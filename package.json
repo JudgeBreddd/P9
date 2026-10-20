@@ -1,6 +1,6 @@
 {
   "name": "p9",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "PolyForm-Shield-1.0.0",
   "bin": {
@@ -124,6 +124,10 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": ".build/licenses",
+        "to": "licenses"
+      },
       {
         "from": ".build/node-win-x64/node.exe",
         "to": "daemon/node.exe"
