@@ -1,0 +1,43 @@
+# Builds the Windows installer on GitHub's Windows machine and attaches it, with SHA256SUMS, to a release.
+# Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag.
+# The release must already exist. Windows minutes count double against the private repo's monthly allowance.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach the installer to (the release must exist)
+        required: true
+        default: v0.1.1
+  # ponytail: lets the workflow run before it reaches main (workflow_dispatch only works from the default branch).
+  push:
+    branches: [windows-build]
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag || 'v0.1.1' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.10.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package:win
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat dist/windows/SHA256SUMS
+          gh release upload "$TAG" dist/windows/*.exe dist/windows/SHA256SUMS --clobber
