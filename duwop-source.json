@@ -1,0 +1,62 @@
+{
+  "repository": "JudgeBreddd/DUWOP",
+  "commit": "f660e9d046c302d759f0fd8d3ceaa09c21721017",
+  "appConfig": {
+    "source": "_engine/registry/theme/duwop-config.ts",
+    "target": "src/lib/duwop-config.ts",
+    "customizations": "Application theme list, default Prime, AMOLED and Command Center themes; not an unmodified vendor file."
+  },
+  "files": [
+    {
+      "registry": "theme",
+      "source": "_engine/registry/theme/duwop.css",
+      "target": "src/lib/duwop.css",
+      "sha256": "033123e0db3bd0a74c94782f198db25087055194190ba495f1124aa89fe10a45"
+    },
+    {
+      "registry": "theme",
+      "source": "_engine/registry/theme/theme.ts",
+      "target": "src/lib/theme.ts",
+      "sha256": "32d986f5f5e553d6cd5c619a1bfbf71e9db3e039d065dd78118cd1d69c402e82"
+    },
+    {
+      "registry": "command-center",
+      "source": "_engine/registry/command-center/command-center.css",
+      "target": "src/lib/command-center.css",
+      "sha256": "c74161eb9e3176906a25ae94e4bde0135ce4bffe8e5c083c715c70160970ab56",
+      "customizations": "Comments only: personal names replaced (Builder, the Windows desktop), 2026-10-19."
+    },
+    {
+      "registry": "command-center",
+      "source": "_engine/registry/command-center/command-center.ts",
+      "target": "src/lib/command-center.ts",
+      "sha256": "7c31a2f2d4aee325fb7dffc0757738a62374085418ad031111ff289cdb262aef"
+    },
+    {
+      "registry": "boot",
+      "source": "_engine/registry/boot/duwop-boot.js",
+      "target": "public/duwop-boot.js",
+      "sha256": "4ebce3b8fa4c5d559cbd7fb614e547c456b91ebda1ed4985f6ea1207d388cf6d"
+    },
+    {
+      "registry": "boot-astro",
+      "source": "_engine/registry/boot/DuwopBoot.astro",
+      "target": "src/components/DuwopBoot.astro",
+      "sha256": "8bb207f4378f69411ccfd18c939afed83e113aa90a54b5f96e0dd447b7b88617"
+    },
+    {
+      "registry": "gods",
+      "source": "_engine/registry/gods/gods.ts",
+      "target": "src/lib/gods.ts",
+      "commit": "7bc53c2e10ba10be29f70a3bf1458d47e252ae9e",
+      "sha256": "5ef22365de85128a6953c66e0f022e515ef93763ad9decc0d1dadb82d2f49327"
+    },
+    {
+      "registry": "gods",
+      "source": "_engine/registry/gods/gods.css",
+      "target": "src/lib/gods.css",
+      "commit": "7bc53c2e10ba10be29f70a3bf1458d47e252ae9e",
+      "sha256": "9089ecccd28ab4c32e1a382b5f446c9abaf0d4f2d4304176b4d6d8d04c785985"
+    }
+  ]
+}

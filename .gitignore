@@ -1,0 +1,10 @@
+_private/
+node_modules/
+.build/
+dist/
+apps/web/dist/
+apps/web/.astro/
+AGENTS.md
+CLAUDE.md
+CONTEXT.md
+.publish
