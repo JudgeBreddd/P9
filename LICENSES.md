@@ -32,7 +32,7 @@ main commit **f660e9d046c302d759f0fd8d3ceaa09c21721017**, after
 [Prime PR 1](https://github.com/JudgeBreddd/DUWOP/pull/1) merged, including Anymouse #13.
 Items installed: theme, command-center, boot, boot-astro, and gods (from commit 7bc53c2, 2026-10-19). duwop-source.json records
 upstream paths/hashes. command-center.css differs only in comments (personal names removed). duwop-config.ts is customized: default Prime, AMOLED,
-every theme offered, Command Center and Gods packs added, and local fonts. MIT text is in DUWOP-LICENSE.md.
+every theme offered, Command Center and Gods packs added, and local fonts. MIT text is in [third-party/DUWOP-LICENSE.md](third-party/DUWOP-LICENSE.md).
 
 Space Grotesk, Inter, JetBrains Mono, Fraunces, Orbitron, Cinzel, Pixelify Sans, Outfit, Chakra Petch and
 Press Start 2P: pinned @fontsource and @fontsource-variable packages (5.3.0), OFL-1.1. Original notices remain in their installed packages. The app
