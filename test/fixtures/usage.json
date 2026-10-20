@@ -1,0 +1,8 @@
+[
+  {"conversation":"fixture-claude","provider":"claude","type":"turn-end","data":{"stopReason":"end_turn","usage":{"totalTokens":17000,"inputTokens":10000,"outputTokens":1000,"cachedReadTokens":6000,"cachedWriteTokens":0}}},
+  {"conversation":"fixture-claude","provider":"claude","type":"update","data":{"sessionUpdate":"usage_update","used":21000,"size":1000000,"cost":{"amount":0.1,"currency":"USD"}}},
+  {"conversation":"fixture-claude","provider":"claude","type":"turn-end","data":{"stopReason":"end_turn","usage":{"totalTokens":15380,"inputTokens":8240,"outputTokens":1140,"cachedReadTokens":6000,"cachedWriteTokens":0}}},
+  {"conversation":"fixture-claude","provider":"claude","type":"update","data":{"sessionUpdate":"usage_update","used":37699,"size":1000000,"cost":{"amount":0.1842,"currency":"USD"}}},
+  {"conversation":"fixture-codex","provider":"codex","type":"turn-end","data":{"stopReason":"end_turn","usage":{"totalTokens":18240,"inputTokens":9360,"outputTokens":1680,"cachedReadTokens":7200}}},
+  {"conversation":"fixture-codex","provider":"codex","type":"update","data":{"sessionUpdate":"usage_update","used":35236,"size":475000,"cost":{"amount":0.0926,"currency":"USD"}}}
+]

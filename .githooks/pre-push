@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+node scripts/scan.mjs
+# Every branch and every commit, not just this branch: a secret or private path in any history is published.
+gitleaks git . --redact --no-banner --log-opts=--all
+if git log --all -p -- . ':(exclude).gitignore' ':(exclude).publishignore' | grep -qE '/h[o]me/|I[C]M/|_p[r]ivate/'; then
+  echo 'pre-push: a private path appears in the git history' >&2; exit 1
+fi
