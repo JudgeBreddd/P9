@@ -1,0 +1,626 @@
+import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell, WebContentsView } from 'electron';
+import { spawn } from 'node:child_process';
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { constants, watch } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import os from 'node:os';
+import { health, daemonRequest } from '../../scripts/teh.mjs';
+import { ORIGIN } from '../../packages/protocol/index.mjs';
+import { WebSocket } from 'ws';
+import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
+
+export const APP_URL = 'p9://app/';
+export const DEV_URL = 'p9://dev/';
+export const WEBVIEW_URL = 'p9://webview/';
+export const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme';
+// placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
+// (the builder's needs-done list tracks it).
+export const FILE_PROTECTION_DOCS = 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection';
+export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here and on your paired phone, from opening or changing your secrets '
+  + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons.\n\n'
+  + 'With it off, one wrong save can break those files, and anyone holding your unlocked, paired phone can read or change them, keys included.\n\n'
+  + 'Agents, terminals and editor extensions are not affected: they can already change any file you can. You can turn protection back on any time in Settings.';
+// The Settings page's UI settings (threat model row 15): one fixed shape, checked here, kept in the profile folder.
+// pet: each focus mode's own pet settings: shown or not, size in pixels, a petdex pet per agent (system when the agent has
+// none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
+const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null });
+// name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
+export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
+  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false });
+const NAME = /^[^\p{Cc}\p{Cf}]{0,40}$/u;
+const PET_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/, PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const exactly = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === keys;
+const petName = name => name === null || (typeof name === 'string' && PET_NAME.test(name));
+const spot = at => at === null || (Array.isArray(at) && at.length === 2 && at.every(n => Number.isFinite(n) && n >= 0 && n <= 1));
+const checkPet = p => exactly(p, 'claude,codex,on,pane,size,system,top') && typeof p.on === 'boolean' && Number.isInteger(p.size) && p.size >= 24 && p.size <= 128
+  && [p.claude, p.codex, p.system].every(petName) && spot(p.top) && spot(p.pane)
+  && { on: p.on, size: p.size, claude: p.claude, codex: p.codex, system: p.system, top: p.top && [...p.top], pane: p.pane && [...p.pane] };
+export function checkSettings(value) {
+  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,zoom') || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
+      || typeof value.name !== 'string' || !NAME.test(value.name) || typeof value.startLast !== 'boolean'
+      || value.zoom < 0.5 || value.zoom > 3 || !exactly(value.focus, 'chat,dev,mission') || !exactly(value.pet, 'chat,dev,mission')) return null;
+  const focus = value.focus, pet = { chat: checkPet(value.pet.chat), dev: checkPet(value.pet.dev), mission: checkPet(value.pet.mission) };
+  if (![focus.chat, focus.dev, focus.mission].every(on => typeof on === 'boolean') || !(focus.chat || focus.dev || focus.mission)) return null;
+  if (!pet.chat || !pet.dev || !pet.mission) return null;
+  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast };
+}
+// Older files: no pet, one pet name, or one pet per agent ({ claude, codex, system }) become every focus's pets, shown in Chat only.
+// Files from before the landing page get its name (the account's, below) and startLast off.
+export function upgradeSettings(file, name = '') {
+  const old = file?.pet;
+  if (old === undefined || old === null || typeof old === 'string' || exactly(old, 'claude,codex,system')) {
+    const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old;
+    file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
+  }
+  return { name, startLast: false, ...file };
+}
+// The greeting's first name: the first word of the account's full name (the passwd comment on Linux), else the login name.
+export async function accountName() {
+  const { username, uid } = os.userInfo();
+  const full = process.platform === 'linux' ? (await readFile('/etc/passwd', 'utf8').catch(() => '')).split('\n').map(l => l.split(':')).find(f => f[2] === String(uid))?.[4] : '';
+  const word = (full?.split(',')[0].trim().split(/\s+/)[0] || username || '').slice(0, 40);
+  return NAME.test(word) ? word.charAt(0).toUpperCase() + word.slice(1) : '';
+}
+// Agent-working pets (threat model row 16): a petdex folder under <profile>/pets, read as plain files only (never a link),
+// pet.json up to 16 KB, the spritesheet a bare .webp/.png name up to 8 MB with a matching signature, handed over as a data URL.
+async function readPlain(file, max) {
+  if ((await lstat(file)).isSymbolicLink()) throw new Error('pet-refused'); // Windows has no O_NOFOLLOW
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > max) throw new Error('pet-refused');
+    return await handle.readFile();
+  } finally { await handle.close(); }
+}
+async function readPet(pets, name) {
+  if (typeof name !== 'string' || !PET_NAME.test(name)) return null;
+  try {
+    const folder = path.join(pets, name);
+    if (!(await lstat(folder)).isDirectory()) return null;
+    const meta = JSON.parse(await readPlain(path.join(folder, 'pet.json'), 16384));
+    const file = meta?.spritesheetPath;
+    if (typeof meta?.id !== 'string' || typeof meta.displayName !== 'string' || typeof file !== 'string'
+        || file.startsWith('.') || !/^[\w.-]{1,128}\.(?:webp|png)$/i.test(file)) return null;
+    const bytes = await readPlain(path.join(folder, file), 8 << 20);
+    const type = bytes.subarray(0, 8).equals(PNG) ? 'png' : bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP' ? 'webp' : null;
+    return type && { meta, file, bytes, type };
+  } catch { return null; }
+}
+async function loadPet(pets, name) {
+  const pet = await readPet(pets, name);
+  return pet && { name, displayName: pet.meta.displayName.slice(0, 80), sprite: `data:image/${pet.type};base64,` + pet.bytes.toString('base64') };
+}
+// Adding copies a checked pet out of a folder the user picked: a rewritten pet.json and the sheet bytes, never over an existing pet.
+async function addPet(pets, folder) {
+  const name = path.basename(folder), pet = await readPet(path.dirname(folder), name);
+  if (!PET_NAME.test(name)) return 'name';
+  if (!pet) return 'invalid';
+  const target = path.join(pets, name), { id, displayName, description = '', spritesheetPath } = pet.meta;
+  await mkdir(pets, { recursive: true });
+  try { await mkdir(target); } catch (error) { return error.code === 'EEXIST' ? 'exists' : 'invalid'; }
+  try {
+    await writeFile(path.join(target, 'pet.json'), JSON.stringify({ id, displayName, description: String(description).slice(0, 1000), spritesheetPath }, null, 2) + '\n');
+    await writeFile(path.join(target, spritesheetPath), pet.bytes);
+  } catch { await rm(target, { recursive: true, force: true }); return 'invalid'; }
+  return null;
+}
+// The Dev Focus page itself (query and hash aside); any other p9://dev/ file is an asset, never a page with IPC.
+const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
+
+// CSP hashes of a page's inline scripts (the ones without src).
+const inlineHashes = html => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
+  .filter(match => !/\bsrc\s*=/.test(match[1]))
+  .map(match => "'sha256-" + createHash('sha256').update(match[2]).digest('base64') + "'");
+
+async function assets(directory, prefix = '/') {
+  const result = new Map();
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const name = path.join(directory, entry.name), route = prefix + entry.name;
+    if (entry.isDirectory()) for (const [key, value] of await assets(name, route + '/')) result.set(key, value);
+    else if (entry.isFile()) result.set(route, await readFile(name));
+    else throw new Error('nonregular-build-asset');
+  }
+  return result;
+}
+
+export async function createDesktop({ state, open } = {}) {
+  // KDE/GNOME on Wayland match a window to its menu entry and icon by app id; without this it is "electron" (generic icon).
+  if (process.platform === 'linux') app.setDesktopName('p9-event-horizon.desktop');
+  await app.whenReady();
+  const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
+  const appSite = async () => {
+    const files = await assets(webDist);
+    const html = files.get('/index.html').toString('utf8');
+    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'` };
+  };
+  const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2',
+    '.woff': 'font/woff', '.ttf': 'font/ttf', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg' };
+  // Three origins: p9://app (the shell), p9://dev (Dev Focus, filled once the editor host is up) and p9://webview (its
+  // extension pages). Each gets its own CSP, and each session serves only its own origins.
+  const sites = { app: await appSite() };
+  const serve = (...hosts) => request => {
+    const url = new URL(request.url);
+    const key = url.pathname === '/' ? '/index.html' : url.pathname;
+    const site = hosts.includes(url.host) && Object.hasOwn(sites, url.host) ? sites[url.host] : null, data = site?.files.get(key);
+    if (request.method !== 'GET' || url.username || url.password || url.port || !data) return new Response('Not found', { status: 404 });
+    return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff' } });
+  };
+  protocol.handle('p9', serve('app'));
+  const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json');
+  const name = await accountName();
+  let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
+  let settingsSaving = Promise.resolve();
+  const petsFolder = path.join(app.getPath('userData'), 'pets');
+  // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
+  session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
+  const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
+    webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
+      nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
+      additionalArguments: process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [] } }); // the test runs click the shell straight away
+  window.removeMenu();
+  window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
+  window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
+  window.webContents.on('will-attach-webview', event => event.preventDefault());
+  let persistent = true, stoppingBeforeQuit = false;
+  ipcMain.handle('p9:lifecycle', async (event, action, payload) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || action !== 'mode' || !payload || Object.keys(payload).join(',') !== 'persistent' || typeof payload.persistent !== 'boolean') throw new Error('ipc-sender-refused');
+    persistent = payload.persistent;
+    return { ok: true };
+  });
+  app.on('before-quit', (event) => {
+    if (persistent || stoppingBeforeQuit || !state) return;
+    event.preventDefault();
+    stoppingBeforeQuit = true;
+    daemonRequest(state, 'POST', '/stop-all', {}, randomBytes(16).toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5'))
+      .catch(() => {}).finally(() => app.quit());
+  });
+  ipcMain.handle('p9:get-status', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    try { return { status: state && (await health(state)).status === 'ok' ? 'ok' : 'unavailable' }; }
+    catch { return { status: 'unavailable' }; }
+  });
+  ipcMain.handle('p9:usage', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!state) return { status: 503, body: { state: 'unavailable' } };
+    try { return await daemonRequest(state, 'GET', '/usage'); }
+    catch { return { status: 503, body: { state: 'unavailable' } }; }
+  });
+  // Anymouse: the daemon files the note, or answers with GitHub's prefilled new-issue page for P9's repo, which only
+  // this exact prefix may open (in the user's browser). ponytail: P9_OPEN_URL swaps the browser for a test logger.
+  const NEW_ISSUE = 'https://github.com/JudgeBreddd/p9/issues/new?';
+  ipcMain.handle('p9:anymouse', async (event, ...args) => {
+    const [payload] = args;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    let result;
+    try { result = await daemonRequest(state, 'POST', '/anymouse', payload); }
+    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+    const open = result.body?.open;
+    if (open === undefined) return result;
+    if (typeof open !== 'string' || !open.startsWith(NEW_ISSUE) || /[\s]/.test(open)) return { status: 502, body: { error: 'request-refused' } };
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(open);
+    return { status: 200, body: { opened: true } };
+  });
+  // Mission Control: a fixed list of actions, each mapped to one daemon route; the daemon validates the rest.
+  const id = value => (typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value) ? value : null);
+  const missionRoutes = {
+    overview: () => ['GET', '/mission'],
+    run: ({ id: script, ...body }) => id(script) && ['POST', `/scripts/${script}/run`, body],
+    output: ({ run, from }) => /^[0-9a-f-]{36}$/.test(run ?? '') && Number.isSafeInteger(from) && from >= 0 && ['GET', `/runs/${run}?from=${from}`],
+    launch: ({ kind, id: target, ...body }) => ['apps', 'pages'].includes(kind) && id(target) && ['POST', `/${kind}/${target}/launch`, body],
+    answer: body => ['POST', '/mission/answer', body],
+    hub: () => ['GET', '/mission/hub'],
+    hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
+    hubDecide: body => ['POST', '/mission/hub/decide', body],
+    fix: ({ host, name }) => [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
+    idea: ({ name, text, needs_done }) => [name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
+    // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
+    list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
+    read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
+  };
+  ipcMain.handle('p9:mission', async (event, ...args) => {
+    const [action, payload = {}] = args;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length > 2 || !Object.hasOwn(missionRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
+    const route = missionRoutes[action](payload);
+    if (!route) return { status: 400, body: { error: 'request-refused' } };
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try { return await daemonRequest(state, ...route); }
+    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
+  // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  const chatRoutes = {
+    list: () => ['GET', '/chat'],
+    events: ({ after = 0, wait = 0 }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000 && ['GET', `/chat/events?after=${after}&wait=${wait}`],
+    create: body => ['POST', '/chat', body],
+    prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
+    answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
+    cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
+    stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
+    lock: () => ['GET', '/agent-lock'],
+    setup: () => ['GET', '/setup'],
+    setLock: body => ['POST', '/agent-lock', body],
+    stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
+  };
+  ipcMain.handle('p9:chat', async (event, ...args) => {
+    const [action, payload = {}] = args;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length > 2 || !Object.hasOwn(chatRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
+    const { op, ...rest } = payload;
+    const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
+    if (!route) return { status: 400, body: { error: 'request-refused' } };
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try { return await daemonRequest(state, route[0], route[1], route[2], op); }
+    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
+  // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
+  // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
+  // holds. One socket at a time; frames pass through as they are (the page stamps keys with the daemon's leases, like the
+  // phone) and the daemon checks every one. Each socket has a serial, so the page can tell a new socket's frames from an old one's.
+  const fromApp = event => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
+  const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}] };
+  ipcMain.handle('p9:terminal', async (event, ...args) => {
+    const [action, payload = {}] = args;
+    if (!fromApp(event) || args.length > 2 || !Object.hasOwn(terminalRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
+    const route = terminalRoutes[action](payload);
+    if (!route) return { status: 400, body: { error: 'request-refused' } };
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try { return await daemonRequest(state, ...route); }
+    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
+  let dockSocket = null, dockSerial = 0;
+  const endDock = () => { dockSerial++; dockSocket?.terminate(); dockSocket = null; };
+  ipcMain.handle('p9:terminal-open', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
+    endDock();
+    const serial = dockSerial;
+    const credentials = state && await readFile(path.join(state, 'desktop.json'), 'utf8').then(JSON.parse).catch(() => null);
+    if (serial !== dockSerial) return null;  // a newer open came in meanwhile
+    if (!credentials) return null;
+    const ws = new WebSocket('ws+unix:' + (credentials.socketPath ?? path.join(state, 'daemon.sock')) + ':/terminals/' + args[0] + '/socket',
+      { origin: ORIGIN, headers: { host: 'p9.local', cookie: 'p9=' + credentials.cookie, 'x-p9-csrf': credentials.csrf } });
+    dockSocket = ws;
+    const tell = message => { if (!window.isDestroyed()) window.webContents.send('p9:terminal', serial, message); };
+    ws.on('open', () => tell({ open: true }));
+    ws.on('message', (data, binary) => tell(binary ? { bytes: new Uint8Array(data) } : { text: String(data) }));
+    ws.on('close', code => { if (dockSocket === ws) dockSocket = null; tell({ close: code }); });
+    ws.on('error', () => {});  // a close follows
+    return serial;
+  });
+  // A key frame is a lease and at most 32 KiB (the page's paste pieces); the one text frame is a resize.
+  ipcMain.on('p9:terminal-send', (event, ...args) => {
+    const [serial, frame] = args;
+    if (!fromApp(event) || args.length !== 2 || serial !== dockSerial || dockSocket?.readyState !== WebSocket.OPEN) return;
+    if (typeof frame === 'string' ? frame.length <= 64 : frame instanceof Uint8Array && frame.length > 8 && frame.length <= 8 + 32768) dockSocket.send(frame);
+  });
+  ipcMain.on('p9:terminal-close', (event, ...args) => { if (fromApp(event) && args.length === 1 && args[0] === dockSerial) endDock(); });
+  // A reload (hot reload included) leaves no tmux client behind; the new page opens its own.
+  window.webContents.on('did-start-loading', endDock);
+  // Dev Focus: the editor page in its own view, session and origin, laid over the shell's Dev pane. Started on first open.
+  // A failed start or a crashed page is rebuilt on the next open; the editor host, once up, is kept.
+  let dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [];
+  const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
+  const startHost = () => editorHost ??= (async () => {
+    // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
+    // wait for promises on quit, and the host must not outlive the app.
+    // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
+    const unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), quit = new AbortController();
+    app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
+    return startEditorHost({ unit, signal: quit.signal });
+  })().catch(error => { editorHost = null; throw error; });
+  const openDev = () => dev ??= (async () => {
+    const devSession = session.fromPartition('persist:p9-dev');
+    if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview'));
+    // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
+    // editor host; a request that gets past it never leaves the machine.
+    devSession.webRequest.onBeforeRequest({ urls: ['*://*.vscode-cdn.net/*'] }, (_details, callback) => callback({ cancel: true }));
+    devReady = false;
+    if (devView) { window.contentView.removeChildView(devView); devView.webContents.close(); }
+    devSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write'));
+    devSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write');
+    devView = new WebContentsView({ webPreferences: { preload: fileURLToPath(new URL('./dev-preload.cjs', import.meta.url)), session: devSession, sandbox: true,
+      contextIsolation: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false } });
+    devView.setBackgroundColor('#05070e');
+    devView.webContents.on('dom-ready', () => devView?.webContents.setZoomFactor(settings.zoom));
+    devView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    devView.webContents.on('will-navigate', (event, url) => { if (!isDevPage(url)) event.preventDefault(); });
+    // Subframes (the workbench's webviews) stay on p9://dev/ and p9://webview/; the CSP's frame-src says the same.
+    devView.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && !event.url.startsWith(DEV_URL) && !event.url.startsWith(WEBVIEW_URL) && !/^about:(blank|srcdoc)$/.test(event.url)) event.preventDefault(); });
+    devView.webContents.on('will-attach-webview', event => event.preventDefault());
+    devView.webContents.on('render-process-gone', () => { dev = null; devReady = false; });
+    // Ctrl/Alt+1/2/3 switch focus from inside the editor too: hand the key to the shell.
+    devView.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && (input.control || input.alt) && !input.shift && ['1', '2', '3'].includes(input.key)) {
+        event.preventDefault();
+        window.webContents.focus();
+        window.webContents.send('p9:focus', { 1: 'chat', 2: 'dev', 3: 'mission' }[input.key]);
+      }
+    });
+    window.contentView.addChildView(devView);
+    let config;
+    try {
+      if (!state) throw new Error('daemon-unavailable');
+      const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state)]);
+      const host = await startHost();
+      const origin = 'http://127.0.0.1:' + host.port;
+      // Extension pages (webviews: a README, an image preview) get their own origin, p9://webview, so their scripts can't reach
+      // window.p9dev (threat model row 5; Builder, 2026-10-19: "photos ... blocked"). VS Code injects an inline script into each
+      // page, so inline scripts run there; the page's own CSP narrows that, and index-*.html carries its own hash-only CSP.
+      const isWebview = name => /^\/assets\/(index-[^/]+\.html|fake-[^/]+\.html|service-worker-[^/]+\.js)$/.test(name);
+      sites.webview = { files: new Map([...devFiles].filter(([name]) => isWebview(name))), csp: "default-src 'none'; script-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; "
+        + "style-src 'self' 'unsafe-inline' https://*.vscode-cdn.net; img-src 'self' data: blob: https:; font-src 'self' data: https://*.vscode-cdn.net; "
+        + "media-src 'self' blob: https://*.vscode-cdn.net; connect-src 'self' https://*.vscode-cdn.net; worker-src 'self'; frame-src 'self'; "
+        + "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors p9://dev p9://webview" };
+      const devScripts = [...devFiles].filter(([name]) => name.endsWith('.html') && !isWebview(name)).flatMap(([, data]) => inlineHashes(data.toString('utf8')));
+      sites.dev = { files: devFiles, csp: `default-src 'none'; script-src 'self' 'wasm-unsafe-eval' ${devScripts.join(' ')}; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; `
+        // Images from any https host: extension icons (Open VSX) and README images (badges, raw.githubusercontent.com), as VS Code
+        // allows (threat model row 5; A/B: with Open VSX only, all 5 of the YAML README's images stay blank). Gallery search, installs
+        // and README text come through the editor host, so connect-src stays local.
+        + `img-src 'self' data: blob: ${origin} https:; font-src 'self' data: blob: ${origin}; media-src 'self' blob:; connect-src 'self' ws://127.0.0.1:${host.port} ${origin}; `
+        + "frame-src 'self' p9://webview; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'" };
+      config = { port: host.port, token: host.token, commit: host.commit, workspace: status.workspace, data: host.data };
+    } catch (error) {
+      sites.dev = { files: new Map([['/index.html', Buffer.from('<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px">Dev Focus is unavailable: the editor host or daemon did not start.</body>')]]),
+        csp: "default-src 'none'; style-src 'unsafe-inline'" };
+      config = { error: error.message };
+    }
+    await devView.webContents.loadURL(DEV_URL);
+    if (config.error) dev = null;
+    return config;
+  })().catch(error => { dev = null; throw error; });
+  ipcMain.handle('p9:dev-view', async (event, ...args) => {
+    const [b] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))) throw new Error('ipc-sender-refused');
+    if (!b.visible) { devView?.setVisible(false); return { ok: true }; }
+    const shown = devView?.getVisible();
+    openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
+    // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
+    const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
+    devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
+    devView.setVisible(true);
+    if (!shown) devView.webContents.focus();
+    return { ok: true };
+  });
+  // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
+  ipcMain.handle('p9:settings', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length > 1) throw new Error('ipc-sender-refused');
+    if (!args.length) return settings;
+    const next = checkSettings(args[0]);
+    if (!next) throw new Error('settings-refused');
+    // One save at a time: saves share the .tmp file, and Ctrl = held down sends many at once.
+    const saved = settingsSaving.then(async () => {
+      await writeFile(settingsFile + '.tmp', JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+      await rename(settingsFile + '.tmp', settingsFile);
+    });
+    settingsSaving = saved.catch(() => {});
+    await saved;
+    settings = next;
+    window.webContents.setZoomFactor(settings.zoom);
+    devView?.webContents.setZoomFactor(settings.zoom);
+    return settings;
+  });
+  // Pets: no argument lists the usable ones (name and display name only); one argument is a folder name to load.
+  ipcMain.handle('p9:pets', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length > 1) throw new Error('ipc-sender-refused');
+    if (args.length) return (await loadPet(petsFolder, args[0])) ?? Promise.reject(new Error('pet-refused'));
+    const names = (await readdir(petsFolder).catch(() => [])).filter(name => PET_NAME.test(name)).sort().slice(0, 50);
+    const pets = (await Promise.all(names.map(name => loadPet(petsFolder, name)))).filter(Boolean).map(({ name, displayName }) => ({ name, displayName }));
+    return { folder: petsFolder, pets, importable: (await importable()).length };
+  });
+  // Import: petdex's own folder, names P9 does not have yet; each still goes through addPet's checks on the click.
+  const petdexFolder = () => path.join(app.getPath('home'), '.codex', 'pets');
+  const importable = async () => {
+    const have = new Set(await readdir(petsFolder).catch(() => []));
+    return (await readdir(petdexFolder()).catch(() => [])).filter(name => PET_NAME.test(name) && !have.has(name)).sort().slice(0, 20);
+  };
+  const addFolders = async folders => {
+    const added = [], refused = [];
+    for (const folder of folders.slice(0, 20)) {
+      const why = await addPet(petsFolder, folder);
+      (why ? refused : added).push({ name: path.basename(folder).slice(0, 80), ...(why && { why }) });
+    }
+    return { added, refused };
+  };
+  ipcMain.handle('p9:pet-import', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    return addFolders((await importable()).map(name => path.join(petdexFolder(), name)));
+  });
+  // Install (Builder, 2026-10-18: paste "the npm command from petdex.dev"): the page sends the pasted text; main keeps only the pet
+  // names after "install", then does what petdex 1.4.0's install does (read 2026-10-18): petdex.dev's manifest, then the pet's
+  // pet.json and sheet from assets.petdex.dev only. Nothing downloaded runs; each pet goes through Add's checks (threat model row 16).
+  const getBytes = async (url, max) => {
+    const res = await fetch(url, { headers: { Accept: 'application/json, image/*' }, signal: AbortSignal.timeout(20000) });
+    if (!res.ok || +res.headers.get('content-length') > max) throw new Error('fetch');
+    const bytes = Buffer.from(await res.arrayBuffer()); if (bytes.length > max) throw new Error('fetch'); return bytes;
+  };
+  const asset = (rel, base) => { const u = new URL(rel, base + '/'); if (u.protocol !== 'https:' || u.hostname !== 'assets.petdex.dev') throw new Error('host'); return u.href; };
+  ipcMain.handle('p9:pet-install', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 300) throw new Error('ipc-sender-refused');
+    // The words after the last "install" (or all of them), each a pet name; split, not one regex (a nested one froze main on a long typo).
+    const words = args[0].trim().split(/\s+/), tail = words.slice(words.lastIndexOf('install') + 1);
+    const names = tail.every(word => PET_NAME.test(word)) ? [...new Set(tail)].slice(0, 5) : [];
+    if (!names.length) return { added: [], refused: [{ name: args[0].slice(0, 80), why: 'command' }] };
+    let list;
+    try { const m = JSON.parse(await getBytes('https://petdex.dev/api/manifest/v2', 16 << 20)); list = m.v === 2 && Array.isArray(m.pets) && m.pets; if (!list) throw 0; asset('', m.assetBase); list.base = m.assetBase; }
+    catch { return { added: [], refused: names.map(name => ({ name, why: 'offline' })) }; }
+    const tmp = await mkdtemp(path.join(os.tmpdir(), 'p9-petdex-')), folders = [], refused = [];
+    try {
+      for (const name of names) {
+        const row = list.find(p => Array.isArray(p) && p[0] === name);
+        if (!row) { refused.push({ name, why: 'unknown' }); continue; }
+        try {
+          const meta = JSON.parse(await getBytes(asset(row[5], list.base), 16 << 10)), sheet = asset(row[4], list.base), ext = path.extname(new URL(sheet).pathname);
+          if (!['.webp', '.png'].includes(ext)) throw 0;
+          await mkdir(path.join(tmp, name));
+          await writeFile(path.join(tmp, name, 'pet.json'), JSON.stringify({ id: String(meta.id ?? name), displayName: String(meta.displayName ?? row[1]), description: String(meta.description ?? ''), spritesheetPath: 'spritesheet' + ext }));
+          await writeFile(path.join(tmp, name, 'spritesheet' + ext), await getBytes(sheet, 8 << 20));
+          folders.push(path.join(tmp, name));
+        } catch (error) { refused.push({ name, why: error?.message === 'host' ? 'invalid' : 'offline' }); }
+      }
+      const r = await addFolders(folders); r.refused.push(...refused); return r;
+    } finally { await rm(tmp, { recursive: true, force: true }); }
+  });
+  // Add: no argument; the user picks folders in the native picker (it opens where the petdex command installs). Remove: one pet name.
+  ipcMain.handle('p9:pet-add', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    const petdex = petdexFolder();
+    const pick = await dialog.showOpenDialog(window, { title: 'Add pets', buttonLabel: 'Add', properties: ['openDirectory', 'multiSelections'],
+      defaultPath: (await stat(petdex).catch(() => null))?.isDirectory() ? petdex : app.getPath('home') });
+    return addFolders(pick.canceled ? [] : pick.filePaths);
+  });
+  // New chat's Choose folder... (threat model row 24): the system folder dialog, then only a folder inside the workspace's real path goes
+  // back, workspace-relative ('' is the workspace itself). The daemon checks it again when the chat is made.
+  ipcMain.handle('p9:pick-folder', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    if (!state) return null;
+    const root = await realpath((await health(state)).workspace);
+    const pick = await dialog.showOpenDialog(window, { title: 'Start the chat in', buttonLabel: 'Start here', properties: ['openDirectory'], defaultPath: root });
+    if (pick.canceled || !pick.filePaths[0]) return undefined;
+    const real = await realpath(pick.filePaths[0]).catch(() => null);
+    if (real === root) return '';
+    return real?.startsWith(root + path.sep) ? real.slice(root.length + 1).split(path.sep).join('/') : null;
+  });
+  ipcMain.handle('p9:pet-remove', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || typeof args[0] !== 'string' || !PET_NAME.test(args[0])) throw new Error('ipc-sender-refused');
+    const folder = path.join(petsFolder, args[0]), info = await lstat(folder).catch(() => null);
+    if (!info?.isDirectory()) throw new Error('pet-refused'); // lstat: a link is never a directory here
+    await rm(folder, { recursive: true });
+    return { removed: args[0] };
+  });
+  ipcMain.handle('p9:open-docs', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [DOCS_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(DOCS_URL);
+    return { opened: true };
+  });
+  // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,
+  // which the page can neither draw nor answer; turning it on never asks.
+  ipcMain.handle('p9:file-protection', async (event, ...args) => {
+    if (!fromApp(event) || args.length > 1 || (args.length && typeof args[0] !== 'boolean')) throw new Error('ipc-sender-refused');
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try {
+      if (!args.length) return await daemonRequest(state, 'GET', '/file-protection');
+      while (!args[0]) {
+        const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Turn off file protection?', message: 'Turn off file protection?',
+          detail: FILE_PROTECTION_RISK, buttons: ['Keep protection on', 'Turn off protection', 'Read about the risk'], defaultId: 0, cancelId: 0, noLink: true });
+        if (response === 1) break;
+        if (response !== 2) return await daemonRequest(state, 'GET', '/file-protection');
+        if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [FILE_PROTECTION_DOCS], { shell: false, stdio: 'ignore' }).on('error', () => {});
+        else await shell.openExternal(FILE_PROTECTION_DOCS);
+      }
+      return await daemonRequest(state, 'POST', '/file-protection', { on: args[0] });
+    } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
+  // The shell's DUWOP look (colours as #rrggbbaa), kept for the next Dev Focus start and passed on to a running one.
+  const LOOK_TOKENS = ['background', 'foreground', 'card', 'primary', 'primary-foreground', 'muted', 'muted-foreground', 'accent', 'border', 'ring'];
+  ipcMain.handle('p9:look', (event, ...args) => {
+    const [input] = args;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length !== 1
+        || !input || typeof input.dark !== 'boolean' || !input.colors || Object.keys(input.colors).length !== LOOK_TOKENS.length
+        || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))) throw new Error('ipc-sender-refused');
+    look = { dark: input.dark, colors: Object.fromEntries(LOOK_TOKENS.map(token => [token, input.colors[token]])) };
+    devView?.webContents.send('p9dev:look', look);
+    return { ok: true };
+  });
+  ipcMain.handle('p9dev:config', async (event, ...args) => {
+    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
+    return { ...(await openDev()), look };
+  });
+  // Every editor save is the daemon's guarded save: the expected hash is what the editor loaded, so a disk change is a conflict.
+  ipcMain.handle('p9dev:save', async (event, ...args) => {
+    const [input] = args;
+    if (!fromDev(event) || args.length !== 1 || !input || typeof input.path !== 'string' || !/^[0-9a-f]{64}$/.test(input.hash ?? '') || typeof input.content !== 'string') throw new Error('ipc-sender-refused');
+    if (!state) return { kind: 'failed', error: 'daemon-unavailable' };
+    try { return (await daemonRequest(state, 'PUT', '/files', { path: input.path, hash: input.hash, content: input.content })).body; }
+    catch { return { kind: 'failed', error: 'daemon-unavailable' }; }
+  });
+  ipcMain.handle('p9dev:create', async (event, ...args) => {
+    const [input] = args;
+    if (!fromDev(event) || args.length !== 1 || !input || typeof input.path !== 'string' || typeof input.content !== 'string') throw new Error('ipc-sender-refused');
+    if (!state) return { kind: 'failed', error: 'daemon-unavailable' };
+    try {
+      const result = await daemonRequest(state, 'POST', '/files', { path: input.path, content: input.content });
+      return result.status === 201 ? result.body : { kind: 'failed', error: result.body?.error ?? String(result.status) };
+    } catch { return { kind: 'failed', error: 'daemon-unavailable' }; }
+  });
+  ipcMain.handle('p9dev:host-path', async (event, ...args) => {
+    if (!fromDev(event) || args.length !== 2 || typeof args[0] !== 'string' || !['write', 'name'].includes(args[1])) throw new Error('ipc-sender-refused');
+    const host = await editorHost?.catch(() => null);
+    return Boolean(host) && hostWritable(host.data, args[0], args[1]);
+  });
+  ipcMain.handle('p9dev:open-in-code', async (event, ...args) => {
+    const [input] = args;
+    if (!fromDev(event) || args.length !== 1 || !input) throw new Error('ipc-sender-refused');
+    const config = await openDev();
+    if (config.error) return { ok: false, error: config.error };
+    return openInCode({ workspace: config.workspace, name: input.name, line: input.line, reason: input.reason });
+  });
+  // p9 edit / p9 diff (threat model row 14). Anything running as Builder can start a second instance, so this is the boundary:
+  // exact shape, absolute paths, real path a regular file inside the workspace's real path. It only opens; saving stays guarded.
+  const checkOpen = async data => {
+    if (!state || !data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const keys = Object.keys(data).sort().join(',');
+    const edit = data.open === 'edit' && keys === 'line,open,path' && Number.isSafeInteger(data.line) && data.line >= 1 && data.line <= 10000000;
+    if (!edit && !(data.open === 'diff' && keys === 'a,b,open')) return null;
+    const root = (await realpath((await health(state)).workspace)) + path.sep;
+    const name = async file => {
+      if (typeof file !== 'string' || !path.isAbsolute(file)) return null;
+      try {
+        const real = await realpath(file);
+        return real.startsWith(root) && (await stat(real)).isFile() ? real.slice(root.length).split(path.sep).join('/') : null;
+      } catch { return null; }
+    };
+    const names = await Promise.all(edit ? [name(data.path)] : [name(data.a), name(data.b)]);
+    if (names.includes(null)) return null;
+    return edit ? { open: 'edit', name: names[0], line: data.line } : { open: 'diff', a: names[0], b: names[1] };
+  };
+  const deliver = () => { while (devReady && queued.length) devView.webContents.send('p9dev:open', queued.shift()); };
+  const request = async data => {
+    const checked = await checkOpen(data).catch(() => null);
+    if (!checked) return console.error('p9: open request refused');
+    queued.push(checked);
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    window.webContents.send('p9:focus', 'dev');
+    deliver();
+  };
+  app.on('second-instance', (_event, _argv, _cwd, data) => { if (data && Object.keys(data).length) request(data); });
+  ipcMain.handle('p9dev:open-ready', (event, ...args) => {
+    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
+    devReady = true;
+    deliver();
+    return { ok: true };
+  });
+  // Hot reload, source checkouts only: a new web build (pnpm build) is read again and the window reloads. Chats live in the
+  // daemon and keep running; unsent composer text is lost. Daemon code still needs a daemon restart.
+  // ponytail: an 800 ms quiet gap stands in for "build finished"; a half-written dist fails to load and the next file event retries.
+  if (!app.isPackaged) {
+    let timer;
+    watch(webDist, { recursive: true }, () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => appSite().then(site => { sites.app = site; window.webContents.reload(); }, () => {}), 800);
+    });
+  }
+  await window.loadURL(APP_URL);
+  if (open) request(open);
+  return window;
+}

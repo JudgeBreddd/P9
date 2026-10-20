@@ -1,0 +1,62 @@
+---
+import '../styles/phone.css';
+---
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#080b10" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/p9-icon.png" />
+    <link rel="apple-touch-icon" href="/p9-icon.png" />
+    <title>P9 phone</title>
+  </head>
+  <body>
+    <header><span class="mark" aria-hidden="true"></span><strong>P9</strong><span id="syncState">Connecting</span></header>
+    <div id="stale" role="status" hidden>Offline — showing stale data. Commands and saves are disabled.</div>
+    <div id="gap" role="alert" hidden>History gap detected. Refresh to reload the conversation.</div>
+    <main>
+      <section data-view="chat" aria-labelledby="chatTitle">
+        <div class="heading"><div><p class="eyebrow">Agent workspace</p><h1 id="chatTitle">Chat</h1></div><button id="refreshChat" class="quiet">Refresh</button></div>
+        <label>Conversation<select id="conversation"></select></label>
+        <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button></div>
+        <div id="events" class="feed" aria-live="polite"></div>
+        <form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select></div><label for="prompt">Message</label><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><button type="submit">Send message</button></form>
+      </section>
+      <section data-view="terminal" aria-labelledby="terminalTitle" hidden>
+        <div class="heading"><div><p class="eyebrow">P9 tmux sessions</p><h1 id="terminalTitle">Terminal</h1></div><button id="refreshTerminal" class="quiet">Refresh</button></div>
+        <label>Terminal<select id="terminal"></select></label>
+        <div class="actions start"><button class="quiet" id="newTerminal">New terminal</button><button class="quiet" id="stopTerminal">Stop</button><span id="termState" role="status">Not connected</span></div>
+        <div id="screen" aria-label="Terminal"></div>
+        <div id="keys" class="actions start keys"><button class="quiet" data-key="esc">Esc</button><button class="quiet" data-key="tab">Tab</button><button class="quiet" data-key="ctrlc">Ctrl+C</button><button class="quiet" data-key="up" aria-label="Up arrow">↑</button><button class="quiet" data-key="down" aria-label="Down arrow">↓</button></div>
+      </section>
+      <section data-view="mission" aria-labelledby="missionTitle" hidden>
+        <div class="heading"><div><p class="eyebrow">Live workspace</p><h1 id="missionTitle">Mission Control</h1></div><button id="refreshMission" class="quiet">Refresh</button></div>
+        <div id="mission" class="stack"></div>
+      </section>
+      <section data-view="usage" aria-labelledby="usageTitle" hidden>
+        <div class="heading"><div><p class="eyebrow">Recorded only</p><h1 id="usageTitle">Usage</h1></div><button id="refreshUsage" class="quiet">Refresh</button></div>
+        <div id="usage" class="stack"></div>
+      </section>
+      <section data-view="files" aria-labelledby="filesTitle" hidden>
+        <div class="heading"><div><p class="eyebrow">Guarded save</p><h1 id="filesTitle">File editor</h1></div><span id="fileState">Not loaded</span></div>
+        <div id="browser"><div class="crumbs"><button id="up" class="quiet" disabled>Up</button><span id="dirPath">Workspace</span></div><ul id="fileList" class="list"></ul></div>
+        <div id="fileView" hidden>
+          <div class="crumbs"><button id="closeFile" class="quiet">Back</button><span id="openPath"></span></div>
+          <div id="editor" aria-label="File contents"></div>
+          <div id="conflict" class="conflict" role="alert" hidden>The file changed after you opened it. Your draft was not saved.</div>
+          <div class="actions"><button id="discard" class="quiet" disabled>Discard</button><button id="save" disabled>Save</button></div>
+        </div>
+      </section>
+    </main>
+    <nav aria-label="Phone workspace">
+      <button data-nav="chat" aria-current="page"><span>●</span>Chat</button>
+      <button data-nav="terminal"><span>▮</span>Terminal</button>
+      <button data-nav="mission"><span>◆</span>Mission</button>
+      <button data-nav="usage"><span>◒</span>Usage</button>
+      <button data-nav="files"><span>▤</span>Files</button>
+    </nav>
+    <script src="../phone.ts"></script>
+  </body>
+</html>

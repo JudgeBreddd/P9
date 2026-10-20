@@ -1,0 +1,231 @@
+/* Command Center (@duwop/command-center): an add-on theme pack carrying three looks from Builder's design suite,
+   converted exactly from its hex tokens (tyler-design.css, 2026-10-11) to oklch.
+     Redline        true black, gunmetal surfaces, signature red glow, JetBrains Mono
+     Night Drive    blue on night indigo (the Tokyo Night palette by enkia, MIT licence)
+     Event Horizon  near-black, steel blue, Space Grotesk; glow only on interaction
+   All three are dark-only. Each theme has three blocks:
+     1. --nh / --nc / --primary / --glow2, so the core shared rules still build a sane theme (and AMOLED works).
+     2. .dark.dark.dark[...]: tokens that stay put with or without AMOLED. The tripled .dark is on purpose:
+        four parts outrank the core shared rule (.dark[data-theme]:not(...), three parts) whichever CSS file
+        loads first.
+     3. .dark.dark[...]:not([data-amoled]): the exact surfaces (four parts), which AMOLED replaces with true black. */
+
+/* ---- Redline ---- */
+.dark[data-theme="redline"] {
+  --nh: 268;
+  --nc: 0.01;
+  --primary: oklch(0.601 0.175 24);
+  --glow2: oklch(0.52 0.139 24);
+}
+.dark.dark.dark[data-theme="redline"] {
+  --foreground: oklch(0.946 0.003 265);
+  --card-foreground: oklch(0.946 0.003 265);
+  --popover-foreground: oklch(0.946 0.003 265);
+  --secondary-foreground: oklch(0.946 0.003 265);
+  --accent-foreground: oklch(0.946 0.003 265);
+  --muted-foreground: oklch(0.579 0.015 267);
+  --primary-foreground: oklch(0 0 0); /* black on the red: 4.9:1. White is 3.7:1 */
+  --destructive: oklch(0.637 0.208 25);
+  --border: oklch(1 0 0 / 7%);
+  --input: oklch(1 0 0 / 10%);
+  --ring: oklch(0.601 0.175 24);
+  --glow: oklch(0.605 0.199 25);
+  --radius: 0.75rem;
+}
+.dark.dark[data-theme="redline"]:not([data-amoled]) {
+  --background: oklch(0 0 0);
+  --card: oklch(0.086 0.006 285);
+  --popover: oklch(0.173 0.009 264);
+  --secondary: oklch(0.205 0.01 268);
+  --muted: oklch(0.173 0.009 264);
+  --accent: oklch(0.218 0.012 271);
+}
+
+/* ---- Night Drive: Tokyo Night palette by enkia (github.com/enkia/tokyo-night-vscode-theme, MIT) ---- */
+.dark[data-theme="night-drive"] {
+  --nh: 278;
+  --nc: 0.025;
+  --primary: oklch(0.719 0.132 264);
+  --glow2: oklch(0.82 0.105 236);
+}
+.dark.dark.dark[data-theme="night-drive"] {
+  --foreground: oklch(0.846 0.061 275);
+  --card-foreground: oklch(0.846 0.061 275);
+  --popover-foreground: oklch(0.846 0.061 275);
+  --secondary-foreground: oklch(0.846 0.061 275);
+  --accent-foreground: oklch(0.846 0.061 275);
+  --muted-foreground: oklch(0.767 0.054 275);
+  --primary-foreground: oklch(0.226 0.021 280);
+  --destructive: oklch(0.723 0.159 10);
+  --border: oklch(0.459 0.043 276);
+  --input: oklch(0.459 0.043 276);
+  --ring: oklch(0.719 0.132 264);
+  --radius: 0.75rem;
+}
+.dark.dark[data-theme="night-drive"]:not([data-amoled]) {
+  --background: oklch(0.226 0.021 280);
+  --card: oklch(0.204 0.016 285);
+  --popover: oklch(0.204 0.016 285);
+  --secondary: oklch(0.306 0.037 273);
+  --muted: oklch(0.261 0.034 274);
+  --accent: oklch(0.306 0.037 273);
+}
+
+/* ---- Event Horizon: steel blue is the primary, ring and glow; the gunmetal panel is secondary / muted ---- */
+.dark:is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]) {
+  --nh: 253;
+  --nc: 0.014;
+  --primary: oklch(0.608 0.095 243);
+  --glow2: oklch(0.586 0.132 278);
+}
+.dark.dark.dark:is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]) {
+  --foreground: oklch(0.943 0.011 244);
+  --card-foreground: oklch(0.943 0.011 244);
+  --popover-foreground: oklch(0.943 0.011 244);
+  --secondary-foreground: oklch(0.943 0.011 244);
+  --accent-foreground: oklch(0.943 0.011 244);
+  --primary-foreground: oklch(0.122 0.006 262);
+  --muted-foreground: oklch(0.724 0.021 253);
+  --destructive: oklch(0.634 0.116 13);
+  --border: oklch(0.311 0.022 259);
+  --input: oklch(0.311 0.022 259);
+  --ring: oklch(0.608 0.095 243);
+  --glow: oklch(0.608 0.095 243);
+  --radius: 0.5rem;
+}
+.dark.dark:is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]):not([data-amoled]) {
+  --background: oklch(0.122 0.006 262);
+  --card: oklch(0.211 0.014 253);
+  --popover: oklch(0.211 0.014 253);
+  --secondary: oklch(0.22 0.012 254);
+  --muted: oklch(0.22 0.012 254);
+  --accent: oklch(0.266 0.016 252);
+}
+
+/* Event Horizon Prime: Event Horizon with every dial up (Builder, 2026-10-14: "make that the prime!!").
+   Mockup it came from: premium-max.html. Gods (@duwop/gods) gave the recipe: a display serif, a gradient
+   fill on titles and main buttons, a lit hairline along each surface's top edge.
+   A black hole: light bends around a dark centre. Fraunces italic headings, glass surfaces over deep space,
+   the event horizon glowing behind the cards, halos that orbit in blue, amber and violet.
+   Base colours are Event Horizon's: duwop.css and d1.css share them with this look via :is(). */
+
+.dark[data-theme="event-horizon-prime"] {
+  --primary: oklch(0.72 0.14 243); /* Event Horizon's blue at chroma 0.14 (was 0.095), Gods run 0.12-0.20 */
+  --glow2: oklch(0.64 0.18 285);
+  --amber: oklch(0.82 0.14 70);
+}
+.dark.dark.dark[data-theme="event-horizon-prime"] {
+  --ring: var(--primary);
+  --glow: var(--primary);
+}
+[data-theme="event-horizon-prime"] {
+  --display: "Fraunces", Georgia, serif;
+  --horizon: linear-gradient(180deg, oklch(0.93 0.05 240) 0%, var(--primary) 52%, var(--glow2) 100%);
+  --ring-line: linear-gradient(90deg, transparent 8%, var(--primary) 32%, oklch(0.93 0.09 75) 50%, var(--primary) 68%, transparent 92%);
+  --glass: color-mix(in oklch, var(--card) 55%, transparent);
+  --lift: inset 0 1px 0 oklch(1 0 0 / 0.06), 0 18px 40px -18px oklch(0 0 0 / 0.9), 0 40px 90px -40px color-mix(in oklch, var(--primary) 35%, transparent);
+}
+
+/* ---- Deep space: faint stars over a night gradient; the event horizon glows behind the cards ---- */
+[data-theme="event-horizon-prime"] .shell {
+  background:
+    radial-gradient(1px 1px at 12% 22%, oklch(1 0 0 / 0.5), transparent),
+    radial-gradient(1px 1px at 38% 70%, oklch(1 0 0 / 0.35), transparent),
+    radial-gradient(1.5px 1.5px at 64% 14%, oklch(1 0 0 / 0.45), transparent),
+    radial-gradient(1px 1px at 82% 58%, oklch(1 0 0 / 0.3), transparent),
+    radial-gradient(1px 1px at 22% 88%, oklch(1 0 0 / 0.3), transparent),
+    radial-gradient(1px 1px at 52% 40%, oklch(1 0 0 / 0.25), transparent),
+    radial-gradient(60% 50% at 50% 120%, oklch(0.3 0.08 270 / 0.45), transparent),
+    linear-gradient(180deg, oklch(0.13 0.015 262), oklch(0.09 0.012 262));
+}
+[data-theme="event-horizon-prime"] .stage::before {
+  content: ""; position: absolute; z-index: 0; pointer-events: none;
+  width: 640px; height: 460px; right: -190px; top: 0;
+  background: radial-gradient(circle at 50% 120px, #000 0 140px, transparent 145px),
+    conic-gradient(from 200deg at 50% 120px, transparent, color-mix(in oklch, var(--primary) 55%, transparent), oklch(0.9 0.12 75 / 0.85), color-mix(in oklch, var(--glow2) 55%, transparent), transparent 55%, color-mix(in oklch, var(--primary) 25%, transparent), transparent);
+  -webkit-mask: radial-gradient(circle at 50% 120px, #000 0 136px, #000a 149px, #0006 204px, transparent 317px);
+  mask: radial-gradient(circle at 50% 120px, #000 0 136px, #000a 149px, #0006 204px, transparent 317px);
+  filter: blur(3px);
+}
+[data-theme="event-horizon-prime"] .focuses { position: relative; z-index: 1; }
+[data-theme="event-horizon-prime"] :is(.topbar, .statusbar) { background: color-mix(in oklch, var(--card) 30%, transparent); }
+[data-theme="event-horizon-prime"] .shell::after { content: ""; position: fixed; inset: 0 0 auto; height: 1px; background: var(--ring-line); pointer-events: none; z-index: 50; }
+
+/* ---- Type: Fraunces italic for names and headings; the horizon light on the big ones ---- */
+.dark.dark.dark.dark[data-theme="event-horizon-prime"] .fx-title {
+  font-family: var(--display); font-style: italic; font-weight: 400; letter-spacing: 0;
+  background: var(--horizon); -webkit-background-clip: text; background-clip: text; color: transparent;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  filter: drop-shadow(0 0 18px color-mix(in oklch, var(--primary) 30%, transparent));
+}
+[data-theme="event-horizon-prime"] .eyebrow { letter-spacing: 0.28em; color: var(--amber); }
+[data-theme="event-horizon-prime"] .brand { font-family: var(--display); font-weight: 400; font-size: 17px; letter-spacing: 0.01em; }
+[data-theme="event-horizon-prime"] .brand .mark { border-radius: 50%; background: radial-gradient(circle, #000 0 38%, transparent 40%), conic-gradient(from 210deg, var(--primary), var(--amber), var(--glow2), var(--primary)); box-shadow: 0 0 16px color-mix(in oklch, var(--primary) 60%, transparent); }
+[data-theme="event-horizon-prime"] :is(.brand, .mdl-head h2, .panel h3) {
+  background: var(--horizon); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+[data-theme="event-horizon-prime"] :is(.mdl-head h2, .panel h3) { font-family: var(--display); font-style: italic; font-weight: 400; letter-spacing: 0; text-transform: none; }
+[data-theme="event-horizon-prime"] .mdl-head h2 { font-size: 17px; }
+[data-theme="event-horizon-prime"] .panel h3 { font-size: 17px; }
+/* the clip would hide the count and the muted host name inside a heading: give them their own colour */
+[data-theme="event-horizon-prime"] .panel h3 :is(.n, .muted) { -webkit-text-fill-color: currentColor; font-family: "Space Grotesk", system-ui, sans-serif; font-style: normal; font-size: 12px; }
+[data-theme="event-horizon-prime"] .panel h3 .muted { color: var(--muted-foreground); }
+/* the plan carries fx-title for its light, but its steps stay in the reading face */
+.dark.dark.dark.dark[data-theme="event-horizon-prime"] .plan.fx-title { font-family: inherit; font-style: normal; }
+[data-theme="event-horizon-prime"] .panel h3 .n { background: var(--amber); color: oklch(0.15 0.02 260); box-shadow: 0 0 10px -2px var(--amber); }
+[data-theme="event-horizon-prime"] .tile .n { font-family: var(--display); font-size: 18px; font-weight: 300; }
+
+/* ---- Glass surfaces: see-through and blurred, the lit ring along the top, light falling into it ---- */
+[data-theme="event-horizon-prime"] :is(.card, .mdl, .pop, .tile, .toast, .panel, .composer) {
+  border-color: color-mix(in oklch, var(--primary) 26%, var(--border));
+  background-color: var(--glass);
+  background-image: var(--ring-line), radial-gradient(55% 56px at 50% 0, color-mix(in oklch, var(--primary) 14%, transparent), transparent);
+  background-repeat: no-repeat;
+  background-size: 100% 1px, 100% 100%;
+  background-position: top;
+  /* ponytail: blur on every surface costs GPU; drop it here first if the Windows desktop drags */
+  backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow: var(--lift);
+}
+[data-theme="event-horizon-prime"] .mdl { background-color: color-mix(in oklch, var(--popover) 82%, transparent); }
+[data-theme="event-horizon-prime"] :is(.tile.bad, .toast.bad) {
+  background-color: color-mix(in oklch, var(--destructive) 18%, var(--glass));
+  border-color: color-mix(in oklch, var(--destructive) 55%, transparent);
+  box-shadow: var(--lift), 0 0 26px -8px var(--destructive);
+}
+
+/* ---- The halo orbits: a blue, amber and violet light circling the edge until it's handled ---- */
+[data-theme="event-horizon-prime"] .fx-halo::after {
+  background: conic-gradient(from var(--eh-halo-a), transparent 0 40%, var(--primary) 62%, oklch(0.95 0.1 75) 75%, var(--glow2) 86%, transparent 100%);
+  padding: 1.5px;
+  animation-duration: 3.6s;
+}
+
+/* ---- Accents: counts, the bell, the rail, tabs, meters ---- */
+[data-theme="event-horizon-prime"] .card .n { background: var(--horizon); color: oklch(0.15 0.02 260); box-shadow: 0 0 14px color-mix(in oklch, var(--primary) 70%, transparent), inset 0 1px 0 oklch(1 0 0 / 0.5); }
+[data-theme="event-horizon-prime"] .rail .bell b { background: var(--amber); color: oklch(0.15 0.02 260); box-shadow: 0 0 10px var(--amber); }
+[data-theme="event-horizon-prime"] .rail [data-slot="button"][aria-pressed="true"] {
+  color: var(--foreground);
+  background: linear-gradient(180deg, color-mix(in oklch, var(--primary) 22%, transparent), color-mix(in oklch, var(--glow2) 12%, transparent));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.12), 0 0 0 1px color-mix(in oklch, var(--primary) 35%, transparent), 0 0 20px -6px var(--primary);
+}
+[data-theme="event-horizon-prime"] .tab[aria-selected="true"] { border-image: linear-gradient(90deg, var(--primary), var(--amber), var(--glow2)) 1; }
+[data-theme="event-horizon-prime"] .tab[aria-selected="true"]::before { content: ""; position: absolute; inset: 7px 2px; border-radius: 9px; background: color-mix(in oklch, var(--primary) 9%, transparent); z-index: -1; }
+[data-theme="event-horizon-prime"] .tree button[aria-current="true"] { background: linear-gradient(90deg, color-mix(in oklch, var(--primary) 18%, transparent), transparent); box-shadow: inset 2px 0 0 var(--primary); }
+[data-theme="event-horizon-prime"] .tree .mod { box-shadow: 0 0 8px var(--warn); }
+[data-theme="event-horizon-prime"] .fx-meter > span { background: linear-gradient(90deg, var(--primary), var(--glow2)); box-shadow: 0 0 10px var(--primary); }
+[data-theme="event-horizon-prime"] .fx-meter[data-hot] > span { background: linear-gradient(90deg, var(--primary), var(--amber)); box-shadow: 0 0 10px var(--amber); }
+
+/* ---- Main buttons: the horizon gradient, a lit top edge and a glow (the green click flash and your plain approval buttons still win) ---- */
+[data-theme="event-horizon-prime"] [data-slot="button"][data-variant="default"]:not(.done, [data-approve]) {
+  background: var(--horizon);
+  color: oklch(0.15 0.02 260);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.55), inset 0 -1px 0 oklch(0 0 0 / 0.25), 0 8px 22px -10px var(--primary), 0 0 0 1px color-mix(in oklch, var(--primary) 50%, transparent);
+  letter-spacing: 0.03em;
+}
+[data-theme="event-horizon-prime"] [data-slot="button"][data-variant="default"]:not(.done, [data-approve]):hover { filter: brightness(1.08); }
+
+/* Builder's black panels (builder-look.css) stay in Event Horizon; in Prime they open onto deep space */
+[data-theme="event-horizon-prime"] :is(#tree, .hist, .bottom, .ed, details.tool summary) { background-color: transparent; }
+[data-theme="event-horizon-prime"] #term { background-color: color-mix(in oklch, #000 70%, transparent); }

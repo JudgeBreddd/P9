@@ -1,0 +1,624 @@
+/* DUWOP theme (@duwop/theme). The shared look for every app and site we build.
+   Everything is driven by attributes on <html>, set by lib/theme.ts (applyLook):
+     data-theme="<id>"  which theme (list and notes in lib/theme.ts)
+     class="dark"       on for dark themes
+     data-amoled        true-black background on any dark theme
+     data-fx="a b"      effects, space-separated
+     --app-font         the picked font (style on <html>)
+   Selectors aren't tied to <html>, so a theme preview is just an element with the same attributes.
+   Every theme selector has two parts (e.g. .dark[data-theme="x"]) so it outranks the app's own
+   :root / .dark tokens no matter which order the CSS loads in. Don't edit this file in an app:
+   pick themes in lib/duwop-config.ts instead, so every app stays in step. */
+
+/* ---- Fonts ---- */
+@theme {
+  --font-sans: var(--app-font, "Inter"), ui-sans-serif, system-ui, sans-serif;
+}
+html,
+body {
+  font-family: var(--app-font, "Inter"), ui-sans-serif, system-ui, sans-serif;
+  /* Same text width whichever font is picked (lib/theme.ts sets the value per font). */
+  font-size-adjust: var(--app-font-adjust, none);
+}
+
+/* ---- Base ---- */
+
+/* The glow colours effects use, and the default corner radius. Each theme can override them. */
+[data-theme] {
+  --glow: var(--primary);
+  --glow2: var(--primary);
+}
+.dark[data-theme],
+[data-theme]:not(.dark) {
+  --radius: 0.75rem;
+  /* shadcn's sidebar and chart tokens follow the theme too. */
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--card-foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --chart-1: var(--primary);
+  --chart-2: var(--glow2);
+}
+
+/* Daylight: the default light theme. Primary is deep enough to read as text on paper and carry white
+   text (both 5.4:1, WCAG AA). */
+[data-theme="daylight"]:not(.dark) {
+  --background: oklch(0.985 0.004 85);
+  --foreground: oklch(0.2 0.02 270);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.02 270);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.02 270);
+  --primary: oklch(0.52 0.13 70);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.95 0.008 270);
+  --secondary-foreground: oklch(0.25 0.02 270);
+  --muted: oklch(0.95 0.008 270);
+  --muted-foreground: oklch(0.5 0.02 270);
+  --accent: oklch(0.94 0.02 80);
+  --accent-foreground: oklch(0.25 0.02 270);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.9 0.01 270);
+  --input: oklch(0.9 0.01 270);
+  --ring: oklch(0.52 0.13 70);
+}
+
+/* Duskwood: gold on deep ink. The house look and every app's default (named for DUWOP; was "Trove" until 2026-10-10). */
+.dark[data-theme="duskwood"] {
+  --background: oklch(0.16 0.015 270);
+  --foreground: oklch(0.95 0.01 85);
+  --card: oklch(0.2 0.018 270);
+  --card-foreground: oklch(0.95 0.01 85);
+  --popover: oklch(0.2 0.018 270);
+  --popover-foreground: oklch(0.95 0.01 85);
+  --primary: oklch(0.8 0.13 80);
+  --primary-foreground: oklch(0.18 0.02 270);
+  --secondary: oklch(0.26 0.02 270);
+  --secondary-foreground: oklch(0.95 0.01 85);
+  --muted: oklch(0.24 0.018 270);
+  --muted-foreground: oklch(0.68 0.02 270);
+  --accent: oklch(0.28 0.025 270);
+  --accent-foreground: oklch(0.95 0.01 85);
+  --destructive: oklch(0.65 0.2 25);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.8 0.13 80);
+  --glow2: oklch(0.6 0.1 280);
+}
+
+/* ---- Dark themes. Each one only picks a hue and chroma for its neutrals (--nh, --nc) and an accent;
+   this shared rule builds the rest, so they stay balanced. ---- */
+.dark[data-theme]:not([data-theme="duskwood"]) {
+  --background: oklch(0.155 var(--nc) var(--nh));
+  --foreground: oklch(0.96 calc(var(--nc) * 0.4) var(--nh));
+  --card: oklch(0.195 var(--nc) var(--nh));
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --secondary: oklch(0.255 var(--nc) var(--nh));
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.235 var(--nc) var(--nh));
+  --muted-foreground: oklch(0.7 calc(var(--nc) * 0.8) var(--nh));
+  --accent: oklch(0.275 calc(var(--nc) * 1.2) var(--nh));
+  --accent-foreground: var(--foreground);
+  --primary-foreground: oklch(0.16 var(--nc) var(--nh));
+  --destructive: oklch(0.65 0.2 25);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: var(--primary);
+  --glow: var(--primary);
+}
+.dark[data-theme="midnight"] {
+  --nh: 262;
+  --nc: 0.032;
+  --primary: oklch(0.72 0.17 252);
+  --glow2: oklch(0.62 0.18 290);
+}
+.dark[data-theme="ember"] {
+  --nh: 40;
+  --nc: 0.014;
+  --primary: oklch(0.72 0.18 45);
+  --glow2: oklch(0.6 0.2 25);
+}
+.dark[data-theme="forest"] {
+  --nh: 165;
+  --nc: 0.022;
+  --primary: oklch(0.76 0.15 155);
+  --glow2: oklch(0.7 0.12 120);
+}
+.dark[data-theme="synthwave"] {
+  --nh: 300;
+  --nc: 0.045;
+  --primary: oklch(0.72 0.24 345);
+  --glow2: oklch(0.8 0.14 200);
+}
+.dark[data-theme="rose"] {
+  --nh: 350;
+  --nc: 0.025;
+  --primary: oklch(0.8 0.12 5);
+  --glow2: oklch(0.7 0.13 320);
+}
+.dark[data-theme="arctic"] {
+  --nh: 230;
+  --nc: 0.022;
+  --primary: oklch(0.85 0.1 210);
+  --glow2: oklch(0.75 0.09 250);
+}
+.dark[data-theme="mono"] {
+  --nh: 0;
+  --nc: 0;
+  --primary: oklch(0.93 0 0);
+  --glow2: oklch(0.6 0 0);
+}
+
+/* Outrun: 80s/90s arcade racer and space shooter. Sunset orange over deep violet, magenta second glow.
+   Pairs with the Horizon effect. */
+.dark[data-theme="outrun"] {
+  --nh: 290;
+  --nc: 0.06;
+  --primary: oklch(0.78 0.17 55);
+  --glow2: oklch(0.65 0.26 340);
+}
+
+/* Cyberpunk: hazard yellow on near-black teal, cyan second glow, hard corners. Its look is under Personalities. */
+.dark[data-theme="cyberpunk"] {
+  --nh: 200;
+  --nc: 0.03;
+  --primary: oklch(0.92 0.19 105);
+  --glow2: oklch(0.82 0.15 195);
+  --radius: 0px;
+}
+/* 8-bit: console-cartridge colours, square corners. Pairs with the Pixelify font; its look is under Personalities. */
+.dark[data-theme="8bit"] {
+  --nh: 265;
+  --nc: 0.05;
+  --primary: oklch(0.86 0.17 95);
+  --glow2: oklch(0.7 0.19 145);
+  --border: oklch(1 0 0 / 22%);
+  --input: oklch(1 0 0 / 30%);
+  --radius: 0px;
+}
+/* ASCII: green phosphor terminal, square corners. Pairs with JetBrains Mono; its look is under Personalities. */
+.dark[data-theme="ascii"] {
+  --nh: 150;
+  --nc: 0.02;
+  --primary: oklch(0.85 0.2 145);
+  --glow2: oklch(0.7 0.15 145);
+  --border: oklch(0.85 0.2 145 / 30%);
+  --radius: 0px;
+}
+/* Custom: the random palette roller (lib/theme.ts rollPalette) sets --nh, --nc, --primary and --glow2
+   inline on <html>, which outranks these. These are only the look before the first roll. */
+.dark[data-theme="custom"] {
+  --nh: 200;
+  --nc: 0.03;
+  --primary: oklch(0.78 0.16 20);
+  --glow2: oklch(0.68 0.18 80);
+}
+
+/* ---- Light themes other than Daylight: same idea as the dark rule, light values. ---- */
+[data-theme]:not(.dark):not([data-theme="daylight"]) {
+  --background: oklch(0.975 var(--nc) var(--nh));
+  --foreground: oklch(0.24 calc(var(--nc) * 1.6) var(--nh));
+  --card: oklch(0.993 calc(var(--nc) * 0.5) var(--nh));
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --secondary: oklch(0.94 var(--nc) var(--nh));
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.94 var(--nc) var(--nh));
+  --muted-foreground: oklch(0.48 var(--nc) var(--nh));
+  --accent: oklch(0.92 calc(var(--nc) * 1.5) var(--nh));
+  --accent-foreground: var(--foreground);
+  --primary-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.55 0.2 27);
+  --border: oklch(0.88 var(--nc) var(--nh));
+  --input: oklch(0.88 var(--nc) var(--nh));
+  --ring: var(--primary);
+  --glow: var(--primary);
+}
+
+/* Linen: organic modern / Scandi neutrals. Warm oat paper, clay accent, sage second glow, soft corners. */
+[data-theme="linen"]:not(.dark) {
+  --nh: 75;
+  --nc: 0.012;
+  --primary: oklch(0.5 0.1 45);
+  --glow2: oklch(0.62 0.06 140);
+  --radius: 1rem;
+}
+
+/* ---- Personalities (2026-10-10): each theme looks the part, not just its colours ----
+   Builder: "we shouldn't dim it down, we should do more the opposite"; 8-bit and ASCII should look like pixel art
+   and a text terminal. Apps opt elements in with classes they already use:
+     .fx-title   a page title (gets the theme's title treatment and display font)
+     .fx-lift    a card or image tile (frames, cut corners)
+     .fx-meter   a thin progress bar's track, its fill the only child (shadcn's Progress is picked up by data-slot)
+   Everything here is static (no per-frame repaint) except the ASCII cursor blink, which only changes opacity. */
+
+/* Titles: the theme's display font, and a gradient from the main colour to the second glow on every dark theme.
+   Neon (an effect) takes over the colour when it's on. */
+.fx-title {
+  font-family: var(--app-display, inherit);
+}
+/* A display font has its own proportions: the body font's size equaliser (--app-font-adjust) would shrink it. */
+:is([data-theme="8bit"], [data-theme="cyberpunk"], [data-theme="linen"]) .fx-title {
+  font-size-adjust: none;
+}
+.dark[data-theme]:not([data-theme="mono"]):not([data-fx~="neon"]) .fx-title {
+  background: linear-gradient(100deg, var(--primary) 25%, var(--glow2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Colour themes: a hairline of the theme's colour on cards, so surfaces carry it too. */
+.dark[data-theme] [data-slot="card"] {
+  border-color: color-mix(in oklch, var(--primary) 22%, var(--border));
+}
+
+/* Duskwood: a gold title, light catching the top edge. */
+.dark[data-theme="duskwood"]:not([data-fx~="neon"]) .fx-title {
+  background: linear-gradient(180deg, oklch(0.95 0.08 95) 0%, var(--primary) 52%, oklch(0.62 0.13 65) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 1px 0 oklch(0.3 0.06 60));
+}
+
+/* Synthwave: hot pink into cyan, with a pink haze behind. */
+.dark[data-theme="synthwave"]:not([data-fx~="neon"]) .fx-title {
+  filter: drop-shadow(0 0 12px color-mix(in oklch, var(--primary) 55%, transparent));
+}
+
+/* Outrun: chrome-and-sunset arcade title, italic and wide; cards sit on a neon strip. */
+.dark[data-theme="outrun"] .fx-title {
+  font-size: 1.875rem;
+  font-weight: 700;
+  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dark[data-theme="outrun"]:not([data-fx~="neon"]) .fx-title {
+  background: linear-gradient(180deg, oklch(0.96 0.06 95) 0%, oklch(0.88 0.15 85) 38%, var(--primary) 55%, var(--glow2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 2px 0 oklch(0.28 0.14 300)) drop-shadow(0 0 14px color-mix(in oklch, var(--glow2) 45%, transparent));
+}
+.dark[data-theme="outrun"] [data-slot="card"] {
+  border-bottom: 2px solid var(--glow2);
+}
+
+/* Cyberpunk: glitched, upper-case titles; hazard stripes on cards; cut corners on buttons and image tiles. */
+.dark[data-theme="cyberpunk"] .fx-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: none;
+  color: var(--primary);
+  text-shadow:
+    -2px 0 var(--glow2),
+    2px 0 oklch(0.65 0.26 350);
+}
+.dark[data-theme="cyberpunk"] [data-slot="card"] {
+  position: relative;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+  border-color: color-mix(in oklch, var(--primary) 35%, transparent);
+}
+[data-theme="cyberpunk"] [data-slot="card"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: repeating-linear-gradient(-45deg, var(--primary) 0 8px, transparent 8px 16px);
+  opacity: 0.85;
+}
+[data-theme="cyberpunk"] :is([data-slot="button"], .fx-lift > *) {
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+}
+[data-theme="cyberpunk"] [data-slot="button"] {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* 8-bit: an arcade title font with a hard pixel shadow; notched pixel frames and drop shadows on cards, buttons,
+   inputs, badges and image tiles; their images drawn with hard pixels; segmented bars; a faint dither on the page. */
+.dark[data-theme="8bit"] .fx-title {
+  font-size: 1.25rem;
+  line-height: 1.6;
+  background: none;
+  color: var(--primary);
+  text-shadow: 2px 2px 0 color-mix(in oklch, var(--glow2) 30%, black);
+}
+[data-theme="8bit"] {
+  --px: 3px;
+  --frame: color-mix(in oklch, var(--foreground) 70%, transparent);
+}
+.dark[data-theme="8bit"]
+  :is([data-slot="card"], [data-slot="button"], [data-slot="input"], [data-slot="badge"], [data-slot="tabs-list"], .fx-lift > *) {
+  border-color: transparent;
+  border-radius: 0;
+  box-shadow:
+    0 calc(-1 * var(--px)) 0 0 var(--frame),
+    0 var(--px) 0 0 var(--frame),
+    calc(-1 * var(--px)) 0 0 0 var(--frame),
+    var(--px) 0 0 0 var(--frame),
+    calc(2 * var(--px)) calc(2 * var(--px)) 0 var(--px) oklch(0 0 0 / 60%);
+}
+[data-theme="8bit"] [data-slot="button"][data-variant="default"] {
+  --frame: color-mix(in oklch, var(--primary) 55%, black);
+}
+[data-theme="8bit"] [data-slot="button"] {
+  text-transform: uppercase;
+}
+[data-theme="8bit"] [data-slot="button"]:active {
+  translate: var(--px) var(--px);
+  box-shadow:
+    0 calc(-1 * var(--px)) 0 0 var(--frame),
+    0 var(--px) 0 0 var(--frame),
+    calc(-1 * var(--px)) 0 0 0 var(--frame),
+    var(--px) 0 0 0 var(--frame);
+}
+[data-theme="8bit"] .fx-lift img {
+  image-rendering: pixelated;
+}
+[data-theme="8bit"] :is([data-slot="progress-indicator"], .fx-meter > *),
+[data-theme="ascii"] :is([data-slot="progress-indicator"], .fx-meter > *) {
+  background: repeating-linear-gradient(90deg, var(--primary) 0 6px, transparent 6px 8px);
+}
+.dark[data-theme="8bit"] body {
+  background-image: repeating-conic-gradient(oklch(1 0 0 / 3.5%) 0 25%, transparent 0 50%);
+  background-size: 4px 4px;
+}
+
+/* ASCII: a green phosphor terminal. Double-line boxes, [ bracketed ] buttons and tags, a prompt and a blinking
+   cursor on titles, glowing text and scanlines over everything. Images keep their own colours (builder 2026-10-10: green-tinted
+   images were too much). */
+[data-theme="ascii"] {
+  font-variant-ligatures: none;
+}
+.dark[data-theme="ascii"] body {
+  text-shadow: 0 0 6px color-mix(in oklch, var(--primary) 30%, transparent);
+}
+.dark[data-theme="ascii"] .fx-title {
+  background: none;
+  color: var(--primary);
+}
+.dark[data-theme="ascii"] .fx-title::before {
+  content: "> ";
+  opacity: 0.6;
+}
+.dark[data-theme="ascii"] .fx-title::after {
+  content: "\2588";
+  margin-left: 0.15em;
+  font-weight: 400;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dark[data-theme="ascii"] .fx-title::after {
+    animation: fx-blink 1.1s step-end infinite;
+  }
+}
+@keyframes fx-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.dark[data-theme="ascii"] [data-slot="card"] {
+  border: 3px double color-mix(in oklch, var(--primary) 45%, transparent);
+}
+[data-theme="ascii"] :is([data-slot="input"], [data-slot="textarea"], [data-slot="separator"], [data-slot="tabs-list"]) {
+  border-style: dashed;
+}
+[data-theme="ascii"] :is([data-slot="button"]:not([data-size^="icon"]), [data-slot="badge"])::before {
+  content: "[";
+  opacity: 0.7;
+}
+[data-theme="ascii"] :is([data-slot="button"]:not([data-size^="icon"]), [data-slot="badge"])::after {
+  content: "]";
+  opacity: 0.7;
+}
+.dark[data-theme="ascii"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, oklch(0 0 0 / 16%) 2px 3px);
+}
+
+/* Linen: a soft serif title, like a printed catalogue. */
+[data-theme="linen"]:not(.dark) .fx-title {
+  color: var(--primary);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Mono: stark white titles, no gradient. */
+.dark[data-theme="mono"] .fx-title {
+  color: var(--foreground);
+  letter-spacing: 0.02em;
+}
+
+/* AMOLED: true black behind everything (pixels off on OLED screens), with surfaces just above black so
+   cards still read. Works on every dark theme. */
+.dark[data-theme][data-amoled] {
+  --background: oklch(0 0 0);
+  --card: oklch(0.13 var(--nc, 0.015) var(--nh, 270));
+  --popover: oklch(0.13 var(--nc, 0.015) var(--nh, 270));
+  --muted: oklch(0.17 var(--nc, 0.015) var(--nh, 270));
+  --secondary: oklch(0.2 var(--nc, 0.015) var(--nh, 270));
+  --accent: oklch(0.21 var(--nc, 0.015) var(--nh, 270));
+}
+
+/* ---- Effects: words in data-fx. Apps opt elements in with these classes:
+   .fx-lift      a card or image tile that lifts and glows (Underglow) and gets a sheen (Shine)
+   .fx-ambient   a <div> near the top of <body>: the backdrop for Ambient, Drifting and Horizon. Put one
+                 empty <div class="fx-horizon"> inside it for Horizon (2026-10-10)
+   .fx-neon      a heading or logo that glows like a neon tube (Neon)
+   .fx-title     a page title: each theme's title look and display font (see Personalities)
+   .fx-meter     a thin progress bar's track (its fill the only child); shadcn Progress needs nothing ---- */
+
+/* Underglow: cards and image tiles glow in the theme's colour on hover, the same in every theme (2026-10-10:
+   no theme glows all the time). 8-bit's frame is itself a box-shadow, so there the frame lights up instead. */
+[data-fx~="underglow"] :is(.fx-lift, [data-slot="card"]) {
+  transition:
+    translate 0.2s ease,
+    box-shadow 0.25s ease;
+}
+/* The lift itself lives here (2026-10-10), so every app gets it, not only ones that add their own hover class.
+   Image tiles rise; big cards only glow, since a whole settings panel jumping would be too much. */
+[data-fx~="underglow"] :is(.fx-lift:hover, .group:hover .fx-lift, .fx-lift:focus-visible, .group:focus-visible .fx-lift) {
+  translate: 0 -4px;
+}
+[data-fx~="underglow"]:not([data-theme="8bit"])
+  :is(.fx-lift:hover, .group:hover .fx-lift, .fx-lift:focus-visible, .group:focus-visible .fx-lift, [data-slot="card"]:hover) {
+  box-shadow:
+    0 20px 38px -14px color-mix(in oklch, var(--glow) 75%, transparent),
+    0 0 0 1px color-mix(in oklch, var(--glow) 50%, transparent);
+}
+[data-fx~="underglow"][data-theme="8bit"] :is([data-slot="card"]:hover, .fx-lift:hover > *, .group:hover .fx-lift > *) {
+  --frame: var(--glow);
+}
+
+/* The backdrop. ::before is the Ambient wash; the Horizon grid is the .fx-horizon child. */
+.fx-ambient {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+[data-fx~="ambient"] .fx-ambient,
+[data-fx~="horizon"] .fx-ambient {
+  display: block;
+}
+
+/* Ambient glow: a soft wash of the theme's two colours. */
+[data-fx~="ambient"] .fx-ambient::before {
+  content: "";
+  position: absolute;
+  /* Screen-sized, not oversized: about half the area to blend on every scroll frame (2026-10-10). The glows
+     fade to nothing well inside the edges, so the drift never shows a border. */
+  inset: 0;
+  background:
+    radial-gradient(53% 45% at 5% -3%, color-mix(in oklch, var(--glow) 16%, transparent), transparent 70%),
+    radial-gradient(48% 42% at 95% 103%, color-mix(in oklch, var(--glow2) 13%, transparent), transparent 70%);
+}
+/* Drifting glow: the ambient wash slowly moves (only for people who haven't asked for less motion). */
+@media (prefers-reduced-motion: no-preference) {
+  [data-fx~="motion"] .fx-ambient::before {
+    animation: fx-drift 45s ease-in-out infinite alternate;
+  }
+}
+@keyframes fx-drift {
+  to {
+    transform: translate(7%, -5%) rotate(10deg) scale(1.12);
+  }
+}
+
+/* Horizon: an 80s neon grid running to the horizon along the bottom of the page. Scrolls with Drifting.
+   Markup: <div class="fx-ambient"><div class="fx-horizon"></div></div>. The child holds the tilt and the fade and
+   never changes; only its ::before (the grid) slides, by transform, so the browser moves an already-drawn layer
+   instead of repainting a page-wide glowing grid every frame (the old background-position + drop-shadow version
+   made whole pages feel sluggish, 2026-10-10). The glow is drawn into the lines rather than added by a filter. */
+.fx-horizon {
+  display: none;
+}
+[data-fx~="horizon"] .fx-horizon {
+  display: block;
+  position: absolute;
+  left: -50%;
+  right: -50%;
+  bottom: 0;
+  height: 50%;
+  overflow: hidden;
+  transform: perspective(320px) rotateX(62deg);
+  transform-origin: 50% 100%;
+  mask-image: linear-gradient(to top, black 15%, transparent 90%);
+  opacity: 0.7;
+}
+[data-fx~="horizon"] .fx-horizon::before {
+  content: "";
+  position: absolute;
+  inset: -64px 0 0;
+  --line: color-mix(in oklch, var(--glow2) 85%, transparent);
+  --halo: color-mix(in oklch, var(--glow2) 25%, transparent);
+  background:
+    repeating-linear-gradient(to right, var(--halo) 0 1.5px, var(--line) 1.5px 3.5px, var(--halo) 3.5px 5px, transparent 5px 64px),
+    repeating-linear-gradient(to bottom, var(--halo) 0 1.5px, var(--line) 1.5px 3.5px, var(--halo) 3.5px 5px, transparent 5px 64px);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-fx~="horizon"][data-fx~="motion"] .fx-horizon::before {
+    will-change: transform;
+    animation: fx-road 1.6s linear infinite;
+  }
+}
+@keyframes fx-road {
+  to {
+    transform: translateY(64px);
+  }
+}
+
+/* Shine: a sweep of light across a card on hover. */
+[data-fx~="shine"] .fx-lift {
+  position: relative;
+  overflow: hidden;
+}
+[data-fx~="shine"] .fx-lift::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 35%, rgb(255 255 255 / 0.2) 50%, transparent 65%);
+  translate: -130% 0;
+}
+[data-fx~="shine"] :is(.fx-lift:hover, .group:hover .fx-lift)::after {
+  translate: 130% 0;
+  transition: translate 0.8s ease;
+}
+
+/* Neon: text glows like a lit neon tube in the theme's colour, and now and then flickers. */
+[data-fx~="neon"] .fx-neon {
+  color: color-mix(in oklch, var(--glow) 35%, white);
+  text-shadow:
+    0 0 2px color-mix(in oklch, var(--glow) 80%, white),
+    0 0 10px var(--glow),
+    0 0 24px var(--glow),
+    0 0 48px color-mix(in oklch, var(--glow) 60%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-fx~="neon"] .fx-neon {
+    animation: fx-flicker 7s linear infinite;
+  }
+}
+/* At most two quick dips every 7 seconds, never to full dark: well under the 3-flashes-a-second limit. */
+@keyframes fx-flicker {
+  0%,
+  41%,
+  43%,
+  45.5%,
+  100% {
+    opacity: 1;
+  }
+  42%,
+  44.5% {
+    opacity: 0.55;
+    text-shadow: none;
+  }
+}
+
+/* Anyone who asked their system for less motion gets none of it. The animations above only run under
+   no-preference; this turns off the hover movement too. */
+@media (prefers-reduced-motion: reduce) {
+  [data-fx] :is(.fx-lift, [data-slot="card"]) {
+    transition: none;
+    /* biome-ignore lint/complexity/noImportantStyles: must also stop an app's own hover lift (e.g. a Tailwind group-hover translate) for reduced motion */
+    translate: none !important;
+  }
+  [data-fx] .fx-lift::after {
+    display: none;
+  }
+}

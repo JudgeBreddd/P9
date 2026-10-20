@@ -1,0 +1,381 @@
+import { createServer } from 'node:http';
+import { readdir, readFile as readAsset, stat } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
+import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { getRequestListener } from '@hono/node-server';
+import { WebSocketServer } from 'ws';
+import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
+import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, setProtection, protection } from '../../packages/files/index.mjs';
+import { createMission } from './mission.mjs';
+import { createHub } from './hub.mjs';
+import { openLedger, operations } from './ledger.mjs';
+import { createAnymouse } from './anymouse.mjs';
+import { createChat } from './chat.mjs';
+import { createLifecycle } from './lifecycle.mjs';
+import { createTerminals } from './terminals.mjs';
+import { createAuth } from './auth.mjs';
+import { planLimits } from './limits.mjs';
+import { loginPage, loginScript } from './login-page.mjs';
+import { authority, stillAuthorized } from './authority.mjs';
+
+function equal(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const left = Buffer.from(a), right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+function cookieValue(header, name) {
+  const values = (header ?? '').split(';').map((part) => part.trim()).filter((part) => part.startsWith(name + '='));
+  return values.length === 1 ? values[0].slice(name.length + 1) : '';
+}
+const READS = ['GET', 'HEAD', 'OPTIONS'];
+const isPublic = (route) => PUBLIC_ROUTES.some((prefix) => route === prefix || route.startsWith(prefix + '/'));
+const TERMINAL_SOCKET = /^\/terminals\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/socket$/;
+// An upgrade's path, or null. Only an origin-form target ('/x') is parsed: 'GET //' throws in new URL, and an upgrade
+// callback is outside Hono's error handler, so it would end the daemon.
+const upgradeRoute = (url) => {
+  if (!/^\/(?![/\\])/.test(url ?? '')) return null;
+  try { return new URL(url, 'http://p9.invalid').pathname; } catch { return null; }
+};
+const refuse = (socket, status) => socket.end('HTTP/1.1 ' + status + ' Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+const webRoot = fileURLToPath(new URL('../web/dist/', import.meta.url));
+const types = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
+
+export function authorize(headers, method, transport, credentials) {
+  // The desktop check. The remote listener never accepts desktop credentials, proxy headers or source IP.
+  if (!['unix', 'pipe'].includes(transport)) return 401;
+  const cookies = (headers.cookie ?? '').split(';').map((part) => part.trim());
+  if (cookies.filter((part) => part.startsWith('p9=')).length !== 1
+      || !equal(cookies.find((part) => part.startsWith('p9='))?.slice(3), credentials.cookie)) return 401;
+  if (headers.origin !== ORIGIN || headers.host !== 'p9.local') return 403;
+  if ((!READS.includes(method) || headers.upgrade)
+      && !equal(headers['x-p9-csrf'], credentials.csrf)) return 403;
+  return 0;
+}
+
+// The remote check (phase 10): this device's passkey session, the pinned Serve origin and host, and the session's
+// CSRF token on anything that is not a read. Tailscale-User-* headers and the source address are never consulted.
+export function authorizeRemote(headers, method, route, auth, remote) {
+  if (headers.host !== remote.host) return { status: 403 };
+  const sameOrigin = headers.origin === remote.origin;
+  const upgrade = Boolean(headers.upgrade);
+  const mutating = !READS.includes(method) || upgrade;
+  if (isPublic(route)) return { status: mutating && !sameOrigin ? 403 : 0 };
+  const session = auth.session(cookieValue(headers.cookie, 'p9s'));
+  if (session.status) return session;
+  // A browser sends Origin on every mutation and upgrade, so a missing one is refused like a foreign one.
+  if ((headers.origin !== undefined || mutating) && !sameOrigin) return { status: 403 };
+  // A browser WebSocket cannot send x-p9-csrf, but always sends Origin: an upgrade needs the exact origin instead.
+  if (upgrade) return sameOrigin ? session : { status: 403 };
+  if (mutating && !equal(headers['x-p9-csrf'], session.csrf)) return { status: 403 };
+  return session;
+}
+
+export function createListener({ workspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, remote, anymouse = createAnymouse() }) {
+  const lifecycle = createLifecycle();
+  const mission = createMission({ workspace, recovery, settings, instance, lifecycle });
+  const hub = createHub({ workspace, settings });
+  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle });
+  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket });
+  const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
+  // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
+  setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
+  const json = async (c) => {
+    if (c.req.header('content-type') !== 'application/json') throw new Error('json-required');
+    return c.req.json();
+  };
+  const reply = (c, { status, ...result }) => c.json(result, status);
+  // EBUSY is 503 (try again), not 409, which the clients read as "the file changed", nor 423, which means a locked device.
+  const statuses = { ENOENT: 404, EACCES: 403, EPERM: 403, EROFS: 403, EBUSY: 503, ENOSPC: 507, EDQUOT: 507, EIO: 500 };
+  const onError = (error) => {
+    if (error.message === 'session-ended') return new Response(JSON.stringify({ error: 'login-required' }), { status: 401, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    const invalid = error instanceof SyntaxError || ['unsafe-path', 'locked-path', 'unsafe-file', 'path-changed',
+      'binary-or-oversize', 'invalid-save', 'json-required'].includes(error.message) || ['ELOOP', 'ENOTDIR'].includes(error.code);
+    const code = Object.hasOwn(statuses, error.code) ? error.code : invalid ? 'REQUEST_REFUSED' : 'INTERNAL_FAILURE';
+    if (code !== 'REQUEST_REFUSED') console.error(JSON.stringify({ event: 'P9_REQUEST_FAILED', code }));
+    return new Response(JSON.stringify({ error: code === 'REQUEST_REFUSED' ? 'request-refused' : 'storage-unavailable' }), {
+      status: statuses[code] ?? (invalid ? 400 : 500), headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    });
+  };
+  const hardening = async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('X-Content-Type-Options', 'nosniff');
+    await next();
+  };
+  const limit = bodyLimit({ maxSize: MAX_BYTES * 6 + 8192, onError: (c) => c.json({ error: 'body-too-large' }, 413) });
+
+  // The routes both listeners serve. Device management is desktop-only and the login routes are remote-only.
+  const api = new Hono();
+  api.onError(onError);
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', workspace,
+    recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
+  api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
+  api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));
+  // File protection off lifts these three read-only rules too (Builder, 2026-10-18: "Everything").
+  const readOnly = (path, name = path.toLowerCase()) => protection() && Boolean(
+    // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
+    // ponytail: Builder edits registry.json outside P9; a reviewed registry editor would need its own confirm step.
+    (settings && name === settings.registry.toLowerCase())
+    // The space holds button commands too, so it is read-only to P9 for the same reason.
+    || (settings?.space && name === settings.space.toLowerCase())
+    // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
+    || (settings?.hub && name === (settings.hub + '/mission_control.py').toLowerCase()));
+  api.put('/files', async (c) => {
+    if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
+    const input = parseSave(await c.req.json());
+    if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
+    const result = await guardedSave(workspace, input.path, input.hash, input.content, recovery);
+    if (result.draftRetained) console.error(JSON.stringify({ event: 'P9_DRAFT_RETAINED' }));
+    if (result.kind === 'failed') console.error(JSON.stringify({ event: 'P9_REQUEST_FAILED', code: result.code }));
+    return c.json(result, result.kind === 'saved' ? 200 : result.kind === 'conflict' ? 409 : statuses[result.code] ?? 500);
+  });
+  for (const route of ['/mission', '/mission/*', '/scripts/*', '/runs/*', '/apps/*', '/pages/*']) {
+    api.use(route, async (c, next) => (settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503)));
+  }
+  api.get('/mission', async (c) => c.json(await mission.overview()));
+  api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
+  api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
+  // A space log view rides the hub text route, so both clients open it like any other log.
+  api.get('/mission/hub/text', async (c) => reply(c, c.req.query('kind') === 'space' ? await mission.spaceLog(c.req.query('name')) : await hub.text(c.req.query())));
+  // Fix with Claude: the daemon reads the incident through the hub's own checks and seeds a Claude chat with it; the
+  // client names only the machine and incident, never prompt text. workspace-hub opened a terminal here instead.
+  api.post('/mission/fix', async (c) => {
+    const { host, name } = (await json(c)) ?? {};
+    const incident = await hub.text({ kind: 'incident', host, name });
+    if (incident.status !== 200) return reply(c, incident);
+    // Only an incident the hub lists: a server read that fails comes back as a placeholder line, not an error.
+    if (!(await hub.sections()).incidents.some((i) => i.host === host && i.name === name)) return reply(c, { status: 404, error: 'not-found' });
+    const where = host === os.hostname().split('.')[0] ? '' : ` You are on ${os.hostname().split('.')[0]}; reach ${host} with ssh ${host} (its workspace is ~/workspace).`;
+    const made = await chat.create({ provider: 'claude', title: 'Fix: ' + name.replace(/\.md$/, '').slice(0, 100) });
+    const sent = await chat.prompt(made.conversation, { text: `This is a doctor incident from ${host}. Find the cause and fix it, then run `
+      + `doctor.sh --fix (the workspace's _system/scripts) to confirm it passes.${where}\n\n${incident.text.slice(-90_000)}` });
+    return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
+  });
+  // New idea: one new file in _ideas/ (or _ideas/needs-done/), named as workspace-hub's new_idea names it; never replaces one.
+  api.post('/mission/idea', async (c) => {
+    const { name, text, needs_done: needsDone } = (await json(c)) ?? {};
+    if (typeof name !== 'string' || typeof text !== 'string' || typeof needsDone !== 'boolean' || name.length > 200) return reply(c, { status: 400, error: 'invalid-idea' });
+    const dot = name.trim().lastIndexOf('.');
+    const [base, ext] = dot > 0 ? [name.trim().slice(0, dot), name.trim().slice(dot + 1)] : [name.trim(), 'md'];
+    const slug = base.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120);
+    if (!slug) return reply(c, { status: 400, error: 'give it a name' });
+    const file = `${slug}.${ext.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'md'}`;
+    const relative = ['_ideas', ...(needsDone ? ['needs-done'] : []), file].join('/');
+    try { await createFile(workspace, relative, text.trimEnd() + '\n'); }
+    catch (error) {
+      if (error.code === 'EEXIST') return reply(c, { status: 409, error: `${file} already exists` });
+      if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return reply(c, { status: 404, error: 'no _ideas folder' });
+      return reply(c, { status: 400, error: error.message });
+    }
+    return reply(c, { status: 201, path: relative });
+  });
+  api.post('/mission/hub/decide', async (c) => reply(c, await hub.decide(await json(c))));
+  api.post('/scripts/:id/run', async (c) => reply(c, await mission.run(c.req.param('id'), await json(c))));
+  api.get('/runs/:id', (c) => reply(c, mission.output(c.req.param('id'), Number(c.req.query('from') ?? 0))));
+  api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));
+  api.post('/pages/:id/launch', async (c) => reply(c, await mission.launch('pages', c.req.param('id'), await json(c))));
+  api.get('/agent-lock', (c) => reply(c, chat.lock()));
+  // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
+  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
+  api.get('/setup', async (c) => {
+    const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
+    return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: await present(settingsFile),
+      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
+  });
+  api.get('/chat', (c) => c.json({ conversations: chat.list() }));
+  api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
+  api.get('/chat/events', async (c) => reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0))));
+  api.get('/usage', async (c) => { const { claudeLive, ...usage } = ledger.usage(); return c.json({ ...usage, limits: await planLimits({ home: os.homedir(), claudeLive }) }); });
+  api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
+  api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
+  api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
+  if (terminals) {
+    api.get('/terminals', async (c) => c.json({ terminals: await terminals.list() }));
+    api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
+    api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
+  }
+  api.post('/stop-all', async (c) => {
+    // Checked after the lifecycle wait for running starts, so a device revoked meanwhile stops nothing.
+    // ponytail: a desktop Stop All that joins this one in that window gets its 401 too; pressing it again works.
+    const results = await lifecycle.stopAll(() => {
+      stillAuthorized();
+      return Promise.all([chat.stopAll(), mission.stopAll(), terminals?.stopAll() ?? 'stopped']);
+    });
+    const result = results.some((value) => String(value).startsWith('cleanup-failed')) ? 'cleanup-failed' : 'stopped';
+    return c.json({ result, components: { chat: results[0], scripts: results[1], terminals: results[2] } }, result === 'stopped' ? 200 : 500);
+  });
+
+  const app = new Hono();
+  app.onError(onError);
+  app.use('*', async (c, next) => {
+    const status = authorize(Object.fromEntries(c.req.raw.headers), c.req.method, transport, credentials);
+    if (status) return c.json({ error: status === 401 ? 'login-required' : 'request-refused' }, status);
+    await next();
+  });
+  app.use('*', hardening, limit, operations(ledger, 'desktop'));
+  if (auth) {
+    // The only way a device is approved, locked, revoked or reset: the desktop, over the Unix socket.
+    app.get('/devices', (c) => c.json(auth.list()));
+    app.post('/devices/enrollments/:id/approve', (c) => reply(c, auth.approve(c.req.param('id'))));
+    app.post('/devices/enrollments/:id/refuse', (c) => reply(c, auth.refuse(c.req.param('id'))));
+    app.post('/devices/reset', (c) => reply(c, auth.reset()));
+    app.post('/devices/:id/lock', (c) => reply(c, auth.lock(c.req.param('id'), 'desktop')));
+    app.post('/devices/:id/revoke', (c) => reply(c, auth.revoke(c.req.param('id'))));
+  }
+  // Threat model row 15: only the desktop turns the agent lock on or off; reading it is on the shared api.
+  app.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
+  // Threat model row 4: file protection is read and changed by the desktop only; the phone just lives with it.
+  // New files from Dev Focus (threat model row 4): create-only through packages/files, so it never replaces a file.
+  app.post('/files', async (c) => {
+    if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
+    const input = await c.req.json();
+    if (!input || typeof input !== 'object' || Object.keys(input).sort().join() !== 'content,path' || typeof input.path !== 'string' || typeof input.content !== 'string') return c.json({ error: 'request-refused' }, 400);
+    if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
+    try { return c.json(await createFile(workspace, input.path, input.content), 201); }
+    catch (error) { if (error.code === 'EEXIST') return c.json({ error: 'file-exists' }, 409); throw error; }
+  });
+  app.get('/file-protection', (c) => c.json({ on: protection() }));
+  app.post('/file-protection', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return c.json({ error: 'request-refused' }, 400);
+    ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('file-protection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.on ? 'on' : 'off');
+    setProtection(body.on);
+    return c.json({ on: protection() });
+  });
+  app.route('/', api);
+
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  const attachTerminal = (request, socket, head, route) => {
+    const match = TERMINAL_SOCKET.exec(route);
+    if (!terminals || !match) return refuse(socket, 404);
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      // Before anything else: ws reports a protocol error (an over-limit frame, bad UTF-8) as an 'error' event, and an
+      // unheard one would end the daemon. The socket is cut; attach's close handler stops its tmux client.
+      ws.on('error', () => ws.terminate());
+      terminals.attach(match[1], ws, socket).catch(() => (ws.readyState === ws.OPEN ? ws.close(1011, 'terminal-failed') : ws.terminate()));
+    });
+  };
+  const options = { maxHeaderSize: 8192, requestTimeout: 10000, headersTimeout: 5000 };
+  const server = createServer(options, getRequestListener(app.fetch));
+  server.on('upgrade', (request, socket, head) => {
+    const status = authorize(request.headers, request.method, transport, credentials);
+    if (status) return refuse(socket, status);
+    const route = upgradeRoute(request.url);
+    if (!route) return refuse(socket, 400);
+    attachTerminal(request, socket, head, route);
+  });
+  server.maxConnections = 32;
+  Object.assign(server, { chat, mission, terminals, lifecycle, auth });
+  if (auth) server.remote = remoteListener();
+  return server;
+
+  function remoteListener() {
+    // Every open socket of each device (requests in flight, long polls, terminal sockets): revoke, lock, reset and a
+    // new login of that device destroy them at once, so nothing keeps working on an old session.
+    const open = new Map();
+    const watched = new WeakSet();
+    const busy = new WeakMap();  // socket -> Map(device -> requests still running on it; HTTP pipelining can stack them)
+    const track = (device, socket) => {
+      if (!open.has(device)) open.set(device, new Set());
+      open.get(device).add(socket);
+      if (watched.has(socket)) return;
+      watched.add(socket);
+      socket.once('close', () => { for (const sockets of open.values()) sockets.delete(socket); });
+    };
+    auth.onClose((device) => { for (const socket of open.get(device) ?? []) socket.destroy(); open.delete(device); });
+    const remoteApp = new Hono();
+    remoteApp.onError(onError);
+    remoteApp.use('*', async (c, next) => {
+      const headers = Object.fromEntries(c.req.raw.headers);
+      const result = authorizeRemote(headers, c.req.method, c.req.path, auth, remote);
+      // A browser opening a page with no session (the installed phone app starting on /phone/) goes to the login page;
+      // fetches and sockets keep the JSON 401. ponytail: keyed on Sec-Fetch-Mode (Safari 16.4+, every current Chromium).
+      if (result.status === 401 && c.req.method === 'GET' && headers['sec-fetch-mode'] === 'navigate') return c.redirect('/login');
+      if (result.status) return c.json({ error: { 401: 'login-required', 423: 'locked' }[result.status] ?? 'request-refused' }, result.status);
+      // A keep-alive socket belongs to the devices with a request still running on it plus this request's device: a
+      // public login on it must not be cut by that login's own rotation, one device's revoke must not cut another
+      // device's request, and a request pipelined behind a long poll must not untrack the poll.
+      const socket = c.env.incoming.socket;
+      const running = busy.get(socket) ?? new Map();
+      busy.set(socket, running);
+      for (const [device, sockets] of open) if (!running.get(device)) sockets.delete(socket);
+      if (!result.device) return next();
+      const device = result.device, token = cookieValue(headers.cookie, 'p9s');
+      c.set('device', device);
+      track(device, socket);
+      running.set(device, (running.get(device) ?? 0) + 1);
+      // Handlers call stillAuthorized() before a side effect that follows an await; this is the check they run.
+      // Counted until the response has gone out, not just until the handler returns: queued bytes stay cuttable.
+      c.env.outgoing.once('close', () => running.set(device, running.get(device) - 1));
+      await authority.run(() => auth.session(token).status === 0, next);
+    });
+    remoteApp.use('*', hardening, limit);
+    remoteApp.use('*', async (c, next) => {
+      await next();
+      c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+      c.header('Referrer-Policy', 'no-referrer');
+    });
+    const login = (c, { status, token, csrf, ...result }) => {
+      if (token) c.header('Set-Cookie', 'p9s=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200');
+      return c.json(csrf ? { ...result, csrf } : result, status);
+    };
+    remoteApp.get('/login', (c) => c.html(loginPage));
+    remoteApp.get('/login.js', (c) => c.body(loginScript, 200, { 'content-type': 'text/javascript; charset=utf-8' }));
+    remoteApp.post('/auth/enroll', async (c) => reply(c, auth.request(await json(c))));
+    remoteApp.post('/auth/enroll/:id/options', async (c) => reply(c, await auth.enrollOptions(c.req.param('id'))));
+    remoteApp.post('/auth/enroll/:id/verify', async (c) => login(c, await auth.enrollVerify(c.req.param('id'), await json(c))));
+    remoteApp.post('/auth/login/options', async (c) => reply(c, await auth.loginOptions()));
+    remoteApp.post('/auth/login/verify', async (c) => login(c, await auth.loginVerify(await json(c))));
+    // The body can take a while to arrive: re-check the session once it has, before any handler acts on it.
+    remoteApp.use('*', async (c, next) => {
+      if (!['GET', 'HEAD'].includes(c.req.method)) { await c.req.text(); stillAuthorized(); }
+      await next();
+    });
+    // Operation IDs bind to the device, so one device can never replay or read another device's stored reply.
+    remoteApp.use('*', operations(ledger, (c) => 'device:' + c.get('device')));
+    remoteApp.get('/', (c) => c.redirect('/phone/'));
+    remoteApp.get('/phone', (c) => c.redirect('/phone/'));
+    remoteApp.get('/phone/', async (c) => c.html(await readAsset(path.join(webRoot, 'phone', 'index.html'), 'utf8')));
+    remoteApp.get('/manifest.webmanifest', async (c) => c.body(await readAsset(path.join(webRoot, 'manifest.webmanifest')), 200,
+      { 'content-type': types['.webmanifest'] }));
+    remoteApp.get('/sw.js', async (c) => c.body(await readAsset(path.join(webRoot, 'sw.js')), 200,
+      { 'content-type': types['.js'], 'service-worker-allowed': '/' }));
+    remoteApp.get('/p9-icon.png', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.png')), 200,
+      { 'content-type': 'image/png' }));
+    remoteApp.get('/p9-icon.svg', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.svg')), 200,
+      { 'content-type': types['.svg'] }));
+    remoteApp.get('/_astro/:file', async (c) => {
+      const file = c.req.param('file');
+      if (!/^[a-zA-Z0-9_.-]+$/.test(file)) return c.json({ error: 'request-refused' }, 400);
+      return c.body(await readAsset(path.join(webRoot, '_astro', file)), 200,
+        { 'content-type': types[path.extname(file)] ?? 'application/octet-stream' });
+    });
+    // Self-lock answers on its own socket, so that one is spared; every other socket of the device closes.
+    remoteApp.post('/lock', (c) => {
+      const socket = c.env.incoming.socket, device = c.get('device');
+      if (busy.get(socket)?.get(device) === 1) open.get(device)?.delete(socket);  // not when another request of it runs there
+      return reply(c, auth.lock(device, 'self'));
+    });
+    remoteApp.route('/', api);
+    const remoteServer = createServer(options, getRequestListener(remoteApp.fetch));
+    remoteServer.on('upgrade', (request, socket, head) => {
+      const route = upgradeRoute(request.url);
+      if (!route) return refuse(socket, 400);
+      const result = isPublic(route) ? { status: 404 } : authorizeRemote(request.headers, request.method, route, auth, remote);
+      if (result.status) return refuse(socket, result.status);
+      track(result.device, socket);
+      // An open terminal ends with its session, not only when the next HTTP request finds it expired.
+      const expiry = setTimeout(() => socket.destroy(), Math.max(0, result.expires - Date.now()));
+      expiry.unref();
+      socket.once('close', () => clearTimeout(expiry));
+      attachTerminal(request, socket, head, route);
+    });
+    remoteServer.maxConnections = 32;
+    return remoteServer;
+  }
+}
