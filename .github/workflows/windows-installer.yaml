@@ -10,9 +10,6 @@ on:
         description: Release tag to build and attach the installer to (the release must exist)
         required: true
         default: v0.1.1
-  # ponytail: lets the workflow run before it reaches main (workflow_dispatch only works from the default branch).
-  push:
-    branches: [windows-build]
 
 permissions:
   contents: write
@@ -22,7 +19,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     env:
-      TAG: ${{ inputs.tag || 'v0.1.1' }}
+      TAG: ${{ inputs.tag }}
       # NSIS 3.0.4 cannot open paths over 260 characters; the runner's default pnpm cache put
       # electron-builder's StdUtils.nsh at 276. A short cache root keeps the dlx path under the limit.
       npm_config_cache_dir: C:\pc
