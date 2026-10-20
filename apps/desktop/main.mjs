@@ -15,6 +15,8 @@ export const APP_URL = 'p9://app/';
 export const DEV_URL = 'p9://dev/';
 export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme';
+// Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
+export const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
 export const FILE_PROTECTION_DOCS = 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection';
@@ -159,7 +161,7 @@ export async function createDesktop({ state, open } = {}) {
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [] } }); // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + app.getVersion(), ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [])] } }); // the test runs click the shell straight away
   window.removeMenu();
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -509,6 +511,13 @@ export async function createDesktop({ state, open } = {}) {
         || args.length) throw new Error('ipc-sender-refused');
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [DOCS_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(DOCS_URL);
+    return { opened: true };
+  });
+  ipcMain.handle('p9:open-updates', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [RELEASES_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(RELEASES_URL);
     return { opened: true };
   });
   // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,

@@ -13,6 +13,7 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
 const PETS = { chat: look(true), dev: look(false), mission: look(false) };
 const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme'; // main.mjs loads only inside Electron
+const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -80,6 +81,12 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), DOCS_URL);
+  // Check for updates (threat model row 28): shows this build's version and opens only the newest-release page.
+  const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.match(await page.locator('#setVer').innerText(), new RegExp('^You have P9 ' + version.replaceAll('.', '\\.') + '\\. '));
+  await page.click('#setUpd');
+  for (let i = 0; i < 50 && url.trim() !== RELEASES_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== RELEASES_URL) await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(url.trim(), RELEASES_URL);
   await page.click('#setAm');
   await page.locator('#amDlg[open]').waitFor();
   await page.click('#amClose');

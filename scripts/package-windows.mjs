@@ -54,7 +54,12 @@ const daemonDeps = path.join(build, 'daemon-deps');
 await mkdir(daemonDeps, { recursive: true });
 for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) await copyFile(path.join(root, file), path.join(daemonDeps, file));
 run(process.execPath, [process.env.npm_execpath, 'install', '--prod', '--frozen-lockfile', '--config.node-linker=hoisted'], { cwd: daemonDeps });
-run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', '--x64']);
+// NSIS 3.0.4 cannot open a path over 260 characters, and pnpm's default dlx cache put electron-builder's StdUtils.nsh at
+// 276 (the Windows desktop 2026-10-17, GitHub's Windows runner 2026-10-20). A short cache root on the same drive keeps it under;
+// a cache folder you set yourself wins. --publish never: on a CI machine electron-builder otherwise uploads by itself.
+const cacheDir = process.env.npm_config_cache_dir || (process.platform === 'win32' ? path.join(path.parse(root).root, 'p9-cache') : undefined);
+run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', '--x64', '--publish', 'never'],
+  { env: { ...process.env, ...(cacheDir ? { npm_config_cache_dir: cacheDir } : {}) } });
 // v1 installers are unsigned (README): SHA256SUMS beside them is how a download is checked.
 const out = path.join(root, 'dist', 'windows');
 const installers = (await readdir(out)).filter((name) => name.endsWith('.exe')).sort();
