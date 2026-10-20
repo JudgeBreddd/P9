@@ -4,7 +4,7 @@
 
 One workspace. Every agent. Your focus.
 
-**Version 0.1.1, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.2, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` below prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
 
 P9 is a desktop app with three focus modes in one window:

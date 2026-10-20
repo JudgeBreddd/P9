@@ -1,6 +1,9 @@
-# Builds the Windows installer on GitHub's Windows machine and attaches it, with SHA256SUMS, to a release.
-# Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag.
-# The release must already exist. Windows minutes count double against the private repo's monthly allowance.
+# Builds the Windows installer on GitHub's Windows machine.
+# Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag: it builds that
+# tag and attaches the .exe and SHA256SUMS to the release (which must already exist). Tags before v0.1.2 lack the
+# packaging fix and fail on this machine (the NSIS 260-character path).
+# A push to a branch other than main that changes the packaging builds the installer too, as a check only: nothing is
+# attached anywhere. Windows minutes count double against the private repo's monthly allowance.
 name: Windows installer
 
 on:
@@ -9,7 +12,14 @@ on:
       tag:
         description: Release tag to build and attach the installer to (the release must exist)
         required: true
-        default: v0.1.1
+  push:
+    branches-ignore: [main]
+    paths:
+      - scripts/package-windows.mjs
+      - scripts/extract-node-windows.ps1
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/windows-installer.yaml
 
 permissions:
   contents: write
@@ -20,28 +30,28 @@ jobs:
     timeout-minutes: 60
     env:
       TAG: ${{ inputs.tag }}
-      # NSIS 3.0.4 cannot open paths over 260 characters; the runner's default pnpm cache put
-      # electron-builder's StdUtils.nsh at 276. A short cache root keeps the dlx path under the limit.
-      npm_config_cache_dir: C:\pc
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ inputs.tag || github.sha }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
           node-version: 26.10.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # ponytail: electron-builder publishes by itself when it detects CI (it asked for GH_TOKEN after building the .exe).
-      # CI=false keeps this job's upload as the only one; the root fix is --publish never in package-windows.mjs.
       - run: pnpm package:win
-        env:
-          CI: 'false'
       - name: Attach to the release
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat dist/windows/SHA256SUMS
           gh release upload "$TAG" dist/windows/*.exe dist/windows/SHA256SUMS --clobber
+      - name: Show the check build
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          cat dist/windows/SHA256SUMS
+          ls -l dist/windows/*.exe
