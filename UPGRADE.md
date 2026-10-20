@@ -1,5 +1,13 @@
 # Upgrading P9
 
+## To 0.1.1 (beta)
+
+No app code changed since 0.1.0: P9 now carries a licence (PolyForm Shield), Linux has a one-line install, and
+the Windows installer ships licence notices in `resources\licenses`.
+
+- **Linux:** update as `README.md` § Update says. Nothing else to do.
+- **Windows:** run the 0.1.1 installer over the old one. Your workspace and the `P9 Foundation` task are kept.
+
 ## To 0.1.0 (beta)
 
 0.1.0 is the first tagged release. A new install needs nothing from this file; follow `README.md`.
