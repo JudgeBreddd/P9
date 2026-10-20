@@ -12,6 +12,8 @@ const build = path.join(root, '.build');
 const archive = path.join(build, `node-v${version}-win-x64.zip`);
 const runtime = path.join(build, 'node-win-x64');
 const node = path.join(runtime, 'node.exe');
+const nodeLicense = path.join(runtime, 'LICENSE');
+const exists = (file) => access(file).then(() => true, () => false);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', ...options });
@@ -19,7 +21,7 @@ function run(command, args, options = {}) {
 }
 
 await mkdir(runtime, { recursive: true });
-if (!(await access(node).then(() => true, () => false))) {
+if (!(await exists(node)) || !(await exists(nodeLicense))) {
   let bytes = await readFile(archive).catch(() => null);
   if (!bytes || createHash('sha256').update(bytes).digest('hex') !== archiveHash) {
     const response = await fetch(`https://nodejs.org/dist/v${version}/node-v${version}-win-x64.zip`);
@@ -30,11 +32,19 @@ if (!(await access(node).then(() => true, () => false))) {
   }
   if (process.platform === 'win32') run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(root, 'scripts', 'extract-node-windows.ps1'), '-Archive', archive, '-Build', build, '-Destination', node, '-Version', version]);
-  else run('unzip', ['-jo', archive, `node-v${version}-win-x64/node.exe`, '-d', runtime]);
+  else run('unzip', ['-jo', archive, `node-v${version}-win-x64/node.exe`, `node-v${version}-win-x64/LICENSE`, '-d', runtime]);
 }
 if (!(await readFile(node)).length) throw new Error('empty-node-runtime');
 if (!process.env.npm_execpath) throw new Error('run-with-pnpm-package-win');
 run(process.execPath, [process.env.npm_execpath, 'build']);
+// Every notice the installed app must carry, in one folder beside it (resources/licenses): P9's own licence, the
+// dependency list, DUWOP's MIT text, Node's licence (node.exe is bundled) and each bundled font's OFL.
+const licenses = path.join(build, 'licenses');
+await mkdir(path.join(licenses, 'fonts'), { recursive: true });
+for (const file of ['LICENSE', 'LICENSES.md', 'third-party/DUWOP-LICENSE.md']) await copyFile(path.join(root, file), path.join(licenses, path.basename(file)));
+await copyFile(nodeLicense, path.join(licenses, 'node-LICENSE'));
+const fonts = Object.keys(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).devDependencies).filter((name) => name.startsWith('@fontsource'));
+for (const font of fonts) await copyFile(path.join(root, 'node_modules', font, 'LICENSE'), path.join(licenses, 'fonts', font.slice(1).replace('/', '-') + '-LICENSE'));
 if (process.env.P9_PREPARE_ONLY === '1') process.exit(0);
 const missing = missingWindowsBinaries(await readdir(path.join(root, 'node_modules', '.pnpm')));
 if (missing.length) throw new Error(`windows-platform-binaries-not-installed:${missing.join(',')};build-on-windows`);
