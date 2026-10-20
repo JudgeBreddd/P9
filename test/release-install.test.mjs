@@ -3,8 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, mkdir, writeFile, chmod } from 'node:fs/promises';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtemp, mkdir, writeFile, chmod, symlink, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { root } from './helpers.mjs';
 import { startEditorHost } from '../apps/desktop/editor-host.mjs';
@@ -86,4 +86,57 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
+});
+
+// scripts/install.sh, the one-command Linux install, run against stand-in tools: a PATH that holds only the stubs
+// below and the three coreutils it needs, so a tool on the real machine cannot hide a missing one.
+test('install.sh: checks tools and Node, then installs, builds and starts the service in that order', { skip: process.platform !== 'linux' }, async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-sh-')), bin = path.join(home, 'bin'), log = path.join(home, 'log');
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(bin);
+  for (const tool of ['realpath', 'dirname', 'mkdir']) {
+    await symlink(['/usr/bin/', '/bin/'].map((dir) => dir + tool).find(existsSync), path.join(bin, tool));
+  }
+  const stub = (name, body) => writeFile(path.join(bin, name), '#!/bin/sh\n' + body + '\n', { mode: 0o755 });
+  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run', 'curl', 'sha256sum', 'tar']) await stub(tool, 'exit 0');
+  await stub('node', '[ "$1" = --version ] && { echo "${FAKE_NODE:-v26.10.0}"; exit 0; }\necho "node $*" >> ' + log);
+  await stub('pnpm', 'echo "pnpm $*" >> ' + log);
+  const run = (env = {}) => {
+    rmSync(log, { force: true });
+    const result = spawnSync('/bin/bash', [path.join(root, 'scripts', 'install.sh'), 'ws'],
+      { cwd: home, encoding: 'utf8', env: { HOME: home, XDG_RUNTIME_DIR: home, PATH: bin, ...env } });
+    return { ...result, log: existsSync(log) ? readFileSync(log, 'utf8') : '' };
+  };
+
+  const ok = run();
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.equal(ok.log, 'pnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
+  assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
+
+  const oldNode = run({ FAKE_NODE: 'v24.19.0' });
+  assert.equal(oldNode.status, 1);
+  assert.match(oldNode.stdout, /needs Node v26\.10\.0, found 'v24\.19\.0'/);
+  assert.equal(oldNode.log, '', 'nothing installed with the wrong Node');
+
+  await rm(path.join(bin, 'tmux'));
+  const noTmux = run();
+  assert.equal(noTmux.status, 1);
+  assert.match(noTmux.stdout, /MISSING: tmux\b/);
+  assert.equal(noTmux.log, '', 'nothing installed with a tool missing');
+  await stub('tmux', 'exit 0');
+
+  // No pnpm and a global npm install that needs root: the ~/.local fallback is used and the run carries on.
+  await rm(path.join(bin, 'pnpm'));
+  await stub('npm', 'case "$*" in *--prefix*) mkdir -p "$HOME/.local/bin"; printf \'#!/bin/sh\\necho "pnpm $*" >> ' + log + '\\n\' > "$HOME/.local/bin/pnpm"; chmod +x "$HOME/.local/bin/pnpm";; *) exit 1;; esac');
+  await symlink(['/usr/bin/chmod', '/bin/chmod'].find(existsSync), path.join(bin, 'chmod'));
+  const fallback = run();
+  assert.equal(fallback.status, 0, fallback.stdout + fallback.stderr);
+  assert.match(fallback.log, /^pnpm install --frozen-lockfile\npnpm build\n/);
+
+  await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
+  await writeFile(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service'), '');
+  const again = run();
+  assert.equal(again.status, 0);
+  assert.match(again.stdout, /already installed/);
+  assert.equal(again.log, '', 'an existing install is left alone');
 });
