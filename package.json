@@ -2,6 +2,7 @@
   "name": "p9",
   "version": "0.1.0",
   "private": true,
+  "license": "PolyForm-Shield-1.0.0",
   "bin": {
     "p9": "scripts/p9.mjs"
   },

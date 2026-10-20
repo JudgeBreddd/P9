@@ -315,4 +315,8 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Licenses
 
+P9 is source-available under the [PolyForm Shield License 1.0.0](LICENSE): use it, change it and share it,
+but not to sell or provide a product that competes with it. Contributions come in as pull requests; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 Every pinned third-party dependency, with its licence, is listed in [LICENSES.md](LICENSES.md).
