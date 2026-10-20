@@ -4,7 +4,7 @@
 
 One workspace. Every agent. Your focus.
 
-**Version 0.1.0, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.1, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` below prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
 
 P9 is a desktop app with three focus modes in one window:
@@ -17,6 +17,36 @@ A small daemon runs as your own user and owns the work: closing the window leave
 running. An optional phone view reaches the same daemon through Tailscale, signed in with a passkey.
 Read [SECURITY.md](SECURITY.md) before you use it: it says what P9 protects and what it does not.
 What each part of the app does is in [docs/guide.md](docs/guide.md).
+
+## Install
+
+The repository is private: you need a GitHub account with access to `JudgeBreddd/p9`.
+
+**Windows**
+
+1. Signed in to GitHub, open [the releases page](https://github.com/JudgeBreddd/p9/releases) and download
+   `p9-event-horizon-<version>-windows-x64.exe` from the newest release.
+2. Double-click it. The installer is unsigned, so SmartScreen says "Windows protected your PC": click
+   **More info**, then **Run anyway**, and click through the installer. Checking the download first is
+   recommended (next section).
+3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows).
+
+**Linux**
+
+Install `tmux` and the GitHub CLI (`gh`): for example `sudo apt install tmux gh`, `sudo dnf install tmux gh` or
+`sudo pacman -S tmux github-cli`. Then paste:
+
+```sh
+gh auth status >/dev/null 2>&1 || gh auth login -h github.com -p https --web && gh auth setup-git && gh repo clone JudgeBreddd/p9 ~/p9 && bash ~/p9/scripts/install.sh
+```
+
+It signs you in to GitHub if needed, clones P9 to `~/p9`, checks the other tools, builds, starts the daemon
+and prints the command that opens P9. Without Node 26.10.0 it downloads P9's own copy from nodejs.org into
+`~/.local/share/p9` (checked against a pinned SHA-256; your system Node is left alone) and prints the PATH line
+to add to `~/.bashrc`. If the clone worked but a later step failed, fix what it printed and run
+`bash ~/p9/scripts/install.sh`. P9's workspace is `~/work`; for another folder, run
+`bash ~/p9/scripts/install.sh <folder>` instead of the last part. Step by step:
+[Install on Linux](#install-on-linux-per-user-from-source).
 
 ## Windows installer: unsigned in v1, check the checksum
 
@@ -74,7 +104,8 @@ for t in git npm tmux systemctl systemd-run curl sha256sum tar; do command -v $t
 echo "${XDG_RUNTIME_DIR:?not set: log in to a normal desktop or ssh session}"
 ```
 
-Then install. Replace `~/work` with the folder you want P9 to manage (it is created if missing):
+Then install (`scripts/install.sh` runs these same steps). Replace `~/work` with the folder you want P9 to
+manage (it is created if missing):
 
 ```sh
 git clone https://github.com/JudgeBreddd/p9.git ~/p9 && cd ~/p9
@@ -165,7 +196,8 @@ Optional keys, each off when left out:
 
 ## Install on Windows
 
-Run `p9-event-horizon-<version>-windows-x64.exe` after checking its checksum (above). It installs for your
+Run `p9-event-horizon-<version>-windows-x64.exe` (download and SmartScreen steps in [Install](#install); check
+its checksum first, above). It installs for your
 user only and registers a per-user Scheduled Task, `P9 Foundation`, for the daemon; it runs on battery too.
 On the first install its workspace is a new, empty `%USERPROFILE%\P9`, and an update keeps the folder the task
 already has. To use another folder, run `resources\daemon\scripts\install-windows.ps1 -Workspace
