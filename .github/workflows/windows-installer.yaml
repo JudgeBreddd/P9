@@ -36,7 +36,11 @@ jobs:
           node-version: 26.10.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # ponytail: electron-builder publishes by itself when it detects CI (it asked for GH_TOKEN after building the .exe).
+      # CI=false keeps this job's upload as the only one; the root fix is --publish never in package-windows.mjs.
       - run: pnpm package:win
+        env:
+          CI: 'false'
       - name: Attach to the release
         shell: bash
         env:
