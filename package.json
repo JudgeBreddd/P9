@@ -125,6 +125,10 @@
     ],
     "extraResources": [
       {
+        "from": ".build/licenses",
+        "to": "licenses"
+      },
+      {
         "from": ".build/node-win-x64/node.exe",
         "to": "daemon/node.exe"
       },

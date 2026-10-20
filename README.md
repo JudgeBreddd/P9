@@ -33,14 +33,18 @@ The repository is private: you need a GitHub account with access to `JudgeBreddd
 
 **Linux**
 
-Install Node 26.10.0, `tmux` and the GitHub CLI (`gh`; for example `sudo apt install tmux gh`), then paste:
+Install `tmux` and the GitHub CLI (`gh`): for example `sudo apt install tmux gh`, `sudo dnf install tmux gh` or
+`sudo pacman -S tmux github-cli`. Then paste:
 
 ```sh
 gh auth status >/dev/null 2>&1 || gh auth login -h github.com -p https --web && gh auth setup-git && gh repo clone JudgeBreddd/p9 ~/p9 && bash ~/p9/scripts/install.sh
 ```
 
 It signs you in to GitHub if needed, clones P9 to `~/p9`, checks the other tools, builds, starts the daemon
-and prints the command that opens P9. P9's workspace is `~/work`; for another folder, run
+and prints the command that opens P9. Without Node 26.10.0 it downloads P9's own copy from nodejs.org into
+`~/.local/share/p9` (checked against a pinned SHA-256; your system Node is left alone) and prints the PATH line
+to add to `~/.bashrc`. If the clone worked but a later step failed, fix what it printed and run
+`bash ~/p9/scripts/install.sh`. P9's workspace is `~/work`; for another folder, run
 `bash ~/p9/scripts/install.sh <folder>` instead of the last part. Step by step:
 [Install on Linux](#install-on-linux-per-user-from-source).
 

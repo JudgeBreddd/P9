@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, chmod, symlink, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { root } from './helpers.mjs';
@@ -89,18 +89,26 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
 });
 
 // scripts/install.sh, the one-command Linux install, run against stand-in tools: a PATH that holds only the stubs
-// below and the three coreutils it needs, so a tool on the real machine cannot hide a missing one.
+// below and the coreutils it needs, so a tool on the real machine cannot hide a missing one.
 test('install.sh: checks tools and Node, then installs, builds and starts the service in that order', { skip: process.platform !== 'linux' }, async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-sh-')), bin = path.join(home, 'bin'), log = path.join(home, 'log');
   t.after(() => rm(home, { recursive: true, force: true }));
   await mkdir(bin);
-  for (const tool of ['realpath', 'dirname', 'mkdir']) {
+  for (const tool of ['realpath', 'dirname', 'mkdir', 'mktemp', 'mv', 'rm', 'rmdir', 'chmod']) {
     await symlink(['/usr/bin/', '/bin/'].map((dir) => dir + tool).find(existsSync), path.join(bin, tool));
   }
   const stub = (name, body) => writeFile(path.join(bin, name), '#!/bin/sh\n' + body + '\n', { mode: 0o755 });
-  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run', 'curl', 'sha256sum', 'tar']) await stub(tool, 'exit 0');
+  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run']) await stub(tool, 'exit 0');
   await stub('node', '[ "$1" = --version ] && { echo "${FAKE_NODE:-v26.10.0}"; exit 0; }\necho "node $*" >> ' + log);
   await stub('pnpm', 'echo "pnpm $*" >> ' + log);
+  // The Node download: curl writes a file, sha256sum passes only with FAKE_SUM_OK, tar unpacks a node that logs as p9node.
+  await stub('uname', 'echo x86_64');
+  await stub('curl', 'echo "curl $*" >> ' + log + '\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\necho tarball > "$out"');
+  await stub('sha256sum', 'read line; echo "sha256sum $line" >> ' + log + '\n[ -n "$FAKE_SUM_OK" ]');
+  await stub('tar', 'echo "tar" >> ' + log + '\nwhile [ $# -gt 0 ]; do [ "$1" = -C ] && dir=$2; shift; done\nmkdir -p "$dir/node-v26.10.0-linux-x64/bin"\n'
+    + 'printf \'#!/bin/sh\\n[ "$1" = --version ] && { echo v26.10.0; exit 0; }\\necho "p9node $*" >> ' + log + '\\n\' > "$dir/node-v26.10.0-linux-x64/bin/node"\n'
+    + 'chmod +x "$dir/node-v26.10.0-linux-x64/bin/node"');
+  const share = path.join(home, '.local', 'share', 'p9'), ownNode = path.join(share, 'node-v26.10.0-linux-x64');
   const run = (env = {}) => {
     rmSync(log, { force: true });
     const result = spawnSync('/bin/bash', [path.join(root, 'scripts', 'install.sh'), 'ws'],
@@ -113,10 +121,26 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(ok.log, 'pnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
   assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
 
-  const oldNode = run({ FAKE_NODE: 'v24.19.0' });
-  assert.equal(oldNode.status, 1);
-  assert.match(oldNode.stdout, /needs Node v26\.10\.0, found 'v24\.19\.0'/);
-  assert.equal(oldNode.log, '', 'nothing installed with the wrong Node');
+  assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
+
+  // Wrong Node: a download that fails its checksum installs nothing and leaves nothing behind.
+  const badSum = run({ FAKE_NODE: 'v24.19.0' });
+  assert.equal(badSum.status, 1);
+  assert.match(badSum.stdout, /does not match its pinned checksum/);
+  assert.doesNotMatch(badSum.log, /^(tar|pnpm|p9node|node) ?/m, 'nothing unpacked or installed after a bad checksum');
+  assert.deepEqual(readdirSync(share), [], 'no Node and no temp folder left');
+
+  // Wrong Node, good download: P9's own Node is pinned, unpacked, and runs the service install.
+  const oldNode = run({ FAKE_NODE: 'v24.19.0', FAKE_SUM_OK: '1' });
+  assert.equal(oldNode.status, 0, oldNode.stdout + oldNode.stderr);
+  assert.match(oldNode.log, new RegExp('^curl -fsSL -o \\S+/node\\.tar\\.gz https://nodejs\\.org/dist/v26\\.10\\.0/node-v26\\.10\\.0-linux-x64\\.tar\\.gz\n'
+    + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\npnpm install --frozen-lockfile\npnpm build\n'
+    + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\n$'));
+  assert.deepEqual(readdirSync(share), ['node-v26.10.0-linux-x64'], 'temp folder removed');
+  assert.ok(oldNode.stdout.includes('export PATH="' + path.join(ownNode, 'bin') + ':$PATH"'), 'PATH line printed');
+  const cached = run({ FAKE_NODE: 'v24.19.0' });
+  assert.equal(cached.status, 0, cached.stdout + cached.stderr);
+  assert.match(cached.log, /^pnpm install --frozen-lockfile\npnpm build\np9node /, 'a second run reuses the downloaded Node');
 
   await rm(path.join(bin, 'tmux'));
   const noTmux = run();
@@ -128,7 +152,6 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   // No pnpm and a global npm install that needs root: the ~/.local fallback is used and the run carries on.
   await rm(path.join(bin, 'pnpm'));
   await stub('npm', 'case "$*" in *--prefix*) mkdir -p "$HOME/.local/bin"; printf \'#!/bin/sh\\necho "pnpm $*" >> ' + log + '\\n\' > "$HOME/.local/bin/pnpm"; chmod +x "$HOME/.local/bin/pnpm";; *) exit 1;; esac');
-  await symlink(['/usr/bin/chmod', '/bin/chmod'].find(existsSync), path.join(bin, 'chmod'));
   const fallback = run();
   assert.equal(fallback.status, 0, fallback.stdout + fallback.stderr);
   assert.match(fallback.log, /^pnpm install --frozen-lockfile\npnpm build\n/);
@@ -139,4 +162,19 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(again.status, 0);
   assert.match(again.stdout, /already installed/);
   assert.equal(again.log, '', 'an existing install is left alone');
+});
+
+// The Windows installer carries every licence notice in resources/licenses (package-windows.mjs gathers them).
+test('Windows package: licence notices ship in resources/licenses', () => {
+  const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.ok(pkg.build.extraResources.some((entry) => entry.from === '.build/licenses' && entry.to === 'licenses'), 'licenses folder packaged');
+  const pack = readFileSync(path.join(root, 'scripts', 'package-windows.mjs'), 'utf8');
+  for (const file of ['LICENSE', 'LICENSES.md', 'third-party/DUWOP-LICENSE.md']) {
+    assert.ok(pack.includes("'" + file + "'"), file + ' copied');
+    assert.ok(existsSync(path.join(root, file)), file + ' exists');
+  }
+  assert.match(pack, /node-LICENSE/);
+  assert.match(pack, /startsWith\('@fontsource'\)/);
+  assert.ok(Object.keys(pkg.devDependencies).filter((name) => name.startsWith('@fontsource')).length >= 10, 'fonts found by the same filter');
+  assert.match(readFileSync(path.join(root, 'scripts', 'extract-node-windows.ps1'), 'utf8'), /win-x64\\LICENSE/);
 });
