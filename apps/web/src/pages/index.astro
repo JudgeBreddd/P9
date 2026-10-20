@@ -1,0 +1,21 @@
+---
+import Shell from '../Shell';
+import DuwopBoot from '../components/DuwopBoot.astro';
+import '../styles/fonts.css';
+import '../lib/duwop.css';
+import '../lib/command-center.css';
+import '../lib/gods.css';
+import '../styles/d1.css';
+import '../styles/shell.css';
+import '../styles/builder-look.css';
+---
+<!doctype html>
+<html lang="en" class="dark" data-theme="event-horizon-prime" data-amoled data-fx="underglow motion shine">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <DuwopBoot />
+    <title>P9 — Event Horizon</title>
+  </head>
+  <body><Shell client:load /></body>
+</html>

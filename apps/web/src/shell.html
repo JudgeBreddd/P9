@@ -1,0 +1,141 @@
+
+<div class="fx-ambient"><div class="fx-horizon"></div></div>
+<div class="shell" data-focus="chat">
+  <header class="topbar">
+    <button class="brand" id="brandBtn" title="Home: the landing page"><span class="mark"></span>Event Horizon</button>
+    <span class="focus-title" id="focusTitle"></span>
+    <div class="tabs" id="tabs" role="tablist" data-in="chat"></div>
+    <div class="tabs" id="devTabs" role="tablist" data-in="dev"></div>
+    <button data-slot="button" data-variant="ghost" data-size="icon" id="newBtn" data-in="chat" aria-haspopup="menu" aria-expanded="false" title="New session"></button>
+    <div class="pop" id="newPop" hidden style="top:44px;left:0"></div>
+    <div class="spacer"></div>
+    <span class="agent-ind" id="agentInd" role="status" hidden><span class="glyph" id="indGlyph" aria-hidden="true"></span><span id="indText"></span><span id="indPets"></span></span>
+    <button data-slot="button" data-variant="ghost" id="histBtn" data-in="chat" aria-expanded="false">History</button>
+    <div class="pop" id="histPop" hidden style="top:44px;right:140px;width:380px"></div>
+    <button data-slot="button" data-variant="ghost" data-size="icon" id="setBtn" title="Settings"></button>
+    <button data-slot="button" data-variant="ghost" id="amBtn" title="Anymouse: an idea, a bug or a gripe">Anymouse</button>
+    <button data-slot="button" data-variant="ghost" data-size="icon" id="themeBtn" title="Look" aria-expanded="false"></button>
+    <div class="pop" id="themePop" hidden style="top:44px;right:52px;width:min(620px,calc(100vw - 64px));max-height:calc(100vh - 56px)"></div>
+    <button data-slot="button" data-variant="destructive" data-size="icon" id="stopAll" title="Session controls"></button>
+  </header>
+  <div class="body">
+    <nav class="rail" aria-label="Workspace">
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rChat" data-focus-btn="chat" title="Chat Focus (Ctrl 1)"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rDev" data-focus-btn="dev" title="Dev Focus (Ctrl 2)"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rMission" data-focus-btn="mission" title="Mission Control (Ctrl 3)"></button>
+      <hr>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rSearch" title="Search files" data-in="chat"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rFiles" title="Toggle files pane" aria-pressed="false" data-in="chat"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rSplit" title="Split chats side by side" aria-pressed="false" data-in="chat"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rTerm" title="Terminal (Ctrl &#96;)" aria-pressed="false"></button>
+      <div class="bots" id="rBots" role="group" aria-label="Running chats"></div>
+      <span class="grow"></span>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rBell" class="bell" title="Notification Center"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rCmd" title="Command palette (Ctrl K)"></button>
+    </nav>
+    <div class="stage">
+      <div class="focuses">
+        <section class="fpane on" id="fChat" data-focus="chat" aria-label="Chat Focus">
+    <aside class="files" id="files" aria-label="Files" hidden>
+      <div class="hd"><select data-slot="select" id="fileScope" aria-label="Files from" hidden></select><input data-slot="input" id="fileSearch" placeholder="Search files" aria-label="Search files"></div>
+      <div class="tree" id="tree"></div>
+    </aside>
+          <main class="content"><div class="chats" id="chats" data-split="false"></div></main>
+        </section>
+        <section class="fpane" id="fDev" data-focus="dev" aria-label="Dev Focus" inert>
+          <aside class="explorer" aria-label="Explorer"><div class="hd">Explorer <span class="muted">agent-first-workspace</span></div><div class="tree" id="devTree"></div></aside>
+          <main class="editor" id="devMain"></main>
+        </section>
+        <section class="fpane" id="fMission" data-focus="mission" aria-label="Mission Control" inert></section>
+      </div>
+      <div class="cards" id="cards" aria-label="Needs you and active sessions"></div>
+      <section class="dock float" id="dock" aria-label="Terminal" hidden>
+        <div class="grip" id="grip" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="Resize terminal (arrow keys)"></div>
+        <div class="tb"><span>Shell</span><span data-slot="badge" data-variant="ok" id="dBadge">running</span><span class="muted" id="dState">fish · ~/workspace/personal-projects/agent-first-workspace</span><span class="spacer" style="flex:1"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="dRefresh" hidden>Refresh</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="dFloat" title="Float / dock"></button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="dHide" title="Hide"></button></div>
+        <pre id="term"></pre>
+        <div id="termView" hidden></div>
+      </section>
+    </div>
+  </div>
+  <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
+</div>
+
+<!-- Landing page (Builder, plan.md "Landing page"): the black hole intro, then a greeting, the focus modes and the pets. -->
+<dialog id="land" class="land" tabindex="-1" aria-labelledby="landHi" data-stage="intro" data-pending>
+  <canvas id="landSky" aria-hidden="true"></canvas>
+  <div class="land-brand" aria-hidden="true">
+    <svg class="land-mark" viewBox="0 0 320 150">
+      <defs>
+        <linearGradient id="landChrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbfdff"/><stop offset=".42" stop-color="#c4cfdd"/><stop offset=".5" stop-color="#6d7a8c"/><stop offset=".62" stop-color="#e8eef6"/><stop offset="1" stop-color="#9aa6b6"/></linearGradient>
+        <linearGradient id="landNine" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#bcd4ff"/><stop offset=".45" stop-color="#6f8dff"/><stop offset="1" stop-color="#8b4dff"/></linearGradient>
+        <linearGradient id="landOrbit" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8fb4ff" stop-opacity="0"/><stop offset=".3" stop-color="#9fc0ff"/><stop offset=".55" stop-color="#ffe2a8"/><stop offset=".8" stop-color="#a98bff"/><stop offset="1" stop-color="#a98bff" stop-opacity="0"/></linearGradient>
+      </defs>
+      <g transform="rotate(-9 160 80)"><path class="orbit back" pathLength="1" d="M14 80a146 30 0 0 1 292 0"/></g>
+      <text x="160" y="118" text-anchor="middle"><tspan fill="url(#landChrome)">P</tspan><tspan fill="url(#landNine)">9</tspan></text>
+      <g transform="rotate(-9 160 80)"><path class="orbit front" pathLength="1" d="M306 80a146 30 0 0 1-292 0"/></g>
+    </svg>
+    <div class="land-word">Event Horizon</div>
+    <p class="land-tag">One workspace. Every agent. Your focus.</p>
+  </div>
+  <div class="land-main">
+    <h1 id="landHi"></h1>
+    <p id="landSub" role="status"></p>
+    <nav class="land-bar" aria-label="Focus modes">
+      <button data-land="chat"><span class="ic"></span><span class="tx"><strong>Chat</strong><small>Talk to your agents</small></span><kbd>1</kbd></button>
+      <button data-land="dev"><span class="ic"></span><span class="tx"><strong>Dev</strong><small>Code with them</small></span><kbd>2</kbd></button>
+      <button data-land="mission"><span class="ic"></span><span class="tx"><strong>Mission Control</strong><small>Run your systems</small></span><kbd>3</kbd></button>
+    </nav>
+    <div class="land-pets" id="landPets"></div>
+  </div>
+  <p class="land-skip" aria-hidden="true">press <kbd><svg viewBox="0 0 24 12"><path d="M3 3v5h18V3"/></svg></kbd> to skip</p>
+  <button data-slot="button" data-variant="ghost" data-size="icon" class="land-set" id="landSet" title="Settings"></button>
+</dialog>
+<dialog id="looseDlg" aria-labelledby="looseT" aria-describedby="looseP"><form method="dialog">
+  <div class="dlg-head"><div><h2 id="looseT"></h2><p id="looseP"></p><p class="muted sm">The agent lock in Settings still overrides it. Mode changes back at any time.</p></div></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no" autofocus>Cancel</button><button data-slot="button" data-variant="outline" value="never">Turn on, don't show again</button><button data-slot="button" data-variant="destructive" value="yes">Turn on</button></div>
+</form></dialog>
+<dialog id="stopDlg" aria-labelledby="stopT">
+  <div class="dlg-head"><div><h2 id="stopT">Session controls</h2><p id="sessionModeNote">Persistent is the default. Closing the UI keeps owned work running.</p></div></div>
+  <div class="dlg-body" style="display:grid;gap:10px">
+    <div><strong>Close Window</strong><div class="muted sm">Close this window. Agent sessions and P9 tmux terminals keep running.</div></div>
+    <div><strong>Quit UI</strong><div class="muted sm">Exit Event Horizon. Agent sessions and P9 tmux terminals keep running; the Dev editor terminal closes with its editor host.</div></div>
+    <div><strong>Stop Session</strong><div class="muted sm">End one agent or terminal. Its history stays available.</div></div>
+    <div><strong>Stop All</strong><div class="muted sm">Block new starts, then stop and verify every P9-owned agent, script and tmux terminal.</div></div>
+  </div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" id="stopKeep">Keep running</button><button data-slot="button" data-variant="destructive" id="stopGo">Stop sessions</button></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" id="sessionMode">Persistent: on</button><span class="muted sm">One click switches to dies-with-the-app.</span></div>
+</dialog>
+<dialog id="mdl" class="mdl" aria-labelledby="mdlT">
+  <div class="mdl-head"><button data-slot="button" data-variant="ghost" data-size="sm" id="mdlBack" hidden>&larr; Back</button><h2 id="mdlT"></h2><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" id="mdlPrimary" title="Move this into the main workspace" hidden>Make Primary</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="mdlX" title="Close (Esc). Nothing you typed is lost">&times;</button></div>
+  <div class="mdl-body" id="mdlBody"></div>
+  <div class="mdl-foot" id="mdlFoot"></div>
+</dialog>
+<dialog id="setDlg" aria-labelledby="setT">
+  <div class="dlg-head"><div><h2 id="setT">Settings</h2><p>Kept on this computer; each one survives a restart.</p></div></div>
+  <div class="dlg-body settings" id="setBody"></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" id="setClose">Close</button></div>
+</dialog>
+<dialog id="welDlg" aria-labelledby="welT">
+  <div class="dlg-head"><div><h2 id="welT">Welcome to Event Horizon</h2><p>Two things make it yours. Both can wait: Skip, and Settings opens this again.</p></div></div>
+  <div class="dlg-body settings" id="welBody"></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" id="welMission">Turn Mission off for now</button><button data-slot="button" id="welSkip">Skip</button></div>
+</dialog>
+<dialog id="amDlg" aria-labelledby="amT">
+  <form id="amForm">
+    <div class="dlg-head"><div><h2 id="amT">Anymouse</h2><p>An idea, a bug or a gripe. It becomes an issue on P9's GitHub.</p></div></div>
+    <div class="dlg-body" style="display:grid;gap:10px">
+      <div role="radiogroup" aria-label="Kind" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        <button type="button" data-slot="button" data-variant="default" role="radio" aria-checked="true" data-kind="idea">Idea</button>
+        <button type="button" data-slot="button" data-variant="outline" role="radio" aria-checked="false" data-kind="bug">Bug</button>
+        <button type="button" data-slot="button" data-variant="outline" role="radio" aria-checked="false" data-kind="gripe">Gripe</button>
+      </div>
+      <textarea data-slot="textarea" id="amText" aria-label="Your note" placeholder="What should we know?" maxlength="2000" rows="6"></textarea>
+      <p id="amNote" role="status" class="muted sm"></p>
+    </div>
+    <div class="dlg-foot"><button type="button" data-slot="button" data-variant="outline" id="amClose">Close</button><button type="submit" data-slot="button" data-variant="default" id="amSend" disabled>Send</button></div>
+  </form>
+</dialog>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<dialog id="palette" aria-label="Command palette">
+  <div class="dlg-body"><input id="palIn" placeholder="Type a command…" aria-label="Command"><ul id="palList" role="listbox"></ul></div>
+</dialog>

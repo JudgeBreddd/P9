@@ -1,0 +1,169 @@
+import { mkdir, open, lstat, chmod, unlink, readdir, realpath, readFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { constants } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createServer as createNetServer } from 'node:net';
+import path from 'node:path';
+import os from 'node:os';
+import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { createListener } from './server.mjs';
+import { openLedger } from './ledger.mjs';
+import { createAnymouse } from './anymouse.mjs';
+import { createHash } from 'node:crypto';
+import { parseSettings } from './mission.mjs';
+import { drainSaves } from '../../packages/files/index.mjs';
+import { childEnv } from './child-env.mjs';
+import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+
+const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
+
+const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'tmux-socket': { type: 'string' },
+  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' } } });
+if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbsolute(values[key]))) {
+  throw new Error('absolute-workspace-state-and-recovery-required');
+}
+process.umask(0o077);
+const windows = process.platform === 'win32';
+const workspace = await realpath(values.workspace);
+function inside(parent, child) {
+  const relative = path.relative(parent, child);
+  return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
+}
+async function canonicalDestination(directory) {
+  try { return await realpath(directory); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return path.join(await canonicalDestination(path.dirname(directory)), path.basename(directory));
+  }
+}
+for (const directory of [values.state, values.recovery]) {
+  if (inside(workspace, await canonicalDestination(directory))) throw new Error('private-directory-inside-workspace');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const stat = await lstat(directory);
+  if (!stat.isDirectory() || (!windows && (stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700))
+      || inside(workspace, await realpath(directory))) throw new Error('unsafe-private-directory');
+}
+const state = await realpath(values.state), recovery = await realpath(values.recovery);
+if (inside(state, recovery) || inside(recovery, state)) throw new Error('state-and-recovery-must-be-separate');
+const socketPath = internalEndpoint(state);
+const ownershipDirectory = windows ? windowsStateRoot() : path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+if (inside(workspace, await canonicalDestination(ownershipDirectory))) throw new Error('private-directory-inside-workspace');
+await mkdir(ownershipDirectory, { recursive: true, mode: 0o700 });
+const ownershipStat = await lstat(ownershipDirectory);
+if (!ownershipStat.isDirectory() || inside(workspace, await realpath(ownershipDirectory))
+    || (!windows && (ownershipStat.uid !== process.getuid() || (ownershipStat.mode & 0o777) !== 0o700))) throw new Error('unsafe-ownership-directory');
+let workspaceLock;
+if (windows) {
+  workspaceLock = createNetServer();
+  await new Promise((resolve, reject) => {
+    workspaceLock.once('error', (error) => reject(new Error(error.code === 'EADDRINUSE' ? 'daemon-already-running' : 'workspace-lock-unavailable')));
+    workspaceLock.listen(windowsLockEndpoint(ownershipDirectory), resolve);
+  });
+} else {
+  workspaceLock = await open(path.join(ownershipDirectory, 'daemon.lock'),
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const lockStat = await workspaceLock.stat();
+  if (!lockStat.isFile() || lockStat.nlink !== 1 || lockStat.uid !== process.getuid()
+      || (lockStat.mode & 0o777) !== 0o600) throw new Error('unsafe-ownership-file');
+  // The daemon retains this open description; process exit releases its kernel lock.
+  const ownership = spawnSync('/usr/bin/flock', ['--exclusive', '--nonblock', '3'],
+    { stdio: ['ignore', 'ignore', 'ignore', workspaceLock.fd], env: childEnv() });
+  if (ownership.status !== 0) {
+    await workspaceLock.close();
+    throw new Error(ownership.status === 1 ? 'daemon-already-running' : 'workspace-lock-unavailable');
+  }
+}
+const stateEntries = await readdir(state);
+if (windows) {
+  if (stateEntries.some((name) => name !== 'desktop.json')) throw new Error('state-directory-not-empty');
+  await unlink(path.join(state, 'desktop.json')).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+} else {
+  const socketName = path.basename(socketPath);
+  if (stateEntries.some((name) => !['desktop.json', socketName].includes(name))) throw new Error('state-directory-not-empty');
+  await unlink(path.join(state, 'desktop.json')).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+  await unlink(socketPath).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+}
+// Mission Control's ICM paths (workspace-relative); without the file the Mission routes answer settings-missing.
+const settingsFile = values.settings ?? (windows ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'P9', 'settings.json')
+  : path.join(os.homedir(), '.config', 'p9', 'settings.json'));
+if (!path.isAbsolute(settingsFile)) throw new Error('absolute-settings-required');
+let settings, settingsInvalid = false;
+try { settings = parseSettings(await readFile(settingsFile, 'utf8')); }
+// A broken file turns off Mission Control only; Chat, terminals and the phone stay up (release r1 R1-3).
+catch (error) { if (error.code !== 'ENOENT') { settingsInvalid = true; console.error('P9_SETTINGS_INVALID ' + settingsFile + ': ' + String(error.message).slice(0, 200)); } }
+const credentials = { cookie: randomBytes(32).toString('hex'), csrf: randomBytes(32).toString('hex'), socketPath };
+// Chat history and operation IDs outlive the daemon: they live in the 0700 ownership directory, not the state directory.
+const ledger = openLedger(path.join(ownershipDirectory, 'p9.db'));
+// ponytail: --acp-override swaps the real adapters for a test or recording shim; only the unit's ExecStart can pass it.
+const adapterOverride = values['acp-override'];
+if (adapterOverride !== undefined && !path.isAbsolute(adapterOverride)) throw new Error('absolute-acp-override-required');
+const instance = createHash('sha256').update(ownershipDirectory).digest('hex').slice(0, 8);
+const tmuxSocket = values['tmux-socket'] ?? `p9-${instance}`;
+if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tmuxSocket)) throw new Error('invalid-tmux-socket');
+// Remote logins (phase 10) are off unless both flags are given: the port binds 127.0.0.1 only, for tailscale serve to
+// proxy, and the origin pins the passkey RP ID and the Host header (https, or http://localhost for tests).
+let remote;
+if (values['remote-port'] !== undefined || values['remote-origin'] !== undefined) {
+  const port = Number(values['remote-port']), origin = new URL(values['remote-origin'] ?? 'invalid:');
+  if (!Number.isInteger(port) || port < 1024 || port > 65535 || origin.origin !== values['remote-origin']
+      || !(origin.protocol === 'https:' || (origin.protocol === 'http:' && (origin.hostname === 'localhost' || origin.hostname.endsWith('.localhost'))))) throw new Error('invalid-remote-options');
+  remote = { port, origin: origin.origin, rpID: origin.hostname, host: origin.host };
+}
+// Anymouse's GitHub token (Builder's install only, from secrets.sh): read once, then gone from the environment children see.
+const githubToken = process.env.P9_GITHUB_TOKEN || undefined;
+delete process.env.P9_GITHUB_TOKEN;
+// ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
+const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
+delete process.env.P9_GITHUB_API;
+const server = createListener({ workspace, recovery, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
+try {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
+  if (remote) {
+    await new Promise((resolve, reject) => {
+      server.remote.once('error', reject);
+      server.remote.listen(remote.port, '127.0.0.1', resolve);
+    });
+  }
+  if (!windows) await chmod(socketPath, 0o600);
+  else {
+    const acl = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', windowsHost, '-Mode', 'PipeLock', '-Pipe', socketPath], { encoding: 'utf8', env: childEnv() });
+    if (acl.status !== 0) throw new Error('pipe-acl-not-current-user-only');
+  }
+  // A second process must bind successfully before it may create credentials.
+  const credentialFile = await open(path.join(values.state, 'desktop.json'), 'wx', 0o600);
+  try { await credentialFile.writeFile(JSON.stringify(credentials)); await credentialFile.sync(); }
+  finally { await credentialFile.close(); }
+} catch {
+  console.error('P9_START_FAILED');
+  process.exit(1);
+}
+let stopping = false;
+function stop() {
+  if (stopping) return;
+  stopping = true;
+  // A stuck request or filesystem must not keep systemctl stop waiting indefinitely.
+  setTimeout(() => { server.closeAllConnections(); process.exit(1); }, 10000).unref();
+  if (server.remote) { server.remote.close(); server.remote.closeAllConnections(); }
+  // Agents stop first, alongside the request drain: an open long poll would otherwise hold server.close for 8 s.
+  // The woken polls answer, then sit idle on keep-alive; close them once the agents are down.
+  const work = Promise.all([server.chat.shutdown(), server.mission.stopAll()]).then((result) => { server.closeIdleConnections(); return result; });
+  server.close(async () => {
+    try {
+      if ((await work).some((value) => String(value).startsWith('cleanup-failed'))) console.error('P9_CLEANUP_FAILED');
+      await drainSaves();
+      server.closeAllConnections();
+      await unlink(path.join(values.state, 'desktop.json'));
+      if (windows) await new Promise((resolve) => workspaceLock.close(resolve));
+      else await workspaceLock?.close();
+      process.exit(0);
+    } catch { process.exit(1); }
+  });
+}
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
+console.log('P9_READY');

@@ -1,0 +1,28 @@
+---
+// DUWOP boot for Astro (@duwop/boot). Put <DuwopBoot /> in the layout's <head>, before any stylesheet
+// links, so the saved look (or this app's default) is on <html> before the first paint.
+import { duwopConfig } from "@/lib/duwop-config";
+import { allThemes, fonts } from "@/lib/theme";
+
+const d = duwopConfig.defaultLook;
+const font = fonts.find((f) => f.id === d.font) ?? fonts[0];
+const theme = allThemes.find((t) => t.id === d.theme);
+const google = duwopConfig.loadFonts !== false; // false: the app self-hosts its fonts
+// Same shape applyLook saves, so a first visit paints exactly like a returning one (mode, title font included).
+const fallback = JSON.stringify({
+  ...d,
+  dark: theme?.dark !== false,
+  both: theme?.dark === "both",
+  display: theme?.display ?? "",
+  displayUrl:
+    google && theme?.display ? `https://fonts.googleapis.com/css2?family=${encodeURIComponent(theme.display)}&display=swap` : "",
+  family: font.family,
+  adjust: font.adjust,
+  url:
+    google && font.family
+      ? `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font.family)}:wght@400;500;600;700&display=swap`
+      : "",
+});
+---
+
+<script is:inline src="/duwop-boot.js" data-key={duwopConfig.storageKey} data-default={fallback}></script>
