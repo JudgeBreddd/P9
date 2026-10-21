@@ -69,7 +69,15 @@ jobs:
           $exe = (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName
           # Wait for the installer alone (-Wait also waits on its children); run 39522683697 hung here 30 min with no output.
           $setup = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru
-          if (-not $setup.WaitForExit(300000)) { throw 'the installer did not finish in 5 min' }
+          if (-not $setup.WaitForExit(240000)) {
+            # Run 39528710341 timed out here even with /SD IDOK: show what the installer is still running and any window it shows.
+            $all = Get-CimInstance Win32_Process
+            $tree = @($setup.Id); do { $n = $tree.Count; $tree = @($tree + ($all | Where-Object { $tree -contains $_.ParentProcessId } | ForEach-Object ProcessId) | Select-Object -Unique) } while ($tree.Count -gt $n)
+            $all | Where-Object { $tree -contains $_.ProcessId } | ForEach-Object { 'proc ' + $_.ProcessId + ' <- ' + $_.ParentProcessId + ': ' + $_.CommandLine }
+            Get-Process | Where-Object MainWindowTitle | ForEach-Object { 'window: ' + $_.ProcessName + ' - ' + $_.MainWindowTitle }
+            Write-Output ('task registered: ' + [bool](Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue))
+            throw 'the installer did not finish in 4 min'
+          }
           Write-Output ('installer exit code: ' + $setup.ExitCode)
           # If the service did not start, run its script here so its own error shows in this log.
           $script = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\resources\daemon\scripts\install-windows.ps1'
