@@ -59,7 +59,9 @@ $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson
 $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $hostScript + '"'),
   '-Mode', 'Daemon', '-Payload', $payload) -join ' '
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+# conhost --headless: the host gets a console with no window. Plain powershell.exe opened one at every logon, and closing it
+# killed the daemon (GitHub issue #4; on Windows 11, Terminal ignores -WindowStyle Hidden).
+$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ('--headless powershell.exe ' + $arguments)
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
 $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)

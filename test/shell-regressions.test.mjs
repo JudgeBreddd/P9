@@ -9,7 +9,7 @@ import { _electron } from '@playwright/test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 }, async t => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-round1-'));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, chromiumSandbox: true });
   try {
     const page = await app.firstWindow();

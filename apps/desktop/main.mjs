@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell, WebContentsView } from 'electron';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, watch } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
@@ -131,6 +131,10 @@ export async function createDesktop({ state, open } = {}) {
   // KDE/GNOME on Wayland match a window to its menu entry and icon by app id; without this it is "electron" (generic icon).
   if (process.platform === 'linux') app.setDesktopName('p9-event-horizon.desktop');
   await app.whenReady();
+  // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
+  // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
+  // Fixed argv, no shell, the user's own task.
+  if (process.platform === 'win32' && state) health(state).catch(() => execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {}));
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
@@ -271,6 +275,10 @@ export async function createDesktop({ state, open } = {}) {
   // holds. One socket at a time; frames pass through as they are (the page stamps keys with the daemon's leases, like the
   // phone) and the daemon checks every one. Each socket has a serial, so the page can tell a new socket's frames from an old one's.
   const fromApp = event => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
+  // Test-only: the UI tests' sample data (test/sample-data.mjs), never in a packaged build (GitHub issue #4). JSON drops its helpers.
+  const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
+    ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
+  ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
   const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}] };
   ipcMain.handle('p9:terminal', async (event, ...args) => {
     const [action, payload = {}] = args;

@@ -17,6 +17,9 @@ on:
     paths:
       - scripts/package-windows.mjs
       - scripts/extract-node-windows.ps1
+      - scripts/install-windows.ps1
+      - scripts/installer.nsh
+      - scripts/windows-host.ps1
       - package.json
       - pnpm-lock.yaml
       - .github/workflows/windows-installer.yaml
@@ -55,3 +58,31 @@ jobs:
         run: |
           cat dist/windows/SHA256SUMS
           ls -l dist/windows/*.exe
+      # GitHub issue #4: install the check build here, then see the daemon task start with no window and come back after a
+      # stop, the way the desktop app restarts it. A runner's session is not a real desktop, so this proves the task and the
+      # daemon, not what a person sees.
+      - name: Install it here and start the daemon
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName
+          Start-Process -FilePath $exe -ArgumentList '/S' -Wait
+          $action = (Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0]
+          Write-Output ('task runs: ' + $action.Execute + ' ' + $action.Arguments.Substring(0, 40))
+          if ($action.Execute -ne 'conhost.exe' -or -not $action.Arguments.StartsWith('--headless ')) { throw 'task is not headless' }
+          $file = Join-Path $env:LOCALAPPDATA 'P9\runtime\desktop.json'
+          function Wait-Daemon([datetime]$After) {
+            $end = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $end) { if ((Test-Path $file) -and (Get-Item $file).LastWriteTime -gt $After) { return } ; Start-Sleep 2 }
+            Get-ScheduledTaskInfo -TaskName 'P9 Foundation' | Format-List LastRunTime, LastTaskResult
+            throw 'the daemon did not write desktop.json in 90 s'
+          }
+          Wait-Daemon ([datetime]::MinValue)
+          Write-Output 'daemon up after install'
+          Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | ForEach-Object { 'node: ' + $_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length)) }
+          $before = Get-Date
+          Stop-ScheduledTask -TaskName 'P9 Foundation'
+          Start-Sleep 3
+          schtasks.exe /Run /TN 'P9 Foundation'
+          Wait-Daemon $before
+          Write-Output 'daemon up again after a stop and schtasks /Run (what the app does)'
