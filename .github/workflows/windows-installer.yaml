@@ -64,21 +64,28 @@ jobs:
       - name: Install it here and start the daemon
         if: github.event_name == 'push'
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 18
         run: |
           $exe = (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName
           # Wait for the installer alone (-Wait also waits on its children); run 39522683697 hung here 30 min with no output.
           $setup = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru
-          if (-not $setup.WaitForExit(240000)) {
-            # Run 39528710341 timed out here even with /SD IDOK: show what the installer is still running and any window it shows.
+          # Run 39530752722: at 4 min the 608 MB installer had no child process and no window, so it was still unpacking (belief).
+          # Every 30 s: files written so far and the installer's CPU seconds, so slow and stuck look different.
+          $dirs = @((Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'), (Join-Path $env:ProgramFiles 'P9 Event Horizon'))
+          $began = Get-Date
+          while (-not $setup.WaitForExit(30000) -and ((Get-Date) - $began).TotalMinutes -lt 12) {
+            $files = ($dirs | Where-Object { Test-Path $_ } | ForEach-Object { (Get-ChildItem $_ -Recurse -File -ErrorAction SilentlyContinue).Count } | Measure-Object -Sum).Sum
+            Write-Output ('{0:n0} s: {1} files, installer CPU {2:n0} s' -f ((Get-Date) - $began).TotalSeconds, $files, (Get-Process -Id $setup.Id -ErrorAction SilentlyContinue).CPU)
+          }
+          if (-not $setup.HasExited) {
             $all = Get-CimInstance Win32_Process
             $tree = @($setup.Id); do { $n = $tree.Count; $tree = @($tree + ($all | Where-Object { $tree -contains $_.ParentProcessId } | ForEach-Object ProcessId) | Select-Object -Unique) } while ($tree.Count -gt $n)
             $all | Where-Object { $tree -contains $_.ProcessId } | ForEach-Object { 'proc ' + $_.ProcessId + ' <- ' + $_.ParentProcessId + ': ' + $_.CommandLine }
             Get-Process | Where-Object MainWindowTitle | ForEach-Object { 'window: ' + $_.ProcessName + ' - ' + $_.MainWindowTitle }
             Write-Output ('task registered: ' + [bool](Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue))
-            throw 'the installer did not finish in 4 min'
+            throw 'the installer did not finish in 12 min'
           }
-          Write-Output ('installer exit code: ' + $setup.ExitCode)
+          Write-Output ('installer exit code: ' + $setup.ExitCode + ' after ' + [int]((Get-Date) - $began).TotalSeconds + ' s')
           # If the service did not start, run its script here so its own error shows in this log.
           $script = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\resources\daemon\scripts\install-windows.ps1'
           if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script; throw 'the installer registered no task' }
