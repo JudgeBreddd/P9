@@ -113,6 +113,9 @@
     "directories": {
       "output": "dist/windows"
     },
+    "asarUnpack": [
+      "apps/desktop/pets/**"
+    ],
     "files": [
       "apps/desktop/**",
       "apps/web/dist/**",

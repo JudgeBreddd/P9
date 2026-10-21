@@ -91,9 +91,11 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   // A silent install (/S) still shows a MessageBox with no /SD and waits for a click nobody can give. /SD goes after the text:
   // before it, makensis takes the text for a jump label and the build fails (GitHub run 39527149502).
   for (const box of nsh.split('\n').filter((line) => /^\s*MessageBox /.test(line))) assert.match(box, /"\s+\/SD ID\w+\s*$/, 'silent default, after the text (NSIS reads text after /SD as a jump label): ' + box.trim());
-  // The installer is 32-bit: with redirection on, $SYSDIR's PowerShell is the 32-bit one (GitHub run 39532602630: no task).
+  // The installer is 32-bit: with redirection on, $SYSDIR's PowerShell is the 32-bit one, not the one a user opens.
   for (const part of [install, uninstall]) assert.match(part, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^]*\$\{EnableX64FSRedirection\}/, 'every PowerShell call runs with WOW64 redirection off');
   for (const part of [install, uninstall]) assert.ok(part.indexOf('${DisableX64FSRedirection}') < part.indexOf('nsExec'), 'redirection goes off before the first PowerShell call');
+  // Windows PowerShell under a PowerShell 7 parent loads 7's Set-Acl module and fails (GitHub run 39535290300: no task).
+  assert.ok(ps1.search(/PSModulePath = .*-notmatch '\\\\PowerShell\\\\'/) >= 0 && ps1.search(/PSModulePath =/) < ps1.indexOf('Set-Acl -LiteralPath'), "7's module folders leave PSModulePath before Set-Acl");
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');

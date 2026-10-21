@@ -190,12 +190,13 @@ setInterval(() => { if (!document.hidden) { IND.frame++; tickPets(); } }, 125);
 // Each chat keeps its own pet spot, apart in Chat Focus and in its chat window (Builder, 2026-10-19: moving one pet moved
 // both, and moving the robot head window's pet moved the chat's). Settings' per-focus pane spot is no longer read.
 // ponytail: localStorage (petSpots, top of this section), last 200 dragged chats; move it into the settings file if spots should follow a profile copy.
-// Until dragged, a chat's pet stands beside its message box, not on it; with no room there, just above the box's right end.
+// Until dragged, a chat's pet stands left of its message box, standing on the box's top edge (Builder, 2026-10-20: moved from
+// the right side to where the owner dragged his); with no room there, just above the box's left end.
 function petHome(p, cv) {
-  const r = p.getBoundingClientRect(), c = p.querySelector('.bottom .col')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
-  if (!r.width || !r.height || !c) return [0.9, 0.7];
-  const beside = r.right - c.right >= w + 16;
-  return [((beside ? c.right + 8 + w / 2 : c.right - w / 2) - r.left) / r.width, ((beside ? c.bottom - h / 2 : c.top - h / 2 - 4) - r.top) / r.height];
+  const r = p.getBoundingClientRect(), c = p.querySelector('.bottom .col')?.getBoundingClientRect(), b = p.querySelector('.composer')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
+  if (!r.width || !r.height || !c || !b) return [0.1, 0.7];
+  const beside = c.left - r.left >= w + 16;
+  return [((beside ? c.left - 8 - w / 2 : c.left + w / 2) - r.left) / r.width, ((beside ? b.top - h / 2 : c.top - h / 2 - 4) - r.top) / r.height];
 }
 // Drag a chat's pet within its chat; the spot is saved for that chat on release. The top bar's pets stay put.
 document.addEventListener('pointerdown', e => {
@@ -1512,14 +1513,19 @@ function applyChat(ev) {
   if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push({ id: ev.conversation, agent: d.provider, title: d.title, model: chatModel[d.provider], mode: startMode(d.provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: d.folder || 'P9 workspace', folder: d.folder || '', events: [], live: true, created: ev.at }); return null; }
   const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
-  const settle = () => { s.working = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
+  const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = true; break;
+    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = true; break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; break;
     case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; break;
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
       if (Array.isArray(d.pickers)) { s.pickers = lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; } break;
     case 'update':
+      // Claude Code also runs turns nobody prompted (the continuation after a compaction, a background task's report): no
+      // 'user' starts them and no 'turn-end' closes them. Agent output marks the chat working; that turn's closing
+      // usage_update (the one with a cost) marks it done.
+      if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
+      else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content);
         if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });

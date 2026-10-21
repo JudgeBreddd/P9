@@ -90,8 +90,9 @@ export async function mutationInventory(directory) {
     const extension = path.extname(file);
     if (!sourceExtensions.has(extension)) {
       if (dataExtensions.has(extension) || specialFiles.has(relative)) continue;
-      // Release images (README, icons) are binary and live only in docs/brand/, plus the phone's icon in apps/web/public/.
-      if ((relative.startsWith('docs/brand/') || relative === 'apps/web/public/p9-icon.png') && ['.png', '.jpg', '.ico'].includes(extension)) continue;
+      // Release images (README, icons) are binary and live only in docs/brand/, plus the phone's icon in apps/web/public/
+      // and the bundled default pet's sheet.
+      if ((relative.startsWith('docs/brand/') || relative === 'apps/web/public/p9-icon.png' || relative === 'apps/desktop/pets/skipper/spritesheet.png') && ['.png', '.jpg', '.ico'].includes(extension)) continue;
       throw new Error('unsupported-source-extension: ' + relative);
     }
     if (relative.startsWith('test/')) continue;
