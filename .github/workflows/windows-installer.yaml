@@ -86,9 +86,17 @@ jobs:
             throw 'the installer did not finish in 12 min'
           }
           Write-Output ('installer exit code: ' + $setup.ExitCode + ' after ' + [int]((Get-Date) - $began).TotalSeconds + ' s')
-          # If the service did not start, run its script here so its own error shows in this log.
-          $script = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\resources\daemon\scripts\install-windows.ps1'
-          if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script; throw 'the installer registered no task' }
+          # The installer's own run of install-windows.ps1: exit code and output (installer.nsh writes it).
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
+          Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | ForEach-Object { 'hook: ' + $_ }
+          $script = Join-Path $app 'resources\daemon\scripts\install-windows.ps1'
+          # Run 39532602630 registered no task, then this hand run from 64-bit PowerShell did. If it happens again, show
+          # the 32-bit PowerShell's error too (the belief behind installer.nsh's redirection lines).
+          if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) {
+            & "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $script 2>&1 | ForEach-Object { '32-bit: ' + $_ }
+            Write-Output ('32-bit exit: ' + $LASTEXITCODE)
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script; throw 'the installer registered no task'
+          }
           $action = (Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0]
           Write-Output ('task runs: ' + $action.Execute + ' ' + $action.Arguments.Substring(0, 40))
           if ($action.Execute -ne 'conhost.exe' -or -not $action.Arguments.StartsWith('--headless ')) { throw 'task is not headless' }
@@ -108,3 +116,7 @@ jobs:
           schtasks.exe /Run /TN 'P9 Foundation'
           Wait-Daemon $before
           Write-Output 'daemon up again after a stop and schtasks /Run (what the app does)'
+          # Belief check only, never fails the job: does 32-bit PowerShell fail this script here? (exit 0 means the cause was something else)
+          & "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $script 2>&1 | ForEach-Object { 'belief check 32-bit: ' + $_ }
+          Write-Output ('belief check 32-bit exit: ' + $LASTEXITCODE)
+          $global:LASTEXITCODE = 0
