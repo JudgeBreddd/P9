@@ -1453,8 +1453,11 @@ async function welcome() {
   const yes = (ok, good, bad) => `<span class="${ok ? 'ok' : 'warn'}">${ok ? good : bad}</span>`;
   $('#welBody').innerHTML = `<div class="set-row"><span><strong>Mission Control paths</strong><span class="muted sm" id="welFile"></span></span><span class="spacer"></span>${yes(s.settings, 'Loaded', s.settingsPresent ? 'Found: restart P9 to load it' : 'Not found')}</div>`
     + (s.settings ? '' : `<label class="set-row"><span><strong>Ask your agent to write it</strong><span class="muted sm">Click the box, Ctrl C, then paste into Claude or Codex.</span></span></label><textarea data-slot="input" id="welPrompt" readonly rows="6"></textarea>`)
-    + `<div class="set-row"><span><strong>Agents</strong><span class="muted sm">Sign in from a terminal: run claude and log in, or codex login. Restart P9 after.</span></span><span class="spacer"></span>${yes(s.claude, 'Claude signed in', 'Claude not signed in')} ${yes(s.codex, 'Codex signed in', 'Codex not signed in')}</div>`;
+    + `<div class="set-row"><span><strong>Agents</strong><span class="muted sm">Sign in from a terminal: run claude and log in, or codex login. Restart P9 after.</span></span><span class="spacer"></span>${yes(s.claude, 'Claude signed in', 'Claude not signed in')} ${yes(s.codex, 'Codex signed in', 'Codex not signed in')}</div>`
+    // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
+    + `<div class="set-row"><span><strong>Pets</strong><span class="muted sm">Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.</span></span></div>`;
   $('#welFile').textContent = s.settingsFile || '';
+  $('#welPetdex').onclick = e => { if (window.p9?.openPetdex) { e.preventDefault(); window.p9.openPetdex(); } };
   if ($('#welPrompt')) { $('#welPrompt').value = prompt; $('#welPrompt').onfocus = e => e.target.select(); }
   $('#welMission').hidden = !settings.focus.mission || !(settings.focus.chat || settings.focus.dev);
   if (!$('#welDlg').open) $('#welDlg').showModal();
