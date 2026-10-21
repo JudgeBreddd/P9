@@ -92,7 +92,16 @@ The temp is open only to you until the rename, and no other process can open it
 even once it carries the target's DACL. (Known limit: P9 cannot read,
 compare or keep a file's audit SACL or its SACL protection, because reading them needs
 SeSecurityPrivilege, which P9's limited process never holds. The saved file gets
-whatever audit SACL Windows gives a new file in that folder.)
+whatever audit SACL Windows gives a new file in that folder. Accepted as a stated limit,
+the owner, 2026-10-20: "Q1 yes".)
+
+**Crash leftover (both platforms, stated limit):** just before the rename, the save temp
+(`.p9-save-…`) gets the target's permissions (Windows: owner, group and DACL; Linux: the
+mode bits, `packages/files/index.mjs` `file.chmod`). If P9 is killed in that moment, the
+temp stays in the folder and anyone allowed to read the original can read the new, unsaved
+text; the draft is also kept in recovery. Nothing removes leftover `.p9-save-` files on
+startup yet. Accepted as a stated limit, the owner, 2026-10-20: "Q2 yes" ("ive tried answering
+yes to q1 q2 for days").
 Not tested: the unassignable owner or group, resource attributes and scoped
 policy (none can be set up on a non-admin test account).
 
