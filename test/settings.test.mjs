@@ -12,7 +12,10 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
 const PETS = { chat: look(true), dev: look(false), mission: look(false) };
+const SKIPPER = { system: 'skipper' }, DEFAULT_PETS = { chat: look(true, SKIPPER), dev: look(false, SKIPPER), mission: look(false, SKIPPER) };
 const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme'; // main.mjs loads only inside Electron
+const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
+const PETDEX_URL = 'https://petdex.dev';
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -36,6 +39,10 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   const zoomOf = (app) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor());
 
   let { app, page } = await launch();
+  // A new profile starts with the bundled Skipper as its System pet (the owner, 2026-10-20); removed, it stays removed (below).
+  assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [{ name: 'skipper', displayName: 'Skipper' }]);
+  assert.deepEqual((await page.evaluate(() => window.p9.getSettings())).pet, DEFAULT_PETS);
+  await page.evaluate(() => window.p9.removePet('skipper'));
   // Case 4: the handler itself, called as the shell's own frame, refuses every other shape and writes nothing.
   const refused = await app.evaluate(async ({ ipcMain, BrowserWindow }, PETS) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, handler = ipcMain._invokeHandlers.get('p9:settings');
@@ -80,6 +87,16 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), DOCS_URL);
+  // Check for updates (threat model row 28): shows this build's version and opens only the newest-release page.
+  const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.match(await page.locator('#setVer').innerText(), new RegExp('^You have P9 ' + version.replaceAll('.', '\\.') + '\\. '));
+  await page.click('#setUpd');
+  for (let i = 0; i < 50 && url.trim() !== RELEASES_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== RELEASES_URL) await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(url.trim(), RELEASES_URL);
+  // Settings → Pets: petdex.dev is a link and opens only that page (the owner, 2026-10-20).
+  await page.click('#petdexLink');
+  for (let i = 0; i < 50 && url.trim() !== PETDEX_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== PETDEX_URL) await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(url.trim(), PETDEX_URL);
   await page.click('#setAm');
   await page.locator('#amDlg[open]').waitFor();
   await page.click('#amClose');
@@ -108,7 +125,8 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // The name is the account's (main.mjs accountName), so the test reads it back rather than guessing it.
   const kept = JSON.parse(await readFile(file, 'utf8'));
   assert.match(kept.name, /^[^\p{Cc}\p{Cf}]{0,40}$/u);
-  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: PETS, name: kept.name, startLast: false });
+  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false });
+  assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [], 'a removed Skipper is not put back');
   // Phase 18 review: saves in flight together (Ctrl = held down) all succeed, and the file ends on the last one.
   const saves = await page.evaluate((pet) => Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
     window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false }))), PETS);
@@ -190,6 +208,12 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.equal(await page.locator('#indGlyph').isVisible(), true);
   for (const focus of ['Control+2', 'Control+3', 'Control+1']) { await page.keyboard.press(focus); assert.equal(await page.locator('#agentInd').isVisible(), true, focus); }
   await call(instance, `/chat/${id}/cancel`, 'POST', {});
+  await page.locator('#agentInd').waitFor({ state: 'hidden', timeout: 15000 });
+  // After a compaction the agent works on with no prompt open (Builder, 2026-10-20: the spinner and pet went away): the
+  // indicator comes back for that turn and hides on its closing usage_update.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'compact' });
+  await page.getByText('after compact').first().waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#agentInd').getAttribute('data-state'), 'working', 'working again after the compaction');
   await page.locator('#agentInd').waitFor({ state: 'hidden', timeout: 15000 });
 
   // The old single-pet file became every focus's system pet (refused, so the spinner), shown in Chat only.
@@ -368,13 +392,13 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.waitForFunction(() => document.querySelectorAll('#chats .pane canvas.pet').length === 2, null, { timeout: 15000 });
   assert.equal(await page.evaluate(() => [...document.querySelectorAll('#chats .pane')].map((p) => p.getAttribute('aria-label') + ':' + p.querySelector('canvas.pet').dataset.petName).sort().join()), 'Claude chat:good-pet,Codex chat:other-pet');
   await drawn('#chats .pane canvas.pet');
-  // Undragged, a chat's pet stands beside its message box, not on it; dragging one leaves the other where it was.
+  // Undragged, a chat's pet stands left of its message box, not on it; dragging one leaves the other where it was.
   const placed = () => page.evaluate(() => [...document.querySelectorAll('#chats .pane')].map((p) => {
     const c = p.querySelector('canvas.pet').getBoundingClientRect(), b = p.querySelector('.composer').getBoundingClientRect(), r = p.getBoundingClientRect();
-    return { id: p.dataset.id, at: [Math.round(c.x), Math.round(c.y)], onBox: c.right > b.left && c.left < b.right && c.bottom > b.top && c.top < b.bottom, inPane: c.left >= r.left && c.right <= r.right && c.top >= r.top && c.bottom <= r.bottom };
+    return { id: p.dataset.id, at: [Math.round(c.x), Math.round(c.y)], onBox: c.right > b.left && c.left < b.right && c.bottom > b.top && c.top < b.bottom, left: c.x + c.width / 2 < b.x + b.width / 2, inPane: c.left >= r.left && c.right <= r.right && c.top >= r.top && c.bottom <= r.bottom };
   }));
   const petsAt = await placed();
-  assert.deepEqual(petsAt.map((x) => [x.onBox, x.inPane]), [[false, true], [false, true]], JSON.stringify(petsAt));
+  assert.deepEqual(petsAt.map((x) => [x.onBox, x.left, x.inPane]), [[false, true, true], [false, true, true]], JSON.stringify(petsAt));
   await shot('pets-split.png');
   const first = page.locator('#chats .pane').first(), fb = await first.boundingBox(), fc = await first.locator('canvas.pet').boundingBox();
   await page.mouse.move(fc.x + fc.width / 2, fc.y + fc.height / 2); await page.mouse.down();
@@ -495,7 +519,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     return { why: result.refused[0]?.why, ms: performance.now() - started };
   });
   assert.equal(typo.why, 'command'); assert.ok(typo.ms < 500, typo.ms + ' ms');
-  // Walkthrough preview (draft; Builder approves before it ships): each bubble fits the window, carries Chat's system pet and
+  // Walkthrough (Ctrl K; it also starts once on first login, see Landing page): each bubble fits the window, carries Chat's system pet and
   // outlines its step's element (unless that element is hidden); Back goes back; Done and Escape end it in the focus it began in.
   const { WALKTHROUGH } = await import('../apps/web/src/walkthrough.mjs');
   await page.click('#setClose');
@@ -503,7 +527,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.click('[data-focus-btn="mission"]');
   // Mission #3 (Builder, 2026-10-18): with the sample's 12 apps, the Apps list scrolls and Usage keeps its full height.
   assert.ok(await page.locator('#fMission [data-panel="musage"] .pscroll').evaluate((p) => p.scrollHeight <= p.clientHeight + 1), 'Usage squeezed by Apps');
-  const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough preview (draft)' }).click(); };
+  const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); };
   const walkNow = () => page.evaluate((steps) => {
     const w = document.querySelector('#walk'), r = w.getBoundingClientRect(), n = +w.querySelector('.eyebrow').textContent.split(' ')[0], sel = steps[n - 1].at;
     const el = sel && document.querySelector(sel), shown = el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
@@ -672,8 +696,11 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
 
 test('First-run welcome: a Set up card while settings or sign-in are missing; /setup says only booleans (threat model row 17)',{ timeout: 120000 }, async (t) => {
   const instance = await daemon(t);
-  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-welcome-')), 'profile');
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-welcome-')), profile = path.join(home, 'profile');
+  const opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" > ' + opened + '\n');
+  await chmod(browser, 0o755);
+  const env = { ...process.env, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE;
   const launch = async () => {
     const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
     const proc = app.process();
@@ -697,7 +724,12 @@ test('First-run welcome: a Set up card while settings or sign-in are missing; /s
   await card.locator('.open').click();
   await page.locator('#welDlg[open]').waitFor();
   const body = await page.locator('#welBody').innerText();
-  for (const text of ['Not found', 'Claude not signed in', 'Codex not signed in']) assert.ok(body.includes(text), text);
+  for (const text of ['Not found', 'Claude not signed in', 'Codex not signed in', 'Skipper is your System pet']) assert.ok(body.includes(text), text);
+  // Issue #4 item 4, option C: the welcome points at petdex.dev, opened only through the fixed-address opener.
+  await page.click('#welPetdex');
+  let url = '';
+  for (let i = 0; i < 50 && url.trim() !== PETDEX_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== PETDEX_URL) await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(url.trim(), PETDEX_URL);
   assert.equal(await page.locator('#welFile').textContent(), settingsFile);
   const prompt = await page.locator('#welPrompt').inputValue();
   assert.ok(prompt.includes(settingsFile) && prompt.includes('"primary"') && prompt.includes('show me the file before you save it'), prompt);
@@ -970,7 +1002,13 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
     await mode(pane).evaluate((el, w) => new Promise((ok) => { const end = Date.now() + 3000; (function tick() { if (el.value === w || Date.now() > end) ok(); else setTimeout(tick, 20); })(); }), want);
     assert.equal(await mode(pane).inputValue(), want, message);
   };
-  const said = async (pane, text, want) => { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter'); await pane.locator('.msg.agent', { hasText: want }).waitFor({ timeout: 15000 }); };
+  // After Turn on the picker already reads the new mode (the browser set it); the handler sets s.mode only once the dialog's
+  // close task runs. Its localStorage write marks that, so the next prompt carries the new mode (GitHub run 39527149498).
+  const applied = (agent, want) => page.waitForFunction(([a, w]) => localStorage.getItem('p9-mode:' + a) === w, [agent, want], { timeout: 5000 });
+  // On a timeout the pane's text goes in the error: GitHub's runner missed one reply (2026-10-20) and nothing showed why.
+  const said = async (pane, text, want) => { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter');
+    try { await pane.locator('.msg.agent', { hasText: want }).waitFor({ timeout: 15000 }); }
+    catch (error) { throw new Error(`no reply "${want}"; the pane shows:\n${(await pane.innerText().catch(() => '?')).slice(-1500)}`, { cause: error }); } };
   let codex = await chat('codex');
   assert.equal(await mode(codex).inputValue(), 'Auto review', 'a new install starts Codex in Auto review');
   assert.deepEqual(await mode(codex).locator('option').allInnerTexts(), ['Read-only', 'Workspace access', 'Auto review', 'Full access']);
@@ -987,11 +1025,15 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await mode(codex).selectOption('Full access'); await dlg.waitFor(); await page.keyboard.press('Escape'); await dlg.waitFor({ state: 'hidden' });
   await settled(codex, 'Auto review', 'Escape cancels too');
   await mode(codex).selectOption('Full access'); await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
+  await settled(codex, 'Full access', 'Turn on sets the mode');
+  await applied('codex', 'Full access');
   await said(codex, 'mode', 'mode:agent-full-access');
   let claude = await chat('claude');
   assert.equal(await mode(claude).inputValue(), 'Auto');
   await mode(claude).selectOption('Bypass permissions');
   await dlg.getByRole('button', { name: 'Turn on, don\'t show again' }).click();
+  await settled(claude, 'Bypass permissions', 'Turn on sets the mode');
+  await applied('claude', 'Bypass permissions');
   await said(claude, 'mode', 'mode:bypassPermissions');
   await app.close();
   ({ app, page } = await launch()); dlg = page.locator('#looseDlg');
@@ -1236,10 +1278,18 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await shot('landing-main.png');
   // Behind the main page the sky draws at full resolution, not a fraction scaled up (Builder, 2026-10-19: "when it is in the
   // background it looks low quality. as if it lost its quality somehow").
-  await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
+  // Without WebGL (a display with no GPU, such as GitHub's Xvfb) the sky is off by design (landing-sky.mjs), so there is nothing to size.
+  if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
+  else await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');
   await page.waitForFunction(() => !document.querySelector('#land').open);
+  // First login: the walkthrough starts in Chat as the landing closes and ends in the focus picked (GitHub issue #4 item 2).
+  await page.locator('#walk').waitFor({ timeout: 5000 });
+  assert.match(await page.locator('#walk .eyebrow').innerText(), /^1 of \d+$/i); // innerText applies the eyebrow's uppercase
+  assert.equal((await state(page)).focus, 'chat');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#walk'));
   assert.deepEqual(await state(page), { open: false, stage: 'main', focus: 'dev' });
 
   // The mark in the top bar opens it again on the main stage; the name goes in as text; Esc returns to the last focus.
@@ -1260,6 +1310,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('#land').open);
   assert.equal((await state(page)).focus, 'dev');
+  assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough runs once, not on every landing close');
 
   // Settings: name and "Start in my last focus mode"; with it on, the next start goes straight to the last focus.
   await page.click('#setBtn');

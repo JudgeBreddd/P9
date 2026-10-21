@@ -1,0 +1,130 @@
+# Builds the Windows installer on GitHub's Windows machine.
+# Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag: it builds that
+# tag and attaches the .exe and SHA256SUMS to the release (which must already exist). Tags before v0.1.2 lack the
+# packaging fix and fail on this machine (the NSIS 260-character path).
+# A push to a branch other than main that changes the packaging builds the installer too, as a check only: nothing is
+# attached anywhere. Windows minutes count double against the private repo's monthly allowance.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach the installer to (the release must exist)
+        required: true
+  push:
+    branches-ignore: [main]
+    paths:
+      - scripts/package-windows.mjs
+      - scripts/extract-node-windows.ps1
+      - scripts/install-windows.ps1
+      - scripts/installer.nsh
+      - scripts/windows-host.ps1
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/windows-installer.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.10.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package:win
+      - name: Attach to the release
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat dist/windows/SHA256SUMS
+          gh release upload "$TAG" dist/windows/*.exe dist/windows/SHA256SUMS --clobber
+      - name: Show the check build
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          cat dist/windows/SHA256SUMS
+          ls -l dist/windows/*.exe
+      # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
+      # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
+      # daemon, not what a person sees.
+      - name: Install it here and start the daemon
+        if: github.event_name == 'push'
+        shell: pwsh
+        timeout-minutes: 28
+        run: |
+          $exe = (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName
+          # Wait for the installer alone (-Wait also waits on its children); run 39522683697 hung here 30 min with no output.
+          $setup = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru
+          # Run 39530752722: at 4 min the 608 MB installer had no child process and no window, so it was still unpacking (belief).
+          # Every 30 s: files written so far and the installer's CPU seconds, so slow and stuck look different.
+          $dirs = @((Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'), (Join-Path $env:ProgramFiles 'P9 Event Horizon'))
+          $began = Get-Date
+          while (-not $setup.WaitForExit(30000) -and ((Get-Date) - $began).TotalMinutes -lt 12) {
+            $files = ($dirs | Where-Object { Test-Path $_ } | ForEach-Object { (Get-ChildItem $_ -Recurse -File -ErrorAction SilentlyContinue).Count } | Measure-Object -Sum).Sum
+            Write-Output ('{0:n0} s: {1} files, installer CPU {2:n0} s' -f ((Get-Date) - $began).TotalSeconds, $files, (Get-Process -Id $setup.Id -ErrorAction SilentlyContinue).CPU)
+          }
+          if (-not $setup.HasExited) {
+            $all = Get-CimInstance Win32_Process
+            $tree = @($setup.Id); do { $n = $tree.Count; $tree = @($tree + ($all | Where-Object { $tree -contains $_.ParentProcessId } | ForEach-Object ProcessId) | Select-Object -Unique) } while ($tree.Count -gt $n)
+            $all | Where-Object { $tree -contains $_.ProcessId } | ForEach-Object { 'proc ' + $_.ProcessId + ' <- ' + $_.ParentProcessId + ': ' + $_.CommandLine }
+            Get-Process | Where-Object MainWindowTitle | ForEach-Object { 'window: ' + $_.ProcessName + ' - ' + $_.MainWindowTitle }
+            Write-Output ('task registered: ' + [bool](Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue))
+            throw 'the installer did not finish in 12 min'
+          }
+          Write-Output ('installer exit code: ' + $setup.ExitCode + ' after ' + [int]((Get-Date) - $began).TotalSeconds + ' s')
+          # The installer's own run of install-windows.ps1: exit code and output (installer.nsh writes it).
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
+          Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | ForEach-Object { 'hook: ' + $_ }
+          $script = Join-Path $app 'resources\daemon\scripts\install-windows.ps1'
+          # This step's shell is PowerShell 7, so the installer inherits 7's module path: the case run 39535290300 failed on.
+          if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the installer registered no task (hook: lines above)' }
+          $action = (Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0]
+          Write-Output ('task runs: ' + $action.Execute + ' ' + $action.Arguments.Substring(0, 40))
+          if ($action.Execute -ne 'conhost.exe' -or -not $action.Arguments.StartsWith('--headless ')) { throw 'task is not headless' }
+          $file = Join-Path $env:LOCALAPPDATA 'P9\runtime\desktop.json'
+          function Wait-Daemon([datetime]$After) {
+            $end = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $end) { if ((Test-Path $file) -and (Get-Item $file).LastWriteTime -gt $After) { return } ; Start-Sleep 2 }
+            Get-ScheduledTaskInfo -TaskName 'P9 Foundation' | Format-List LastRunTime, LastTaskResult
+            throw 'the daemon did not write desktop.json in 90 s'
+          }
+          Wait-Daemon ([datetime]::MinValue)
+          Write-Output 'daemon up after install'
+          Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | ForEach-Object { 'node: ' + $_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length)) }
+          function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' }) }
+          # A daemon that died on its own (issue #4 item 7) is the case the app restarts with schtasks /Run (main.mjs).
+          $before = Get-Date
+          Get-Daemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+          $end = (Get-Date).AddSeconds(30)
+          while ((Get-ScheduledTask -TaskName 'P9 Foundation').State -eq 'Running' -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          Write-Output ('task state before /Run: ' + (Get-ScheduledTask -TaskName 'P9 Foundation').State)
+          schtasks.exe /Run /TN 'P9 Foundation'
+          Wait-Daemon $before
+          Write-Output 'daemon up again after it died and schtasks /Run (what the app does)'
+          # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
+          # alone left the daemon running (run 39540753837), which an update over this version would hit too.
+          $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName
+          $began = Get-Date
+          $un = Start-Process -FilePath $uninstaller -ArgumentList '/S', ('_?=' + $app) -PassThru
+          if (-not $un.WaitForExit(600000)) { throw 'the uninstaller did not finish in 10 min' }
+          Write-Output ('uninstaller exit code: ' + $un.ExitCode + ' after ' + [int]((Get-Date) - $began).TotalSeconds + ' s')
+          Start-Sleep 3
+          $left = Get-Daemon
+          Write-Output ('daemon processes left after uninstall: ' + $left.Count)
+          if ($left.Count -gt 0) { throw 'the uninstaller left the daemon running' }
+          if (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue) { throw 'the uninstaller left the task' }
+          Write-Output 'uninstall: no daemon, no task'

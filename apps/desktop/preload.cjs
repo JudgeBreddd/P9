@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   getSettings: () => ipcRenderer.invoke('p9:settings'),
   setSettings: (settings) => ipcRenderer.invoke('p9:settings', settings),
   openDocs: () => ipcRenderer.invoke('p9:open-docs'),
+  openUpdates: () => ipcRenderer.invoke('p9:open-updates'),
+  openPetdex: () => ipcRenderer.invoke('p9:open-petdex'),
   fileProtection: (...on) => ipcRenderer.invoke('p9:file-protection', ...on),
   listPets: () => ipcRenderer.invoke('p9:pets'),
   loadPet: (name) => ipcRenderer.invoke('p9:pets', name),
@@ -27,4 +29,6 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   terminalClose: (serial) => ipcRenderer.send('p9:terminal-close', serial),
   onTerminal: (callback) => { ipcRenderer.on('p9:terminal', (_event, serial, message) => callback(serial, message)); },
   landing: !process.argv.includes('--p9-landing=off'),
+  version: (process.argv.find(arg => arg.startsWith('--p9-version=')) || '').slice('--p9-version='.length),
+  sample: ipcRenderer.sendSync('p9:sample'), // null unless an unpackaged test run set P9_SAMPLE_DATA=1
 }));

@@ -100,6 +100,7 @@ test('Phase 13: uninstall removes only the named P9 unit; other apps and P9 stat
     .map((name) => readdirSync(path.join(projects, name)).map((entry) => name + '/' + entry + ' ' + statSync(path.join(projects, name, entry)).mtimeMs).sort().join('\n'));
   const enabled = () => spawnSync('systemctl', ['--user', 'is-enabled', 'p9-foundation.service'], { encoding: 'utf8' }).stdout.trim();
   const hub = () => spawnSync('pgrep', ['-f', 'workspace-hub/mission_control.py']).status === 0;
+  mkdirSync(units, { recursive: true }); // a fresh machine (GitHub's runner) has no user units yet
   writeFileSync(path.join(units, unit), '[Service]\nExecStart=/bin/sleep 300\n');
   mkdirSync(path.join(units, unit + '.d'), { recursive: true });
   writeFileSync(path.join(units, unit + '.d', 'override.conf'), '[Service]\nEnvironment=P9_TEST=1\n');

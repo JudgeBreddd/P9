@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell, WebContentsView } from 'electron';
-import { spawn } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, watch } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,10 @@ export const APP_URL = 'p9://app/';
 export const DEV_URL = 'p9://dev/';
 export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme';
+// Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
+export const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
+// Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
+export const PETDEX_URL = 'https://petdex.dev';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
 export const FILE_PROTECTION_DOCS = 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection';
@@ -25,7 +29,8 @@ export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here an
 // The Settings page's UI settings (threat model row 15): one fixed shape, checked here, kept in the profile folder.
 // pet: each focus mode's own pet settings: shown or not, size in pixels, a petdex pet per agent (system when the agent has
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
-const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null });
+// Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
+const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
 // name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
   pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false });
@@ -51,7 +56,7 @@ export function checkSettings(value) {
 export function upgradeSettings(file, name = '') {
   const old = file?.pet;
   if (old === undefined || old === null || typeof old === 'string' || exactly(old, 'claude,codex,system')) {
-    const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old;
+    const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old; // an older file keeps its own (no) pet
     file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
   }
   return { name, startLast: false, ...file };
@@ -128,7 +133,13 @@ async function assets(directory, prefix = '/') {
 export async function createDesktop({ state, open } = {}) {
   // KDE/GNOME on Wayland match a window to its menu entry and icon by app id; without this it is "electron" (generic icon).
   if (process.platform === 'linux') app.setDesktopName('p9-event-horizon.desktop');
+  // Lets the freeze record read the stack a hung page is stuck in (with the Document-Policy header serve() sends).
+  app.commandLine.appendSwitch('enable-features', 'DocumentPolicyIncludeJSCallStacksInCrashReports');
   await app.whenReady();
+  // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
+  // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
+  // Fixed argv, no shell, the user's own task.
+  if (process.platform === 'win32' && state) health(state).catch(() => execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {}));
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
@@ -145,7 +156,7 @@ export async function createDesktop({ state, open } = {}) {
     const key = url.pathname === '/' ? '/index.html' : url.pathname;
     const site = hosts.includes(url.host) && Object.hasOwn(sites, url.host) ? sites[url.host] : null, data = site?.files.get(key);
     if (request.method !== 'GET' || url.username || url.password || url.port || !data) return new Response('Not found', { status: 404 });
-    return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff' } });
+    return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff', 'Document-Policy': 'include-js-call-stacks-in-crash-reports' } });
   };
   protocol.handle('p9', serve('app'));
   const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json');
@@ -153,19 +164,36 @@ export async function createDesktop({ state, open } = {}) {
   let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
   let settingsSaving = Promise.resolve();
   const petsFolder = path.join(app.getPath('userData'), 'pets');
+  // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
+  if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
+  // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
+  const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [] } }); // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [])] } }); // the test runs click the shell straight away
   window.removeMenu();
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
   window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
+  // Freeze record (Builder, 2026-10-20: the window freezes "and i just need to close and reopen the app"): when the window
+  // stops answering, the JavaScript it is stuck in goes to p9-freeze.log in the profile folder, then how long it lasted.
+  // "no stack" means it was stuck outside JavaScript (layout, paint, an IPC wait). ponytail: never rotated, a few lines per freeze.
+  const note = line => appendFile(path.join(app.getPath('userData'), 'p9-freeze.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {});
+  let frozeAt = 0;
+  window.webContents.on('unresponsive', async () => {
+    frozeAt = Date.now(); note('window unresponsive');
+    const stack = await Promise.race([window.webContents.mainFrame.collectJavaScriptCallStack().catch(() => null), new Promise(resolve => setTimeout(resolve, 5000))]);
+    note(stack ? 'stuck in:' + stack.replace(/\s*\n\s*/g, ' | ') : 'no stack: not stuck in JavaScript');
+  });
+  window.webContents.on('responsive', () => note(`window responsive again after ${Math.round((Date.now() - frozeAt) / 1000)} s`));
+  window.webContents.on('render-process-gone', (_event, details) => note('window process gone: ' + details.reason));
+  app.on('child-process-gone', (_event, details) => note(details.type + ' process gone: ' + details.reason));
   let persistent = true, stoppingBeforeQuit = false;
   ipcMain.handle('p9:lifecycle', async (event, action, payload) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -267,6 +295,10 @@ export async function createDesktop({ state, open } = {}) {
   // holds. One socket at a time; frames pass through as they are (the page stamps keys with the daemon's leases, like the
   // phone) and the daemon checks every one. Each socket has a serial, so the page can tell a new socket's frames from an old one's.
   const fromApp = event => event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === APP_URL;
+  // Test-only: the UI tests' sample data (test/sample-data.mjs), never in a packaged build (GitHub issue #4). JSON drops its helpers.
+  const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
+    ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
+  ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
   const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}] };
   ipcMain.handle('p9:terminal', async (event, ...args) => {
     const [action, payload = {}] = args;
@@ -509,6 +541,20 @@ export async function createDesktop({ state, open } = {}) {
         || args.length) throw new Error('ipc-sender-refused');
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [DOCS_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(DOCS_URL);
+    return { opened: true };
+  });
+  ipcMain.handle('p9:open-updates', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [RELEASES_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(RELEASES_URL);
+    return { opened: true };
+  });
+  ipcMain.handle('p9:open-petdex', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [PETDEX_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(PETDEX_URL);
     return { opened: true };
   });
   // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,
