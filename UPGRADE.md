@@ -1,5 +1,14 @@
 # Upgrading P9
 
+## To 0.1.2 (beta)
+
+Settings has an Updates row: it shows the version you have, and **Check for updates** opens P9's newest GitHub
+release in your browser. P9 itself downloads nothing. Building the Windows installer no longer needs any cache
+setting (the NSIS path limit is handled in `scripts/package-windows.mjs`).
+
+- **Linux:** update as `README.md` § Update says, then reopen the window (the desktop main process changed).
+- **Windows:** run the 0.1.2 installer over the old one. Your workspace and the `P9 Foundation` task are kept.
+
 ## To 0.1.1 (beta)
 
 No app code changed since 0.1.0: P9 now carries a licence (PolyForm Shield), Linux has a one-line install, and

@@ -1,7 +1,7 @@
 // Test-only ACP agent, ported from agent-first-workspace's _engine/fake-acp-agent.ts. The prompt text picks the
 // behaviour: "permission" asks for approval, "ask" sends a form question, "ask-strict" one with required, integer,
 // multi-select, pattern and format fields (some limits null) and optional choices, "ask-object" one with a nested
-// object P9 cannot render, "slow" waits for cancel, "crash" exits, "detach" starts a setsid sleeper and replies with its
+// object P9 cannot render, "slow" waits for cancel, "crash" exits, "auth-required" fails the turn signed out, "detach" starts a setsid sleeper and replies with its
 // pid, "env" replies with its environment's names (never values), "config" with its model and settings, "probe <port> <host> <script>" runs the phase 10 credential probe, anything else is echoed. A file named slow-init in
 // the working directory stalls initialize for 10 s, hang-init never answers it; slow-close stalls session/close for 2 s.
 import { Readable, Writable } from 'node:stream';
@@ -64,6 +64,7 @@ const connection = new acp.AgentSideConnection(() => ({
     const text = params.prompt.map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     if (text === 'crash') process.exit(3);
+    if (text === 'auth-required') throw acp.RequestError.authRequired();
     // Images the way the real adapters send them (threat model row 26): Codex's image generation as a finished tool call
     // with the image (and its saved path as uri), Claude's image in a reply, and an image known only by its address.
     if (text === 'images') {
@@ -126,6 +127,17 @@ const connection = new acp.AgentSideConnection(() => ({
       child.unref();
       await new Promise((resolve) => setTimeout(resolve, 200));
       await say('detach:' + child.pid);
+      return { stopReason: 'end_turn' };
+    }
+    // Claude Code after a compaction: the prompt ends, then the agent works on with no prompt open, and only that turn's
+    // usage_update with a cost says it stopped.
+    if (text === 'compact') {
+      setTimeout(async () => {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-1', title: 'Compact conversation', kind: 'think', status: 'completed' } });
+        await say('after compact');
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.01, currency: 'USD' } } });
+      }, 1500);
       return { stopReason: 'end_turn' };
     }
     // A reply that lands well after the prompt was accepted, so a client must keep listening to see it.

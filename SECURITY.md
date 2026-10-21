@@ -179,8 +179,10 @@ bootstrap file never reach the renderer. No process argv or arbitrary URL crosse
 checks again (since 2026-10-19: the Chat Focus file browser's read-only list and read, threat model row 23, and a new
 chat's folder, row 24): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
 browser cannot write. A chat's folder is where its agent starts, not a sandbox (Codex's own sandbox keeps its writes there;
-Claude can still reach the rest of the workspace under its permission rules). Notifications, Wiki, Logs and Workspace panels
-are still sample data. The production app has no test-only bridge or sender bypass.
+Claude can still reach the rest of the workspace under its permission rules). The app ships no sample data (GitHub issue #4):
+it lives in `test/sample-data.mjs`, which the packaged build leaves out. The one test-only path is `window.p9.sample`: the desktop
+fills it from that file only when unpackaged and `P9_SAMPLE_DATA=1` is set, answers only the main window, and loads no other
+path; otherwise it is `null`. There is no sender bypass.
 
 Tests launch real Electron with chromiumSandbox:true (Playwright otherwise defaults
 to disabling it on Linux), check renderer seccomp and preferences, reject a separate
@@ -428,8 +430,8 @@ alt text (threat model row 26).
 
 ## Outbound requests a reader of this file should know about
 
-Four things P9 does that reach the network or a host outside your machine, each covered
-in more detail above or in its own section (threat model rows 5, 13, 15, 16):
+Things P9 does that reach the network or a host outside your machine, each covered
+in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28):
 
 - **Pets (petdex).** Settings > Pets fetches petdex.dev's manifest (https only, capped) and,
   for a pet found there, its `pet.json` and spritesheet from `https://assets.petdex.dev` only;
@@ -444,6 +446,10 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16):
   their own origin, p9://webview, walled off from the editor page and its save bridge, as in
   VS Code. Their scripts run, and their files come from the editor host; a request for them
   that would leave the machine is cancelled. All extension pages share that one origin.
+- **Check for updates.** Settings > Check for updates opens P9's newest GitHub release
+  (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser; GitHub's sign-in and the
+  download happen there. P9 itself sends nothing, downloads nothing and keeps no GitHub token
+  (threat model row 28).
 - **Landing page name.** The landing greeting's name comes from Settings (or your account's
   first name, once, if the file is new); it is shown as text on your own screen and never sent
   anywhere.

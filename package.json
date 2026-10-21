@@ -1,6 +1,6 @@
 {
   "name": "p9",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "license": "PolyForm-Shield-1.0.0",
   "bin": {
@@ -113,6 +113,9 @@
     "directories": {
       "output": "dist/windows"
     },
+    "asarUnpack": [
+      "apps/desktop/pets/**"
+    ],
     "files": [
       "apps/desktop/**",
       "apps/web/dist/**",
@@ -121,7 +124,10 @@
       "packages/protocol/**",
       "scripts/teh.mjs",
       "apps/server/process-tree.mjs",
-      "package.json"
+      "package.json",
+      "!node_modules/@openai/**",
+      "!node_modules/@anthropic-ai/**",
+      "!node_modules/@agentclientprotocol/**"
     ],
     "extraResources": [
       {

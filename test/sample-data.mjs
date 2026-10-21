@@ -1,4 +1,6 @@
-/* Shared mock data for all eight prototypes. Mirrors the real apps' shapes (ACP typed events, hub registry.json) with invented but realistic content. */
+/* Test-only sample data for the UI tests; it never ships (Tyler, 2026-10-20: "sample data should not be in the app at all").
+   The desktop hands it to the page only unpackaged with P9_SAMPLE_DATA=1 (apps/desktop/main.mjs). Mirrors the real apps' shapes
+   (ACP typed events, hub registry.json). */
 export const M = (() => {
 const now = new Date('2026-10-11T19:52:00');
 const sessions = [
