@@ -342,6 +342,11 @@ The tests start real daemons, Electron windows and tmux servers in temporary hom
 installed P9. Run them with `TMPDIR` on a disk with space: the full-disk test uses private 1 MiB tmpfs
 mounts (it needs unprivileged user and mount namespaces), never a real filesystem.
 
+Besides Node and pnpm, the tests need: tmux, `ss` (iproute2), GTK 3 (Electron), a display (or `xvfb-run`),
+a systemd user manager, unprivileged user namespaces (Electron's Chromium sandbox) and gitleaks 8.19 or newer
+(`gitleaks dir`; Debian trixie's package is too old). `.github/workflows/test.yaml` installs this same set on
+GitHub's Ubuntu runner and runs the suite on every push to a branch other than `main`.
+
 To publish your own copy, run `git config core.hooksPath .githooks`: the commit hook scans the staged
 index for secrets, and the push hook runs gitleaks and a private-path scan over the full history.
 

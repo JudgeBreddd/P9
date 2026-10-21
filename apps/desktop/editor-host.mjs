@@ -46,7 +46,10 @@ export function stopEditorHost(unit) {
   // The path is known because the host is started with --slice=app.slice. ponytail: if this fails too, nothing a user process
   // can do is left; the quit goes on and the host may run until logout (logged, SECURITY.md). Not done: refusing the quit
   // (event.preventDefault in will-quit) would trap the user in an app that cannot close.
-  const slice = readFileSync('/proc/self/cgroup', 'utf8').match(/^0::(.*\/user@\d+\.service)\//m)?.[1];
+  // A process started outside the user manager (over SSH, or GitHub's runner service) has no user@ in its own cgroup;
+  // systemd's standard path for this user's manager is the fallback.
+  const slice = readFileSync('/proc/self/cgroup', 'utf8').match(/^0::(.*\/user@\d+\.service)\//m)?.[1]
+    ?? '/user.slice/user-' + process.getuid() + '.slice/user@' + process.getuid() + '.service';
   const scope = slice && path.join('/sys/fs/cgroup', slice, 'app.slice', unit + '.scope');
   if (scope && existsSync(path.dirname(scope))) {
     try { writeFileSync(path.join(scope, 'cgroup.kill'), '1'); } catch {}
