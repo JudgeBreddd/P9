@@ -64,9 +64,16 @@ jobs:
       - name: Install it here and start the daemon
         if: github.event_name == 'push'
         shell: pwsh
+        timeout-minutes: 10
         run: |
           $exe = (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName
-          Start-Process -FilePath $exe -ArgumentList '/S' -Wait
+          # Wait for the installer alone (-Wait also waits on its children); run 39522683697 hung here 30 min with no output.
+          $setup = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru
+          if (-not $setup.WaitForExit(300000)) { throw 'the installer did not finish in 5 min' }
+          Write-Output ('installer exit code: ' + $setup.ExitCode)
+          # If the service did not start, run its script here so its own error shows in this log.
+          $script = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\resources\daemon\scripts\install-windows.ps1'
+          if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script; throw 'the installer registered no task' }
           $action = (Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0]
           Write-Output ('task runs: ' + $action.Execute + ' ' + $action.Arguments.Substring(0, 40))
           if ($action.Execute -ne 'conhost.exe' -or -not $action.Arguments.StartsWith('--headless ')) { throw 'task is not headless' }

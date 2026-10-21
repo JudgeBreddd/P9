@@ -31,6 +31,11 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
 const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@agentclientprotocol/${provider === 'claude' ? 'claude-agent-acp' : 'codex-acp'}/dist/index.js`, import.meta.url));
 const refused = (status, error) => ({ status, error });
+// ACP's authRequired (code -32000) means the agent's own CLI on this computer is not signed in (GitHub issue #4: the
+// window showed only "Authentication required"). Say how to sign in; any other error passes through, cut to 500 chars.
+const SIGN_IN = { claude: 'Claude Code is not signed in on this computer. Open a terminal, run claude and log in, then start a new chat.',
+  codex: 'Codex is not signed in on this computer. Open a terminal, run codex login, then start a new chat.' };
+const agentError = (error, provider) => (error?.code === -32000 ? SIGN_IN[provider] : String(error?.message ?? error).slice(0, 500));
 
 // The form P9 can show for an ACP elicitation schema (council 2026-10-16-013039-tier2): flat fields of string, number,
 // integer, boolean, string choices (enum, or oneOf/anyOf of { const, title }) and string-choice multi-select, with
@@ -349,7 +354,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       proc.child.stdin.end();
       await Promise.race([session.exited, wait(1000)]);
       const result = await endTree(proc);
-      emit(conversation.id, 'error', { message: String(error.message ?? error).slice(0, 500), stderr: stderr.slice(-1000) });
+      emit(conversation.id, 'error', { message: agentError(error, conversation.provider), stderr: stderr.slice(-1000) });
       settle(conversation.id, proc, result);
       throw Object.assign(new Error('adapter-start-failed'), { status: 502 });
     } finally {
@@ -485,7 +490,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
-        (error) => { if (session.turn === turn && !session.stopping) emit(id, 'error', { message: String(error.message ?? error).slice(0, 500) }); },
+        (error) => { if (session.turn === turn && !session.stopping) emit(id, 'error', { message: agentError(error, conversation.provider) }); },
       ).finally(() => { if (session.turn === turn) { session.turn = null; if (live.get(id) === session) setState(id, 'running'); } });
       return { status: 202, turn };
     },

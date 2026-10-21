@@ -14,6 +14,7 @@ const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, sys
 const PETS = { chat: look(true), dev: look(false), mission: look(false) };
 const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme'; // main.mjs loads only inside Electron
 const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
+const PETDEX_URL = 'https://petdex.dev';
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -87,6 +88,10 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   await page.click('#setUpd');
   for (let i = 0; i < 50 && url.trim() !== RELEASES_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== RELEASES_URL) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), RELEASES_URL);
+  // Settings → Pets: petdex.dev is a link and opens only that page (the owner, 2026-10-20).
+  await page.click('#petdexLink');
+  for (let i = 0; i < 50 && url.trim() !== PETDEX_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== PETDEX_URL) await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(url.trim(), PETDEX_URL);
   await page.click('#setAm');
   await page.locator('#amDlg[open]').waitFor();
   await page.click('#amClose');
@@ -502,7 +507,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     return { why: result.refused[0]?.why, ms: performance.now() - started };
   });
   assert.equal(typo.why, 'command'); assert.ok(typo.ms < 500, typo.ms + ' ms');
-  // Walkthrough preview (draft; Builder approves before it ships): each bubble fits the window, carries Chat's system pet and
+  // Walkthrough (Ctrl K; it also starts once on first login, see Landing page): each bubble fits the window, carries Chat's system pet and
   // outlines its step's element (unless that element is hidden); Back goes back; Done and Escape end it in the focus it began in.
   const { WALKTHROUGH } = await import('../apps/web/src/walkthrough.mjs');
   await page.click('#setClose');
@@ -510,7 +515,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.click('[data-focus-btn="mission"]');
   // Mission #3 (Builder, 2026-10-18): with the sample's 12 apps, the Apps list scrolls and Usage keeps its full height.
   assert.ok(await page.locator('#fMission [data-panel="musage"] .pscroll').evaluate((p) => p.scrollHeight <= p.clientHeight + 1), 'Usage squeezed by Apps');
-  const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough preview (draft)' }).click(); };
+  const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); };
   const walkNow = () => page.evaluate((steps) => {
     const w = document.querySelector('#walk'), r = w.getBoundingClientRect(), n = +w.querySelector('.eyebrow').textContent.split(' ')[0], sel = steps[n - 1].at;
     const el = sel && document.querySelector(sel), shown = el && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
@@ -1254,6 +1259,12 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');
   await page.waitForFunction(() => !document.querySelector('#land').open);
+  // First login: the walkthrough starts in Chat as the landing closes and ends in the focus picked (GitHub issue #4 item 2).
+  await page.locator('#walk').waitFor({ timeout: 5000 });
+  assert.match(await page.locator('#walk .eyebrow').innerText(), /^1 of \d+$/);
+  assert.equal((await state(page)).focus, 'chat');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#walk'));
   assert.deepEqual(await state(page), { open: false, stage: 'main', focus: 'dev' });
 
   // The mark in the top bar opens it again on the main stage; the name goes in as text; Esc returns to the last focus.
@@ -1274,6 +1285,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('#land').open);
   assert.equal((await state(page)).focus, 'dev');
+  assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough runs once, not on every landing close');
 
   // Settings: name and "Start in my last focus mode"; with it on, the next start goes straight to the last focus.
   await page.click('#setBtn');

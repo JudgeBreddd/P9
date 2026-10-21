@@ -7,7 +7,7 @@ import { WALKTHROUGH } from './walkthrough.mjs';
 import { createSky } from './landing-sky.mjs';
 
 export function mountShell() {
-// The sample data lives in test/sample-data.mjs and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
+// The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
 // empty and fill from the daemon (GitHub issue #4: a fresh Windows install showed the sample items, and so did a dead daemon).
 const sampleView = !!window.p9?.sample;
@@ -1149,7 +1149,7 @@ $('#sessionMode').onclick = () => {
   showSessionMode();
 };
 $('#stopGo').onclick = () => { if (liveChat.on) { S.sessions.filter(s => s.live && s.state === 'running').forEach(s => { s.state = 'stopping'; }); liveChat.call('stopAll'); } else S.sessions.forEach(s => { if (s.state === 'running') { s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped by Stop All at ' + new Date().toTimeString().slice(0,5) + '.'}); } }); $('#stopDlg').close(); renderTabs(); renderChats(); };
-/* ---------- walkthrough (draft preview) ---------- */
+/* ---------- walkthrough (first login, then Ctrl K) ---------- */
 // The guide pet is Chat's system pet at Settings' largest size, 128 px (Builder, 2026-10-19); without one the bubble is text only. A step whose
 // element is hidden or empty is shown in the middle of the window. Ends back in the focus it started from.
 function walkthrough(i = 0, from = S.focus) {
@@ -1174,7 +1174,7 @@ function walkthrough(i = 0, from = S.focus) {
   placeDev();
   tickPets();
 }
-const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough preview (draft)', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', () => $('#rSplit').click()], ['Browse files', () => $('#rSearch').click()], ['Toggle files pane', () => $('#rFiles').click()], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')]];
+const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', () => $('#rSplit').click()], ['Browse files', () => $('#rSearch').click()], ['Toggle files pane', () => $('#rFiles').click()], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')]];
 let palSel = 0;
 function renderPal() { const q = $('#palIn').value.toLowerCase(); const list = cmds.filter(c => c[0].toLowerCase().includes(q)); palSel = Math.min(palSel, Math.max(0, list.length - 1)); $('#palList').innerHTML = list.map((c, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${cmds.indexOf(c)}">${svg.bolt.replace('<svg', '<svg width="14" height="14"')}${esc(c[0])}${i === palSel ? '<kbd>↵</kbd>' : ''}</li>`).join('') || '<li class="muted">No matching command</li>'; $('#palList').querySelectorAll('li[data-i]').forEach(li => li.onclick = () => run(+li.dataset.i)); }
 function run(i) { $('#palette').close(); cmds[i][1](); }
@@ -1204,7 +1204,7 @@ const PET_WHY = { name: 'its folder name must be lowercase letters, digits and d
 function petSettings() {
   const mode = petMode ||= S.focus, f = settings.pet[mode], pick = (role, label, none) => `<label class="set-row"><span><strong>${label}</strong></span><span class="spacer"></span><select data-slot="input" id="setPet-${role}" data-pet-role="${role}"><option value="">${none}</option>${pets.pets.map(p => `<option value="${esc(p.name)}" ${f[role] === p.name ? 'selected' : ''}>${esc(p.displayName)}</option>`).join('')}</select></label>`;
   return `<fieldset class="set-group"><legend>Pets</legend>`
-    + `<p class="muted sm">Find a pet at petdex.dev, copy its install command and paste it below.</p>`
+    + `<p class="muted sm">Find a pet at <a id="petdexLink" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, copy its install command and paste it below.</p>`
     + (window.p9?.installPets ? `<form class="set-row" id="petInstallForm"><input data-slot="input" id="petInstall" placeholder="npx petdex@latest install boba" autocomplete="off" spellcheck="false" style="flex:1"><button data-slot="button" data-variant="default" id="petInstallGo">Install</button></form>` : '')
     + `<div class="pet-lib">${pets.pets.map(p => `<figure><canvas data-thumb="${esc(p.name)}" width="192" height="208"></canvas><figcaption>${esc(p.displayName)}</figcaption><button data-slot="button" data-variant="ghost" data-size="icon-sm" data-pet-remove="${esc(p.name)}" title="Remove ${esc(p.displayName)}">×</button></figure>`).join('') || '<p class="muted sm">No pets yet.</p>'}</div>`
     + (window.p9?.addPets ? `<div class="set-row">${pets.importable ? `<button data-slot="button" data-variant="default" id="petImport">Import ${pets.importable} new petdex pet${pets.importable === 1 ? '' : 's'}</button>` : ''}<button data-slot="button" data-variant="outline" id="petAdd">Add pets…</button></div>` : '')
@@ -1232,6 +1232,7 @@ function wirePetSettings() {
     if (r.added.length || r.refused.length) toast({ kind: 'pets', level: r.refused.length ? 'warn' : 'ok', txt: [r.added.length && 'Added ' + r.added.map(p => p.name).join(', ') + '.', ...r.refused.map(p => `${p.name} not added: ${PET_WHY[p.why] || p.why}.`)].filter(Boolean).join(' ') }, true);
     refresh();
   };
+  $('#petdexLink').onclick = e => { if (window.p9?.openPetdex) { e.preventDefault(); window.p9.openPetdex(); } }; // a browser preview follows the link
   if ($('#petAdd')) $('#petAdd').onclick = addWith(() => window.p9.addPets());
   if ($('#petImport')) $('#petImport').onclick = addWith(() => window.p9.importPets());
   if ($('#petInstallForm')) $('#petInstallForm').onsubmit = e => { e.preventDefault(); $('#petInstallGo').disabled = true; $('#petInstallGo').textContent = 'Installing…'; addWith(() => window.p9.installPets($('#petInstall').value))().finally(renderSettings); };
@@ -1369,6 +1370,10 @@ land.addEventListener('close', () => {
   cancelAnimationFrame(LAND.raf); LAND.raf = 0;
   clearTimeout(LAND.intro); clearTimeout(LAND.status);
   $('#landPets').replaceChildren();
+  // The walkthrough runs once, the first time the landing page closes, starting in Chat and ending in the focus picked
+  // (Builder approved it in _tyler/p9-walkthrough-review.md: "A."; GitHub issue #4 item 2). Ctrl K brings it back.
+  let walked = true; try { walked = !!localStorage.getItem('p9-walked'); localStorage.setItem('p9-walked', '1'); } catch {}
+  if (!walked) { const from = S.focus; setFocus('chat', true); walkthrough(0, from); }
 });
 // Esc on the main stage goes to the last focus; during the intro it does nothing (only Space skips).
 land.addEventListener('cancel', e => { e.preventDefault(); if (land.dataset.stage === 'main') setFocus(lastFocus()); });
@@ -1598,8 +1603,9 @@ $('#amForm').onsubmit = async (e) => {
     if (!window.p9?.anymouse) throw new Error('Anymouse needs the desktop app');
     const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus });
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
-    amText.value = '';
-    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there.' : 'Sent as issue #' + r.body.number + '. Thanks.';
+    // P9's repo is private: GitHub shows 404 to anyone not signed in with access (GitHub issue #4 item 6), so the note stays to copy.
+    if (!r.body.opened) amText.value = '';
+    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. P9\'s repo is private, so GitHub shows "404" unless you are signed in with an account that has access. Your note is still here to copy.' : 'Sent as issue #' + r.body.number + '. Thanks.';
   } catch (err) { amNote.textContent = err.message; }
   finally { amSend.disabled = !amText.value.trim(); }
 };

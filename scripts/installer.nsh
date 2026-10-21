@@ -6,7 +6,7 @@
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\resources\daemon\scripts\install-windows.ps1"'
   Pop $0
   StrCmp $0 "0" +2
-    MessageBox MB_ICONEXCLAMATION|MB_OK "P9 is installed, but its background service did not start (code $0). Run $INSTDIR\resources\daemon\scripts\install-windows.ps1 -Workspace <folder> from PowerShell to see why."
+    MessageBox MB_ICONEXCLAMATION|MB_OK /SD IDOK "P9 is installed, but its background service did not start (code $0). Run $INSTDIR\resources\daemon\scripts\install-windows.ps1 -Workspace <folder> from PowerShell to see why."
 !macroend
 
 !macro customUnInstall

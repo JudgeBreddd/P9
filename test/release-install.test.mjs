@@ -83,6 +83,8 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.doesNotMatch(install.split('\n').find((line) => line.includes('nsExec')), /-Workspace/, 'the installer must not reset the workspace');
   assert.match(uninstall, /\$\{ifNot\} \$\{isUpdated\}[^]*Unregister-ScheduledTask[^]*\$\{endIf\}/, 'an update must not unregister the task');
   assert.doesNotMatch(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Unregister-ScheduledTask/);
+  // A silent install (/S) still shows a MessageBox with no /SD and waits for a click nobody can give.
+  for (const box of nsh.split('\n').filter((line) => /^\s*MessageBox /.test(line))) assert.match(box, / \/SD ID/, 'silent default: ' + box.trim());
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
