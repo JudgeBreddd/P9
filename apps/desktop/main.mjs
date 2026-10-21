@@ -17,6 +17,8 @@ export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme';
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
 export const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
+// Settings → Pets: where pets come from (GitHub issue #4 follow-up, Tyler 2026-10-20: the petdex.dev text needs a link).
+export const PETDEX_URL = 'https://petdex.dev';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
 export const FILE_PROTECTION_DOCS = 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection';
@@ -528,6 +530,13 @@ export async function createDesktop({ state, open } = {}) {
         || args.length) throw new Error('ipc-sender-refused');
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [RELEASES_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(RELEASES_URL);
+    return { opened: true };
+  });
+  ipcMain.handle('p9:open-petdex', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [PETDEX_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(PETDEX_URL);
     return { opened: true };
   });
   // File protection (threat model row 4): no argument reads it, a boolean sets it. Turning it off asks first in a native dialog,

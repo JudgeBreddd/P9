@@ -172,6 +172,17 @@ test('mode picker: each prompt sets the picked mode, unknown modes refused, the 
   console.log('PASS mode picker: Claude 5 and Codex 4 modes reach the agent by its own ids, 7 unknown modes 400, lock wins over bypass and Full access');
 });
 
+test('a signed-out agent says how to sign in, not just "Authentication required" (GitHub issue #4)', async (t) => {
+  const instance = await start(t);
+  for (const [provider, want] of [['claude', /^Claude Code is not signed in on this computer\. .*run claude and log in/], ['codex', /^Codex is not signed in on this computer\. .*run codex login/]]) {
+    const id = await create(instance, provider);
+    assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'auth-required' })).status, 202, provider);
+    const { hit } = await until(instance, (event) => event.type === 'error' && event.conversation === id);
+    assert.match(hit.data.message, want, provider);
+  }
+  console.log('PASS signed out: Claude and Codex authRequired errors become sign-in steps');
+});
+
 test('agent images: kept with their own data only; SVG, remote, bad alphabet, oversized and a fifth image stored as notes (threat model row 26)', async (t) => {
   const instance = await start(t);
   const id = await create(instance, 'codex');

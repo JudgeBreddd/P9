@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,12 +86,12 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
     });
     await t.test('fixture label and filename markup stay literal text and preserve attribute values', async () => {
       const payload = '</span><style data-p9-injected>body{color:red}</style><span>\'"';
-      const assets = path.join(root, 'apps/web/dist/_astro');
-      const shell = (await readdir(assets)).find(name => name.startsWith('Shell.') && name.endsWith('.js'));
-      const original = await readFile(path.join(assets, shell), 'utf8');
-      assert.match(original, /["'`]Colour["'`]/); assert.match(original, /["'`]plan\.md["'`]/);
-      const injected = original.replace(/["'`]Colour["'`]/g, JSON.stringify(payload)).replace(/["'`]plan\.md["'`]/g, JSON.stringify(payload + '.md'));
-      await page.route('**/' + shell, route => route.fulfill({ body: injected, contentType: 'text/javascript' }));
+      // The sample data comes from main now (GitHub issue #4), so the markup goes in through main's p9:sample answer.
+      const original = await page.evaluate(() => JSON.stringify(window.p9.sample));
+      assert.ok(original.includes('"Colour"') && original.includes('"plan.md"'));
+      const injected = JSON.parse(original.replaceAll('"Colour"', JSON.stringify(payload)).replaceAll('"plan.md"', JSON.stringify(payload + '.md')));
+      const answer = (sample) => app.evaluate(({ ipcMain }, s) => { ipcMain.removeAllListeners('p9:sample'); ipcMain.on('p9:sample', e => { e.returnValue = s; }); }, sample);
+      await answer(injected);
       try {
         await reset(); await page.click('#rFiles');
         assert.equal(await page.locator('[data-p9-injected]').count(), 0);
@@ -103,7 +103,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
         assert.ok((await page.locator('#mdlBody [data-question]').innerText()).includes(payload));
         assert.equal(await page.locator('[data-p9-injected]').count(), 0);
         await screenshot('round1-literal-label');
-      } finally { await page.unroute('**/' + shell); }
+      } finally { await answer(JSON.parse(original)); }
     });
   } finally { await app.close(); await rm(profile, { recursive: true, force: true }); }
 });

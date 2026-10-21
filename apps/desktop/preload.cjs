@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   setSettings: (settings) => ipcRenderer.invoke('p9:settings', settings),
   openDocs: () => ipcRenderer.invoke('p9:open-docs'),
   openUpdates: () => ipcRenderer.invoke('p9:open-updates'),
+  openPetdex: () => ipcRenderer.invoke('p9:open-petdex'),
   fileProtection: (...on) => ipcRenderer.invoke('p9:file-protection', ...on),
   listPets: () => ipcRenderer.invoke('p9:pets'),
   loadPet: (name) => ipcRenderer.invoke('p9:pets', name),

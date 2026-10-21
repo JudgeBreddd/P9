@@ -1,5 +1,6 @@
-// First-login walkthrough, DRAFT (Builder, 2026-10-18: "I want to view and approve the walkthrough before its integrated
-// into the app official"). Only the command menu's "Walkthrough preview (draft)" runs it; nothing starts it on first login.
+// First-login walkthrough (Builder, 2026-10-18: "I want to view and approve the walkthrough before its integrated into the
+// app official"; approved as written: "A."). It starts once, the first time the landing page closes; the command menu's
+// "Walkthrough" runs it again.
 // Each step: the element it points at (none = centred), the focus mode to show first, and what the guide pet says.
 export const WALKTHROUGH = [
   { title: 'Welcome to P9', text: 'One window for your agent chats, your code and your system. This takes about two minutes. Skip any time; the command menu (Ctrl K) brings it back.' },

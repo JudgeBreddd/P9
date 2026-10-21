@@ -85,6 +85,9 @@ test('Anymouse in the desktop: the box sends, and with no token main opens only 
   await page.locator('#amSend').click();
   await page.locator('#amNote', { hasText: 'Opened GitHub' }).waitFor({ timeout: 10000 });
   assert.equal(await page.locator('#amDlg img').count(), 0, 'the note never becomes markup');
+  // The repo is private: the page says why GitHub may show 404 and keeps the note to copy (GitHub issue #4 item 6).
+  assert.match(await page.locator('#amNote').innerText(), /private, so GitHub shows "404" unless you are signed in/);
+  assert.equal(await page.locator('#amText').inputValue(), '<img src=x onerror=alert(1)> the save button');
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
   assert.ok(url.startsWith(NEW_ISSUE), url);
