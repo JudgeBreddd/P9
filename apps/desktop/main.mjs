@@ -158,10 +158,12 @@ export async function createDesktop({ state, open } = {}) {
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
+  // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
+  const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + app.getVersion(), ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [])] } }); // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [])] } }); // the test runs click the shell straight away
   window.removeMenu();
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

@@ -994,11 +994,13 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await mode(codex).selectOption('Full access'); await dlg.waitFor(); await page.keyboard.press('Escape'); await dlg.waitFor({ state: 'hidden' });
   await settled(codex, 'Auto review', 'Escape cancels too');
   await mode(codex).selectOption('Full access'); await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
+  await settled(codex, 'Full access', 'Turn on sets the mode'); // the close task, before the prompt carries s.mode (GitHub's slower runner, 2026-10-20)
   await said(codex, 'mode', 'mode:agent-full-access');
   let claude = await chat('claude');
   assert.equal(await mode(claude).inputValue(), 'Auto');
   await mode(claude).selectOption('Bypass permissions');
   await dlg.getByRole('button', { name: 'Turn on, don\'t show again' }).click();
+  await settled(claude, 'Bypass permissions', 'Turn on sets the mode');
   await said(claude, 'mode', 'mode:bypassPermissions');
   await app.close();
   ({ app, page } = await launch()); dlg = page.locator('#looseDlg');
@@ -1243,7 +1245,9 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await shot('landing-main.png');
   // Behind the main page the sky draws at full resolution, not a fraction scaled up (Builder, 2026-10-19: "when it is in the
   // background it looks low quality. as if it lost its quality somehow").
-  await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
+  // Without WebGL (a display with no GPU, such as GitHub's Xvfb) the sky is off by design (landing-sky.mjs), so there is nothing to size.
+  if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
+  else await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');
   await page.waitForFunction(() => !document.querySelector('#land').open);
