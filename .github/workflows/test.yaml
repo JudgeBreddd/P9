@@ -47,6 +47,9 @@ jobs:
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
+      # The Electron tests load apps/web/dist and apps/dev/dist; the passkey and surface-2 tests use Playwright's own Chromium.
+      - run: pnpm build
+      - run: pnpm exec playwright install --only-shell chromium
       - name: Tests
         env:
           FILES: ${{ inputs.files }}
