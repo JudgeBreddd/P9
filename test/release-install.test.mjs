@@ -61,13 +61,18 @@ test('Phase 13: a unit that starts but whose daemon never answers is removed too
 test('release r2 R2-1: build.files covers every module the desktop imports; the host script resolves outside app.asar', async () => {
   const { build } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
   const shipped = (file) => build.files.some((entry) => entry.endsWith('/**') ? file.startsWith(entry.slice(0, -2)) : file === entry);
+  // The agent packages ship once, in the daemon (extraResources); a second copy in app.asar made the installer 608 MB.
+  const left = build.files.filter((entry) => entry.startsWith('!node_modules/')).map((entry) => entry.slice('!node_modules/'.length, -'/**'.length));
+  assert.deepEqual(left, ['@openai', '@anthropic-ai', '@agentclientprotocol']);
   const seen = new Set(), queue = ['apps/desktop/main.mjs'];
   while (queue.length) {
     const file = queue.pop();
     if (seen.has(file)) continue;
     seen.add(file);
     assert.ok(shipped(file), file + ' is imported by the desktop app but not in build.files');
-    for (const [, spec] of readFileSync(path.join(root, file), 'utf8').matchAll(/from '(\.{1,2}\/[^']+)'/g)) queue.push(path.posix.normalize(path.posix.join(path.posix.dirname(file), spec)));
+    const text = readFileSync(path.join(root, file), 'utf8');
+    for (const [, spec] of text.matchAll(/(?:from |import\(|require\()'([^'.][^']*)'/g)) assert.ok(!left.some((scope) => spec.startsWith(scope + '/')), file + ' imports ' + spec + ', which build.files leaves out of app.asar');
+    for (const [, spec] of text.matchAll(/from '(\.{1,2}\/[^']+)'/g)) queue.push(path.posix.normalize(path.posix.join(path.posix.dirname(file), spec)));
   }
   const { hostScript } = await import('../apps/server/process-tree.mjs');
   const packed = hostScript('file:///p9/resources/app.asar/apps/server/process-tree.mjs');
@@ -86,6 +91,9 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   // A silent install (/S) still shows a MessageBox with no /SD and waits for a click nobody can give. /SD goes after the text:
   // before it, makensis takes the text for a jump label and the build fails (GitHub run 39527149502).
   for (const box of nsh.split('\n').filter((line) => /^\s*MessageBox /.test(line))) assert.match(box, /"\s+\/SD ID\w+\s*$/, 'silent default, after the text (NSIS reads text after /SD as a jump label): ' + box.trim());
+  // The installer is 32-bit: with redirection on, $SYSDIR's PowerShell is the 32-bit one (GitHub run 39532602630: no task).
+  for (const part of [install, uninstall]) assert.match(part, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^]*\$\{EnableX64FSRedirection\}/, 'every PowerShell call runs with WOW64 redirection off');
+  for (const part of [install, uninstall]) assert.ok(part.indexOf('${DisableX64FSRedirection}') < part.indexOf('nsExec'), 'redirection goes off before the first PowerShell call');
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
