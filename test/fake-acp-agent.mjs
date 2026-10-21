@@ -129,6 +129,17 @@ const connection = new acp.AgentSideConnection(() => ({
       await say('detach:' + child.pid);
       return { stopReason: 'end_turn' };
     }
+    // Claude Code after a compaction: the prompt ends, then the agent works on with no prompt open, and only that turn's
+    // usage_update with a cost says it stopped.
+    if (text === 'compact') {
+      setTimeout(async () => {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'compact-1', title: 'Compact conversation', kind: 'think', status: 'completed' } });
+        await say('after compact');
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.01, currency: 'USD' } } });
+      }, 1500);
+      return { stopReason: 'end_turn' };
+    }
     // A reply that lands well after the prompt was accepted, so a client must keep listening to see it.
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {

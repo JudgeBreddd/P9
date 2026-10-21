@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, watch } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,8 @@ export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here an
 // The Settings page's UI settings (threat model row 15): one fixed shape, checked here, kept in the profile folder.
 // pet: each focus mode's own pet settings: shown or not, size in pixels, a petdex pet per agent (system when the agent has
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
-const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null });
+// Skipper is the System pet a new profile starts with (Tyler, 2026-10-20: "the pet we will ship as the system default").
+const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
 // name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
   pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false });
@@ -55,7 +56,7 @@ export function checkSettings(value) {
 export function upgradeSettings(file, name = '') {
   const old = file?.pet;
   if (old === undefined || old === null || typeof old === 'string' || exactly(old, 'claude,codex,system')) {
-    const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old;
+    const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old; // an older file keeps its own (no) pet
     file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
   }
   return { name, startLast: false, ...file };
@@ -132,6 +133,8 @@ async function assets(directory, prefix = '/') {
 export async function createDesktop({ state, open } = {}) {
   // KDE/GNOME on Wayland match a window to its menu entry and icon by app id; without this it is "electron" (generic icon).
   if (process.platform === 'linux') app.setDesktopName('p9-event-horizon.desktop');
+  // Lets the freeze record read the stack a hung page is stuck in (with the Document-Policy header serve() sends).
+  app.commandLine.appendSwitch('enable-features', 'DocumentPolicyIncludeJSCallStacksInCrashReports');
   await app.whenReady();
   // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
   // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
@@ -153,7 +156,7 @@ export async function createDesktop({ state, open } = {}) {
     const key = url.pathname === '/' ? '/index.html' : url.pathname;
     const site = hosts.includes(url.host) && Object.hasOwn(sites, url.host) ? sites[url.host] : null, data = site?.files.get(key);
     if (request.method !== 'GET' || url.username || url.password || url.port || !data) return new Response('Not found', { status: 404 });
-    return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff' } });
+    return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff', 'Document-Policy': 'include-js-call-stacks-in-crash-reports' } });
   };
   protocol.handle('p9', serve('app'));
   const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json');
@@ -161,6 +164,8 @@ export async function createDesktop({ state, open } = {}) {
   let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
   let settingsSaving = Promise.resolve();
   const petsFolder = path.join(app.getPath('userData'), 'pets');
+  // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
+  if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
@@ -176,6 +181,19 @@ export async function createDesktop({ state, open } = {}) {
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
   window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
+  // Freeze record (Builder, 2026-10-20: the window freezes "and i just need to close and reopen the app"): when the window
+  // stops answering, the JavaScript it is stuck in goes to p9-freeze.log in the profile folder, then how long it lasted.
+  // "no stack" means it was stuck outside JavaScript (layout, paint, an IPC wait). ponytail: never rotated, a few lines per freeze.
+  const note = line => appendFile(path.join(app.getPath('userData'), 'p9-freeze.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {});
+  let frozeAt = 0;
+  window.webContents.on('unresponsive', async () => {
+    frozeAt = Date.now(); note('window unresponsive');
+    const stack = await Promise.race([window.webContents.mainFrame.collectJavaScriptCallStack().catch(() => null), new Promise(resolve => setTimeout(resolve, 5000))]);
+    note(stack ? 'stuck in:' + stack.replace(/\s*\n\s*/g, ' | ') : 'no stack: not stuck in JavaScript');
+  });
+  window.webContents.on('responsive', () => note(`window responsive again after ${Math.round((Date.now() - frozeAt) / 1000)} s`));
+  window.webContents.on('render-process-gone', (_event, details) => note('window process gone: ' + details.reason));
+  app.on('child-process-gone', (_event, details) => note(details.type + ' process gone: ' + details.reason));
   let persistent = true, stoppingBeforeQuit = false;
   ipcMain.handle('p9:lifecycle', async (event, action, payload) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL

@@ -6,6 +6,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell started under a PowerShell 7 process (the installer run from pwsh) inherits 7's module folders,
+# autoloads 7's Microsoft.PowerShell.Security and Set-Acl fails (GitHub run 39535290300). Keep only its own folders.
+if ($PSVersionTable.PSEdition -eq 'Desktop') { $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';' }
 function Full([string]$Value, [string]$Name) {
   if ([string]::IsNullOrWhiteSpace($Value) -or $Value.IndexOfAny([char[]]@([char]0, [char]13, [char]10, [char]34)) -ge 0) { throw "invalid-$Name" }
   return [IO.Path]::GetFullPath($Value)

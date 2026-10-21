@@ -2,9 +2,9 @@
 ; install, stop and remove it on uninstall and before an update replaces its files (release r1 R1-2).
 ; The workspace is the installed task's, or a new, empty %USERPROFILE%\P9; install-windows.ps1 -Workspace <folder>
 ; points it elsewhere. An update stops the task but keeps it, so its workspace survives (release r2 R2-6).
-; The installer is a 32-bit program, so $SYSDIR's PowerShell is the 32-bit one unless WOW64 redirection is off
-; (belief, 2026-10-20: GitHub run 39532602630 installed with exit 0 but registered no task; the same script run by hand
-; from 64-bit PowerShell did). cmd's redirection keeps the script's whole output in service-install.log (nsExec's own
+; The installer is a 32-bit program; with WOW64 redirection off it runs the 64-bit PowerShell a user opens. (Not the
+; cause of run 39532602630's missing task: 32-bit PowerShell ran the script fine in run 39535290300; Set-Acl's module
+; path was, see install-windows.ps1.) cmd's redirection keeps the script's whole output in service-install.log (nsExec's own
 ; capture is cut at NSIS's string limit), since a silent install shows nothing.
 !include x64.nsh
 !include LogicLib.nsh

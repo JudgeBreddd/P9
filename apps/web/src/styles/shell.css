@@ -235,7 +235,7 @@ html,body{height:100%;overflow:hidden}
 details.tool{border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--card) 60%,transparent);font-size:12.5px}
 details.tool summary{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;list-style:none;user-select:none}
 details.tool summary::-webkit-details-marker{display:none}
-details.tool summary .chev{width:14px;height:14px;transition:rotate .15s;color:var(--muted-foreground)}
+details.tool summary .chev{flex:none;width:14px;height:14px;transition:rotate .15s;color:var(--muted-foreground)}
 details[open].tool summary .chev{rotate:90deg}
 details.tool .ttl{font-family:"JetBrains Mono",monospace;font-size:12px;font-size-adjust:none}
 details.tool pre{margin:0;padding:8px 12px 10px;border-top:1px solid var(--border);font-size:11.5px;line-height:1.55;overflow:auto;white-space:pre-wrap}

@@ -12,6 +12,7 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
 const PETS = { chat: look(true), dev: look(false), mission: look(false) };
+const SKIPPER = { system: 'skipper' }, DEFAULT_PETS = { chat: look(true, SKIPPER), dev: look(false, SKIPPER), mission: look(false, SKIPPER) };
 const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme'; // main.mjs loads only inside Electron
 const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
 const PETDEX_URL = 'https://petdex.dev';
@@ -38,6 +39,10 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   const zoomOf = (app) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor());
 
   let { app, page } = await launch();
+  // A new profile starts with the bundled Skipper as its System pet (Tyler, 2026-10-20); removed, it stays removed (below).
+  assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [{ name: 'skipper', displayName: 'Skipper' }]);
+  assert.deepEqual((await page.evaluate(() => window.p9.getSettings())).pet, DEFAULT_PETS);
+  await page.evaluate(() => window.p9.removePet('skipper'));
   // Case 4: the handler itself, called as the shell's own frame, refuses every other shape and writes nothing.
   const refused = await app.evaluate(async ({ ipcMain, BrowserWindow }, PETS) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, handler = ipcMain._invokeHandlers.get('p9:settings');
@@ -120,7 +125,8 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // The name is the account's (main.mjs accountName), so the test reads it back rather than guessing it.
   const kept = JSON.parse(await readFile(file, 'utf8'));
   assert.match(kept.name, /^[^\p{Cc}\p{Cf}]{0,40}$/u);
-  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: PETS, name: kept.name, startLast: false });
+  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false });
+  assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [], 'a removed Skipper is not put back');
   // Phase 18 review: saves in flight together (Ctrl = held down) all succeed, and the file ends on the last one.
   const saves = await page.evaluate((pet) => Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
     window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false }))), PETS);
@@ -202,6 +208,12 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.equal(await page.locator('#indGlyph').isVisible(), true);
   for (const focus of ['Control+2', 'Control+3', 'Control+1']) { await page.keyboard.press(focus); assert.equal(await page.locator('#agentInd').isVisible(), true, focus); }
   await call(instance, `/chat/${id}/cancel`, 'POST', {});
+  await page.locator('#agentInd').waitFor({ state: 'hidden', timeout: 15000 });
+  // After a compaction the agent works on with no prompt open (Builder, 2026-10-20: the spinner and pet went away): the
+  // indicator comes back for that turn and hides on its closing usage_update.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'compact' });
+  await page.getByText('after compact').first().waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#agentInd').getAttribute('data-state'), 'working', 'working again after the compaction');
   await page.locator('#agentInd').waitFor({ state: 'hidden', timeout: 15000 });
 
   // The old single-pet file became every focus's system pet (refused, so the spinner), shown in Chat only.
@@ -380,13 +392,13 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.waitForFunction(() => document.querySelectorAll('#chats .pane canvas.pet').length === 2, null, { timeout: 15000 });
   assert.equal(await page.evaluate(() => [...document.querySelectorAll('#chats .pane')].map((p) => p.getAttribute('aria-label') + ':' + p.querySelector('canvas.pet').dataset.petName).sort().join()), 'Claude chat:good-pet,Codex chat:other-pet');
   await drawn('#chats .pane canvas.pet');
-  // Undragged, a chat's pet stands beside its message box, not on it; dragging one leaves the other where it was.
+  // Undragged, a chat's pet stands left of its message box, not on it; dragging one leaves the other where it was.
   const placed = () => page.evaluate(() => [...document.querySelectorAll('#chats .pane')].map((p) => {
     const c = p.querySelector('canvas.pet').getBoundingClientRect(), b = p.querySelector('.composer').getBoundingClientRect(), r = p.getBoundingClientRect();
-    return { id: p.dataset.id, at: [Math.round(c.x), Math.round(c.y)], onBox: c.right > b.left && c.left < b.right && c.bottom > b.top && c.top < b.bottom, inPane: c.left >= r.left && c.right <= r.right && c.top >= r.top && c.bottom <= r.bottom };
+    return { id: p.dataset.id, at: [Math.round(c.x), Math.round(c.y)], onBox: c.right > b.left && c.left < b.right && c.bottom > b.top && c.top < b.bottom, left: c.x + c.width / 2 < b.x + b.width / 2, inPane: c.left >= r.left && c.right <= r.right && c.top >= r.top && c.bottom <= r.bottom };
   }));
   const petsAt = await placed();
-  assert.deepEqual(petsAt.map((x) => [x.onBox, x.inPane]), [[false, true], [false, true]], JSON.stringify(petsAt));
+  assert.deepEqual(petsAt.map((x) => [x.onBox, x.left, x.inPane]), [[false, true, true], [false, true, true]], JSON.stringify(petsAt));
   await shot('pets-split.png');
   const first = page.locator('#chats .pane').first(), fb = await first.boundingBox(), fc = await first.locator('canvas.pet').boundingBox();
   await page.mouse.move(fc.x + fc.width / 2, fc.y + fc.height / 2); await page.mouse.down();
