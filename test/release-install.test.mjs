@@ -88,6 +88,8 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.doesNotMatch(install.split('\n').find((line) => line.includes('nsExec')), /-Workspace/, 'the installer must not reset the workspace');
   assert.match(uninstall, /\$\{ifNot\} \$\{isUpdated\}[^]*Unregister-ScheduledTask[^]*\$\{endIf\}/, 'an update must not unregister the task');
   assert.doesNotMatch(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Unregister-ScheduledTask/);
+  // Stop-ScheduledTask ends only conhost.exe; the daemon outlived it (GitHub run 39540753837), so the uninstaller ends its node.exe.
+  assert.match(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process/, 'the uninstaller ends the daemon itself');
   // A silent install (/S) still shows a MessageBox with no /SD and waits for a click nobody can give. /SD goes after the text:
   // before it, makensis takes the text for a jump label and the build fails (GitHub run 39527149502).
   for (const box of nsh.split('\n').filter((line) => /^\s*MessageBox /.test(line))) assert.match(box, /"\s+\/SD ID\w+\s*$/, 'silent default, after the text (NSIS reads text after /SD as a jump label): ' + box.trim());
