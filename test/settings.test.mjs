@@ -696,8 +696,11 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
 
 test('First-run welcome: a Set up card while settings or sign-in are missing; /setup says only booleans (threat model row 17)',{ timeout: 120000 }, async (t) => {
   const instance = await daemon(t);
-  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-welcome-')), 'profile');
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-welcome-')), profile = path.join(home, 'profile');
+  const opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" > ' + opened + '\n');
+  await chmod(browser, 0o755);
+  const env = { ...process.env, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE;
   const launch = async () => {
     const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
     const proc = app.process();
@@ -721,7 +724,12 @@ test('First-run welcome: a Set up card while settings or sign-in are missing; /s
   await card.locator('.open').click();
   await page.locator('#welDlg[open]').waitFor();
   const body = await page.locator('#welBody').innerText();
-  for (const text of ['Not found', 'Claude not signed in', 'Codex not signed in']) assert.ok(body.includes(text), text);
+  for (const text of ['Not found', 'Claude not signed in', 'Codex not signed in', 'Skipper is your System pet']) assert.ok(body.includes(text), text);
+  // Issue #4 item 4, option C: the welcome points at petdex.dev, opened only through the fixed-address opener.
+  await page.click('#welPetdex');
+  let url = '';
+  for (let i = 0; i < 50 && url.trim() !== PETDEX_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== PETDEX_URL) await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(url.trim(), PETDEX_URL);
   assert.equal(await page.locator('#welFile').textContent(), settingsFile);
   const prompt = await page.locator('#welPrompt').inputValue();
   assert.ok(prompt.includes(settingsFile) && prompt.includes('"primary"') && prompt.includes('show me the file before you save it'), prompt);
