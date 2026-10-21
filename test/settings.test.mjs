@@ -982,6 +982,9 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
     await mode(pane).evaluate((el, w) => new Promise((ok) => { const end = Date.now() + 3000; (function tick() { if (el.value === w || Date.now() > end) ok(); else setTimeout(tick, 20); })(); }), want);
     assert.equal(await mode(pane).inputValue(), want, message);
   };
+  // After Turn on the picker already reads the new mode (the browser set it); the handler sets s.mode only once the dialog's
+  // close task runs. Its localStorage write marks that, so the next prompt carries the new mode (GitHub run 39527149498).
+  const applied = (agent, want) => page.waitForFunction(([a, w]) => localStorage.getItem('p9-mode:' + a) === w, [agent, want], { timeout: 5000 });
   // On a timeout the pane's text goes in the error: GitHub's runner missed one reply (2026-10-20) and nothing showed why.
   const said = async (pane, text, want) => { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter');
     try { await pane.locator('.msg.agent', { hasText: want }).waitFor({ timeout: 15000 }); }
@@ -1002,13 +1005,15 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await mode(codex).selectOption('Full access'); await dlg.waitFor(); await page.keyboard.press('Escape'); await dlg.waitFor({ state: 'hidden' });
   await settled(codex, 'Auto review', 'Escape cancels too');
   await mode(codex).selectOption('Full access'); await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
-  await settled(codex, 'Full access', 'Turn on sets the mode'); // the close task, before the prompt carries s.mode (GitHub's slower runner, 2026-10-20)
+  await settled(codex, 'Full access', 'Turn on sets the mode');
+  await applied('codex', 'Full access');
   await said(codex, 'mode', 'mode:agent-full-access');
   let claude = await chat('claude');
   assert.equal(await mode(claude).inputValue(), 'Auto');
   await mode(claude).selectOption('Bypass permissions');
   await dlg.getByRole('button', { name: 'Turn on, don\'t show again' }).click();
   await settled(claude, 'Bypass permissions', 'Turn on sets the mode');
+  await applied('claude', 'Bypass permissions');
   await said(claude, 'mode', 'mode:bypassPermissions');
   await app.close();
   ({ app, page } = await launch()); dlg = page.locator('#looseDlg');
@@ -1261,7 +1266,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await page.waitForFunction(() => !document.querySelector('#land').open);
   // First login: the walkthrough starts in Chat as the landing closes and ends in the focus picked (GitHub issue #4 item 2).
   await page.locator('#walk').waitFor({ timeout: 5000 });
-  assert.match(await page.locator('#walk .eyebrow').innerText(), /^1 of \d+$/);
+  assert.match(await page.locator('#walk .eyebrow').innerText(), /^1 of \d+$/i); // innerText applies the eyebrow's uppercase
   assert.equal((await state(page)).focus, 'chat');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('#walk'));
