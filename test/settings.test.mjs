@@ -977,7 +977,10 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
     await mode(pane).evaluate((el, w) => new Promise((ok) => { const end = Date.now() + 3000; (function tick() { if (el.value === w || Date.now() > end) ok(); else setTimeout(tick, 20); })(); }), want);
     assert.equal(await mode(pane).inputValue(), want, message);
   };
-  const said = async (pane, text, want) => { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter'); await pane.locator('.msg.agent', { hasText: want }).waitFor({ timeout: 15000 }); };
+  // On a timeout the pane's text goes in the error: GitHub's runner missed one reply (2026-10-20) and nothing showed why.
+  const said = async (pane, text, want) => { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter');
+    try { await pane.locator('.msg.agent', { hasText: want }).waitFor({ timeout: 15000 }); }
+    catch (error) { throw new Error(`no reply "${want}"; the pane shows:\n${(await pane.innerText().catch(() => '?')).slice(-1500)}`, { cause: error }); } };
   let codex = await chat('codex');
   assert.equal(await mode(codex).inputValue(), 'Auto review', 'a new install starts Codex in Auto review');
   assert.deepEqual(await mode(codex).locator('option').allInnerTexts(), ['Read-only', 'Workspace access', 'Auto review', 'Full access']);

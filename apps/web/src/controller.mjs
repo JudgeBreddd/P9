@@ -1,6 +1,5 @@
-import { M } from './fixtures.mjs';
 import { popover as createPopover, svg, esc, limitLine, md } from './helpers.mjs';
-// A choice is [value, label]; sample fixtures give plain strings.
+// A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
 import { applyLook, onLookChange } from './lib/theme';
@@ -8,6 +7,13 @@ import { WALKTHROUGH } from './walkthrough.mjs';
 import { createSky } from './landing-sky.mjs';
 
 export function mountShell() {
+// The sample data lives in test/sample-data.mjs and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
+// Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
+// empty and fill from the daemon (GitHub issue #4: a fresh Windows install showed the sample items, and so did a dead daemon).
+const sampleView = !!window.p9?.sample;
+const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], history: [], files: [], fileBody: {}, queue: [], notifications: [], inbox: [],
+  audit: { run: 'none yet', ticked: 0, total: 0, contradictions: 0 }, logs: { host: '', incidents: [], rows: [] }, solo: { when: 'none yet', txt: '' },
+  stats: [['Work in flight (HANDOFF.md)', 0], ['Ideas not researched', 0], ['Punch-list items', 0]], apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 const addEventListener = (type, listener) => window.addEventListener(type, listener, { signal: lifetime.signal });
 const removeEventListener = (type, listener) => window.removeEventListener(type, listener);
@@ -72,7 +78,7 @@ const looseOk = (agent, m) => new Promise(done => {
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
   d.showModal();
 });
-const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startMode(s.agent), queue: [] })), open: ['s-claude-1','s-codex-1'], split: false, files: false,
+const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startMode(s.agent), queue: [] })), open: sampleView ? ['s-claude-1','s-codex-1'] : [], split: false, files: false,
   focus: 'chat', termOpen: { chat: false, dev: false, mission: false }, termMode: { chat: 'float', dev: 'drawer', mission: 'float' },
   snoozed: new Set(), quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
   docs: {}, dev: { tabs: [], active: null } };
@@ -109,8 +115,8 @@ function cardList(all) {
   // Only _tyler/ items that arrive while the app is open get a card (Builder, 2026-10-17); the ones already there, and the ones
   // he skips, wait quietly in the Notification Center. Running chats are robot heads in the rail (renderBots).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
-  if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: '_tyler/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
-  if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: old === 1 ? '1 item in _tyler/' : old + ' items in _tyler/', sub: 'waiting', open: { kind: 'reviews' } });
+  if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
+  if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
   for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, halo: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
   if (S.setup) cards.push({ key: 'welcome', n: [!S.setup.settings, !(S.setup.claude || S.setup.codex)].filter(Boolean).length, title: 'Set up Event Horizon', sub: [!S.setup.settings && 'Mission paths', !(S.setup.claude || S.setup.codex) && 'agent sign-in'].filter(Boolean).join(' · ') });
   return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
@@ -717,9 +723,8 @@ const CTP = ['#cba6f7', '#89b4fa', '#94e2d5', '#fab387', '#f5c2e7', '#a6e3a1', '
 const tint = s => ` style="--tint:${CTP[[...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % CTP.length]}"`;
 const worst = list => ['bad', 'warn', 'ok'].find(l => list.some(s => s[3] === l)) || 'ok';
 const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
-// Live data from the daemon (window.p9.mission) replaces the sample data once it answers; until then the
-// page says it is showing samples. Panels the daemon does not serve yet keep their sample data, labelled.
-const live = { on: false, note: window.p9?.mission ? 'Connecting to the P9 daemon…' : 'Sample data: no P9 daemon in this view', primary: null, waiting: '' };
+// Live data from the daemon (window.p9.mission) fills the lists once it answers; until then the page says why it is empty.
+const live = { on: false, note: window.p9?.mission ? 'Connecting to the P9 daemon…' : 'No P9 daemon in this view', primary: null, waiting: '' };
 const usage = { state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
 async function loadUsage() {
   if (!window.p9?.usage) return;
@@ -732,7 +737,13 @@ const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 6
 async function loadMission() {
   if (!window.p9?.mission) return;
   const r = await window.p9.mission('overview');
-  if (r.status !== 200) { live.note = 'Sample data: the P9 daemon did not answer (' + (r.body?.error || r.status) + ')'; return renderMission(); }
+  if (r.status !== 200) {
+    const why = r.body?.error || r.status;
+    if (sampleView) live.note = 'Sample data: the P9 daemon did not answer (' + why + ')';
+    else if (why === 'settings-missing' || why === 'settings-invalid') live.note = 'Mission Control is not set up yet (' + why + '): see Set up P9.';
+    else { live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.'; if (!lifetime.signal.aborted) setTimeout(loadMission, 5000); }
+    return renderMission();
+  }
   const o = r.body;
   live.on = true; live.note = ''; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
   M.scripts = {}; M.tools = [];
@@ -812,7 +823,7 @@ async function runLive(m, id) {
 // Mission is short: script tiles, then one small card per section (title, a number, one line) that opens the
 // section in the modal window (Builder, 2026-10-17: "hard to navigate because its so long ... group everything so
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
-const sample = () => (live.on && !H.on ? ' · sample' : '');
+const sample = () => (sampleView ? ' · sample' : '');
 const allNotes = () => [...(H.notices || []), ...S.alerts];
 const usageBody = () => (usage.limits ? `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex)].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
@@ -822,10 +833,10 @@ const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
   mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || (H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.'), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
-  minbox: { title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
-  mlogs: { title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
+  minbox: { show: () => sampleView || H.on, title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
+  mlogs: { show: () => sampleView || H.on, title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
     body: () => `<ul class="plist">${M.logs.incidents.map((i, n) => `<li><button data-inc="${n}"${i.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(i.level)}"></span><span class="txt">${esc(i.txt)}</span></button></li>`).join('')}${M.logs.rows.map((r, n) => `<li class="mono sm"${tint(r[0])}><button data-log="${n}"><b>${esc(r[0])}</b><span class="muted">${esc(r[1])}</span><span class="truncate">${esc(r[2])}</span></button></li>`).join('')}</ul>` },
-  mwork: { title: () => 'Workspace' + sample(), card: () => [M.stats[0][1], `${M.stats[1][1]} ideas · ${M.stats[2][1]} punch-list · solo ${M.solo.when}`, 'ok'],
+  mwork: { show: () => sampleView || H.on, title: () => 'Workspace' + sample(), card: () => [M.stats[0][1], `${M.stats[1][1]} ideas · ${M.stats[2][1]} punch-list · solo ${M.solo.when}`, 'ok'],
     body: () => `<div class="stats">${M.stats.map(([k, v], n) => `<div${n === 0 && H.on ? ' data-handoffs role="button" tabindex="0"' : ''}><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div><p class="sm"><span class="kind"${tint('audit')}>audit</span> ${esc(M.audit.run)}: ${esc(M.audit.ticked)} of ${esc(M.audit.total)} ticked, ${esc(M.audit.contradictions)} contradictions</p><p class="sm"${M.solo.live ? ' data-solo role="button" tabindex="0"' : ''}><span class="kind"${tint('last solo run')}>last solo run</span> ${esc(M.solo.when)}: ${esc(M.solo.txt)}</p>` },
   mlaunch: { title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
@@ -878,7 +889,7 @@ function bindWin(root, m) {
 function missionLive() {
   const box = $('#fMission .wins');
   if (box) {
-    setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id)).map(winCard).join(''));
+    setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
     setHTML($('#fMission [data-card="mprimary"]'), wins.mprimary.show() ? winCard('mprimary') : '');
     for (const id of PANELS) { const p = $(`#fMission [data-panel="${id}"]`); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); }
     $('#fMission').querySelectorAll('[data-win]').forEach(b => b.onclick = () => openModal({ kind: 'win', id: b.dataset.win }));
@@ -920,7 +931,7 @@ function missionModal(m, body, row) {
       if (x.confirm && !m.armed) { m.armed = true; return renderModal(); }
       m.armedRun = m.armed; m.armed = false; m.out = ['running…']; renderModal();
       if (x.live) return runLive(m, id);
-      setTimeout(() => { m.out = M.outputs[id] || M.genericOutput(name); if (S.modal === m) renderModal(); }, 600);
+      setTimeout(() => { m.out = M.outputs[id] || [name, '', '[ok] ' + name + ' completed']; if (S.modal === m) renderModal(); }, 600);
     };
     if (m.out) $('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
   } else if (m.kind === 'hubtext') {
@@ -1450,7 +1461,7 @@ $('#welMission').onclick = () => { saveSettings({ ...settings, focus: { ...setti
 // load, then a long poll); the sample sessions go. Sends, answers and Stop go to window.p9.chat; what happened comes
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
-const dataNote = () => { $('#dataNote').textContent = [live.on && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && 'Chat sample data', 'Dev sample data'].filter(Boolean).join(' · '); };
+const dataNote = () => { $('#dataNote').textContent = [live.on && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 liveChat.call = async (action, payload = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() };
   let r = await window.p9.chat(action, body);
@@ -1540,7 +1551,7 @@ async function loadChat() {
   let replaying = true;
   while (!lifetime.signal.aborted) {
     const r = await window.p9.chat('events', { after: liveChat.cursor, wait: replaying ? 0 : 8000 });
-    if (r.status !== 200) { if (!liveChat.on) return; await new Promise(res => setTimeout(res, 2000)); continue; }
+    if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
     if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {

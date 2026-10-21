@@ -179,8 +179,10 @@ bootstrap file never reach the renderer. No process argv or arbitrary URL crosse
 checks again (since 2026-10-19: the Chat Focus file browser's read-only list and read, threat model row 23, and a new
 chat's folder, row 24): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
 browser cannot write. A chat's folder is where its agent starts, not a sandbox (Codex's own sandbox keeps its writes there;
-Claude can still reach the rest of the workspace under its permission rules). Notifications, Wiki, Logs and Workspace panels
-are still sample data. The production app has no test-only bridge or sender bypass.
+Claude can still reach the rest of the workspace under its permission rules). The app ships no sample data (GitHub issue #4):
+it lives in `test/sample-data.mjs`, which the packaged build leaves out. The one test-only path is `window.p9.sample`: the desktop
+fills it from that file only when unpackaged and `P9_SAMPLE_DATA=1` is set, answers only the main window, and loads no other
+path; otherwise it is `null`. There is no sender bypass.
 
 Tests launch real Electron with chromiumSandbox:true (Playwright otherwise defaults
 to disabling it on Linux), check renderer seccomp and preferences, reject a separate
