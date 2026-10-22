@@ -38,8 +38,7 @@ function sync(a, b) {
     if (!o) return a.appendChild(n);
     if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) return a.replaceChild(n, o);
     if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; return; }
-    for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
-    for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
+    attrs(o, n);
     if (o.tagName !== 'TEXTAREA') sync(o, n); // rewriting a textarea's text resets its caret
     // read from the markup: a template's own .value is not filled in
     const v = o.tagName === 'TEXTAREA' ? n.defaultValue : o.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(o.type) ? n.getAttribute('value') ?? '' : null;
@@ -48,6 +47,10 @@ function sync(a, b) {
     else if (o.tagName === 'SELECT') o.selectedIndex = Math.max(0, [...n.options].findIndex(x => x.defaultSelected));
   });
   olds.slice(news.length).forEach(n => n.remove());
+}
+function attrs(o, n) {
+  for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
+  for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
 }
 const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; } return el; };
 // note 7: every chat starts in Auto mode
@@ -409,7 +412,7 @@ const newPop = popover($('#newBtn'), $('#newPop'), renderNewFolder);
 $('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model); newPop.close(); });
 // History: with the daemon, every live chat, newest first (Open gives it a tab again); without it, the sample list.
 const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.slice().reverse().map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)} · ${asks.length} message${asks.length === 1 ? '' : 's'}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
+const liveHistory = () => S.sessions.slice().reverse().map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
 const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
 const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
 $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
@@ -468,7 +471,7 @@ function shown(s) {
 function pane(s, i, bare) {
   const working = busy(s);
   const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…' }[s.state];
-  const body = s.events.length === 0 ? `<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
+  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
   return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''} aria-label="${names[s.agent]} chat">
@@ -490,22 +493,30 @@ function pane(s, i, bare) {
 // state a person owns lives in S or is carried across: draft in s.draft, images in s.images,
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
 const view = {}; // 'container:session id' -> { top, pinned, selection }
-function renderChats() {
+// only: the chat ids a daemon batch touched; the other panes shown are left as they are.
+function renderChats(only) {
   const ids = S.split ? S.open.slice(0, 2) : S.open.slice(0, 1);
   const ss = ids.map(id => S.sessions.find(s => s.id === id)).filter(Boolean);
   if (document.hasFocus()) { const seen = [...(S.focus === 'chat' ? ss : []), mdl.open && S.modal?.kind === 'chat' && S.sessions.find(s => s.id === S.modal.id)].filter(s => s?.done); seen.forEach(s => { s.done = false; }); if (seen.length) renderCards(); }
   $('#chats').dataset.split = String(S.split && ss.length > 1);
-  paint($('#chats'), ss);
-  if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean));
+  for (const s of [...ss, mdl.open && S.modal?.kind === 'chat' && S.sessions.find(x => x.id === S.modal.id)]) if (s?.stub) history(s);
+  paint($('#chats'), ss, only);
+  if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
-function paint(root, ss) {
-  const bare = root.id === 'mdlBody';
-  root.querySelectorAll('.pane').forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
+// E2: with only, and the same panes still shown in the same order, just those panes are rebuilt and re-wired. Before,
+// each daemon batch rebuilt every pane shown, so a quiet 200-step chat beside a streaming one cost the same each time.
+function paint(root, ss, only) {
+  const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
+  const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
+  const panes = part ? old.filter(p => only.has(p.dataset.id)) : old;
+  if (part && !panes.length) return;
+  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
-  morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
-  root.querySelectorAll('.pane').forEach(p => {
+  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
+  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
+  (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
     place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
@@ -559,7 +570,7 @@ function paint(root, ss) {
 }
 function answered(s) {
   if (mdl.open && S.modal?.kind === 'chat' && S.modal.id === s.id) closeModal();
-  renderTabs(); renderChats();
+  renderTabs(); renderChats(new Set([s.id]));
 }
 // Paperclip (Builder, 2026-10-17: it only drew a blue square). Threat model row 20; the daemon checks the same limits.
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_IMAGE = 2 * 1024 * 1024;
@@ -623,7 +634,7 @@ function finished(s) {
 }
 function turnEnd(s) {
   if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
-  if (s.queue.length) startTurn(s, s.queue.shift()); else { renderTabs(); renderChats(); } // an interrupt may queue '' (images only)
+  if (s.queue.length) startTurn(s, s.queue.shift()); else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -1519,10 +1530,25 @@ const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof
 const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
+const liveSession = (id, provider, title, folder, created) => ({ id, agent: provider, title, model: chatModel[provider], mode: startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
+// E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
+// the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
+function history(s, until = liveChat.cursor) {
+  return s.loading ||= (async () => {
+    for (let after = 0; !lifetime.signal.aborted;) {
+      const r = await window.p9.chat('events', { after, only: [s.id], until });
+      if (r.status !== 200) { await new Promise(res => setTimeout(res, 2000)); continue; }
+      for (const ev of r.body.events) try { applyChat(ev); } catch {}
+      after = r.body.cursor;
+      if (r.body.events.length < 500) break;
+    }
+    s.stub = false; renderTabs(); renderChats();
+  })();
+}
 // Applies one daemon event to S; returns the session when a turn ended (so queued messages can go).
 function applyChat(ev) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push({ id: ev.conversation, agent: d.provider, title: d.title, model: chatModel[d.provider], mode: startMode(d.provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: d.folder || 'P9 workspace', folder: d.folder || '', events: [], live: true, created: ev.at }); return null; }
+  if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
   const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
@@ -1571,14 +1597,20 @@ function applyChat(ev) {
 }
 async function loadChat() {
   if (!window.p9?.chat) return;
-  let replaying = true;
+  // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
+  // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
+  let replaying = true, scope = null;
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
   while (!lifetime.signal.aborted) {
-    const r = await window.p9.chat('events', { after: liveChat.cursor, wait: replaying ? 0 : 8000 });
+    const l = scope ? null : await window.p9.chat('list', {});
+    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
     if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
     if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
-      const created = ev.type === 'created' && !replaying;
+      const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
+      if (stub) await history(stub, ev.cursor - 1);
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       if (created) show(ev.conversation);
@@ -1587,13 +1619,15 @@ async function loadChat() {
     liveChat.cursor = r.body.cursor;
     if (replaying && r.body.events.length < 500) {
       replaying = false;
+      const all = await list(), have = new Map(S.sessions.map(s => [s.id, s]));
+      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
       for (const s of S.sessions) s.hidden = s.state === 'stopped' || closedChats.has(s.id);
       for (const id of closedChats) if (!S.sessions.some(s => s.id === id)) closedChats.delete(id);
       keepClosed();
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
     }
     else if (!replaying) { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } }
-    renderTabs(); renderChats();
+    renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation)));
   }
 }
 

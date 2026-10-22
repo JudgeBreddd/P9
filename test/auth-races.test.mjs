@@ -108,6 +108,23 @@ test('Phase 10: an enrollment whose check crosses the 10-minute deadline does no
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM devices').get().n, 0);
 });
 
+// Review #11 (F1): a phone that waited 9 minutes for the desktop still gets 10 from the approval; an unapproved request lapses at 10.
+test('Phase 10: the 10 minutes to finish enrolling count from the approval, not the request', async () => {
+  const { auth, db, release, advance } = await setup();
+  const late = auth.request({ name: 'phone' }).enrollment;
+  advance(9 * 60 * 1000);
+  assert.equal(auth.approve(late).status, 200);
+  advance(9 * 60 * 1000);
+  assert.equal((await auth.enrollOptions(late)).status, 200);
+  const verify = auth.enrollVerify(late, {});
+  release({ verified: true, registrationInfo: { credential: { id: 'cred5', publicKey: new Uint8Array([1]), counter: 0 } } });
+  assert.equal((await verify).status, 201);
+  const unapproved = auth.request({ name: 'tablet' }).enrollment;
+  advance(11 * 60 * 1000);
+  assert.equal(auth.approve(unapproved).status, 404);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM devices').get().n, 1);
+});
+
 test('Phase 10: stillAuthorized stops work once the session check fails, and passes on the desktop (C-H4)', () => {
   let live = true;
   authority.run(() => live, () => {

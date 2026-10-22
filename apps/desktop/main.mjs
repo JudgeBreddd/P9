@@ -280,7 +280,10 @@ export async function createDesktop({ state, open } = {}) {
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
   const chatRoutes = {
     list: () => ['GET', '/chat'],
-    events: ({ after = 0, wait = 0 }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000 && ['GET', `/chat/events?after=${after}&wait=${wait}`],
+    // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
+    events: ({ after = 0, wait = 0, only, until }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000
+      && (only === undefined || Array.isArray(only) && only.length <= 100 && only.every(uuid)) && (until === undefined || Number.isSafeInteger(until) && until >= 0)
+      && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}`],
     create: body => ['POST', '/chat', body],
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
