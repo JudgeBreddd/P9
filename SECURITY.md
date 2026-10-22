@@ -216,8 +216,9 @@ enrollment mutation; a missing or different Origin is 403.
   and a 6-digit code (at most 3 pending). Nothing is granted until the desktop approves
   that id over the owner-only Unix socket. An approval allows one registration attempt;
   the first verify, good or bad, uses it. Wrong origin, wrong RP ID and replayed
-  registrations are refused. An enrollment expires 10 minutes after the phone asked
-  (not after approval), including one whose registration is still being checked, and a
+  registrations are refused. A request the desktop has not approved expires 10 minutes
+  after the phone asked; once approved, the phone has 10 minutes from the approval to
+  finish (at most 20 minutes in all), including a registration still being checked. A
   desktop refuse or reset that lands while a registration is being checked cancels it.
 - **Sessions.** A login or enrollment issues a 12 h session: an `HttpOnly; Secure;
   SameSite=Strict` cookie `p9s` plus a CSRF token in the response body, which every
@@ -243,8 +244,11 @@ enrollment mutation; a missing or different Origin is 403.
   refused because its session ended keeps that 401 as its operation's outcome, because a side
   effect may already have happened; a retry after logging in again needs a new operation ID. An open terminal socket also closes when its
   12 h session expires, and one whose client stops reading (8 MiB queued) is dropped.
-- **Desktop only.** `/devices` and its approve, refuse, lock, revoke and reset routes
-  exist only on the Unix socket; on TCP they are 404.
+- **Desktop only.** `/devices` and its approve, refuse, lock, revoke and reset routes,
+  and `/setup` (it names the workspace and settings file), exist only on the Unix socket;
+  on TCP they are 404. `/health` on TCP leaves out the workspace path. A failed New idea
+  save answers with an allowlisted code (`request-refused`, `storage-unavailable`), never
+  the system's error text, which can hold paths.
 - **Rate limit and audit.** 10 failed logins in a sliding 5-minute window close
   `POST /auth/login/options`, `/auth/login/verify`, `/auth/enroll`,
   `/auth/enroll/:id/options` and `/auth/enroll/:id/verify` with 429. It is one global
@@ -481,3 +485,5 @@ removed (an A/B run; logs in the private phase 12 folder).
 | A device revoked after its request was admitted cannot approve a waiting agent action | `test/auth-races.test.mjs` "cold-read H1" | The answer throws session-ended and the approval stays waiting; fails without the final session check |
 | An ssh button takes one plain word | `test/mission.test.mjs` "surface 8" | Spaces, quotes, glob and brace characters refused for ssh buttons only; fails without the rule |
 | A remote device cannot fill the disk with operation IDs | auth-races "cold-read M2" | 600 new operation IDs an hour per device, then 429 `operation-quota`; the desktop and other devices are unaffected. Rows are never deleted, so a device held at the cap adds about 0.8 GB a year at worst |
+| The 10 minutes to finish enrolling count from the desktop's approval; an unapproved request still lapses at 10 (v0.1.3 F1) | auth-races "Phase 10: the 10 minutes to finish enrolling count from the approval" | Approved at 9 minutes, registered 9 minutes later; an unapproved request is 404 at 11 minutes; fails (403) when the clock starts at the request |
+| A phone never learns the workspace path (v0.1.3 F2) | "PASS F2" in `test/phone.test.mjs` "Phase 11: malformed and stale usage" (not in `gate:12`; run on its own) | TCP `/health` has no workspace, TCP `/setup` is 404, a refused New idea names no path; fails with the old routes |

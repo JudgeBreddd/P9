@@ -110,7 +110,8 @@ export function createListener({ workspace, recovery, credentials, transport, se
   // The routes both listeners serve. Device management is desktop-only and the login routes are remote-only.
   const api = new Hono();
   api.onError(onError);
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', workspace,
+  // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
   api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));
@@ -168,7 +169,8 @@ export function createListener({ workspace, recovery, credentials, transport, se
     catch (error) {
       if (error.code === 'EEXIST') return reply(c, { status: 409, error: `${file} already exists` });
       if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return reply(c, { status: 404, error: 'no _ideas folder' });
-      return reply(c, { status: 400, error: error.message });
+      // F2: onError answers with an allowlisted code; a system error's message names the file's full path.
+      throw error;
     }
     return reply(c, { status: 201, path: relative });
   });
@@ -178,16 +180,10 @@ export function createListener({ workspace, recovery, credentials, transport, se
   api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));
   api.post('/pages/:id/launch', async (c) => reply(c, await mission.launch('pages', c.req.param('id'), await json(c))));
   api.get('/agent-lock', (c) => reply(c, chat.lock()));
-  // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
-  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
-  api.get('/setup', async (c) => {
-    const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
-    return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: await present(settingsFile),
-      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
-  });
   api.get('/chat', (c) => c.json({ conversations: chat.list() }));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
-  api.get('/chat/events', async (c) => reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0))));
+  api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until');
+    return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until))); });
   api.get('/usage', async (c) => { const { claudeLive, ...usage } = ledger.usage(); return c.json({ ...usage, limits: await planLimits({ home: os.homedir(), claudeLive }) }); });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
@@ -238,6 +234,14 @@ export function createListener({ workspace, recovery, credentials, transport, se
     if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
     try { return c.json(await createFile(workspace, input.path, input.content), 201); }
     catch (error) { if (error.code === 'EEXIST') return c.json({ error: 'file-exists' }, 409); throw error; }
+  });
+  // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
+  // Desktop only (F2): it names the workspace and settings file, which the phone never shows.
+  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
+  app.get('/setup', async (c) => {
+    const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
+    return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: await present(settingsFile),
+      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
   });
   app.get('/file-protection', (c) => c.json({ on: protection() }));
   app.post('/file-protection', async (c) => {

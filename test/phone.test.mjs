@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { chromium, _electron } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root, externalEdit } from './helpers.mjs';
@@ -618,4 +618,19 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   old.close();
   assert.equal((await server.remote('/usage', { session: auth })).body.state, 'stale');
   console.log('PASS phase11 usage: malformed row discarded, unavailable and stale explicit, health remains 200');
+  // F2: the phone never gets the workspace path, from /health, /setup or a failed New idea save.
+  const { workspace } = (await server.desk('/health')).body;
+  assert.ok(workspace);
+  const health = await server.remote('/health', { session: auth });
+  assert.equal(health.body.workspace, undefined);
+  assert.ok(!health.text.includes(workspace), health.text);
+  assert.equal((await server.desk('/setup')).status, 200);
+  assert.equal((await server.remote('/setup', { session: auth })).status, 404);
+  await chmod(path.join(server.workspace, '_ideas'), 0o500);
+  try {
+    const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });
+    assert.deepEqual([idea.status, idea.body], [403, { error: 'storage-unavailable' }]);
+    assert.ok(!idea.text.includes(workspace), idea.text);
+  } finally { await chmod(path.join(server.workspace, '_ideas'), 0o755); }
+  console.log('PASS F2: no workspace path to the phone from /health, /setup or a refused idea');
 });

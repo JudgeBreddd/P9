@@ -522,8 +522,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     stopAll,
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
-    async events(after, waitMs) {
+    // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
+    // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).
+    async events(after, waitMs, only, until) {
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(waitMs) || waitMs < 0) return refused(400, 'request-refused');
+      if (only !== undefined || until !== undefined) {
+        if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))) return refused(400, 'request-refused');
+        return { status: 200, ...ledger.of(only, after, until) };
+      }
       let events = ledger.after(after);
       if (!events.length && waitMs) {
         await new Promise((resolve) => {

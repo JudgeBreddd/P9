@@ -1395,3 +1395,74 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   assert.equal((await state(page)).focus, 'chat');
   console.log('PASS landing: opens on start (old settings file upgraded), clicks/keys/Esc do not skip the intro, Space does, pets drawn, 2 enters Dev, reload skips it, the mark reopens it with the name as text, Esc to last focus, startLast skips it, fits 720x600');
 });
+
+test('Speed (E2): a reply in one chat rebuilds only its own pane; launch replays only the chats that are not stopped', { timeout: 300000 }, async (t) => {
+  // Brief E2: "every chat update redraws all panes (about 25 ms), and launch replays stopped chats from a 110 MB ledger".
+  // The same input before and after the fix: 24 stopped chats of 500 steps each, then a 250-step reply streaming in split
+  // view beside a quiet 500-step chat. The numbers print before the checks, so the A/B run reports the old ones too.
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const marks = {}, sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  const turn = async (id, text) => {
+    await call(instance, '/chat/' + id + '/prompt', 'POST', { text });
+    for (;;) {
+      const r = await call(instance, '/chat/events?after=' + (marks[id] ?? 0) + '&only=' + id);
+      marks[id] = r.cursor;
+      if (r.events.some((ev) => ev.type === 'turn-end')) return;
+      await sleep(200);
+    }
+  };
+  const make = async (title) => { const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation; for (const text of ['title ' + title, 'many steps', 'many steps']) await turn(id, text); return id; };
+  const stopped = [];
+  for (let i = 0; i < 24; i += 6) stopped.push(...await Promise.all([0, 1, 2, 3, 4, 5].map((j) => make('Old ' + (i + j)))));
+  for (const id of stopped) await call(instance, '/chat/' + id + '/stop', 'POST');
+  const a = await make('Quiet');
+  const events = (await call(instance, '/chat/events?after=0&only=' + a)).cursor;
+  for (const q of ['only=x', 'only=' + a + '&until=-1', 'after=5&only=' + a + '&until=4', 'only=' + Array(101).fill(a).join(',')])
+    assert.equal((await call(instance, '/chat/events?' + q)).error, 'request-refused', q);
+
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-speed-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const t0 = Date.now();
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#tabs .tab[data-id="' + a + '"]').waitFor({ timeout: 60000 });
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor();
+  const launch = Date.now() - t0;
+  // Read before anything opens it: a stopped chat's History row has only its name until its history loads.
+  await page.click('#histBtn');
+  const row = await page.locator('#histPop .item', { has: page.locator('[data-open="' + stopped[0] + '"]') }).innerText();
+  await page.keyboard.press('Escape');
+
+  const b = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await page.locator('#tabs .tab[data-id="' + b + '"]').click();
+  await page.click('#rSplit');
+  await page.waitForFunction((ids) => [...document.querySelectorAll('#chats > .pane')].map((p) => p.dataset.id).sort().join() === ids, [a, b].sort().join(), { timeout: 15000 });
+  // Every pane build goes through a template's innerHTML (morph, and paint's per-pane path): count whose pane it holds.
+  await page.evaluate(([a, b]) => {
+    const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML'), m = window.e2 = { bytes: 0, a: 0, b: 0 };
+    const of = (id) => new RegExp('class="pane[^"]*" data-id="' + id + '"');
+    Object.defineProperty(Element.prototype, 'innerHTML', { ...d, set(html) { if (this instanceof HTMLTemplateElement) { m.bytes += html.length; m.a += of(a).test(html); m.b += of(b).test(html); } d.set.call(this, html); } });
+  }, [a, b]);
+  const cdp = await app.context().newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const busy = async () => (await cdp.send('Performance.getMetrics')).metrics.find((x) => x.name === 'TaskDuration').value * 1000;
+  const before = await busy();
+  await call(instance, '/chat/' + b + '/prompt', 'POST', { text: 'many steps' });
+  await page.locator('#chats .pane[data-id="' + b + '"]').getByText('All steps done.').waitFor({ timeout: 30000 });
+  await page.waitForTimeout(500);
+  const work = await busy() - before, m = await page.evaluate(() => window.e2);
+  const full = await page.evaluate(() => { const t = performance.now(); for (let i = 0; i < 20; i++) dispatchEvent(new Event('focus')); return (performance.now() - t) / 20; });
+  console.log('E2 numbers: launch to "Chat live" ' + launch + ' ms (' + events + ' events in the ledger, 24 of 25 chats stopped); during the 250-step reply '
+    + m.b + ' updates, the quiet chat rebuilt ' + m.a + ' times, ' + Math.round(m.bytes / 1024) + ' KB of HTML built, main thread ' + Math.round(work) + ' ms in all = '
+    + (work / m.b).toFixed(1) + ' ms per update; one full redraw of both panes ' + full.toFixed(1) + ' ms');
+  assert.ok(m.b > 0, 'the streaming chat was drawn');
+  assert.equal(m.a, 0, 'a reply in one chat rebuilt the other pane');
+  assert.doesNotMatch(row, /message/, 'a stopped chat was replayed at launch');
+  // Opening it from History loads it.
+  await page.click('#histBtn');
+  await page.locator('#histPop [data-open="' + stopped[0] + '"]').click();
+  await page.locator('#chats .pane[data-id="' + stopped[0] + '"]').getByText('All steps done.').first().waitFor({ timeout: 15000 });
+  console.log('PASS E2: only the changed pane is rebuilt; 24 stopped chats not replayed at launch, one loads when opened from History');
+});
