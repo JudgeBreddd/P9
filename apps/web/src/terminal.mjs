@@ -21,6 +21,8 @@ for (const type of ['compositionend', 'keydown']) addEventListener(type, (event)
 
 // screen: the box xterm draws in. state(text, live): the page shows the state and turns its own key buttons on or off.
 // connect(id): a WebSocket to that terminal, or anything with the same readyState, send, close and on* handlers.
+// What the dock and the phone say when the daemon reports no tmux binary.
+export const TMUX_MISSING = 'tmux not found. Install it (Debian/Ubuntu: sudo apt install tmux · Fedora: sudo dnf install tmux · Arch: sudo pacman -S tmux), then press Refresh.';
 export function createTerminal({ screen, state, connect }) {
   const term = { view: null, socket: null, leases: [] };
   function show(text, live = false) {

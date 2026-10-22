@@ -1466,3 +1466,23 @@ test('Speed (E2): a reply in one chat rebuilds only its own pane; launch replays
   await page.locator('#chats .pane[data-id="' + stopped[0] + '"]').getByText('All steps done.').first().waitFor({ timeout: 15000 });
   console.log('PASS E2: only the changed pane is rebuilt; 24 stopped chats not replayed at launch, one loads when opened from History');
 });
+
+test('Speed (E2): a listed chat the bridge will not narrow to still goes live, by replaying everything', { timeout: 120000 }, async (t) => {
+  // GitHub run 39724310852: test/phone.test.mjs seeds idle chats whose IDs are not UUIDs, the bridge refused only= for
+  // them on every try, and the desktop never went live (no Fix with Claude). A refused narrowed replay replays everything.
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const real = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  db.prepare("INSERT INTO conversations (id, provider, title, state, created) VALUES ('fixture-claude', 'claude', 'claude', 'idle', ?)").run(Date.now());
+  db.close();
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-fallback-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 30000 });
+  await page.locator('#tabs .tab[data-id="' + real + '"]').waitFor();
+  console.log('PASS E2 fallback: a chat ID the bridge refuses for only= falls back to the full replay; the desktop went live');
+});

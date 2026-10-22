@@ -1111,22 +1111,27 @@ window.p9?.onTerminal?.((serial, m) => {
   else if ('close' in m) { socket.readyState = 3; socket.onclose?.({ code: m.close }); }
 });
 // Loaded in the window only: the page is prerendered in Node, where xterm has no named exports.
-let dockTerm = null;
+let dockTerm = null, tmuxMissing = '', noteShown = false;
+// The install lines are too long for the toolbar's one-line state, so the dock body carries them; Refresh clears them.
+const noTmux = () => { dockTerm.show('tmux not found'); $('#termView').textContent = tmuxMissing; noteShown = true; };
 // Opening the dock attaches the newest running shell, or starts one.
 let docking = null;
 const openDock = () => docking ??= (async () => {
+  if (noteShown) { $('#termView').textContent = ''; noteShown = false; }
   const list = await window.p9.terminal('list').catch(() => null);
+  if (list?.body?.error === 'tmux-not-found') return noTmux();
   if (list?.status !== 200) return dockTerm.show('Terminals are unavailable');
   let id = list.body.terminals.filter(x => x.state === 'running').at(-1)?.id;
   if (!id) {
     const made = await window.p9.terminal('create').catch(() => null);
-    if (made?.status !== 201) return dockTerm.show('Not started: ' + (made?.body?.error ?? 'daemon unavailable'));
+    if (made?.status !== 201) return made?.body?.error === 'tmux-not-found' ? noTmux() : dockTerm.show('Not started: ' + (made?.body?.error ?? 'daemon unavailable'));
     id = made.body.terminal;
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal }) => {
+if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING }) => {
   if (lifetime.signal.aborted) return;
+  tmuxMissing = TMUX_MISSING;
   dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
@@ -1537,6 +1542,8 @@ function history(s, until = liveChat.cursor) {
   return s.loading ||= (async () => {
     for (let after = 0; !lifetime.signal.aborted;) {
       const r = await window.p9.chat('events', { after, only: [s.id], until });
+      // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
+      if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => setTimeout(res, 2000)); continue; }
       for (const ev of r.body.events) try { applyChat(ev); } catch {}
       after = r.body.cursor;
@@ -1605,6 +1612,8 @@ async function loadChat() {
     const l = scope ? null : await window.p9.chat('list', {});
     if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
     const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
+    // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
+    if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
     if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
     if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
     const ended = [], answered_ = [];

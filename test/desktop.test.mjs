@@ -140,7 +140,9 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await page.locator('#mdlEd').fill((await page.locator('#mdlEd').inputValue()) + '\n- [ ] grew into a real task');
     await page.locator('#mdlEd').evaluate(t => { t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
     const selection = await page.locator('#mdlEd').evaluate(t => t.selectionStart); await page.click('#mdlPrimary');
-    await page.waitForTimeout(100); assert.equal(await page.locator('.shell').getAttribute('data-focus'), 'dev');
+    // Same race as D10-1 above (GitHub run 39724310852 lost it here): wait for the editor's focus, not a fixed 100 ms.
+    await page.waitForFunction(() => document.activeElement?.id === 'devEd', null, { timeout: 5000 }).catch(() => {});
+    assert.equal(await page.locator('.shell').getAttribute('data-focus'), 'dev');
     assert.equal(await page.locator('#devTabs [aria-selected="true"]').getAttribute('data-file'), 'plan.md');
     assert.deepEqual(await editor.evaluate(t => [document.activeElement === t, t.selectionStart, t.value.endsWith('grew into a real task')]), [true, selection, true]);
     assert.equal(await page.locator('#devTabs [data-file="server.ts"]').count(), 1);

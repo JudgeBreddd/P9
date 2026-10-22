@@ -25,7 +25,9 @@ export function createTerminals({ ledger, workspace, lifecycle, socket }) {
   const db = ledger.db;
   db.exec(`CREATE TABLE IF NOT EXISTS terminals
     (id TEXT PRIMARY KEY, state TEXT NOT NULL, created INTEGER NOT NULL);`);
-  const tmux = (args, timeout = 3000) => run('tmux', ['-L', socket, ...args], { env: childEnv(), timeout });
+  // A missing tmux binary is its own error, so the clients can say "tmux not found" instead of a bare "unavailable".
+  const tmux = (args, timeout = 3000) => run('tmux', ['-L', socket, ...args], { env: childEnv(), timeout })
+    .catch((error) => { throw error.code === 'ENOENT' && error.syscall === 'spawn tmux' ? new Error('tmux-not-found') : error; });
   async function sessions() {
     try {
       const { stdout } = await tmux(['list-sessions', '-F', '#{session_name}']);
@@ -61,19 +63,22 @@ export function createTerminals({ ledger, workspace, lifecycle, socket }) {
   const name = (id) => `p9-${id}`;
   const idFrom = (session) => session.slice(3);
 
-  const recovered = (async () => {
+  const recover = async () => {
     const real = await sessions();
     const rows = new Map(db.prepare('SELECT id, state FROM terminals').all().map((row) => [row.id, row.state]));
     // Only IDs already in the ledger come back; a stray p9- session on the socket is never adopted (Stop All still ends it).
     for (const session of real) if (rows.has(idFrom(session))) db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(idFrom(session));
     const present = new Set(real.map(idFrom));
     for (const id of rows.keys()) if (!present.has(id)) db.prepare("UPDATE terminals SET state = 'stopped' WHERE id = ?").run(id);
-  })();
+  };
+  let recovered = recover();
   // A failed tmux query must not end the daemon as an unhandled rejection; every route still awaits it and fails.
   recovered.catch(() => {});
+  // A failed recovery is tried again on the next route call, so installing tmux needs no daemon restart.
+  const ready = () => recovered.catch(() => (recovered = recover()));
 
   async function create(body) {
-    await recovered;
+    try { await ready(); } catch (error) { if (error.message === 'tmux-not-found') return { status: 503, error: 'tmux-not-found' }; throw error; }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
     if (!release) return { status: 503, error: 'stop-all-running' };
@@ -235,7 +240,7 @@ export function createTerminals({ ledger, workspace, lifecycle, socket }) {
   }
 
   return {
-    list: async () => { await recovered; return db.prepare('SELECT id, state, created FROM terminals ORDER BY created').all(); },
+    list: async () => { await ready(); return db.prepare('SELECT id, state, created FROM terminals ORDER BY created').all(); },
     create,
     stop,
     stopAll,

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -164,4 +164,23 @@ test('a key whose lease went out before a 10 s laptop sleep is refused, even wit
   assert.match(log, /send-keys .* -H 4d 41 52 4b\n/, 'the fresh key ran (positive control)');
   assert.doesNotMatch(log, /53 4c 45 50 54/, 'a key from before the sleep ran');
   assert.match(result.stdout, /CODE 4408/);
+});
+
+// F4: no tmux binary is its own answer ("tmux-not-found"), not a bare failure; installing tmux needs no daemon restart.
+test('a missing tmux binary says tmux-not-found on list and create, and works once tmux appears', { skip: process.platform !== 'linux' }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-notmux-')), bin = path.join(dir, 'bin'), fake = path.join(bin, 'tmux');
+  await mkdir(bin);
+  const script = `
+    const { writeFile, chmod } = await import('node:fs/promises');
+    const { createTerminals } = await import(${JSON.stringify(terminals)});
+    const stmt = { all: () => [], get: () => undefined, run: () => {} };
+    const t = createTerminals({ ledger: { db: { exec() {}, prepare: () => stmt } }, workspace: '/', lifecycle: { begin: () => () => {} }, socket: 'p9notmux' });
+    const first = await t.list().then(() => 'resolved', (error) => error.message);
+    const made = await t.create({});
+    await writeFile(${JSON.stringify(fake)}, '#!/bin/sh\\nexit 0\\n'); await chmod(${JSON.stringify(fake)}, 0o755);
+    const later = await t.list().then((rows) => 'rows:' + rows.length, (error) => error.message);
+    console.log(JSON.stringify({ first, made, later }));`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { PATH: bin, HOME: dir }, encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { first: 'tmux-not-found', made: { status: 503, error: 'tmux-not-found' }, later: 'rows:0' });
 });

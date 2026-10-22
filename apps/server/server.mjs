@@ -191,7 +191,10 @@ export function createListener({ workspace, recovery, credentials, transport, se
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
   if (terminals) {
-    api.get('/terminals', async (c) => c.json({ terminals: await terminals.list() }));
+    api.get('/terminals', async (c) => {
+      try { return c.json({ terminals: await terminals.list() }); }
+      catch (error) { if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503); throw error; }
+    });
     api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
     api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
   }

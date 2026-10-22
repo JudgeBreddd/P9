@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell, WebContentsView } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, watch } from 'node:fs';
@@ -6,9 +6,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
+import { contextMenu, windowsFullName } from './native.mjs';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -61,10 +62,13 @@ export function upgradeSettings(file, name = '') {
   }
   return { name, startLast: false, ...file };
 }
-// The greeting's first name: the first word of the account's full name (the passwd comment on Linux), else the login name.
+// Windows keeps the full name in the output of "net user <login>"; the label is localized, so another language falls back to the login name.
+// ponytail: local accounts only (a work-domain full name needs "net user /domain"); a Microsoft account with no full name set also falls back.
+// The greeting's first name: the first word of the account's full name (the passwd comment on Linux, net user on Windows), else the login name.
 export async function accountName() {
   const { username, uid } = os.userInfo();
-  const full = process.platform === 'linux' ? (await readFile('/etc/passwd', 'utf8').catch(() => '')).split('\n').map(l => l.split(':')).find(f => f[2] === String(uid))?.[4] : '';
+  const full = process.platform === 'linux' ? (await readFile('/etc/passwd', 'utf8').catch(() => '')).split('\n').map(l => l.split(':')).find(f => f[2] === String(uid))?.[4]
+    : process.platform === 'win32' ? windowsFullName(await new Promise(resolve => execFile('net', ['user', username], { windowsHide: true, timeout: 5000 }, (_error, out) => resolve(out ?? '')))) : '';
   const word = (full?.split(',')[0].trim().split(/\s+/)[0] || username || '').slice(0, 40);
   return NAME.test(word) ? word.charAt(0).toUpperCase() + word.slice(1) : '';
 }
@@ -188,6 +192,10 @@ export async function createDesktop({ state, open } = {}) {
   window.removeMenu();
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('context-menu', (_event, params) => {
+    const menu = contextMenu(params, word => window.webContents.replaceMisspelling(word), word => window.webContents.session.addWordToSpellCheckerDictionary(word));
+    if (menu.length) Menu.buildFromTemplate(menu).popup({ window });
+  });
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
   window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
@@ -273,7 +281,7 @@ export async function createDesktop({ state, open } = {}) {
     const route = missionRoutes[action](payload);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
-    try { return await daemonRequest(state, ...route); }
+    try { return await daemonRequest(state, route[0], route[1], route[2], undefined, action === 'fix' ? AGENT_START_MS : undefined); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
@@ -302,7 +310,7 @@ export async function createDesktop({ state, open } = {}) {
     const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
-    try { return await daemonRequest(state, route[0], route[1], route[2], op); }
+    try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
