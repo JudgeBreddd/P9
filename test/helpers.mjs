@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
@@ -59,7 +60,8 @@ async function startDaemon(t, entry, fixturePaths, extra) {
   const said = () => `\nstdout: ${output.slice(-2000)}\nstderr: ${errors.slice(-2000)}`;
   const ready = new Promise((resolve, reject) => {
     // Windows pays three PowerShell starts (host, folder ACL check, pipe lock) and an Add-Type compile before P9_READY.
-    const timer = setTimeout(() => reject(new Error('daemon-timeout' + said())), process.platform === 'win32' ? 20000 : 5000);
+    const timer = setTimeout(() => reject(new Error('daemon-timeout' + said() + stuck(child.pid, fixturePaths.directory))),
+      process.platform === 'win32' ? 20000 : 5000);
     child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`daemon-exit-${code}` + said())); });
     child.stdout.on('data', () => { if (output.includes('P9_READY')) { clearTimeout(timer); resolve(); } });
   });
@@ -67,6 +69,21 @@ async function startDaemon(t, entry, fixturePaths, extra) {
   await ready;
   const credentials = JSON.parse(await readFile(path.join(fixturePaths.state, 'desktop.json'), 'utf8'));
   return { ...fixturePaths, child, credentials, extra };
+}
+
+// Where a start hung: the files the daemon wrote (how far it got; this path has no log file) and, on Windows, every
+// process under the host with its CPU time and command line (runs 39732594547 and 39736142911 printed nothing in 20 s).
+function stuck(pid, directory) {
+  let text = '\nfiles: ' + readdirSync(directory, { recursive: true }).join(', ');
+  if (process.platform !== 'win32') return text;
+  const script = `$all = Get-CimInstance Win32_Process; $tree = @(${pid}); do { $n = $tree.Count; $tree = @($tree + ($all | `
+    + `Where-Object { $tree -contains $_.ParentProcessId } | ForEach-Object ProcessId) | Select-Object -Unique) } while ($tree.Count -gt $n); `
+    + `$all | Where-Object { $tree -contains $_.ProcessId } | ForEach-Object { $c = "$($_.CommandLine)"; 'proc ' + $_.ProcessId + ' <- ' + `
+    + `$_.ParentProcessId + ' cpu ' + [int](($_.KernelModeTime + $_.UserModeTime) / 1e7) + ' s: ' + $c.Substring(0, [Math]::Min(300, $c.Length)) }`;
+  try {
+    text += '\n' + execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 30000 });
+  } catch (error) { text += '\nprocess list failed: ' + error.message; }
+  return text;
 }
 
 async function freePort() {
