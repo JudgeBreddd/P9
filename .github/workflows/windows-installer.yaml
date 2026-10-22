@@ -148,6 +148,8 @@ jobs:
           # arm64 job 119719813897: the hook saw no resources\daemon\node.exe though the installer holds it. On disk now?
           Get-ChildItem (Join-Path $app 'resources\daemon') -Force | ForEach-Object { 'daemon dir: ' + $_.Name + ' ' + $_.Length + ' ' + $_.LastWriteTimeUtc.ToString('o') }
           Get-MpThreatDetection -ErrorAction SilentlyContinue | ForEach-Object { 'defender: ' + $_.InitialDetectionTime + ' ' + ($_.Resources -join ', ') }
+          # The other ARM64-filtered files: without the app's own exe there is nothing for Anri to start.
+          foreach ($f in 'P9 Event Horizon.exe', 'resources\daemon\node.exe') { if (-not (Test-Path -LiteralPath (Join-Path $app $f))) { throw "the installer left out $f" } }
           $script = Join-Path $app 'resources\daemon\scripts\install-windows.ps1'
           # This step's shell is PowerShell 7, so the installer inherits 7's module path: the case run 39535290300 failed on.
           if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the installer registered no task (hook: lines above)' }

@@ -77,9 +77,12 @@ run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPo
 // 276 (the Windows desktop 2026-10-17, GitHub's Windows runner 2026-10-20), and D:\p9-cache still gave 263. A 2-letter cache
 // root on the same drive plus 40-character pnpm package folders (Windows default 60) leave about 20 to spare; a cache folder
 // you set yourself wins. --publish never: on a CI machine electron-builder otherwise uploads by itself.
+// arm64: 7za packs the 45 ARM64 .exe and .dll files with its ARM64 filter (method 0A); the installer exited 0 with no
+// node.exe on disk (job 119734051928), the NSIS 7z plugin skipping it. BCJ2 is the filter x64 installs extract.
 const cacheDir = process.env.npm_config_cache_dir || (process.platform === 'win32' ? path.join(path.parse(root).root, 'p9') : undefined);
 run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', `--${arch}`, '--publish', 'never'],
-  { env: { ...process.env, ...(cacheDir ? { npm_config_cache_dir: cacheDir, npm_config_virtual_store_dir_max_length: '40' } : {}) } });
+  { env: { ...process.env, ...(cacheDir ? { npm_config_cache_dir: cacheDir, npm_config_virtual_store_dir_max_length: '40' } : {}),
+    ...(arch === 'arm64' ? { ELECTRON_BUILDER_7Z_FILTER: 'BCJ2' } : {}) } });
 // v1 installers are unsigned (README): SHA256SUMS beside them is how a download is checked.
 const out = path.join(root, 'dist', 'windows');
 const installers = (await readdir(out)).filter((name) => name.endsWith(`-${arch}.exe`)).sort();

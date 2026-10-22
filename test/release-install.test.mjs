@@ -90,6 +90,8 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.doesNotMatch(install.split('\n').find((line) => line.includes('nsExec')), /-Workspace/, 'the installer must not reset the workspace');
   // arm64 job 119719813897: with no -Node the hook took the runner's node from PATH; Anri's laptop has none.
   assert.match(install.split('\n').find((line) => line.includes('nsExec')), /install-windows\.ps1" -Node "\$INSTDIR\\resources\\daemon\\node\.exe"/, 'an installed build runs its own node.exe');
+  // arm64 job 119734051928: 7za's ARM64 filter left node.exe out of the install.
+  assert.match(readFileSync(path.join(root, 'scripts', 'package-windows.mjs'), 'utf8'), /arch === 'arm64' \? \{ ELECTRON_BUILDER_7Z_FILTER: 'BCJ2' \}/, 'arm64 installers use a filter NSIS extracts');
   assert.match(uninstall, /\$\{ifNot\} \$\{isUpdated\}[^]*Unregister-ScheduledTask[^]*\$\{endIf\}/, 'an update must not unregister the task');
   assert.doesNotMatch(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Unregister-ScheduledTask/);
   // Stop-ScheduledTask ends only conhost.exe; the daemon outlived it (GitHub run 39540753837), so the uninstaller ends its node.exe.
