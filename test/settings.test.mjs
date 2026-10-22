@@ -2,7 +2,7 @@
 // file alone) plus each setting surviving an app restart; the agent lock goes through the real daemon.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { deflateSync, crc32 } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
@@ -694,11 +694,11 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
   console.log(`PASS look picker: 25 cards in their own colours (4 matched the page), ${fonts.length} fonts, 6 effects, AMOLED, Roll again`);
 });
 
-test('First-run welcome: a Set up card while settings or sign-in are missing; /setup says only booleans (threat model row 17)',{ timeout: 120000 }, async (t) => {
-  const instance = await daemon(t);
+test('Setup wizard UI: every screen in order, sign-in through the fake CLI, starter files, skip into the Notification Center until done (threat model rows 17, 31)', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-welcome-')), profile = path.join(home, 'profile');
   const opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
-  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" > ' + opened + '\n');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" >> ' + opened + '\n');
   await chmod(browser, 0o755);
   const env = { ...process.env, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE;
   const launch = async () => {
@@ -709,61 +709,146 @@ test('First-run welcome: a Set up card while settings or sign-in are missing; /s
     await page.locator('#rChat').waitFor();
     return { app, page };
   };
-  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  const until = async (check, what) => {
+    for (let i = 0; i < 100; i++) { const value = await check(); if (value) return value; await new Promise((r) => setTimeout(r, 100)); }
+    throw new Error('timed out: ' + what);
+  };
+  const ev = process.env.P9_EVIDENCE, shot = async (name) => { if (ev) { await page.waitForTimeout(600); await page.screenshot({ path: path.join(ev, name) }); } };
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
   assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'registryFile', 'settings', 'settingsError', 'settingsFile', 'settingsInvalid',
     'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
-  assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.settingsFile], [false, false, false, false, settingsFile]);
+  assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
+  // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.
+  const total = s.tmux === null ? 6 : 7, base = s.tmux === false ? 1 : 2, settingsFile = s.settingsFile;
 
   let { app, page } = await launch();
-  const card = page.locator('#cards [data-key="welcome"]');
-  await card.waitFor({ timeout: 10000 });
-  assert.match(await card.innerText(), /Set up Event Horizon[\s\S]*Mission paths · agent sign-in/);
-  if (process.env.P9_EVIDENCE) { await page.waitForTimeout(600); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'setup-card.png') }); }
-  await card.locator('.open').click();
-  await page.locator('#welDlg[open]').waitFor();
-  const body = await page.locator('#welBody').innerText();
-  for (const text of ['Not found', 'Claude not signed in', 'Codex not signed in', 'Skipper is your System pet']) assert.ok(body.includes(text), text);
-  // Issue #4 item 4, option C: the welcome points at petdex.dev, opened only through the fixed-address opener.
-  await page.click('#welPetdex');
-  let url = '';
-  for (let i = 0; i < 50 && url.trim() !== PETDEX_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== PETDEX_URL) await new Promise((r) => setTimeout(r, 100)); }
-  assert.equal(url.trim(), PETDEX_URL);
-  assert.equal(await page.locator('#welFile').textContent(), settingsFile);
-  const prompt = await page.locator('#welPrompt').inputValue();
-  assert.ok(prompt.includes(settingsFile) && prompt.includes('"primary"') && prompt.includes('show me the file before you save it'), prompt);
-  await page.keyboard.press('Escape');
-  if (process.env.P9_EVIDENCE) { await card.locator('.open').click(); await page.locator('#welDlg[open]').waitFor(); await page.waitForTimeout(600); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'welcome-missing.png') }); await page.keyboard.press('Escape'); }
+  const card = () => page.locator('#cards [data-key="welcome"]'), body = () => page.locator('#welBody').innerText();
+  const at = (n, title) => page.waitForFunction(([n, title, total]) => document.querySelector('#welDlg').open
+    && document.querySelector('#welStep').textContent === 'Step ' + n + ' of ' + total && document.querySelector('#welT').textContent === title, [n, title, total]);
+  const next = () => page.click('#welFoot [data-act="next"]');
+  await card().waitFor({ timeout: 10000 });
+  assert.match(await card().innerText(), new RegExp('Set up · ' + base + ' of 4 done[\\s\\S]*agent sign-in · Mission Control files'));
+  await shot('setup-card.png');
+  // The card opens at the first step not done; Back walks to the start.
+  await card().locator('.open').click();
+  await at(3, 'Sign in to an agent');
+  assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits');
+  await page.click('[data-act="back"]'); await at(2, 'Your workspace');
+  assert.equal(await page.locator('#welWs').textContent(), s.workspace);
+  assert.match(await body(), /P9 can write here/);
+  await shot('wizard-1-workspace.png');
+  await page.click('[data-act="back"]'); await at(1, 'Welcome to Event Horizon');
+  await shot('wizard-0-welcome.png');
+  await next(); await at(2, 'Your workspace'); await next(); await at(3, 'Sign in to an agent');
 
-  // Sign-in and a settings file written after start: present, never read, and the settings wait for the next daemon start.
+  // Sign-in: the fake CLI prints a claude.com URL and a paste prompt. The page learns only that a URL exists.
+  await page.click('[data-act="start:claude"]');
+  await page.locator('[data-act="open:claude"]').waitFor({ timeout: 10000 });
+  await page.fill('#welCode', 'abc 123');
+  await page.waitForTimeout(2500);
+  assert.equal(await page.locator('#welCode').inputValue(), 'abc 123', 'a 2 s refresh keeps what is typed');
+  await shot('wizard-2-signing-in.png');
+  await page.click('[data-act="code:claude"]');
+  assert.equal(await until(() => readFile(path.join(instance.workspace, 'fake-login-code'), 'utf8').catch(() => ''), 'the code'), '"abc 123"\n');
+  await page.waitForFunction(() => document.querySelector('#welCode')?.value === '', null, { timeout: 5000 }); // sent: the box empties
+  await page.click('[data-act="open:claude"]');
+  assert.equal((await until(() => readFile(opened, 'utf8').catch(() => ''), 'the open')).trim(), 'https://claude.com/cai/oauth/authorize?fake=1');
+  assert.ok(!(await page.content()).includes('oauth'), 'the page never holds the URL');
+  // "done" ends the fake CLI without a credentials file: the cause, and Retry in place of Sign in.
+  await page.fill('#welCode', 'done'); await page.click('[data-act="code:claude"]');
+  await page.locator('[data-act="start:claude"]', { hasText: 'Retry' }).waitFor({ timeout: 10000 });
+  assert.match(await body(), /Claude sign-in ended without signing in/);
+  await shot('wizard-2-ended.png');
+  // The credentials file appears: shown within a refresh, never read.
   await mkdir(path.dirname(credentials), { recursive: true }); await writeFile(credentials, JSON.stringify({ token: marker }));
-  await mkdir(path.dirname(settingsFile), { recursive: true }); await writeFile(settingsFile, JSON.stringify({ primary: 'AGENTS.md', registry: 'r.json', waiting: 'w' }));
-  const raw = await http({ socketPath: path.join(instance.state, 'daemon.sock'), route: '/setup', method: 'GET', headers: authenticated(instance.credentials) });
-  assert.ok(!raw.text.includes(marker) && !raw.text.includes('token'), raw.text);
-  s = JSON.parse(raw.text);
-  assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex], [false, true, true, false]);
-  await card.locator('.open').click();
-  await page.locator('#welDlg[open]').waitFor();
-  const after = await page.locator('#welBody').innerText();
-  for (const text of ['Found: restart P9 to load it', 'Claude signed in', 'Codex not signed in']) assert.ok(after.includes(text), text);
-  if (process.env.P9_EVIDENCE) { await page.waitForTimeout(600); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'welcome-found.png') }); }
+  await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 5000 });
+  assert.ok(!(await page.content()).includes(marker));
+  assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
+  await shot('wizard-2-agents.png');
+
+  await next(); await at(4, 'Mission Control');
+  assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
+  assert.equal(await page.locator('#welFile').textContent(), settingsFile);
+  await shot('wizard-3-mission.png');
+  await page.click('[data-act="starter"]');
+  await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 });
+  await page.locator('#welBody .ok', { hasText: '✓ There' }).waitFor({ timeout: 5000 });
+  assert.match(await body(), /✓ Loaded/);
+  s = await setup();
+  assert.deepEqual([s.settings, s.agentsFile, s.registryFile], [true, true, true]);
+  await shot('wizard-3-mission-done.png');
+  await next();
+  if (s.tmux !== null) {
+    await at(5, 'Terminal');
+    assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
+    await shot('wizard-4-terminal.png');
+    await next();
+  }
+  await at(total - 1, 'You');
+  await page.fill('#welName', 'Ada');
+  await page.waitForTimeout(2500);
+  assert.equal(await page.locator('#welName').inputValue(), 'Ada');
+  await page.locator('#welName').press('Tab');
+  await until(() => page.evaluate(() => window.p9.getSettings().then((x) => x.name === 'Ada')), 'the name saved');
+  // Issue #4 item 4, option C: petdex.dev, opened only through the fixed-address opener.
+  await page.click('#welPetdex');
+  await until(async () => (await readFile(opened, 'utf8')).includes(PETDEX_URL), 'petdex opened');
+  await shot('wizard-5-you.png');
+  await next(); await at(total, s.tmux === false ? 'Almost there' : 'You are set');
+  await shot('wizard-6-done.png');
+  if (s.tmux !== false) await card().waitFor({ state: 'detached', timeout: 5000 }); // every check passes: no card anywhere
+  await page.click('[data-act="tour"]');
+  await page.locator('#walk').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#welDlg').evaluate((d) => d.open), false);
   await page.keyboard.press('Escape');
 
-  // The x skips for good: gone now and after a restart; Settings opens the welcome again; "Mission off" hides Mission.
-  await card.locator('.x').click();
-  assert.equal(await card.count(), 0);
+  // Signed out again. The x skips: the card leaves the stack for the Notification Center, and stays there after a restart.
+  await rm(credentials);
   await app.close();
   ({ app, page } = await launch());
+  await card().waitFor({ timeout: 10000 });
+  assert.match(await card().innerText(), new RegExp('Set up · ' + (base + 1) + ' of 4 done'));
+  await card().locator('.x').click();
+  assert.equal(await card().count(), 0);
+  const centerRow = () => page.locator('#mdlBody [data-i]', { hasText: 'Set up ·' });
+  await page.keyboard.press('Control+Shift+N');
+  await centerRow().waitFor();
+  await shot('setup-in-center.png');
+  await centerRow().click();
+  await at(3, 'Sign in to an agent');
+  await page.keyboard.press('Escape');
+  await app.close();
+  ({ app, page } = await launch());
+  await page.keyboard.press('Control+Shift+N');
+  await centerRow().waitFor({ timeout: 10000 });
+  assert.equal(await card().count(), 0, 'skipped: not on the stack after a restart');
+  await page.click('#mdlX');
+  // Settings → Setup opens it at the same step; signed in meanwhile, the notification goes.
   await page.click('#setBtn');
-  if (process.env.P9_EVIDENCE) { await page.locator('#setWel').waitFor(); await page.waitForTimeout(600); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'settings-final.png') }); }
+  assert.equal(await page.locator('#setWel').innerText(), 'Setup');
+  await shot('settings-setup.png');
   await page.click('#setWel');
-  await page.locator('#welDlg[open]').waitFor();
-  assert.equal(await page.locator('#cards [data-key="welcome"]').count(), 0, 'skipped card stays gone after a restart');
-  await page.click('#welMission');
+  await at(3, 'Sign in to an agent');
+  await writeFile(credentials, JSON.stringify({ token: marker }));
+  await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 5000 });
+  await page.keyboard.press('Escape');
+  if (s.tmux !== false) {
+    await page.keyboard.press('Control+Shift+N');
+    await page.locator('#mdlBody').waitFor();
+    await page.waitForTimeout(500);
+    assert.equal(await centerRow().count(), 0, 'done: gone from the Notification Center');
+    await page.click('#mdlX');
+  }
+  // "Turn Mission off for now" stays on the Mission Control screen.
+  await page.click('#setBtn'); await page.click('#setWel');
+  await at(s.tmux === false ? 5 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
+  if (s.tmux === false) { await page.click('[data-act="back"]'); } else { await next(); await next(); await next(); }
+  await at(4, 'Mission Control');
+  await page.click('[data-act="mission-off"]');
   await page.waitForFunction(() => document.querySelector('[data-focus-btn="mission"]').hidden && !document.querySelector('#welDlg').open);
-  console.log('PASS welcome: card while missing, /setup booleans only (no credential bytes), skip survives a restart, Settings reopens, Mission off');
+  console.log('PASS setup wizard UI: card count, resume at the first step not done, sign-in code and open, ended shows Retry, starter files, name and petdex, tour, skip to the Notification Center across a restart, gone when done, Mission off');
 });
 
 test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-made one gets a card, Skip clears it, running chats are robot heads', { timeout: 120000 }, async (t) => {
@@ -1332,7 +1417,13 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');
   await page.waitForFunction(() => !document.querySelector('#land').open);
-  // First login: the walkthrough starts in Chat as the landing closes and ends in the focus picked (GitHub issue #4 item 2).
+  // First login: the setup wizard opens itself while a check fails (no settings here), before the walkthrough (v0.1.3 C1).
+  await page.locator('#welDlg[open]').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#welStep').textContent(), 'Step 1 of ' + ((await call(instance, '/setup')).tmux === null ? 6 : 7));
+  assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough waits for the wizard');
+  await shot('wizard-auto.png');
+  await page.click('#welFoot [data-act="skip"]');
+  // Then the walkthrough starts in Chat and ends in the focus picked (GitHub issue #4 item 2).
   await page.locator('#walk').waitFor({ timeout: 5000 });
   assert.match(await page.locator('#walk .eyebrow').innerText(), /^1 of \d+$/i); // innerText applies the eyebrow's uppercase
   assert.equal((await state(page)).focus, 'chat');

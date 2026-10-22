@@ -326,6 +326,7 @@ export async function createDesktop({ state, open } = {}) {
     stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
     lock: () => ['GET', '/agent-lock'],
     setup: () => ['GET', '/setup'],
+    starter: body => !Object.keys(body).length && ['POST', '/setup/starter', body], // the wizard's "Create my starter files"
     setLock: body => ['POST', '/agent-lock', body],
     stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
   };

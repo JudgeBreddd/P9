@@ -33,8 +33,8 @@ const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@ag
 const refused = (status, error) => ({ status, error });
 // ACP's authRequired (code -32000) means the agent's own CLI on this computer is not signed in (GitHub issue #4: the
 // window showed only "Authentication required"). Say how to sign in; any other error passes through, cut to 500 chars.
-const SIGN_IN = { claude: 'Claude Code is not signed in on this computer. Open a terminal, run claude and log in, then start a new chat.',
-  codex: 'Codex is not signed in on this computer. Open a terminal, run codex login, then start a new chat.' };
+const SIGN_IN = { claude: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
+  codex: 'Codex is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal and run codex login. Then start a new chat.' };
 const agentError = (error, provider) => (error?.code === -32000 ? SIGN_IN[provider] : String(error?.message ?? error).slice(0, 500));
 
 // The form P9 can show for an ACP elicitation schema (council 2026-10-16-013039-tier2): flat fields of string, number,
