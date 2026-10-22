@@ -3,7 +3,7 @@ import markup from './shell.html?raw';
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering' }>; usage(): Promise<unknown> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string }>; usage(): Promise<unknown> } }
 }
 
 export default function Shell() {
@@ -13,10 +13,14 @@ export default function Shell() {
     // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
     const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
       .catch(() => ({ status: 'unavailable' as const }))
-      .then((result: { status: string; reason?: string }) => {
+      .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string }) => {
         const label = document.getElementById('daemonStatus');
         if (!active) return;
-        if (label) {
+        // The saved folder was not there when the daemon started (an unplugged drive, an offline share): it runs on the default.
+        if (label && result.status === 'ok' && result.savedWorkspace) {
+          label.textContent = 'Workspace folder not found: ' + result.savedWorkspace + '. Using ' + result.workspace + ' for now';
+          label.title = 'P9 goes back to ' + result.savedWorkspace + ' the next time its background service starts with that folder there (plug the drive in, then restart P9 or sign in again).';
+        } else if (label) {
           label.textContent = result.status === 'ok' ? 'Daemon connected' : result.reason === 'task-missing' || result.reason === 'task-stale'
             ? 'Daemon not installed: reinstall P9' : result.reason ? 'Daemon not answering: starting it again' : 'Daemon unavailable';
           label.title = result.status === 'ok' ? 'Status connected.' : result.reason === 'task-missing'

@@ -146,9 +146,11 @@ export async function createDesktop({ state, open } = {}) {
   // installer's script again, once per launch (no retry loop). If that fails too, reason says reinstall.
   // Fixed argv, no shell, the user's own task. At most every 30 s, since each look runs PowerShell.
   // ponytail: a daemon that is running but hung stays hung (/Run on a running task does nothing); the page says not-answering.
-  let reason = 'not-answering', woke = 0, repaired = false;
+  // changing: p9:workspace-change is between Stop All and the new task's start; a /Run then restarted the old task on the
+  // old folder and the change rolled back (Fable review finding 3).
+  let reason = 'not-answering', woke = 0, repaired = false, changing = false;
   const wake = async () => {
-    if (Date.now() - woke < 30000) return;
+    if (changing || Date.now() - woke < 30000) return;
     woke = Date.now();
     const task = await windowsTask();
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
@@ -233,7 +235,11 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9:get-status', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
-    try { if (state && (await health(state)).status === 'ok') return { status: 'ok' }; } catch {}
+    // savedWorkspace: the saved folder was not there at the daemon's start, so it runs on the default (apps/server/main.mjs).
+    try {
+      const h = state && await health(state);
+      if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
+    } catch {}
     if (process.platform !== 'win32' || !state) return { status: 'unavailable' };
     await wake();
     return { status: 'unavailable', reason };
@@ -617,12 +623,15 @@ export async function createDesktop({ state, open } = {}) {
       // The script returns once the task is started; the new daemon is up when /health names the folder.
       const on = async (want) => { for (const end = Date.now() + 60_000; Date.now() < end; await new Promise(r => setTimeout(r, 1000))) {
         if ((await health(state).catch(() => null))?.workspace?.toLowerCase() === want.toLowerCase()) return true; } return false; };
-      const ran = await repairWindowsTask(process.resourcesPath, folder);
-      if (ran && await on(folder)) return { workspace: folder };
-      await repairWindowsTask(process.resourcesPath, old);
-      await on(old);
-      return { error: 'workspace-not-started', detail: ran ? 'daemon-not-answering' : 'install-windows.ps1 failed (service-install.log)',
-        workspace: (await health(state).catch(() => null))?.workspace ?? null };
+      changing = true;
+      try {
+        const ran = await repairWindowsTask(process.resourcesPath, folder);
+        if (ran && await on(folder)) return { workspace: folder };
+        await repairWindowsTask(process.resourcesPath, old);
+        await on(old);
+        return { error: 'workspace-not-started', detail: ran ? 'daemon-not-answering' : 'install-windows.ps1 failed (service-install.log)',
+          workspace: (await health(state).catch(() => null))?.workspace ?? null };
+      } finally { changing = false; }
     }
     // The unit as install-service.mjs quoted it: ExecStart's node and server, and Environment's PATH.
     const unit = await readFile(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service'), 'utf8').catch(() => '');
