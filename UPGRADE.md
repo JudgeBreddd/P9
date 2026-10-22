@@ -1,5 +1,15 @@
 # Upgrading P9
 
+## To 0.1.3 (beta)
+
+Windows gets a native ARM64 installer next to the x64 one, and the installer now works for a standard (non-admin)
+user. An installed P9 runs only the Node it ships, never one on your PATH.
+
+- **Linux:** update as `README.md` § Update says, then reopen the window (the desktop main process changed). A
+  service unit from before 0.1.0 now finds `tmux` in `~/.local/bin` without a reinstall.
+- **Windows:** run the 0.1.3 installer over the old one: `windows-arm64` on an ARM laptop, `windows-x64` otherwise.
+  Your workspace and the `P9 Foundation` task are kept.
+
 ## To 0.1.2 (beta)
 
 Settings has an Updates row: it shows the version you have, and **Check for updates** opens P9's newest GitHub
