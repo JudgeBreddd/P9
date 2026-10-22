@@ -112,7 +112,7 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   // Issue #6 B7: a task with no --workspace gave IndexOf -1, so argv[0] (node.exe) became the workspace.
   assert.doesNotMatch(ps1, /IndexOf\([^)]*'--workspace'\) \+ 1/);
-  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}\s*(\} catch \{[^\n]*\}\s*)?\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
+  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}([^]*?\} catch \{[^\n]*\})?\s*\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
   // Issue #6 B6 and B4: timestamped lines and the failing line in service-install.log; the task's daemon writes daemon.log.
   assert.match(ps1, /^trap \{ Say \('failed at line '/m);
   assert.match(ps1, /'-Mode', 'Daemon', '-Log', \('"' \+ \$log \+ '"'\)/);
@@ -132,6 +132,10 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   assert.match(stop, /Stop-ScheduledTask -TaskName 'P9 Foundation'[^]*\$_\.ExecutablePath -eq \$bundled[^]*Stop-Process[^]*Wait-Process/, 'the script ends the bundled daemon before it registers');
   // Finding 2: a payload it cannot read threw, so every reinstall and the app's repair failed.
   assert.match(ps1, /try \{\s*\$old = [^\n]*FromBase64String[^]*\} catch \{[^\n]*\$Workspace = \$null \}\s*\}\s*if \(-not \$Workspace\)/, 'an unreadable payload falls to the default folder');
+  // Tyler 2026-10-22, Fable review finding 1: a saved folder not there now (an unplugged drive) failed every reinstall with
+  // workspace-not-found; replacing it with the default lost it for good. The task keeps it, logged; the daemon falls back.
+  assert.match(ps1, /\$Workspace = \$old\.argv\[\$i \+ 1\][^]*if \(\$Workspace -and -not \(Test-Path -LiteralPath \$Workspace -PathType Container\)\) \{\s*Say \('saved workspace ' \+ \$Workspace \+ ' is not there now; the task keeps it[^\n]*\s*\$away = \$true\s*\}\s*\} catch/, 'a missing saved folder stays in the task and is logged');
+  assert.match(ps1, /if \(-not \$away -and -not \(Test-Path -LiteralPath \$Workspace -PathType Container\)\) \{ throw 'workspace-not-found' \}/, 'only an explicit -Workspace must exist');
   // Finding 3: any electron-builder installer's folder matched app-64.7z.
   assert.doesNotMatch(ps1, /'app-64\.7z'/);
   assert.match(ps1, /ns\*\.tmp[^]*Test-Path -LiteralPath \(Join-Path \$_\.FullName 'p9-event-horizon\.marker'\)[^]*Remove-Item/);
@@ -140,6 +144,12 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   assert.match(teh, /export function repairWindowsTask\(resources, workspace\)[^]*\.\.\.\(workspace \? \['-Workspace', workspace\] : \[\]\)/);
   const change = main.slice(main.indexOf("ipcMain.handle('p9:workspace-change'"), main.indexOf("ipcMain.handle('p9:pet-remove'"));
   assert.match(change, /if \(win\) \{[^]*\/stop-all[^]*repairWindowsTask\(process\.resourcesPath, folder\)[^]*repairWindowsTask\(process\.resourcesPath, old\)[^]*workspace-not-started/, 'Stop All, then the script, else the old folder again');
+  // Fable review finding 3: wake()'s schtasks /Run between Stop All and the new task restarted the old task on the old folder.
+  assert.match(main, /const wake = async \(\) => \{\s*if \(changing \|\| Date\.now\(\) - woke < 30000\) return;/, 'wake() does nothing during a change');
+  assert.match(change, /changing = true;\s*try \{\s*const ran = await repairWindowsTask\(process\.resourcesPath, folder\)[^]*\} finally \{ changing = false; \}/, 'the change holds wake() off until it returns');
+  // Fable review finding 1: the page names a saved folder that was not there at the daemon's start.
+  assert.match(main, /h\.savedWorkspace \? \{ savedWorkspace: h\.savedWorkspace, workspace: h\.workspace \}/);
+  assert.match(readFileSync(path.join(root, 'apps', 'web', 'src', 'Shell.tsx'), 'utf8'), /result\.savedWorkspace\) \{\s*label\.textContent = 'Workspace folder not found: ' \+ result\.savedWorkspace/);
   assert.match(change, /win \? path\.dirname\(stateReal\)/, "on Windows %LOCALAPPDATA%\\P9, the state folder's parent, is refused");
   console.log('PASS v0.1.4 (text): findings 1-3 and the Windows workspace change are wired');
 });

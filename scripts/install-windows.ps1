@@ -20,6 +20,7 @@ function Full([string]$Value, [string]$Name) {
 
 # No -Workspace (the installer, and every update): keep the installed task's workspace, else a new %USERPROFILE%\P9
 # (release r2 R2-6). Re-registering on update also gives an older task this version's settings.
+$away = $false
 if (-not $Workspace) {
   $installed = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
   if ($installed -and $installed.Actions[0].Arguments -match '-Payload (\S+)') {
@@ -30,6 +31,13 @@ if (-not $Workspace) {
       # An older task with no --workspace gave IndexOf -1, so argv[0], node.exe, became the workspace (issue #6 B7).
       $i = [Array]::IndexOf([string[]]$old.argv, '--workspace')
       if ($i -ge 0) { $Workspace = $old.argv[$i + 1] }
+      # A saved folder that is not there now (an unplugged drive, a locked or offline share) failed every reinstall with
+      # workspace-not-found. The task keeps it; the daemon runs on the default folder until it is back and /health says so
+      # (Tyler 2026-10-22, Fable review finding 1). An explicit -Workspace that does not exist still fails below.
+      if ($Workspace -and -not (Test-Path -LiteralPath $Workspace -PathType Container)) {
+        Say ('saved workspace ' + $Workspace + ' is not there now; the task keeps it and the daemon uses the default ' + (Join-Path $env:USERPROFILE 'P9') + ' until it is back')
+        $away = $true
+      }
     } catch { Say ('task payload unreadable, so the default workspace: ' + $_); $Workspace = $null }
   }
   if (-not $Workspace) {
@@ -40,7 +48,7 @@ if (-not $Workspace) {
 Say ('workspace ' + $Workspace)
 $Workspace = Full $Workspace 'workspace'
 $Settings = Full $Settings 'settings'
-if (-not (Test-Path -LiteralPath $Workspace -PathType Container)) { throw 'workspace-not-found' }
+if (-not $away -and -not (Test-Path -LiteralPath $Workspace -PathType Container)) { throw 'workspace-not-found' }
 # No settings file yet is fine: the daemon starts and Mission Control says settings-missing (release r1 R1-2).
 
 $bundledNode = Join-Path $PSScriptRoot '..\node.exe'

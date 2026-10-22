@@ -57,6 +57,20 @@
       "target": "src/lib/gods.css",
       "commit": "7bc53c2e10ba10be29f70a3bf1458d47e252ae9e",
       "sha256": "9089ecccd28ab4c32e1a382b5f446c9abaf0d4f2d4304176b4d6d8d04c785985"
+    },
+    {
+      "registry": "aphrodite",
+      "source": "_engine/registry/aphrodite/aphrodite.ts",
+      "target": "src/lib/aphrodite.ts",
+      "commit": "227bf73acaa38f25753e71d9ca0df91924b7da5c",
+      "sha256": "9ac3f2994bd01a25093d036b2ce66a7d88d184a69b21dffed5014e342e9c741b"
+    },
+    {
+      "registry": "aphrodite",
+      "source": "_engine/registry/aphrodite/aphrodite.css",
+      "target": "src/lib/aphrodite.css",
+      "commit": "227bf73acaa38f25753e71d9ca0df91924b7da5c",
+      "sha256": "faf53b2e0e714cd2f4c4d2a034b6900c3aadc7bde7f701f1e592b5fd344ec5d7"
     }
   ]
 }

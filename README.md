@@ -398,7 +398,7 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Status and known gaps
 
-**Version 0.1.3, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.4, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
