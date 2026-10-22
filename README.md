@@ -404,7 +404,7 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
   daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
   branch other than `main`; the Windows installer is built, installed, restarted and uninstalled on GitHub's
-  Windows runner (a runner session, not a real desktop).
+  Windows runner when asked (Actions, Windows installer, Run workflow; a runner session, not a real desktop).
 - **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
   that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`).
 - **Not supported:** macOS.
