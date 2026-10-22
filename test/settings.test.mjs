@@ -713,7 +713,8 @@ test('First-run welcome: a Set up card while settings or sign-in are missing; /s
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
-  assert.deepEqual(Object.keys(s).sort(), ['claude', 'codex', 'settings', 'settingsFile', 'settingsPresent', 'workspace']);
+  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'registryFile', 'settings', 'settingsError', 'settingsFile', 'settingsInvalid',
+    'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.settingsFile], [false, false, false, false, settingsFile]);
 
   let { app, page } = await launch();
