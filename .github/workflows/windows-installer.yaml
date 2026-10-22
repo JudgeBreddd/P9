@@ -1,9 +1,9 @@
-# Builds the Windows installer on GitHub's Windows machine.
+# Builds the Windows installers, x64 and ARM64, each on a GitHub Windows machine of that architecture (B9).
 # Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag: it builds that
-# tag and attaches the .exe and SHA256SUMS to the release (which must already exist). Tags before v0.1.2 lack the
+# tag and attaches both .exe files and SHA256SUMS-x64 and SHA256SUMS-arm64 to the release (which must already exist). Tags before v0.1.2 lack the
 # packaging fix and fail on this machine (the NSIS 260-character path).
 # A push to a branch other than main that changes the packaging builds the installer too, as a check only: nothing is
-# attached anywhere. Windows minutes count double against the private repo's monthly allowance.
+# attached anywhere. Windows minutes count double against the private repo's monthly allowance, and the ARM64 runner's too.
 name: Windows installer
 
 on:
@@ -20,6 +20,11 @@ on:
       - scripts/install-windows.ps1
       - scripts/installer.nsh
       - scripts/windows-host.ps1
+      - scripts/teh.mjs
+      - apps/server/main.mjs
+      - apps/server/process-tree.mjs
+      - apps/server/windows.mjs
+      - test/windows-process-tree.test.mjs
       - package.json
       - pnpm-lock.yaml
       - .github/workflows/windows-installer.yaml
@@ -29,10 +34,26 @@ permissions:
 
 jobs:
   installer:
-    runs-on: windows-latest
-    timeout-minutes: 60
+    strategy:
+      # One architecture failing still finishes the other's installer.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: windows-latest
+          - arch: arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    # One run per branch and architecture at a time; a newer push waits and replaces any run still waiting. Not
+    # cancel-in-progress: four chunks pushing release/v0.1.3 cancelled the 35-minute job before it ever finished
+    # (2026-10-22, run 39724311084).
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.arch }}
+      cancel-in-progress: false
+    timeout-minutes: 90
     env:
       TAG: ${{ inputs.tag }}
+      P9_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -50,14 +71,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat dist/windows/SHA256SUMS
-          gh release upload "$TAG" dist/windows/*.exe dist/windows/SHA256SUMS --clobber
+          cat dist/windows/SHA256SUMS-$P9_ARCH
+          gh release upload "$TAG" dist/windows/*-$P9_ARCH.exe dist/windows/SHA256SUMS-$P9_ARCH --clobber
       - name: Show the check build
         if: github.event_name == 'push'
         shell: bash
         run: |
-          cat dist/windows/SHA256SUMS
+          cat dist/windows/SHA256SUMS-$P9_ARCH
           ls -l dist/windows/*.exe
+      # The check build, to download from the run's page and install by hand (a tester's laptop).
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: windows-installer-${{ matrix.arch }}
+          path: |
+            dist/windows/*.exe
+            dist/windows/SHA256SUMS-${{ matrix.arch }}
+          retention-days: 14
+      # The Windows-only tests on a real Windows machine of each architecture: the host (.cmd through cmd.exe, a new
+      # console, the folder ACL check, the prebuilt DLL) and Job Object stop. After the upload, so a failure keeps the installer.
+      - name: Windows host and process-tree tests
+        if: github.event_name == 'push'
+        run: node --test test/windows-process-tree.test.mjs
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.
@@ -89,6 +124,11 @@ jobs:
           # The installer's own run of install-windows.ps1: exit code and output (installer.nsh writes it).
           $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
           Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | ForEach-Object { 'hook: ' + $_ }
+          # arm64 job 119719813897: the hook saw no resources\daemon\node.exe though the installer holds it. On disk now?
+          Get-ChildItem (Join-Path $app 'resources\daemon') -Force | ForEach-Object { 'daemon dir: ' + $_.Name + ' ' + $_.Length + ' ' + $_.LastWriteTimeUtc.ToString('o') }
+          Get-MpThreatDetection -ErrorAction SilentlyContinue | ForEach-Object { 'defender: ' + $_.InitialDetectionTime + ' ' + ($_.Resources -join ', ') }
+          # The other ARM64-filtered files: without the app's own exe there is nothing for a tester to start.
+          foreach ($f in 'P9 Event Horizon.exe', 'resources\daemon\node.exe') { if (-not (Test-Path -LiteralPath (Join-Path $app $f))) { throw "the installer left out $f" } }
           $script = Join-Path $app 'resources\daemon\scripts\install-windows.ps1'
           # This step's shell is PowerShell 7, so the installer inherits 7's module path: the case run 39535290300 failed on.
           if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the installer registered no task (hook: lines above)' }
@@ -106,6 +146,8 @@ jobs:
           Write-Output 'daemon up after install'
           Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | ForEach-Object { 'node: ' + $_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length)) }
           function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' }) }
+          # arm64 job 119704715150: the task ran the runner's node from PATH, so nothing here matched and /Run was refused.
+          if ((Get-Daemon).Count -lt 1) { throw 'the daemon is not the bundled node.exe (node: and hook: lines above)' }
           # A daemon that died on its own (issue #4 item 7) is the case the app restarts with schtasks /Run (main.mjs).
           $before = Get-Date
           Get-Daemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
@@ -115,6 +157,22 @@ jobs:
           schtasks.exe /Run /TN 'P9 Foundation'
           Wait-Daemon $before
           Write-Output 'daemon up again after it died and schtasks /Run (what the app does)'
+          # No task at all (deleted, or the installer's own run failed): the app runs the installer's script again, once per
+          # launch (main.mjs wake). This runs that same function, teh.mjs repairWindowsTask, on this install's resources folder.
+          Get-Daemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+          $end = (Get-Date).AddSeconds(30)
+          while ((Get-ScheduledTask -TaskName 'P9 Foundation').State -eq 'Running' -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          Unregister-ScheduledTask -TaskName 'P9 Foundation' -Confirm:$false
+          $before = Get-Date
+          # teh.mjs as argv[1] would start its own command line (run 39798563746), so the resources folder comes first.
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { repairWindowsTask } = await import(pathToFileURL(process.argv[2]).href); process.exit(await repairWindowsTask(process.argv[1]) ? 0 : 1)" (Join-Path $app 'resources') (Resolve-Path scripts/teh.mjs).Path
+          $repair = $LASTEXITCODE
+          Get-Content (Join-Path $app 'service-install.log') | Select-Object -Last 15 | ForEach-Object { 'repair log: ' + $_ }
+          if ($repair -ne 0) { throw 'the app''s repair failed (repair log: lines above)' }
+          $t = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
+          if (-not $t -or $t.Actions[0].Execute -ne 'conhost.exe') { throw 'the repair did not register the headless task' }
+          Wait-Daemon $before
+          Write-Output 'daemon up again after the task was deleted and the app repaired it'
           # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
           # alone left the daemon running (run 39540753837), which an update over this version would hit too.
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName
@@ -128,3 +186,120 @@ jobs:
           if ($left.Count -gt 0) { throw 'the uninstaller left the daemon running' }
           if (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue) { throw 'the uninstaller left the task' }
           Write-Output 'uninstall: no daemon, no task'
+      # GitHub issue #6 B5: the runner is an admin, and a tester is not. A standard local user, p9user, installs over v0.1.1's
+      # task, runs v0.1.2's install-windows.ps1 over that install (B1's case, recorded, not required), installs this build
+      # again, then runs teh doctor. p9user's files are owner-only, so every check runs as p9user, through a Scheduled Task
+      # with its password (a batch logon); the scripts and their output go through C:\p9ci, which p9user may write.
+      - name: Install twice as a standard user
+        if: github.event_name == 'push'
+        shell: pwsh
+        timeout-minutes: 40
+        run: |
+          git fetch --no-tags --depth=1 origin refs/tags/v0.1.2:refs/tags/v0.1.2
+          $ci = 'C:\p9ci'
+          New-Item -ItemType Directory -Force -Path $ci | Out-Null
+          icacls.exe $ci /grant '*S-1-1-0:(OI)(CI)M' | Out-Null
+          Copy-Item (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName (Join-Path $ci 'setup.exe')
+          git show v0.1.2:scripts/install-windows.ps1 | Set-Content -LiteralPath (Join-Path $ci 'install-v012.ps1') -Encoding utf8
+          # 14 characters: net user asks a question nobody can answer for a longer one.
+          $password = 'P9!a' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+          net.exe user p9user $password /add | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'net user failed' }
+          Write-Output ('p9user groups: ' + ((net.exe user p9user | Select-String 'Group Memberships') -join ' '))
+          # A task with a password is a batch logon; Users may lack that right on Windows Server (belief), so grant it.
+          $sid = (New-Object Security.Principal.NTAccount 'p9user').Translate([Security.Principal.SecurityIdentifier]).Value
+          secedit.exe /export /cfg (Join-Path $ci 'rights.inf') /areas USER_RIGHTS | Out-Null
+          $inf = Get-Content (Join-Path $ci 'rights.inf')
+          $inf = if ($inf -match '^SeBatchLogonRight') { $inf -replace '^(SeBatchLogonRight\s*=.*)$', ('$1,*' + $sid) } else { $inf -replace '^\[Privilege Rights\]$', ('[Privilege Rights]' + [Environment]::NewLine + 'SeBatchLogonRight = *' + $sid) }
+          Set-Content (Join-Path $ci 'rights.inf') $inf -Encoding Unicode
+          secedit.exe /configure /db (Join-Path $ci 'rights.sdb') /cfg (Join-Path $ci 'rights.inf') /areas USER_RIGHTS | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'secedit failed' }
+          $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+          function Start-AsUser([string]$Task, [string]$Execute, [string]$Argument) {
+            $action = New-ScheduledTaskAction -Execute $Execute -Argument $Argument
+            Register-ScheduledTask -TaskName $Task -Action $action -User 'p9user' -Password $password -RunLevel Limited -Settings $settings -Force | Out-Null
+            Start-ScheduledTask -TaskName $Task
+          }
+          # Runs $Body as p9user and prints its output. Done means it ended without an error; a throw ends it as FAILED.
+          $wrapper = @'
+          $ErrorActionPreference = 'Stop'
+          try { & { @@BODY@@ } *>&1 | Out-File -LiteralPath '@@LOG@@' -Encoding utf8; 'P9CI_DONE' | Out-File -LiteralPath '@@LOG@@' -Append -Encoding utf8 }
+          catch { ('P9CI_FAILED: ' + $_ + ' ' + $_.InvocationInfo.PositionMessage) | Out-File -LiteralPath '@@LOG@@' -Append -Encoding utf8 }
+          '@
+          function As-User([string]$Name, [string]$Body) {
+            $file = Join-Path $ci ($Name + '.ps1'); $log = Join-Path $ci ($Name + '.log')
+            Set-Content -LiteralPath $file -Encoding utf8 -Value $wrapper.Replace('@@LOG@@', $log).Replace('@@BODY@@', $Body)
+            Start-AsUser ('p9ci-' + $Name) 'powershell.exe' ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $file + '"')
+            $end = (Get-Date).AddMinutes(15)
+            while ((Get-Date) -lt $end -and -not ((Test-Path $log) -and (Select-String -LiteralPath $log -Pattern '^P9CI_(DONE|FAILED)' -Quiet))) { Start-Sleep 5 }
+            Get-Content -LiteralPath $log -ErrorAction SilentlyContinue | ForEach-Object { $Name + ': ' + $_ }
+            if (-not (Select-String -LiteralPath $log -Pattern '^P9CI_DONE' -Quiet -ErrorAction SilentlyContinue)) {
+              Get-ScheduledTaskInfo -TaskName ('p9ci-' + $Name) | Format-List LastRunTime, LastTaskResult
+              throw ($Name + ' did not finish as p9user')
+            }
+          }
+          # a. v0.1.1's task: visible powershell.exe, and (B7) a payload with no --workspace.
+          As-User 'stale' @'
+          $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('{"argv":["C:\\p9old\\node.exe","C:\\p9old\\main.mjs"]}'))
+          $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -File C:\p9old\windows-host.ps1 -Mode Daemon -Payload ' + $payload)
+          $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          Register-ScheduledTask -TaskName 'P9 Foundation' -Action $action -Principal (New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited) -Force | Out-Null
+          'planted as ' + $me + ': ' + (Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0].Execute
+          '@
+          # b and d. This build, silent, as p9user: the task is this version's and the workspace the default (B1, B7).
+          $install = @'
+          $began = Get-Date
+          $setup = Start-Process -FilePath 'C:\p9ci\setup.exe' -ArgumentList '/S' -PassThru
+          $setup.WaitForExit()
+          'installer exit ' + $setup.ExitCode + ' after ' + [int]((Get-Date) - $began).TotalSeconds + ' s'
+          $hook = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\service-install.log'
+          Get-Content -LiteralPath $hook | ForEach-Object { 'hook: ' + $_ }
+          if (-not (Select-String -LiteralPath $hook -SimpleMatch 'P9_WINDOWS_TASK_INSTALLED' -Quiet)) { throw 'install-windows.ps1 did not finish' }
+          $a = (Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0]
+          'task: ' + $a.Execute + ' ' + $a.Arguments.Substring(0, 60)
+          if ($a.Execute -ne 'conhost.exe' -or -not $a.Arguments.StartsWith('--headless ')) { throw 'the task is not this version''s' }
+          if ($a.Arguments -notmatch '-Payload (\S+)') { throw 'no payload' }
+          $argv = @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1])) | ConvertFrom-Json).argv)
+          $workspace = $argv[[Array]::IndexOf([string[]]$argv, '--workspace') + 1]
+          'workspace: ' + $workspace
+          if ($workspace -ne (Join-Path $env:USERPROFILE 'P9')) { throw 'the workspace is not %USERPROFILE%\P9' }
+          Set-Content -LiteralPath 'C:\p9ci\task-arguments.txt' -Value $a.Arguments
+          Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue | ForEach-Object { 'temp: ' + $_.Name + ' ' + $_.LastWriteTime.ToString('o') + ' ' + ((Get-ChildItem -LiteralPath $_.FullName -Name) -join ',') }
+          '@
+          As-User 'install-1' $install
+          # c. The A side of B1: v0.1.2's script over that install. Recorded only: CI may not see what a tester's laptop did.
+          As-User 'v012' @'
+          $scripts = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\resources\daemon\scripts'
+          Copy-Item 'C:\p9ci\install-v012.ps1' (Join-Path $scripts 'install-v012.ps1')
+          $ErrorActionPreference = 'Continue'
+          $out = @(& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $scripts 'install-v012.ps1') 2>&1 | ForEach-Object { [string]$_ })
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { 'v0.1.2: ' + $_ }
+          'v0.1.2 exit ' + $code
+          if ($out -match 'PrivilegeNotHeld|SeSecurityPrivilege') { 'B1 REPRODUCED: v0.1.2 Set-Acl threw for a standard user over an install' } else { 'B1 NOT REPRODUCED: v0.1.2 Set-Acl did not throw PrivilegeNotHeld here' }
+          '@
+          As-User 'install-2' $install
+          # e and f. teh doctor as p9user until the daemon answers. First from the installer's own start of the task; an
+          # Interactive task may not start for a user who is not logged on (belief), so then start its action directly.
+          $doctor = @'
+          $state = Join-Path $env:LOCALAPPDATA 'P9\runtime'
+          $daemon = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon\resources\daemon'
+          $ErrorActionPreference = 'Continue'
+          $end = (Get-Date).AddSeconds(@@SECONDS@@)
+          do { $bundle = & (Join-Path $daemon 'node.exe') (Join-Path $daemon 'scripts\teh.mjs') doctor --state $state 2>$null | Out-String; $code = $LASTEXITCODE; if ($code -ne 0) { Start-Sleep 5 } } while ($code -ne 0 -and (Get-Date) -lt $end)
+          'doctor exit ' + $code
+          $bundle
+          Set-Content -LiteralPath 'C:\p9ci\doctor.json' -Value $bundle
+          Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'P9\daemon.log') -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { 'daemon.log: ' + $_ }
+          '@
+          As-User 'doctor-1' $doctor.Replace('@@SECONDS@@', '45')
+          if (-not (Get-Content C:\p9ci\doctor-1.log | Select-String '^doctor exit 0' -Quiet)) {
+            Write-Output 'the task did not bring the daemon up for a user with no logon session; starting its action as p9user'
+            Start-AsUser 'p9ci-daemon' 'powershell.exe' ((Get-Content C:\p9ci\task-arguments.txt -Raw).Trim() -replace '^--headless powershell\.exe ', '')
+            As-User 'doctor-2' $doctor.Replace('@@SECONDS@@', '120')
+          }
+          $bundle = Get-Content C:\p9ci\doctor.json -Raw | ConvertFrom-Json
+          if ($bundle.daemon.status -ne 'ok') { throw 'teh doctor: the daemon did not answer p9user' }
+          if (-not ($bundle.logs | Where-Object event -eq 'P9_READY')) { throw 'teh doctor: no P9_READY from daemon.log' }
+          if ($bundle.unit.SubState -ne 'conhost') { throw 'teh doctor: the task is not this version''s' }
+          Write-Output 'standard user: installed over v0.1.1''s task, installed again, daemon answered teh doctor with P9_READY in daemon.log'

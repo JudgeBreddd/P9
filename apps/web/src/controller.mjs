@@ -38,8 +38,7 @@ function sync(a, b) {
     if (!o) return a.appendChild(n);
     if (o.nodeType !== n.nodeType || o.nodeName !== n.nodeName) return a.replaceChild(n, o);
     if (o.nodeType !== 1) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; return; }
-    for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
-    for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
+    attrs(o, n);
     if (o.tagName !== 'TEXTAREA') sync(o, n); // rewriting a textarea's text resets its caret
     // read from the markup: a template's own .value is not filled in
     const v = o.tagName === 'TEXTAREA' ? n.defaultValue : o.tagName === 'INPUT' && !['checkbox', 'radio', 'file'].includes(o.type) ? n.getAttribute('value') ?? '' : null;
@@ -48,6 +47,10 @@ function sync(a, b) {
     else if (o.tagName === 'SELECT') o.selectedIndex = Math.max(0, [...n.options].findIndex(x => x.defaultSelected));
   });
   olds.slice(news.length).forEach(n => n.remove());
+}
+function attrs(o, n) {
+  for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
+  for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
 }
 const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; } return el; };
 // note 7: every chat starts in Auto mode
@@ -118,7 +121,7 @@ function cardList(all) {
   if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
   for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, halo: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
-  if (S.setup) cards.push({ key: 'welcome', n: [!S.setup.settings, !(S.setup.claude || S.setup.codex)].filter(Boolean).length, title: 'Set up Event Horizon', sub: [!S.setup.settings && 'Mission paths', !(S.setup.claude || S.setup.codex) && 'agent sign-in'].filter(Boolean).join(' · ') });
+  if (S.setup) { const d = setupDone(S.setup), left = Object.keys(d).filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${4 - left.length} of 4 done`, sub: left.map(k => STEP_NAMES[k]).join(' · ') }); }
   return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
 }
 const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.key)).length + S.alerts.length;
@@ -231,7 +234,7 @@ function renderCards() {
   morph($('#cards'), cards.map(c => `<article class="card${c.halo ? ' fx-halo' : ''}" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
   $('#cards').querySelectorAll('.card').forEach((el, i) => {
     const c = cards[i];
-    if (c.key === 'welcome') { el.querySelector('.x').onclick = skipWelcome; el.querySelector('.open').onclick = welcome; return; }
+    if (c.key === 'welcome') { el.querySelector('.x').onclick = skipWelcome; el.querySelector('.open').onclick = () => welcome(); return; }
     el.querySelector('.x').onclick = () => { S.snoozed.add(c.key); renderCards(); };
     // D10-6: a card reopens where you left it, unless that item is already handled
     el.querySelector('.open').onclick = () => { const k = c.key.split(':')[0] + (c.id || ''), r = S.resume[k]; openModal(r && !(k === 'asks' && !S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k); };
@@ -311,7 +314,7 @@ function renderModal() {
     $('#mdlT').textContent = 'Notification Center';
     body.innerHTML = !snoozed.length && !S.alerts.length ? '<p class="empty">Nothing waiting on you.</p>'
       : `<ul class="mlist">${snoozed.map((c, i) => row('c' + i, c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}"></span>`, esc(c.title), (c.quiet ? '' : 'snoozed · ') + esc(c.sub))).join('')}${S.alerts.map((a, i) => row('a' + i, `<span class="lvl" data-l="${esc(a.level)}"></span>`, esc(a.txt), esc(a.kind))).join('')}</ul>`;
-    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
+    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
     body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p><p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
@@ -409,7 +412,7 @@ const newPop = popover($('#newBtn'), $('#newPop'), renderNewFolder);
 $('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model); newPop.close(); });
 // History: with the daemon, every live chat, newest first (Open gives it a tab again); without it, the sample list.
 const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.slice().reverse().map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)} · ${asks.length} message${asks.length === 1 ? '' : 's'}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
+const liveHistory = () => S.sessions.slice().reverse().map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
 const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
 const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
 $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
@@ -468,7 +471,7 @@ function shown(s) {
 function pane(s, i, bare) {
   const working = busy(s);
   const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…' }[s.state];
-  const body = s.events.length === 0 ? `<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
+  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
   return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''} aria-label="${names[s.agent]} chat">
@@ -490,22 +493,30 @@ function pane(s, i, bare) {
 // state a person owns lives in S or is carried across: draft in s.draft, images in s.images,
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
 const view = {}; // 'container:session id' -> { top, pinned, selection }
-function renderChats() {
+// only: the chat ids a daemon batch touched; the other panes shown are left as they are.
+function renderChats(only) {
   const ids = S.split ? S.open.slice(0, 2) : S.open.slice(0, 1);
   const ss = ids.map(id => S.sessions.find(s => s.id === id)).filter(Boolean);
   if (document.hasFocus()) { const seen = [...(S.focus === 'chat' ? ss : []), mdl.open && S.modal?.kind === 'chat' && S.sessions.find(s => s.id === S.modal.id)].filter(s => s?.done); seen.forEach(s => { s.done = false; }); if (seen.length) renderCards(); }
   $('#chats').dataset.split = String(S.split && ss.length > 1);
-  paint($('#chats'), ss);
-  if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean));
+  for (const s of [...ss, mdl.open && S.modal?.kind === 'chat' && S.sessions.find(x => x.id === S.modal.id)]) if (s?.stub) history(s);
+  paint($('#chats'), ss, only);
+  if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
-function paint(root, ss) {
-  const bare = root.id === 'mdlBody';
-  root.querySelectorAll('.pane').forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
+// E2: with only, and the same panes still shown in the same order, just those panes are rebuilt and re-wired. Before,
+// each daemon batch rebuilt every pane shown, so a quiet 200-step chat beside a streaming one cost the same each time.
+function paint(root, ss, only) {
+  const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
+  const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
+  const panes = part ? old.filter(p => only.has(p.dataset.id)) : old;
+  if (part && !panes.length) return;
+  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
-  morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
-  root.querySelectorAll('.pane').forEach(p => {
+  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
+  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
+  (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
     place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
@@ -559,7 +570,7 @@ function paint(root, ss) {
 }
 function answered(s) {
   if (mdl.open && S.modal?.kind === 'chat' && S.modal.id === s.id) closeModal();
-  renderTabs(); renderChats();
+  renderTabs(); renderChats(new Set([s.id]));
 }
 // Paperclip (Builder, 2026-10-17: it only drew a blue square). Threat model row 20; the daemon checks the same limits.
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_IMAGE = 2 * 1024 * 1024;
@@ -623,7 +634,7 @@ function finished(s) {
 }
 function turnEnd(s) {
   if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
-  if (s.queue.length) startTurn(s, s.queue.shift()); else { renderTabs(); renderChats(); } // an interrupt may queue '' (images only)
+  if (s.queue.length) startTurn(s, s.queue.shift()); else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -1100,22 +1111,27 @@ window.p9?.onTerminal?.((serial, m) => {
   else if ('close' in m) { socket.readyState = 3; socket.onclose?.({ code: m.close }); }
 });
 // Loaded in the window only: the page is prerendered in Node, where xterm has no named exports.
-let dockTerm = null;
+let dockTerm = null, tmuxMissing = '', noteShown = false;
+// The install lines are too long for the toolbar's one-line state, so the dock body carries them; Refresh clears them.
+const noTmux = () => { dockTerm.show('tmux not found'); $('#termView').textContent = tmuxMissing; noteShown = true; };
 // Opening the dock attaches the newest running shell, or starts one.
 let docking = null;
 const openDock = () => docking ??= (async () => {
+  if (noteShown) { $('#termView').textContent = ''; noteShown = false; }
   const list = await window.p9.terminal('list').catch(() => null);
+  if (list?.body?.error === 'tmux-not-found') return noTmux();
   if (list?.status !== 200) return dockTerm.show('Terminals are unavailable');
   let id = list.body.terminals.filter(x => x.state === 'running').at(-1)?.id;
   if (!id) {
     const made = await window.p9.terminal('create').catch(() => null);
-    if (made?.status !== 201) return dockTerm.show('Not started: ' + (made?.body?.error ?? 'daemon unavailable'));
+    if (made?.status !== 201) return made?.body?.error === 'tmux-not-found' ? noTmux() : dockTerm.show('Not started: ' + (made?.body?.error ?? 'daemon unavailable'));
     id = made.body.terminal;
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal }) => {
+if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING }) => {
   if (lifetime.signal.aborted) return;
+  tmuxMissing = TMUX_MISSING;
   dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
@@ -1272,7 +1288,7 @@ function renderSettings() {
     + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null) : '')
     + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null) : '')
     + (window.p9?.openUpdates ? `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="setVer">You have P9 ${esc(window.p9.version || '?')}. Opens GitHub's newest release in your browser; if its number is higher, ${/Windows/.test(navigator.userAgent) ? 'download its .exe there and run it. Your workspace and settings stay.' : 'update as the README\'s Update section says (git pull, build, restart).'}</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setUpd">Check for updates</button></div>` : '')
-    + `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Welcome</button>' : ''}</div>`;
+    + `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}</div>`;
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
   $('#setName').value = settings.name || '';
@@ -1382,7 +1398,7 @@ land.addEventListener('close', () => {
   // The walkthrough runs once, the first time the landing page closes, starting in Chat and ending in the focus picked
   // (Builder approved it in _tyler/p9-walkthrough-review.md: "A."; GitHub issue #4 item 2). Ctrl K brings it back.
   let walked = true; try { walked = !!localStorage.getItem('p9-walked'); localStorage.setItem('p9-walked', '1'); } catch {}
-  if (!walked) { const from = S.focus; setFocus('chat', true); walkthrough(0, from); }
+  if (!walked) firstRun(); // the setup wizard first, while a check fails
 });
 // Esc on the main stage goes to the last focus; during the intro it does nothing (only Space skips).
 land.addEventListener('cancel', e => { e.preventDefault(); if (land.dataset.stage === 'main') setFocus(lastFocus()); });
@@ -1439,39 +1455,164 @@ async function landPets() {
   tickPets();
 }
 
-/* ---------- first-run welcome (phase 18) ---------- */
-// A "Set up" card while Mission's settings file is not loaded or no agent is signed in (threat model row 17); its x skips
-// it for good, and Settings opens the welcome again. A card, not a modal, so nothing is blocked on first start.
-// P9 never writes the settings file: the welcome hands the user's own agent a prompt; the daemon loads it on its next start.
+/* ---------- first-run setup wizard (v0.1.3 C1; threat model rows 17, 31, 32) ---------- */
+// Seven screens (Builder approved them, 2026-10-22). It opens itself once, after the landing intro and before the walkthrough.
+// Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
+// skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
+// /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
 async function loadSetup() {
   if (!window.p9?.chat) return null;
-  const r = await liveChat.call('setup');
-  return r.status === 200 ? r.body : null;
+  const r = await liveChat.call('setup').catch(() => null);
+  return r?.status === 200 ? r.body : null;
 }
+// The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
+function setupDone(s) { return { workspace: s.writable, agents: s.claude || s.codex, mission: s.settings && s.agentsFile && s.registryFile, terminal: s.tmux !== false }; }
+function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
+const STEP_NAMES = { workspace: 'workspace folder', agents: 'agent sign-in', mission: 'Mission Control files', terminal: 'terminal' };
 async function checkSetup() {
-  let skipped = false; try { skipped = localStorage.getItem('p9-welcome-skipped') === '1'; } catch {}
-  const s = skipped ? null : await loadSetup();
-  S.setup = s && !(s.settings && (s.claude || s.codex)) ? s : null;
+  const s = await loadSetup();
+  S.setup = s && Object.values(setupDone(s)).includes(false) ? s : null;
   renderCards();
 }
-function skipWelcome() { try { localStorage.setItem('p9-welcome-skipped', '1'); } catch {} S.setup = null; renderCards(); }
-async function welcome() {
-  const s = await loadSetup(); if (!s) return;
-  const prompt = `Write the Event Horizon (P9) settings file at ${s.settingsFile}. It is JSON. Paths are relative to ${s.workspace}, except scripts_root. Required: "primary" = my root AGENTS.md, "registry" = my Mission Control registry JSON (buttons, apps, pages), "waiting" = the folder whose files are things that need me. Optional: "space" = my space file, "hub" = a workspace-hub folder, "scripts_root" = the absolute folder registry commands run from. Look through my files to fill these in, and show me the file before you save it.`;
-  const yes = (ok, good, bad) => `<span class="${ok ? 'ok' : 'warn'}">${ok ? good : bad}</span>`;
-  $('#welBody').innerHTML = `<div class="set-row"><span><strong>Mission Control paths</strong><span class="muted sm" id="welFile"></span></span><span class="spacer"></span>${yes(s.settings, 'Loaded', s.settingsPresent ? 'Found: restart P9 to load it' : 'Not found')}</div>`
-    + (s.settings ? '' : `<label class="set-row"><span><strong>Ask your agent to write it</strong><span class="muted sm">Click the box, Ctrl C, then paste into Claude or Codex.</span></span></label><textarea data-slot="input" id="welPrompt" readonly rows="6"></textarea>`)
-    + `<div class="set-row"><span><strong>Agents</strong><span class="muted sm">Sign in from a terminal: run claude and log in, or codex login. Restart P9 after.</span></span><span class="spacer"></span>${yes(s.claude, 'Claude signed in', 'Claude not signed in')} ${yes(s.codex, 'Codex signed in', 'Codex not signed in')}</div>`
-    // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
-    + `<div class="set-row"><span><strong>Pets</strong><span class="muted sm">Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.</span></span></div>`;
-  $('#welFile').textContent = s.settingsFile || '';
-  $('#welPetdex').onclick = e => { if (window.p9?.openPetdex) { e.preventDefault(); window.p9.openPetdex(); } };
-  if ($('#welPrompt')) { $('#welPrompt').value = prompt; $('#welPrompt').onfocus = e => e.target.select(); }
-  $('#welMission').hidden = !settings.focus.mission || !(settings.focus.chat || settings.focus.dev);
-  if (!$('#welDlg').open) $('#welDlg').showModal();
+function skipWelcome() { try { localStorage.setItem('p9-welcome-skipped', '1'); } catch {} renderCards(); }
+function tour() { const from = S.focus; setFocus('chat', true); walkthrough(0, from); }
+// First run (the landing page closed for the first time): the wizard while a check fails, then the walkthrough.
+async function firstRun() {
+  const s = await loadSetup();
+  if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
+  W.then = tour; welcome(0);
 }
-$('#welSkip').onclick = () => { skipWelcome(); $('#welDlg').close(); };
-$('#welMission').onclick = () => { saveSettings({ ...settings, focus: { ...settings.focus, mission: false } }); $('#welSkip').click(); };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null };
+const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
+async function welcome(at) {
+  if (!window.p9?.chat) return; // a browser preview has no daemon to set up
+  Object.assign(W, { note: {}, code: '', name: null, busy: '' });
+  W.s = await loadSetup();
+  const d = W.s && setupDone(W.s);
+  W.i = at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
+  await wizRefresh();
+  if (!$('#welDlg').open) $('#welDlg').showModal();
+  clearInterval(W.timer); W.timer = setInterval(wizRefresh, 2000);
+}
+async function wizRefresh() {
+  const [s, l] = await Promise.all([loadSetup(), window.p9.agentLogin('state').catch(() => null)]);
+  W.s = s; W.login = l?.status === 200 ? l.body : {};
+  if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
+  wizRender();
+}
+// Each error a step can get back, as [cause, fix].
+const WIZ_ERR = {
+  'daemon-unavailable': ["P9's background service is not answering.", 'It restarts on its own. Retry in a few seconds.'],
+  'workspace-change-unsupported': ["On Windows the folder can't be changed yet.", 'It comes in the next version.'],
+  'workspace-refused': ["That folder can't be the workspace.", "Pick a folder of your own: not your home folder itself, a drive's root or P9's own state folder."],
+  'service-missing': ["P9's background service is not installed.", "Run P9's installer again (the README's Install section), then Retry."],
+  'stop-all-failed': ['Something running would not stop, so the folder stayed the same.', 'Stop it in Chat or the terminal dock, then Change the folder again.'],
+  'workspace-not-started': ['P9 could not start in that folder, so it went back to the one it was on.', 'Pick another folder.'],
+  'workspace-unwritable': ['P9 cannot write to this folder.', 'Change the folder, or give your user write access to this one, then Retry.'],
+  'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
+  'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
+  'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
+  'no-sign-in-page': ['The sign-in has not shown its page yet.', 'Wait a few seconds, then try again.'],
+  'request-refused': ['That code has characters a sign-in code never has.', 'Copy the code again from the browser and paste only the code.'],
+  'shutting-down': ["P9's background service is restarting.", 'Retry in a few seconds.'],
+  'settings-file-unknown': ['P9 does not know where its settings file goes.', 'Restart P9, then Retry.'],
+  'settings-changed': ['Something else wrote the settings file just now.', 'Retry reads it again.'],
+  'settings-invalid': ['Your settings file has an error.', 'Fix it in a text editor, or delete it, then Retry. P9 never changes a file it cannot read.'],
+};
+function wizRender() {
+  const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
+  W.i = steps.indexOf(key);
+  const yes = (ok, good, bad) => `<span class="${ok ? 'ok' : 'warn'}">${ok ? '✓ ' + good : bad}</span>`;
+  const btn = (act, label, variant = 'outline') => `<button data-slot="button" data-variant="${variant}" data-act="${act}"${W.busy ? ' disabled' : ''}>${label}</button>`;
+  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${btn('retry', 'Retry')}</div>`; };
+  const row = (name, note, status, actions = '') => `<div class="set-row"><span><strong>${name}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span><span class="spacer"></span>${status}${actions}</div>`;
+  const note = W.note[key];
+  let title, body, next = btn('next', 'Next', 'default');
+  if (!s && key !== 'welcome') { title = 'Setup'; body = fail('daemon-unavailable'); }
+  else if (key === 'welcome') {
+    title = 'Welcome to Event Horizon'; next = btn('next', 'Start', 'default');
+    body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's starter files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`;
+  } else if (key === 'workspace') {
+    title = 'Your workspace';
+    body = row('Folder', `<span class="mono" id="welWs">${esc(s.workspace)}</span>`, yes(s.writable, 'P9 can write here', 'P9 cannot write here'))
+      + `<p class="muted sm">${s.workspaceEmpty ? 'It is empty; the Mission Control step adds starter files. ' : ''}Changing it restarts P9's background service: running chats, scripts and terminals stop.</p>`
+      + (window.p9.workspaceChange ? `<div class="set-row">${btn('change', 'Change the folder')}</div>` : '')
+      + (s.writable ? '' : fail('workspace-unwritable'))
+      + (note?.error ? fail(note.error, note.detail) : '');
+  } else if (key === 'agents') {
+    title = 'Sign in to an agent';
+    body = '<p class="muted sm">Chats run on Claude Code or Codex; at least one has to be signed in. Sign in opens your browser at its sign-in page.</p>'
+      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].map(([a, name, sub]) => {
+        const l = W.login[a] || {}, ended = !s[a] && !l.running && l.exit !== null && l.exit !== undefined;
+        return row(name, sub, s[a] ? yes(true, 'Signed in') : l.running ? '<span class="muted sm">Waiting for the browser…</span>' : yes(false, '', 'Not signed in'),
+          s[a] ? '' : l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : 'Sign in', 'default'))
+          + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
+          + (ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
+          + (W.note[a]?.error ? fail(W.note[a].error) : '');
+      }).join('');
+    if (!d.agents) next = `<span class="muted sm">Sign in to one to go on, or Skip.</span>` + btn('next', 'Next', 'default').replace('<button', '<button disabled');
+  } else if (key === 'mission') {
+    title = 'Mission Control';
+    body = `<p class="muted sm">Its buttons, apps and pages come from files in your workspace. Create my starter files adds the ones missing and never replaces a file: AGENTS.md, the Mission Control registry, a waiting folder for things that need you, _ideas/, and P9's settings file.</p>`
+      + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
+      + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
+      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission ? '' : `<div class="set-row">${btn('starter', 'Create my starter files', 'default')}</div>`)
+      + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
+      + (note?.error ? fail(note.error, note.detail) : '')
+      + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
+  } else if (key === 'terminal') {
+    title = 'Terminal';
+    body = row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found'))
+      + (s.tmux ? '' : fail('tmux-not-found'));
+  } else if (key === 'you') {
+    title = 'You';
+    body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
+      // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
+      + row('Pets', 'Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.', '', btn('pets', 'Open Settings → Pets'));
+  } else {
+    title = Object.values(d).includes(false) ? 'Almost there' : 'You are set'; next = btn('tour', 'Take the tour', 'default');
+    body = Object.entries(STEP_NAMES).filter(([k]) => k !== 'terminal' || s.tmux !== null).map(([k, name]) => row(name[0].toUpperCase() + name.slice(1), '', yes(d[k], 'Done', 'Not done yet'))).join('')
+      + '<p class="muted sm">The tour shows each focus in about two minutes. Settings → Setup opens this again.</p>';
+  }
+  $('#welT').textContent = title;
+  $('#welStep').textContent = `Step ${W.i + 1} of ${steps.length}`;
+  morph($('#welBody'), body);
+  morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (key === 'done' ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
+}
+$('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value; });
+$('#welDlg').addEventListener('change', e => { if (e.target.id === 'welName') saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) }); });
+$('#welDlg').addEventListener('click', async e => {
+  if (e.target.id === 'welPetdex' && window.p9?.openPetdex) { e.preventDefault(); return window.p9.openPetdex(); }
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+  const [act, agent] = b.dataset.act.split(':');
+  const run = async (fn) => { W.busy = act; wizRender(); try { return await fn(); } finally { W.busy = ''; } };
+  if (act === 'next' || act === 'back') { W.i += act === 'next' ? 1 : -1; return wizRender(); }
+  if (act === 'skip' || act === 'mission-off') {
+    if (act === 'mission-off') saveSettings({ ...settings, focus: { ...settings.focus, mission: false } });
+    skipWelcome(); return $('#welDlg').close();
+  }
+  if (act === 'close') return $('#welDlg').close();
+  if (act === 'tour') { W.then = tour; return $('#welDlg').close(); }
+  if (act === 'pets') { W.then = null; $('#welDlg').close(); await $('#setBtn').onclick(); return [...$('#setBody').querySelectorAll('legend')].find(l => l.textContent === 'Pets')?.scrollIntoView(); }
+  if (act === 'retry') W.note = {};
+  if (act === 'change') {
+    const r = await run(() => window.p9.workspaceChange().catch(() => ({ error: 'daemon-unavailable' })));
+    W.note.workspace = r.error ? r : null;
+    if (!r.error) { files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder
+  }
+  if (act === 'starter') {
+    const r = await run(() => liveChat.call('starter').catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
+    if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
+  }
+  if (['start', 'open', 'code', 'stop'].includes(act)) {
+    const r = await run(() => (act === 'code' ? window.p9.agentLogin('code', agent, W.code.trim()) : window.p9.agentLogin(act, agent)).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    W.note[agent] = r.status >= 400 ? { error: r.body?.error || String(r.status) } : null;
+    if (act === 'code' && r.status < 400) W.code = '';
+  }
+  await wizRefresh();
+});
+$('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer = 0; checkSetup(); const then = W.then; W.then = null; then?.(); });
 
 /* ---------- live chat (phase 6) ---------- */
 // With the daemon, Chat Focus shows only real ACP conversations, rebuilt from the daemon's event log (cursor 0 on
@@ -1519,10 +1660,27 @@ const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof
 const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
+const liveSession = (id, provider, title, folder, created) => ({ id, agent: provider, title, model: chatModel[provider], mode: startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
+// E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
+// the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
+function history(s, until = liveChat.cursor) {
+  return s.loading ||= (async () => {
+    for (let after = 0; !lifetime.signal.aborted;) {
+      const r = await window.p9.chat('events', { after, only: [s.id], until });
+      // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
+      if (r.status === 400) break;
+      if (r.status !== 200) { await new Promise(res => setTimeout(res, 2000)); continue; }
+      for (const ev of r.body.events) try { applyChat(ev); } catch {}
+      after = r.body.cursor;
+      if (r.body.events.length < 500) break;
+    }
+    s.stub = false; renderTabs(); renderChats();
+  })();
+}
 // Applies one daemon event to S; returns the session when a turn ended (so queued messages can go).
 function applyChat(ev) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push({ id: ev.conversation, agent: d.provider, title: d.title, model: chatModel[d.provider], mode: startMode(d.provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: d.folder || 'P9 workspace', folder: d.folder || '', events: [], live: true, created: ev.at }); return null; }
+  if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
   const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
@@ -1571,14 +1729,22 @@ function applyChat(ev) {
 }
 async function loadChat() {
   if (!window.p9?.chat) return;
-  let replaying = true;
+  // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
+  // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
+  let replaying = true, scope = null;
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
   while (!lifetime.signal.aborted) {
-    const r = await window.p9.chat('events', { after: liveChat.cursor, wait: replaying ? 0 : 8000 });
+    const l = scope ? null : await window.p9.chat('list', {});
+    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
+    // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
+    if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
     if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
     if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
-      const created = ev.type === 'created' && !replaying;
+      const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
+      if (stub) await history(stub, ev.cursor - 1);
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       if (created) show(ev.conversation);
@@ -1587,13 +1753,15 @@ async function loadChat() {
     liveChat.cursor = r.body.cursor;
     if (replaying && r.body.events.length < 500) {
       replaying = false;
+      const all = await list(), have = new Map(S.sessions.map(s => [s.id, s]));
+      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
       for (const s of S.sessions) s.hidden = s.state === 'stopped' || closedChats.has(s.id);
       for (const id of closedChats) if (!S.sessions.some(s => s.id === id)) closedChats.delete(id);
       keepClosed();
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
     }
     else if (!replaying) { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } }
-    renderTabs(); renderChats();
+    renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation)));
   }
 }
 

@@ -267,6 +267,18 @@ export async function createNamed(root, parts) {
   }
 }
 
+// Linux: createDirectory's walk, then mkdir. FILE_CREATE fails with EEXIST when the name exists, a link included.
+export async function createDirectory(root, parts) {
+  const handles = [];
+  try {
+    let parent = openRoot(root);
+    handles.push(parent);
+    for (const part of parts.slice(0, -1)) { parent = openDirectory(parent, part); handles.push(parent); }
+    if (finalPath(parent.handle) !== path.join(root, ...parts.slice(0, -1))) throw new Error('path-changed');
+    handles.push(openRelative(parent, parts.at(-1), { access: DIRECTORY_ACCESS, disposition: FILE_CREATE, options: FILE_DIRECTORY_FILE }));
+  } finally { await Promise.all(handles.map((handle) => handle.close())); }
+}
+
 // Files the guard creates stay open from creation to their rename or delete, without write or delete sharing, so no
 // other process can change, move or swap them in between; renameAt and unlinkAt then act through this handle rather than
 // reopening the name. The shared code's close() is deferred to that point (or to createNamed's close).

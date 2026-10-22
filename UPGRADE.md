@@ -1,5 +1,15 @@
 # Upgrading P9
 
+## To 0.1.3 (beta)
+
+Windows gets a native ARM64 installer next to the x64 one, and the installer now works for a standard (non-admin)
+user. An installed P9 runs only the Node it ships, never one on your PATH.
+
+- **Linux:** update as `README.md` § Update says, then reopen the window (the desktop main process changed). A
+  service unit from before 0.1.0 now finds `tmux` in `~/.local/bin` without a reinstall.
+- **Windows:** run the 0.1.3 installer over the old one: `windows-arm64` on an ARM laptop, `windows-x64` otherwise.
+  Your workspace and the `P9 Foundation` task are kept.
+
 ## To 0.1.2 (beta)
 
 Settings has an Updates row: it shows the version you have, and **Check for updates** opens P9's newest GitHub
@@ -34,8 +44,9 @@ What changes for an existing install:
 - **State database.** The first start migrates the ledger to schema 2 (a chat's start folder). The old file is
   copied to `p9.db.v<N>.bak` first; `node scripts/rollback.mjs` restores the newest backup an older build can open.
 - **Service PATH.** New units record the installer's `PATH`, so the service finds the same `tmux` and agent CLIs
-  your shell does. An older unit keeps working; to get the line, run `node scripts/uninstall-service.mjs`, then
-  `node scripts/install-service.mjs "<your workspace>"` again.
+  your shell does. An older unit can start with systemd's bare `PATH` after a reboot; P9 now adds `~/.local/bin`
+  itself, so a `tmux` there is found. For a tool anywhere else, get the line: run `node scripts/uninstall-service.mjs`,
+  then `node scripts/install-service.mjs "<your workspace>"` again.
 - **Settings.** A `settings.json` that does not parse now turns off Mission Control only (`settings-invalid`);
   Chat, terminals and the phone stay up. New optional keys: `space`, `hub`, `server_host` (`README.md`).
 - **Uninstall.** If Stop All or `systemctl disable` fails, the unit is kept so you can stop what still runs;

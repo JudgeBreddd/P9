@@ -16,12 +16,14 @@ const host = hostScript(import.meta.url);
 export const hasUserBus = () => process.platform === 'linux' && !!process.env.XDG_RUNTIME_DIR
   && existsSync(path.join(process.env.XDG_RUNTIME_DIR, 'bus'));
 
+const lookup = (environment, name) => Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+
 export function resolveWindowsExecutable(executable, environment = process.env, fileExists = existsSync) {
   if (path.win32.isAbsolute(executable) || /[\\/]/.test(executable)) return executable;
-  const pathValue = Object.entries(environment).find(([key]) => key.toLowerCase() === 'path')?.[1] ?? '';
+  const pathValue = lookup(environment, 'path') ?? '';
   const suppliedExtension = path.win32.extname(executable).toLowerCase();
-  if (suppliedExtension && !['.exe', '.com'].includes(suppliedExtension)) throw new Error(`command-not-found:${executable}`);
-  const extensions = suppliedExtension ? [''] : ['.exe', '.com'];
+  if (suppliedExtension && !['.exe', '.com', '.cmd', '.bat'].includes(suppliedExtension)) throw new Error(`command-not-found:${executable}`);
+  const extensions = suppliedExtension ? [''] : ['.exe', '.com', '.cmd', '.bat'];
   for (const directory of pathValue.split(';').filter(Boolean)) {
     for (const extension of extensions) {
       const candidate = path.win32.resolve(directory, executable + extension);
@@ -31,11 +33,25 @@ export function resolveWindowsExecutable(executable, environment = process.env, 
   throw new Error(`command-not-found:${executable}`);
 }
 
-export function windowsJobCommand(argv, environment = childEnv()) {
-  const resolved = [resolveWindowsExecutable(argv[0], environment), ...argv.slice(1)];
-  const payload = Buffer.from(JSON.stringify({ argv: resolved, env: environment })).toString('base64');
+// A .cmd or .bat (npm, pnpm) runs only through cmd.exe, which parses its line again (D3). Every part goes inside double
+// quotes, where & | < > ^ are plain text, and a part holding a quote, % or a line break is refused, so nothing in it can
+// end the quoting or expand a variable. verbatim: the caller passes the line unchanged (Node's windowsVerbatimArguments).
+export function windowsArgv(argv, environment = process.env, fileExists = existsSync) {
+  const executable = resolveWindowsExecutable(argv[0], environment, fileExists);
+  if (!/\.(cmd|bat)$/i.test(executable)) return { argv: [executable, ...argv.slice(1)], verbatim: false };
+  const parts = [executable, ...argv.slice(1)];
+  if (parts.some((part) => /["%\r\n\0]/.test(part))) throw new Error(`unsafe-batch-argument:${path.win32.basename(executable)}`);
+  const cmd = path.win32.join(lookup(environment, 'SystemRoot') || 'C:\\Windows', 'System32', 'cmd.exe');
+  return { argv: [cmd, '/d', '/s', '/v:off', '/c', '"' + parts.map((part) => `"${part}"`).join(' ') + '"'], verbatim: true };
+}
+
+// mode Job: the host waits on the child inside a kill-on-close Job Object. Console: it starts the child in a new console
+// window and exits at once (a registry terminal button on Windows, D1).
+export function windowsJobCommand(argv, environment = childEnv(), mode = 'Job') {
+  const { argv: resolved, verbatim } = windowsArgv(argv, environment);
+  const payload = Buffer.from(JSON.stringify({ argv: resolved, env: environment, ...(verbatim ? { verbatim } : {}) })).toString('base64');
   return ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-    '-File', host, '-Mode', 'Job', '-Payload', payload];
+    '-File', host, '-Mode', mode, '-Payload', payload];
 }
 
 // Windows owns the process tree through a Job Object. Linux chat uses a systemd scope; other launches use a process group.

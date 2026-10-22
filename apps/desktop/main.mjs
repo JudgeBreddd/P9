@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, session, shell, WebContentsView } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { constants, watch } from 'node:fs';
@@ -6,9 +6,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
+import { contextMenu, windowsFullName } from './native.mjs';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -61,10 +62,13 @@ export function upgradeSettings(file, name = '') {
   }
   return { name, startLast: false, ...file };
 }
-// The greeting's first name: the first word of the account's full name (the passwd comment on Linux), else the login name.
+// Windows keeps the full name in the output of "net user <login>"; the label is localized, so another language falls back to the login name.
+// ponytail: local accounts only (a work-domain full name needs "net user /domain"); a Microsoft account with no full name set also falls back.
+// The greeting's first name: the first word of the account's full name (the passwd comment on Linux, net user on Windows), else the login name.
 export async function accountName() {
   const { username, uid } = os.userInfo();
-  const full = process.platform === 'linux' ? (await readFile('/etc/passwd', 'utf8').catch(() => '')).split('\n').map(l => l.split(':')).find(f => f[2] === String(uid))?.[4] : '';
+  const full = process.platform === 'linux' ? (await readFile('/etc/passwd', 'utf8').catch(() => '')).split('\n').map(l => l.split(':')).find(f => f[2] === String(uid))?.[4]
+    : process.platform === 'win32' ? windowsFullName(await new Promise(resolve => execFile('net', ['user', username], { windowsHide: true, timeout: 5000 }, (_error, out) => resolve(out ?? '')))) : '';
   const word = (full?.split(',')[0].trim().split(/\s+/)[0] || username || '').slice(0, 40);
   return NAME.test(word) ? word.charAt(0).toUpperCase() + word.slice(1) : '';
 }
@@ -138,8 +142,23 @@ export async function createDesktop({ state, open } = {}) {
   await app.whenReady();
   // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
   // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
-  // Fixed argv, no shell, the user's own task.
-  if (process.platform === 'win32' && state) health(state).catch(() => execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {}));
+  // No task, or v0.1.1's powershell.exe one (issue #6 B3), cannot be fixed by starting it: the installed app runs the
+  // installer's script again, once per launch (no retry loop). If that fails too, reason says reinstall.
+  // Fixed argv, no shell, the user's own task. At most every 30 s, since each look runs PowerShell.
+  // ponytail: a daemon that is running but hung stays hung (/Run on a running task does nothing); the page says not-answering.
+  let reason = 'not-answering', woke = 0, repaired = false;
+  const wake = async () => {
+    if (Date.now() - woke < 30000) return;
+    woke = Date.now();
+    const task = await windowsTask();
+    reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
+    if (reason !== 'not-answering' && app.isPackaged && !repaired) {
+      repaired = true;
+      if (await repairWindowsTask(process.resourcesPath)) { reason = 'not-answering'; return; }
+    }
+    if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
+  };
+  if (process.platform === 'win32' && state) health(state).catch(wake);
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
@@ -178,6 +197,10 @@ export async function createDesktop({ state, open } = {}) {
   window.removeMenu();
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('context-menu', (_event, params) => {
+    const menu = contextMenu(params, word => window.webContents.replaceMisspelling(word), word => window.webContents.session.addWordToSpellCheckerDictionary(word));
+    if (menu.length) Menu.buildFromTemplate(menu).popup({ window });
+  });
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
   window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
@@ -210,8 +233,10 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9:get-status', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
-    try { return { status: state && (await health(state)).status === 'ok' ? 'ok' : 'unavailable' }; }
-    catch { return { status: 'unavailable' }; }
+    try { if (state && (await health(state)).status === 'ok') return { status: 'ok' }; } catch {}
+    if (process.platform !== 'win32' || !state) return { status: 'unavailable' };
+    await wake();
+    return { status: 'unavailable', reason };
   });
   ipcMain.handle('p9:usage', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
@@ -237,6 +262,33 @@ export async function createDesktop({ state, open } = {}) {
     else await shell.openExternal(open);
     return { status: 200, body: { opened: true } };
   });
+  // Wizard sign-in (threat model row 31): the daemon runs the agent's own login CLI. "Browser didn't open?" opens the
+  // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
+  // and claude.com@evil.example fail). The page sees whether a URL exists, never the URL or any other output.
+  const SIGN_IN_ORIGINS = { claude: ['https://claude.com', 'https://claude.ai', 'https://console.anthropic.com'], codex: ['https://auth.openai.com'] };
+  const vendorUrl = (agent, text) => { try { const url = new URL(text); return SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; } };
+  ipcMain.handle('p9:agent-login', async (event, ...args) => {
+    const [action, agent, code] = args;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || !['state', 'start', 'open', 'code', 'stop'].includes(action) || args.length !== (action === 'code' ? 3 : action === 'state' ? 1 : 2)
+        || (action !== 'state' && (typeof agent !== 'string' || !Object.hasOwn(SIGN_IN_ORIGINS, agent)))) throw new Error('ipc-sender-refused');
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try {
+      if (action === 'start') return await daemonRequest(state, 'POST', '/setup/login', { agent });
+      if (action === 'code') return await daemonRequest(state, 'POST', '/setup/login/code', { agent, code });
+      if (action === 'stop') return await daemonRequest(state, 'POST', '/setup/login/stop', { agent });
+      const result = await daemonRequest(state, 'GET', '/setup/login');
+      if (result.status !== 200) return result;
+      if (action === 'state') return { status: 200, body: Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map(name => [name,
+        { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && vendorUrl(name, result.body[name].url) !== null,
+          exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
+      const open = typeof result.body[agent]?.url === 'string' ? vendorUrl(agent, result.body[agent].url) : null;
+      if (!open) return { status: 409, body: { error: 'no-sign-in-page' } };
+      if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
+      else await shell.openExternal(open);
+      return { status: 200, body: { opened: true } };
+    } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
   // Mission Control: a fixed list of actions, each mapped to one daemon route; the daemon validates the rest.
   const id = value => (typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value) ? value : null);
   const missionRoutes = {
@@ -261,14 +313,17 @@ export async function createDesktop({ state, open } = {}) {
     const route = missionRoutes[action](payload);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
-    try { return await daemonRequest(state, ...route); }
+    try { return await daemonRequest(state, route[0], route[1], route[2], undefined, action === 'fix' ? AGENT_START_MS : undefined); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
   const chatRoutes = {
     list: () => ['GET', '/chat'],
-    events: ({ after = 0, wait = 0 }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000 && ['GET', `/chat/events?after=${after}&wait=${wait}`],
+    // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
+    events: ({ after = 0, wait = 0, only, until }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000
+      && (only === undefined || Array.isArray(only) && only.length <= 100 && only.every(uuid)) && (until === undefined || Number.isSafeInteger(until) && until >= 0)
+      && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}`],
     create: body => ['POST', '/chat', body],
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
@@ -276,6 +331,7 @@ export async function createDesktop({ state, open } = {}) {
     stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
     lock: () => ['GET', '/agent-lock'],
     setup: () => ['GET', '/setup'],
+    starter: body => !Object.keys(body).length && ['POST', '/setup/starter', body], // the wizard's "Create my starter files"
     setLock: body => ['POST', '/agent-lock', body],
     stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
   };
@@ -287,7 +343,7 @@ export async function createDesktop({ state, open } = {}) {
     const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
-    try { return await daemonRequest(state, route[0], route[1], route[2], op); }
+    try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
@@ -527,6 +583,48 @@ export async function createDesktop({ state, open } = {}) {
     const real = await realpath(pick.filePaths[0]).catch(() => null);
     if (real === root) return '';
     return real?.startsWith(root + path.sep) ? real.slice(root.length + 1).split(path.sep).join('/') : null;
+  });
+  // Setup's Change the folder (threat model row 32): no argument; the native picker, then a native confirm naming the folder. Main writes
+  // no unit: it re-runs the installed copy's own uninstall-service.mjs and install-service.mjs with only the folder, with the unit's own
+  // node and PATH so the new unit differs only in --workspace, and installs the old folder again when the new one does not come up.
+  // ponytail: Linux only; Windows answers workspace-change-unsupported until install-windows.ps1 -Workspace is wired in (v0.1.4).
+  ipcMain.handle('p9:workspace-change', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    const old = state && (await health(state).catch(() => null))?.workspace;
+    if (!old) return { error: 'daemon-unavailable' };
+    if (process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
+    const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
+      properties: ['openDirectory', 'createDirectory'], defaultPath: old });
+    if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
+    // Never the home folder, a root, or a folder that holds or is inside P9's private state (the daemon refuses those at start too).
+    const folder = await realpath(pick.filePaths[0]).catch(() => null), home = await realpath(os.homedir());
+    const near = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+    const kept = [await realpath(state).catch(() => path.resolve(state)), path.join(home, '.local', 'state', 'p9-foundation')];
+    if (!folder || !(await stat(folder)).isDirectory() || folder === home || path.dirname(folder) === folder || kept.some(p => near(folder, p))) {
+      return { error: 'workspace-refused', workspace: old };
+    }
+    if (folder === old) return { workspace: old };
+    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Change the workspace folder?', message: 'Use ' + folder + ' as the workspace?',
+      detail: 'P9 restarts its background service. Running chats, scripts and terminals stop.', buttons: ['Cancel', 'Change folder'], defaultId: 0, cancelId: 0, noLink: true });
+    if (response !== 1) return { workspace: old };
+    // The unit as install-service.mjs quoted it: ExecStart's node and server, and Environment's PATH.
+    const unit = await readFile(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service'), 'utf8').catch(() => '');
+    const unquote = s => s.replace(/\\(.)/g, '$1').replaceAll('%%', '%').replaceAll('$$', '$');
+    const [node, server] = [...(unit.match(/^ExecStart=(.*)$/m)?.[1] ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m => unquote(m[1]));
+    const unitPath = unit.match(/^Environment="PATH=((?:[^"\\]|\\.)*)"$/m)?.[1];
+    if (!server) return { error: 'service-missing', workspace: old };
+    // Stop All first, so a daemon that cannot stop its chats leaves everything as it was.
+    if ((await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => null))?.status !== 200) return { error: 'stop-all-failed', workspace: old };
+    const env = { ...process.env, ...(unitPath ? { PATH: unquote(unitPath) } : {}) }, scripts = path.join(path.dirname(server), '..', '..', 'scripts');
+    let detail = '';
+    const run = (script, ...more) => new Promise(resolve => execFile(node, [path.join(scripts, script), ...more], { env, timeout: 60_000 },
+      (error, _stdout, stderr) => { if (error) detail = String(stderr).trim().split('\n').filter(l => /^\w*Error/.test(l)).pop()?.slice(0, 300) ?? 'exit ' + error.code; resolve(!error); }));
+    if (!await run('uninstall-service.mjs')) await run('uninstall-service.mjs', '--force');
+    if (await run('install-service.mjs', folder)) return { workspace: folder };
+    // install-service.mjs removed its own unit when the daemon did not answer; the old folder again.
+    const why = detail;
+    await run('install-service.mjs', old);
+    return { error: 'workspace-not-started', detail: why, workspace: (await health(state).catch(() => null))?.workspace ?? null };
   });
   ipcMain.handle('p9:pet-remove', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL

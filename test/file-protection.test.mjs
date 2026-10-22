@@ -66,7 +66,8 @@ test('File protection: refused while on, a native warning before off, kept acros
   await page.click('#setBtn');
   await page.locator('#setDlg[open] #setProtect:checked').waitFor();
   await answers([0]);
-  await page.uncheck('#setProtect');
+  // click, not uncheck: uncheck also checks the box ended up unchecked, and Keep puts it back, so a fast re-render failed it (flaky since 0.1.0).
+  await page.click('#setProtect');
   await page.locator('#setProtect:checked').waitFor();
   const [warning] = await asked();
   assert.deepEqual({ ...warning, detail: undefined }, { type: 'warning', title: 'Turn off file protection?',
@@ -75,7 +76,7 @@ test('File protection: refused while on, a native warning before off, kept acros
   assert.deepEqual((await call(instance, '/file-protection')).body, { on: true });
 
   await answers([2, 1]);
-  await page.uncheck('#setProtect');
+  await page.click('#setProtect');
   await page.locator('#setProtect:not(:checked)').waitFor();
   assert.equal((await asked()).length, 2);
   assert.equal((await readFile(opened, 'utf8')).trim(), 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection');

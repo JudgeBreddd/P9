@@ -228,6 +228,8 @@ export function createHub({ workspace, settings }) {
 
   // Lines that need Builder: silent scheduled jobs (here and on the server) and doctor.sh FAIL lines.
   async function notices() {
+    // Windows has no ICM shell scripts to run: bash there is missing or WSL's, which would boot the WSL VM every 10 min (D2).
+    if (process.platform === 'win32') return [];
     const [overdue, server, doctor] = await Promise.all([
       output('bash', [path.join(scripts, 'heartbeats.sh'), 'overdue'], { cwd: workspace, timeout: 20000 }),
       output('bash', [path.join(scripts, 'heartbeats.sh'), 'remote'], { cwd: workspace, timeout: 20000 }),
