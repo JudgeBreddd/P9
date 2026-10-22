@@ -135,7 +135,7 @@
         "to": "licenses"
       },
       {
-        "from": ".build/node-win-x64/node.exe",
+        "from": ".build/node-win/node.exe",
         "to": "daemon/node.exe"
       },
       {

@@ -1,15 +1,31 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('Job', 'Daemon', 'PipeAcl', 'PipeLock')]
+  [ValidateSet('Job', 'Daemon', 'Console', 'PipeAcl', 'PipeLock', 'Acl', 'Compile')]
   [string]$Mode,
   [string]$Payload,
   [string]$Pipe,
-  [string]$Log
+  [string]$Log,
+  [string]$Out
 )
 
 $ErrorActionPreference = 'Stop'
 
-Add-Type -TypeDefinition @'
+# Acl (the daemon, before it writes anything, B8): each folder in the payload (base64 JSON list) may be owned by and grant
+# access to only this user, SYSTEM and Administrators. Prints each folder that fails and exits 1. Needs no C#.
+if ($Mode -eq 'Acl') {
+  $trusted = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
+  $folders = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)) | ConvertFrom-Json
+  $bad = @($folders | Where-Object {
+    $security = (Get-Item -LiteralPath $_ -Force).GetAccessControl('Access, Owner')
+    $grants = @($security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object AccessControlType -eq 'Allow')
+    ($trusted -notcontains $security.GetOwner([Security.Principal.SecurityIdentifier]).Value) -or
+      @($grants | Where-Object { $trusted -notcontains $_.IdentityReference.Value }).Count -gt 0
+  })
+  $bad
+  exit ([int]($bad.Count -gt 0))
+}
+
+$source = @'
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -21,6 +37,7 @@ using System.Text;
 
 public static class P9WindowsHost {
     const uint CREATE_SUSPENDED = 0x00000004;
+    const uint CREATE_NEW_CONSOLE = 0x00000010;
     const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
     const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
@@ -182,9 +199,27 @@ public static class P9WindowsHost {
         } finally { CloseHandle(handle); }
     }
     // log: the child's stdout and stderr go to this file, appended (the scheduled task's daemon.log, issue #6 B4).
-    public static int Run(string mode, string[] command, IDictionary environment, string log) {
+    // verbatim: the rest of the line is cmd.exe's own /c line (process-tree.mjs windowsArgv), which C quoting would break.
+    static string Line(string[] command, bool verbatim) {
         if (command == null || command.Length < 1) throw new ArgumentException("command-required");
-        string line = String.Join(" ", Array.ConvertAll(command, Quote));
+        return verbatim ? Quote(command[0]) + " " + String.Join(" ", command, 1, command.Length - 1) : String.Join(" ", Array.ConvertAll(command, Quote));
+    }
+    // A terminal button (D1): the child gets a new console window and outlives this host. No job of its own, no wait.
+    // ponytail: it stays in the daemon's job, so a daemon restart closes the window; CREATE_BREAKAWAY_FROM_JOB if that matters.
+    public static int Start(string[] command, IDictionary environment, bool verbatim) {
+        string line = Line(command, verbatim);
+        IntPtr environmentBlock = EnvironmentBlock(environment);
+        try {
+            var startup = new STARTUPINFOEX(); startup.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
+            PROCESS_INFORMATION process;
+            Check(CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, false, CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
+                environmentBlock, Environment.CurrentDirectory, ref startup, out process), "CreateProcess");
+            CloseHandle(process.hThread); CloseHandle(process.hProcess);
+            return 0;
+        } finally { Marshal.FreeHGlobal(environmentBlock); }
+    }
+    public static int Run(string mode, string[] command, IDictionary environment, string log, bool verbatim) {
+        string line = Line(command, verbatim);
         IntPtr job = CreateKillJob(), attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero, logHandle = IntPtr.Zero;
         PROCESS_INFORMATION process = new PROCESS_INFORMATION();
         try {
@@ -228,6 +263,11 @@ public static class P9WindowsHost {
     }
 }
 '@
+if ($Mode -eq 'Compile') { Add-Type -TypeDefinition $source -OutputAssembly $Out; exit 0 }
+# E4: compiling the class costs every host start 1-3 s (csc). package-windows.mjs compiles it once, at build, beside this
+# script in the installed app; a source run has no DLL and compiles here.
+$dll = Join-Path $PSScriptRoot 'P9WindowsHost.dll'
+if (Test-Path -LiteralPath $dll) { Add-Type -LiteralPath $dll } else { Add-Type -TypeDefinition $source }
 
 if ($Mode -eq 'PipeAcl' -or $Mode -eq 'PipeLock') {
   if ([string]::IsNullOrWhiteSpace($Pipe)) { throw 'pipe-required' }
@@ -253,4 +293,6 @@ if ($Log) {
   if ((Test-Path -LiteralPath $Log) -and (Get-Item -LiteralPath $Log).Length -gt 5MB) { Move-Item -LiteralPath $Log -Destination ($Log + '.1') -Force }
   Add-Content -LiteralPath $Log -Value ((Get-Date -Format o) + ' host started')
 }
-exit [P9WindowsHost]::Run($Mode, $command, $environment, $Log)
+$verbatim = [bool]$decoded.verbatim
+if ($Mode -eq 'Console') { exit [P9WindowsHost]::Start($command, $environment, $verbatim) }
+exit [P9WindowsHost]::Run($Mode, $command, $environment, $Log, $verbatim)

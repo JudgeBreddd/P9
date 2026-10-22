@@ -205,5 +205,5 @@ test('Windows package: licence notices ship in resources/licenses', () => {
   assert.match(pack, /node-LICENSE/);
   assert.match(pack, /startsWith\('@fontsource'\)/);
   assert.ok(Object.keys(pkg.devDependencies).filter((name) => name.startsWith('@fontsource')).length >= 10, 'fonts found by the same filter');
-  assert.match(readFileSync(path.join(root, 'scripts', 'extract-node-windows.ps1'), 'utf8'), /win-x64\\LICENSE/);
+  assert.match(readFileSync(path.join(root, 'scripts', 'extract-node-windows.ps1'), 'utf8'), /win-\$Arch\\LICENSE/);
 });

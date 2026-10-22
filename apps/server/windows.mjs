@@ -17,9 +17,10 @@ export function windowsLockEndpoint(ownershipDirectory) {
   return `\\\\.\\pipe\\p9-foundation-lock-${owner}`;
 }
 
-export function missingWindowsBinaries(installed) {
+export function missingWindowsBinaries(installed, arch = 'x64') {
   // codex 0.159+ ships its Windows binary as a version of @openai/codex itself (`@openai+codex@0.159.3-win32-x64`)
-  const alias = { '@openai+codex-win32-x64@': /^@openai\+codex@[^@]*-win32-x64$/ };
-  return ['@openai+codex-win32-x64@', '@anthropic-ai+claude-agent-sdk-win32-x64@']
+  const codex = `@openai+codex-win32-${arch}@`;
+  const alias = { [codex]: new RegExp(`^@openai\\+codex@[^@]*-win32-${arch}$`) };
+  return [codex, `@anthropic-ai+claude-agent-sdk-win32-${arch}@`]
     .filter((prefix) => !installed.some((name) => name.startsWith(prefix) || alias[prefix]?.test(name)));
 }
