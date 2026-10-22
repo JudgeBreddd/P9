@@ -14,7 +14,7 @@
   },
   "scripts": {
     "postinstall": "node -e \"require('electron')\"",
-    "test":"node scripts/with-tmp.mjs node --test test/*.test.mjs",
+    "test": "node scripts/with-tmp.mjs node --test test/*.test.mjs",
     "test:capped": "node scripts/mem-guard.mjs && systemd-run --user --scope -q --unit=eh-tests-$$ -p MemoryMax=3G -p MemorySwapMax=0 node scripts/with-tmp.mjs node --test --test-concurrency=4 test/*.test.mjs",
     "gate:3": "node scripts/with-tmp.mjs node scripts/gate.mjs",
     "gate:all": "node scripts/with-tmp.mjs node scripts/gate.mjs --all",
@@ -102,6 +102,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "electron": "44.7.2",
+    "rolldown": "1.2.14",
     "typescript": "6.0.3",
     "vite": "8.3.4",
     "vscode": "npm:@codingame/monaco-vscode-extension-api@33.0.9"
@@ -139,16 +140,8 @@
         "to": "daemon/node.exe"
       },
       {
-        "from": "apps/server",
-        "to": "daemon/apps/server"
-      },
-      {
         "from": "packages",
         "to": "daemon/packages"
-      },
-      {
-        "from": ".build/daemon-deps/node_modules",
-        "to": "daemon/node_modules"
       },
       {
         "from": "scripts/windows-host.ps1",
@@ -161,6 +154,10 @@
       {
         "from": ".build/daemon-extra",
         "to": "daemon"
+      },
+      {
+        "from": ".build/daemon-extra/node_modules",
+        "to": "daemon/node_modules"
       }
     ],
     "win": {
