@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
@@ -138,8 +138,18 @@ export async function createDesktop({ state, open } = {}) {
   await app.whenReady();
   // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
   // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
-  // Fixed argv, no shell, the user's own task.
-  if (process.platform === 'win32' && state) health(state).catch(() => execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {}));
+  // No task, or v0.1.1's powershell.exe one (issue #6 B3), cannot be fixed by starting it: reason says reinstall.
+  // Fixed argv, no shell, the user's own task. At most every 30 s, since each look runs PowerShell.
+  // ponytail: a daemon that is running but hung stays hung (/Run on a running task does nothing); the page says not-answering.
+  let reason = 'not-answering', woke = 0;
+  const wake = async () => {
+    if (Date.now() - woke < 30000) return;
+    woke = Date.now();
+    const task = await windowsTask();
+    reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
+    if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
+  };
+  if (process.platform === 'win32' && state) health(state).catch(wake);
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
@@ -210,8 +220,10 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9:get-status', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
-    try { return { status: state && (await health(state)).status === 'ok' ? 'ok' : 'unavailable' }; }
-    catch { return { status: 'unavailable' }; }
+    try { if (state && (await health(state)).status === 'ok') return { status: 'ok' }; } catch {}
+    if (process.platform !== 'win32' || !state) return { status: 'unavailable' };
+    await wake();
+    return { status: 'unavailable', reason };
   });
   ipcMain.handle('p9:usage', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');

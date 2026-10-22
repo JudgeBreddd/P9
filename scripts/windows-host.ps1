@@ -3,7 +3,8 @@ param(
   [ValidateSet('Job', 'Daemon', 'PipeAcl', 'PipeLock')]
   [string]$Mode,
   [string]$Payload,
-  [string]$Pipe
+  [string]$Pipe,
+  [string]$Log
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +35,11 @@ public static class P9WindowsHost {
     const uint WRITE_DAC = 0x00040000;
     const uint PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000;
     const uint OPEN_EXISTING = 3;
+    const uint OPEN_ALWAYS = 4;
+    const uint FILE_APPEND_DATA = 0x0004;
+    const uint FILE_READ_ATTRIBUTES = 0x0080;
+    const uint SYNCHRONIZE = 0x00100000;
+    const uint HANDLE_FLAG_INHERIT = 1;
     const uint DACL_SECURITY_INFORMATION = 0x00000004;
     const int SE_KERNEL_OBJECT = 6;  // SE_FILE_OBJECT (1) returns ERROR_INVALID_PARAMETER for a pipe handle (Windows desktop, 2026-10-17)
     static readonly IntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST = new IntPtr(0x0002000D);
@@ -97,6 +103,7 @@ public static class P9WindowsHost {
     static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(IntPtr descriptor, uint revision, uint info,
         out IntPtr text, out uint length);
     [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
     static void Check(bool ok, string operation) {
         if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error(), operation);
@@ -174,10 +181,11 @@ public static class P9WindowsHost {
             } finally { if (text != IntPtr.Zero) LocalFree(text); LocalFree(descriptor); }
         } finally { CloseHandle(handle); }
     }
-    public static int Run(string mode, string[] command, IDictionary environment) {
+    // log: the child's stdout and stderr go to this file, appended (the scheduled task's daemon.log, issue #6 B4).
+    public static int Run(string mode, string[] command, IDictionary environment, string log) {
         if (command == null || command.Length < 1) throw new ArgumentException("command-required");
         string line = String.Join(" ", Array.ConvertAll(command, Quote));
-        IntPtr job = CreateKillJob(), attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero;
+        IntPtr job = CreateKillJob(), attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero, logHandle = IntPtr.Zero;
         PROCESS_INFORMATION process = new PROCESS_INFORMATION();
         try {
             IntPtr size = IntPtr.Zero;
@@ -190,6 +198,12 @@ public static class P9WindowsHost {
             var startup = new STARTUPINFOEX(); startup.StartupInfo.cb = (uint)Marshal.SizeOf(startup);
             startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES; startup.lpAttributeList = attributes;
             startup.StartupInfo.hStdInput = GetStdHandle(-10); startup.StartupInfo.hStdOutput = GetStdHandle(-11); startup.StartupInfo.hStdError = GetStdHandle(-12);
+            if (!String.IsNullOrEmpty(log)) {
+                logHandle = CreateFileW(log, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, 7, IntPtr.Zero, OPEN_ALWAYS, 0, IntPtr.Zero);
+                if (logHandle == new IntPtr(-1)) { logHandle = IntPtr.Zero; throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFile(log)"); }
+                Check(SetHandleInformation(logHandle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "SetHandleInformation(log)");
+                startup.StartupInfo.hStdOutput = logHandle; startup.StartupInfo.hStdError = logHandle;
+            }
             environmentBlock = EnvironmentBlock(environment);
             Check(CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true,
                 CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
@@ -208,6 +222,7 @@ public static class P9WindowsHost {
             if (attributes != IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); }
             if (jobPointer != IntPtr.Zero) Marshal.FreeHGlobal(jobPointer);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
+            if (logHandle != IntPtr.Zero) CloseHandle(logHandle);
             if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
@@ -233,4 +248,9 @@ $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)
 $command = @($decoded.argv | ForEach-Object { [string]$_ })
 $environment = @{}
 $decoded.env.psobject.Properties | ForEach-Object { $environment[$_.Name] = [string]$_.Value }
-exit [P9WindowsHost]::Run($Mode, $command, $environment)
+if ($Log) {
+  # ponytail: one old copy at 5 MB, checked when the host starts; a daemon that runs for weeks can grow it past that.
+  if ((Test-Path -LiteralPath $Log) -and (Get-Item -LiteralPath $Log).Length -gt 5MB) { Move-Item -LiteralPath $Log -Destination ($Log + '.1') -Force }
+  Add-Content -LiteralPath $Log -Value ((Get-Date -Format o) + ' host started')
+}
+exit [P9WindowsHost]::Run($Mode, $command, $environment, $Log)
