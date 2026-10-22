@@ -578,6 +578,48 @@ export async function createDesktop({ state, open } = {}) {
     if (real === root) return '';
     return real?.startsWith(root + path.sep) ? real.slice(root.length + 1).split(path.sep).join('/') : null;
   });
+  // Setup's Change the folder (threat model row 32): no argument; the native picker, then a native confirm naming the folder. Main writes
+  // no unit: it re-runs the installed copy's own uninstall-service.mjs and install-service.mjs with only the folder, with the unit's own
+  // node and PATH so the new unit differs only in --workspace, and installs the old folder again when the new one does not come up.
+  // ponytail: Linux only; Windows answers workspace-change-unsupported until install-windows.ps1 -Workspace is wired in (v0.1.4).
+  ipcMain.handle('p9:workspace-change', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    const old = state && (await health(state).catch(() => null))?.workspace;
+    if (!old) return { error: 'daemon-unavailable' };
+    if (process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
+    const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
+      properties: ['openDirectory', 'createDirectory'], defaultPath: old });
+    if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
+    // Never the home folder, a root, or a folder that holds or is inside P9's private state (the daemon refuses those at start too).
+    const folder = await realpath(pick.filePaths[0]).catch(() => null), home = await realpath(os.homedir());
+    const near = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+    const kept = [await realpath(state).catch(() => path.resolve(state)), path.join(home, '.local', 'state', 'p9-foundation')];
+    if (!folder || !(await stat(folder)).isDirectory() || folder === home || path.dirname(folder) === folder || kept.some(p => near(folder, p))) {
+      return { error: 'workspace-refused', workspace: old };
+    }
+    if (folder === old) return { workspace: old };
+    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Change the workspace folder?', message: 'Use ' + folder + ' as the workspace?',
+      detail: 'P9 restarts its background service. Running chats, scripts and terminals stop.', buttons: ['Cancel', 'Change folder'], defaultId: 0, cancelId: 0, noLink: true });
+    if (response !== 1) return { workspace: old };
+    // The unit as install-service.mjs quoted it: ExecStart's node and server, and Environment's PATH.
+    const unit = await readFile(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service'), 'utf8').catch(() => '');
+    const unquote = s => s.replace(/\\(.)/g, '$1').replaceAll('%%', '%').replaceAll('$$', '$');
+    const [node, server] = [...(unit.match(/^ExecStart=(.*)$/m)?.[1] ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m => unquote(m[1]));
+    const unitPath = unit.match(/^Environment="PATH=((?:[^"\\]|\\.)*)"$/m)?.[1];
+    if (!server) return { error: 'service-missing', workspace: old };
+    // Stop All first, so a daemon that cannot stop its chats leaves everything as it was.
+    if ((await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => null))?.status !== 200) return { error: 'stop-all-failed', workspace: old };
+    const env = { ...process.env, ...(unitPath ? { PATH: unquote(unitPath) } : {}) }, scripts = path.join(path.dirname(server), '..', '..', 'scripts');
+    let detail = '';
+    const run = (script, ...more) => new Promise(resolve => execFile(node, [path.join(scripts, script), ...more], { env, timeout: 60_000 },
+      (error, _stdout, stderr) => { if (error) detail = String(stderr).trim().split('\n').filter(l => /^\w*Error/.test(l)).pop()?.slice(0, 300) ?? 'exit ' + error.code; resolve(!error); }));
+    if (!await run('uninstall-service.mjs')) await run('uninstall-service.mjs', '--force');
+    if (await run('install-service.mjs', folder)) return { workspace: folder };
+    // install-service.mjs removed its own unit when the daemon did not answer; the old folder again.
+    const why = detail;
+    await run('install-service.mjs', old);
+    return { error: 'workspace-not-started', detail: why, workspace: (await health(state).catch(() => null))?.workspace ?? null };
+  });
   ipcMain.handle('p9:pet-remove', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length !== 1 || typeof args[0] !== 'string' || !PET_NAME.test(args[0])) throw new Error('ipc-sender-refused');

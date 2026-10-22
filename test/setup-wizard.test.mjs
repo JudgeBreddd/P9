@@ -3,11 +3,13 @@
 // the new settings without a daemon restart.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
+import { health } from '../scripts/teh.mjs';
 
 const call = async (instance, route, method = 'GET', body, type = 'application/json') => {
   const result = await http({ socketPath: instance.credentials.socketPath, route, method,
@@ -161,4 +163,71 @@ test('Setup wizard sign-in: main opens only the vendor sign-in page, by parsed o
   await until(async () => (await readFile(opened, 'utf8').catch(() => '')).split('\n').length === 5, 'four opens');
   assert.deepEqual((await readFile(opened, 'utf8')).trim().split('\n'),
     ['https://claude.com/cai/oauth/authorize?a=1', 'https://console.anthropic.com/oauth', 'https://claude.ai/x', 'https://auth.openai.com/oauth/authorize?b=2']);
+});
+
+// A stand-in systemctl that runs the unit's ExecStart for real (so install-service.mjs's health wait and Stop All talk to a real
+// daemon) and never touches the machine's own user units. A workspace named "refused" is a unit that does not start.
+const SYSTEMCTL = String.raw`
+import { readFileSync, writeFileSync, rmSync, openSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+const [, , , command, ...rest] = process.argv, unit = rest.at(-1), pid = path.join(process.env.HOME, unit + '.pid');
+if (command === 'enable') {
+  const line = readFileSync(path.join(process.env.HOME, '.config/systemd/user', unit), 'utf8').match(/^ExecStart=(.*)$/m)[1];
+  const argv = [...line.matchAll(/"((?:[^"\\]|\\.)*)"|(\S+)/g)].map((m) => m[1] !== undefined ? m[1].replace(/\\(.)/g, '$1').replaceAll('%%', '%')
+    : m[2].replace('%t', process.env.XDG_RUNTIME_DIR));
+  if (path.basename(argv[argv.indexOf('--workspace') + 1]) === 'refused') process.exit(1);
+  const log = openSync(path.join(process.env.HOME, 'daemon.log'), 'a');
+  const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: ['ignore', log, log] });
+  writeFileSync(pid, String(child.pid)); child.unref();
+} else if (command === 'disable') {
+  try {
+    const id = Number(readFileSync(pid, 'utf8')), end = Date.now() + 10000;
+    process.kill(id);
+    while (true) { try { process.kill(id, Date.now() > end ? 'SIGKILL' : 0); } catch { break; } }
+  } catch {}
+  // RuntimeDirectory=: systemd removes the daemon's state folder when the unit stops.
+  rmSync(pid, { force: true }); rmSync(path.join(process.env.XDG_RUNTIME_DIR, 'p9-foundation'), { recursive: true, force: true });
+}
+`;
+
+test('Setup wizard workspace change: only through the picker, never home or P9 state; the unit differs only in --workspace and a folder that does not start rolls back (threat model row 32)', { skip: process.platform !== 'linux', timeout: 180000 }, async (t) => {
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-move-'))), bin = path.join(home, 'bin'), run = path.join(home, 'run');
+  const [first, second, refused] = ['first', 'second', 'refused'].map((name) => path.join(home, name));
+  for (const directory of [bin, first, second, refused]) await mkdir(directory);
+  await mkdir(run, { mode: 0o700 });
+  await writeFile(path.join(bin, 'systemctl'), '#!' + process.execPath + '\n' + SYSTEMCTL);
+  await chmod(path.join(bin, 'systemctl'), 0o755);
+  await writeFile(path.join(home, 'a-file'), '');
+  const env = { ...process.env, HOME: home, XDG_RUNTIME_DIR: run, PATH: bin + ':' + process.env.PATH }; delete env.ELECTRON_RUN_AS_NODE;
+  const installed = spawnSync(process.execPath, [path.join(root, 'scripts/install-service.mjs'), first], { env, encoding: 'utf8' });
+  t.after(() => spawnSync(path.join(bin, 'systemctl'), ['--user', 'disable', '--now', 'p9-foundation.service'], { env }));
+  assert.match(installed.stdout, /P9_SERVICE_INSTALLED/, installed.stderr);
+  const state = path.join(run, 'p9-foundation'), unitFile = path.join(home, '.config/systemd/user/p9-foundation.service');
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  // The page passes nothing; main's own pickers answer here (the folder picked, then the confirm's button).
+  const change = async (folder, button = 1) => {
+    await app.evaluate(({ dialog }, [folder, button]) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
+      dialog.showMessageBox = async () => ({ response: button });
+    }, [folder, button]);
+    return page.evaluate(() => window.p9.workspaceChange());
+  };
+  const before = await readFile(unitFile, 'utf8');
+  for (const folder of [home, path.join(home, '.local'), path.join(home, '.local/state/p9-foundation'), path.join(home, '.local/state/p9-foundation/conflicts'),
+    state, run, '/', path.join(home, 'a-file')]) assert.deepEqual(await change(folder), { error: 'workspace-refused', workspace: first }, folder);
+  assert.deepEqual(await change(second, 0), { workspace: first }, 'Cancel in the confirm changes nothing');
+  assert.equal(await readFile(unitFile, 'utf8'), before);
+  assert.deepEqual(await change(second), { workspace: second });
+  const moved = await readFile(unitFile, 'utf8');
+  assert.equal(moved, before.replace('"' + first + '"', '"' + second + '"'), 'only --workspace changed');
+  assert.equal((await health(state)).workspace, second);
+  const back = await change(refused);
+  assert.equal(back.error, 'workspace-not-started');
+  assert.equal(back.workspace, second, 'rolled back to the folder it was on');
+  assert.equal(await readFile(unitFile, 'utf8'), moved);
+  assert.equal((await health(state)).workspace, second);
 });
