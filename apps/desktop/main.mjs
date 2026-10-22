@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -142,15 +142,20 @@ export async function createDesktop({ state, open } = {}) {
   await app.whenReady();
   // Windows: the daemon is the user's 'P9 Foundation' Scheduled Task, which runs at logon. Not answering (it died, or was
   // stopped) means start it; the page keeps asking until it answers (GitHub issue #4: a relaunch never brought it back).
-  // No task, or v0.1.1's powershell.exe one (issue #6 B3), cannot be fixed by starting it: reason says reinstall.
+  // No task, or v0.1.1's powershell.exe one (issue #6 B3), cannot be fixed by starting it: the installed app runs the
+  // installer's script again, once per launch (no retry loop). If that fails too, reason says reinstall.
   // Fixed argv, no shell, the user's own task. At most every 30 s, since each look runs PowerShell.
   // ponytail: a daemon that is running but hung stays hung (/Run on a running task does nothing); the page says not-answering.
-  let reason = 'not-answering', woke = 0;
+  let reason = 'not-answering', woke = 0, repaired = false;
   const wake = async () => {
     if (Date.now() - woke < 30000) return;
     woke = Date.now();
     const task = await windowsTask();
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
+    if (reason !== 'not-answering' && app.isPackaged && !repaired) {
+      repaired = true;
+      if (await repairWindowsTask(process.resourcesPath)) { reason = 'not-answering'; return; }
+    }
     if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
   };
   if (process.platform === 'win32' && state) health(state).catch(wake);

@@ -20,8 +20,8 @@ export default function Shell() {
           label.textContent = result.status === 'ok' ? 'Daemon connected' : result.reason === 'task-missing' || result.reason === 'task-stale'
             ? 'Daemon not installed: reinstall P9' : result.reason ? 'Daemon not answering: starting it again' : 'Daemon unavailable';
           label.title = result.status === 'ok' ? 'Status connected.' : result.reason === 'task-missing'
-            ? 'No P9 Foundation task. Run the P9 installer again.' : result.reason === 'task-stale'
-            ? 'The P9 Foundation task is from an older P9. Run the P9 installer again.' : result.reason
+            ? 'No P9 Foundation task, and P9 could not add it (service-install.log in the install folder). Run the P9 installer again.' : result.reason === 'task-stale'
+            ? 'The P9 Foundation task is from an older P9, and P9 could not replace it (service-install.log in the install folder). Run the P9 installer again.' : result.reason
             ? 'Log: %LOCALAPPDATA%\\P9\\daemon.log' : 'Optional for this preview. Start the daemon and launch with --state to connect.';
         }
         if (result.status !== 'ok') timer = setTimeout(ask, 5000);
