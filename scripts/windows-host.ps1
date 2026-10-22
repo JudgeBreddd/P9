@@ -1,14 +1,39 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('Job', 'Daemon', 'PipeAcl', 'PipeLock')]
+  [ValidateSet('Job', 'Daemon', 'Console', 'PipeAcl', 'PipeLock', 'Acl', 'Compile')]
   [string]$Mode,
   [string]$Payload,
-  [string]$Pipe
+  [string]$Pipe,
+  [string]$Log,
+  [string]$Out
 )
 
 $ErrorActionPreference = 'Stop'
 
-Add-Type -TypeDefinition @'
+# Acl (the daemon, before it writes anything, B8): each folder in the payload (base64, one per line) may be owned by and
+# grant access to only this user, SYSTEM and Administrators. Prints each folder that fails and exits 1. Needs no C#
+# and no module: .NET calls and Where-Object only.
+if ($Mode -eq 'Acl') {
+  $trusted = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
+  $folders = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)).Split("`n")
+  $bad = @($folders | Where-Object {
+    $security = [IO.Directory]::GetAccessControl($_, [Security.AccessControl.AccessControlSections]'Access, Owner')
+    $grants = @($security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object AccessControlType -eq 'Allow')
+    ($trusted -notcontains $security.GetOwner([Security.Principal.SecurityIdentifier]).Value) -or
+      @($grants | Where-Object { $trusted -notcontains $_.IdentityReference.Value }).Count -gt 0
+  })
+  $bad
+  exit ([int]($bad.Count -gt 0))
+}
+
+# Every mode below uses cmdlets from these two modules (Add-Type, ConvertFrom-Json, Test-Path). Imported by path they
+# load at once; left to auto-load, a PowerShell whose LOCALAPPDATA has no module analysis cache scans every module on
+# the machine first. The daemon test's host (a fresh LOCALAPPDATA) spun 17-20 s of CPU there on the GitHub runners and
+# never started node, with or without chunk 3 (run 39738625479).
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1",
+  "$PSHOME\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1"
+
+$source = @'
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -20,6 +45,7 @@ using System.Text;
 
 public static class P9WindowsHost {
     const uint CREATE_SUSPENDED = 0x00000004;
+    const uint CREATE_NEW_CONSOLE = 0x00000010;
     const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
     const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
@@ -34,6 +60,11 @@ public static class P9WindowsHost {
     const uint WRITE_DAC = 0x00040000;
     const uint PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000;
     const uint OPEN_EXISTING = 3;
+    const uint OPEN_ALWAYS = 4;
+    const uint FILE_APPEND_DATA = 0x0004;
+    const uint FILE_READ_ATTRIBUTES = 0x0080;
+    const uint SYNCHRONIZE = 0x00100000;
+    const uint HANDLE_FLAG_INHERIT = 1;
     const uint DACL_SECURITY_INFORMATION = 0x00000004;
     const int SE_KERNEL_OBJECT = 6;  // SE_FILE_OBJECT (1) returns ERROR_INVALID_PARAMETER for a pipe handle (Windows desktop, 2026-10-17)
     static readonly IntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST = new IntPtr(0x0002000D);
@@ -97,6 +128,7 @@ public static class P9WindowsHost {
     static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(IntPtr descriptor, uint revision, uint info,
         out IntPtr text, out uint length);
     [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
     static void Check(bool ok, string operation) {
         if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error(), operation);
@@ -174,10 +206,29 @@ public static class P9WindowsHost {
             } finally { if (text != IntPtr.Zero) LocalFree(text); LocalFree(descriptor); }
         } finally { CloseHandle(handle); }
     }
-    public static int Run(string mode, string[] command, IDictionary environment) {
+    // log: the child's stdout and stderr go to this file, appended (the scheduled task's daemon.log, issue #6 B4).
+    // verbatim: the rest of the line is cmd.exe's own /c line (process-tree.mjs windowsArgv), which C quoting would break.
+    static string Line(string[] command, bool verbatim) {
         if (command == null || command.Length < 1) throw new ArgumentException("command-required");
-        string line = String.Join(" ", Array.ConvertAll(command, Quote));
-        IntPtr job = CreateKillJob(), attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero;
+        return verbatim ? Quote(command[0]) + " " + String.Join(" ", command, 1, command.Length - 1) : String.Join(" ", Array.ConvertAll(command, Quote));
+    }
+    // A terminal button (D1): the child gets a new console window and outlives this host. No job of its own, no wait.
+    // ponytail: it stays in the daemon's job, so a daemon restart closes the window; CREATE_BREAKAWAY_FROM_JOB if that matters.
+    public static int Start(string[] command, IDictionary environment, bool verbatim) {
+        string line = Line(command, verbatim);
+        IntPtr environmentBlock = EnvironmentBlock(environment);
+        try {
+            var startup = new STARTUPINFOEX(); startup.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
+            PROCESS_INFORMATION process;
+            Check(CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, false, CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
+                environmentBlock, Environment.CurrentDirectory, ref startup, out process), "CreateProcess");
+            CloseHandle(process.hThread); CloseHandle(process.hProcess);
+            return 0;
+        } finally { Marshal.FreeHGlobal(environmentBlock); }
+    }
+    public static int Run(string mode, string[] command, IDictionary environment, string log, bool verbatim) {
+        string line = Line(command, verbatim);
+        IntPtr job = CreateKillJob(), attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero, logHandle = IntPtr.Zero;
         PROCESS_INFORMATION process = new PROCESS_INFORMATION();
         try {
             IntPtr size = IntPtr.Zero;
@@ -190,6 +241,12 @@ public static class P9WindowsHost {
             var startup = new STARTUPINFOEX(); startup.StartupInfo.cb = (uint)Marshal.SizeOf(startup);
             startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES; startup.lpAttributeList = attributes;
             startup.StartupInfo.hStdInput = GetStdHandle(-10); startup.StartupInfo.hStdOutput = GetStdHandle(-11); startup.StartupInfo.hStdError = GetStdHandle(-12);
+            if (!String.IsNullOrEmpty(log)) {
+                logHandle = CreateFileW(log, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, 7, IntPtr.Zero, OPEN_ALWAYS, 0, IntPtr.Zero);
+                if (logHandle == new IntPtr(-1)) { logHandle = IntPtr.Zero; throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFile(log)"); }
+                Check(SetHandleInformation(logHandle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "SetHandleInformation(log)");
+                startup.StartupInfo.hStdOutput = logHandle; startup.StartupInfo.hStdError = logHandle;
+            }
             environmentBlock = EnvironmentBlock(environment);
             Check(CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true,
                 CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
@@ -208,11 +265,17 @@ public static class P9WindowsHost {
             if (attributes != IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); }
             if (jobPointer != IntPtr.Zero) Marshal.FreeHGlobal(jobPointer);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
+            if (logHandle != IntPtr.Zero) CloseHandle(logHandle);
             if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
 }
 '@
+if ($Mode -eq 'Compile') { Add-Type -TypeDefinition $source -OutputAssembly $Out; exit 0 }
+# E4: compiling the class costs every host start 1-3 s (csc). package-windows.mjs compiles it once, at build, beside this
+# script in the installed app; a source run has no DLL and compiles here.
+$dll = Join-Path $PSScriptRoot 'P9WindowsHost.dll'
+if (Test-Path -LiteralPath $dll) { Add-Type -LiteralPath $dll } else { Add-Type -TypeDefinition $source }
 
 if ($Mode -eq 'PipeAcl' -or $Mode -eq 'PipeLock') {
   if ([string]::IsNullOrWhiteSpace($Pipe)) { throw 'pipe-required' }
@@ -233,4 +296,11 @@ $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)
 $command = @($decoded.argv | ForEach-Object { [string]$_ })
 $environment = @{}
 $decoded.env.psobject.Properties | ForEach-Object { $environment[$_.Name] = [string]$_.Value }
-exit [P9WindowsHost]::Run($Mode, $command, $environment)
+if ($Log) {
+  # ponytail: one old copy at 5 MB, checked when the host starts; a daemon that runs for weeks can grow it past that.
+  if ((Test-Path -LiteralPath $Log) -and (Get-Item -LiteralPath $Log).Length -gt 5MB) { Move-Item -LiteralPath $Log -Destination ($Log + '.1') -Force }
+  Add-Content -LiteralPath $Log -Value ((Get-Date -Format o) + ' host started')
+}
+$verbatim = [bool]$decoded.verbatim
+if ($Mode -eq 'Console') { exit [P9WindowsHost]::Start($command, $environment, $verbatim) }
+exit [P9WindowsHost]::Run($Mode, $command, $environment, $Log, $verbatim)

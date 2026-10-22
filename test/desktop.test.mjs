@@ -24,7 +24,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'agentLogin', 'workspaceChange', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     const csp = await page.evaluate(async () => (await fetch('/')).headers.get('content-security-policy'));
     assert.match(csp, /default-src 'none'/); assert.match(csp, /script-src 'self' 'sha256-/); assert.ok(!csp.includes('unsafe-eval'));
@@ -110,7 +110,9 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await card('asks:').locator('.open').click(); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
     await page.check('#mdlBody [data-question] input[value="vitest"]'); await page.click('#mdlBody [data-question] [type="submit"]');
     assert.equal(await page.locator('#mdl').evaluate(el => el.open), false);
-    await page.waitForTimeout(100); assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
+    // The dialog's close event restores the caret as a separate task; a fixed 100 ms wait lost that race on a loaded CI runner.
+    await page.waitForFunction(() => document.activeElement?.id === 'devEd', null, { timeout: 5000 }).catch(() => {});
+    assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
     await focus('mission'); await card('reviews:').locator('.open').click(); await page.keyboard.press('Escape');
     await openWin(panelID); assert.equal(await body.evaluate(p => p.scrollTop), missionTop); await closeWin();
     console.log('PASS phase4 D10-1: asking session moves cards, modal answer handles it, close restores editor caret and Mission scroll');
@@ -138,7 +140,9 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await page.locator('#mdlEd').fill((await page.locator('#mdlEd').inputValue()) + '\n- [ ] grew into a real task');
     await page.locator('#mdlEd').evaluate(t => { t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
     const selection = await page.locator('#mdlEd').evaluate(t => t.selectionStart); await page.click('#mdlPrimary');
-    await page.waitForTimeout(100); assert.equal(await page.locator('.shell').getAttribute('data-focus'), 'dev');
+    // Same race as D10-1 above (GitHub run 39724310852 lost it here): wait for the editor's focus, not a fixed 100 ms.
+    await page.waitForFunction(() => document.activeElement?.id === 'devEd', null, { timeout: 5000 }).catch(() => {});
+    assert.equal(await page.locator('.shell').getAttribute('data-focus'), 'dev');
     assert.equal(await page.locator('#devTabs [aria-selected="true"]').getAttribute('data-file'), 'plan.md');
     assert.deepEqual(await editor.evaluate(t => [document.activeElement === t, t.selectionStart, t.value.endsWith('grew into a real task')]), [true, selection, true]);
     assert.equal(await page.locator('#devTabs [data-file="server.ts"]').count(), 1);

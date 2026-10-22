@@ -78,6 +78,8 @@ test('release r2 R2-1: build.files covers every module the desktop imports; the 
   const packed = hostScript('file:///p9/resources/app.asar/apps/server/process-tree.mjs');
   assert.equal(packed, '/p9/resources/daemon/scripts/windows-host.ps1');
   assert.ok(build.extraResources.some(({ from, to }) => from === 'scripts/windows-host.ps1' && to === 'daemon/scripts/windows-host.ps1'));
+  // electron-builder leaves a file an extraResources entry names out of app.asar (CI 2026-10-22 lost package.json).
+  for (const { from } of build.extraResources) assert.ok(!shipped(from), from + ' is in build.files and extraResources, so app.asar loses it');
   console.log('PASS R2-1: ' + seen.size + ' desktop modules all in build.files; packaged host script is ' + packed);
 });
 
@@ -86,6 +88,10 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   const nsh = readFileSync(path.join(root, 'scripts', 'installer.nsh'), 'utf8'), ps1 = readFileSync(path.join(root, 'scripts', 'install-windows.ps1'), 'utf8');
   const install = nsh.slice(nsh.indexOf('!macro customInstall'), nsh.indexOf('!macroend')), uninstall = nsh.slice(nsh.indexOf('!macro customUnInstall'));
   assert.doesNotMatch(install.split('\n').find((line) => line.includes('nsExec')), /-Workspace/, 'the installer must not reset the workspace');
+  // arm64 job 119719813897: with no -Node the hook took the runner's node from PATH; Anri's laptop has none.
+  assert.match(install.split('\n').find((line) => line.includes('nsExec')), /install-windows\.ps1" -Node "\$INSTDIR\\resources\\daemon\\node\.exe"/, 'an installed build runs its own node.exe');
+  // arm64 job 119734051928: 7za's ARM64 filter left node.exe out of the install.
+  assert.match(readFileSync(path.join(root, 'scripts', 'package-windows.mjs'), 'utf8'), /arch === 'arm64' \? \{ ELECTRON_BUILDER_7Z_FILTER: 'BCJ2' \}/, 'arm64 installers use a filter NSIS extracts');
   assert.match(uninstall, /\$\{ifNot\} \$\{isUpdated\}[^]*Unregister-ScheduledTask[^]*\$\{endIf\}/, 'an update must not unregister the task');
   assert.doesNotMatch(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Unregister-ScheduledTask/);
   // Stop-ScheduledTask ends only conhost.exe; the daemon outlived it (GitHub run 39540753837), so the uninstaller ends its node.exe.
@@ -96,9 +102,21 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   // The installer is 32-bit: with redirection on, $SYSDIR's PowerShell is the 32-bit one, not the one a user opens.
   for (const part of [install, uninstall]) assert.match(part, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^]*\$\{EnableX64FSRedirection\}/, 'every PowerShell call runs with WOW64 redirection off');
   for (const part of [install, uninstall]) assert.ok(part.indexOf('${DisableX64FSRedirection}') < part.indexOf('nsExec'), 'redirection goes off before the first PowerShell call');
-  // Windows PowerShell under a PowerShell 7 parent loads 7's Set-Acl module and fails (GitHub run 39535290300: no task).
-  assert.ok(ps1.search(/PSModulePath = .*-notmatch '\\\\PowerShell\\\\'/) >= 0 && ps1.search(/PSModulePath =/) < ps1.indexOf('Set-Acl -LiteralPath'), "7's module folders leave PSModulePath before Set-Acl");
+  // Windows PowerShell under a PowerShell 7 parent loads 7's modules and fails (GitHub run 39535290300: no task).
+  assert.ok(ps1.search(/PSModulePath = .*-notmatch '\\\\PowerShell\\\\'/) >= 0 && ps1.search(/PSModulePath =/) < ps1.indexOf('Register-ScheduledTask'), "7's module folders leave PSModulePath before the task is registered");
+  // Issue #6 B1: Set-Acl threw PrivilegeNotHeldException for a standard user over an earlier install; icacls, checked, instead.
+  assert.doesNotMatch(ps1, /^[^#\n]*Set-Acl/m, 'no Set-Acl outside comments');
+  assert.match(ps1, /icacls\.exe \$root \/inheritance:r \/grant:r \('\*' \+ \$sid \+ ':\(OI\)\(CI\)F'\)[^\n]*\n\s*if \(\$LASTEXITCODE -ne 0\) \{ throw/, 'owner-only through icacls, exit code checked');
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
+  // Issue #6 B7: a task with no --workspace gave IndexOf -1, so argv[0] (node.exe) became the workspace.
+  assert.doesNotMatch(ps1, /IndexOf\([^)]*'--workspace'\) \+ 1/);
+  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}\s*\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
+  // Issue #6 B6 and B4: timestamped lines and the failing line in service-install.log; the task's daemon writes daemon.log.
+  assert.match(ps1, /^trap \{ Say \('failed at line '/m);
+  assert.match(ps1, /'-Mode', 'Daemon', '-Log', \('"' \+ \$log \+ '"'\)/);
+  // Issue #6 B10: the installer stops the old task and daemon before it replaces files, as the uninstaller does.
+  const init = nsh.slice(nsh.indexOf('!macro customInit'));
+  assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
 });
@@ -191,5 +209,5 @@ test('Windows package: licence notices ship in resources/licenses', () => {
   assert.match(pack, /node-LICENSE/);
   assert.match(pack, /startsWith\('@fontsource'\)/);
   assert.ok(Object.keys(pkg.devDependencies).filter((name) => name.startsWith('@fontsource')).length >= 10, 'fonts found by the same filter');
-  assert.match(readFileSync(path.join(root, 'scripts', 'extract-node-windows.ps1'), 'utf8'), /win-x64\\LICENSE/);
+  assert.match(readFileSync(path.join(root, 'scripts', 'extract-node-windows.ps1'), 'utf8'), /win-\$Arch\\LICENSE/);
 });

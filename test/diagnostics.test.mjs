@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { collectBundle } from '../scripts/teh.mjs';
+import { collectBundle, windowsSources } from '../scripts/teh.mjs';
 import { daemon, root } from './helpers.mjs';
 
 test('doctor allowlists output and real CLI bundle excludes credentials and sentinels', async (t) => {
@@ -36,4 +36,18 @@ test('doctor allowlists output and real CLI bundle excludes credentials and sent
   assert.equal(actual.includes(instance.credentials.csrf), false);
   assert.equal((await stat(target)).mode & 0o777, 0o600);
   console.log('PASS teh doctor --bundle: real daemon, JSON file inspected, credential/environment/journal sentinels absent');
+});
+
+// GitHub issue #6 B4: Windows has no systemd; the task and daemon.log feed the same allowlist.
+test('doctor on Windows: the task stands in for the unit and daemon.log for the journal', () => {
+  const secret = 'SENTINEL_NOT_FOR_BUNDLE_2391';
+  const log = ['2026-10-22T10:00:00 host started', secret, 'P9_READY', JSON.stringify({ event: 'P9_REQUEST_FAILED', code: 'EPERM', path: secret })].join('\r\n') + '\r\n';
+  const current = collectBundle({ daemon: { status: 'unavailable' }, ...windowsSources({ state: 'Running', execute: 'conhost.exe', arguments: secret }, log) });
+  assert.deepEqual(current.unit, { ActiveState: 'running', SubState: 'conhost' });
+  assert.deepEqual(current.logs, [{ event: 'P9_READY' }, { event: 'P9_REQUEST_FAILED', code: 'EPERM' }]);
+  assert.equal(JSON.stringify(current).includes(secret), false);
+  assert.deepEqual(collectBundle({ ...windowsSources({ state: 'Ready', execute: 'powershell.exe' }, ''), journal: '' }).unit, { ActiveState: 'ready', SubState: 'powershell' }, 'v0.1.1\'s task');
+  assert.deepEqual(collectBundle(windowsSources(null, Array(150).fill('P9_READY').join('\n'))).unit, { ActiveState: 'missing', SubState: 'missing' });
+  assert.equal(collectBundle(windowsSources(null, Array(150).fill('P9_READY').join('\n'))).logs.length, 100, 'last 100 lines');
+  console.log('PASS doctor Windows sources: task state and action in unit, daemon.log through the allowlist, sentinel absent');
 });

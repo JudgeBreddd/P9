@@ -1,16 +1,17 @@
 import { createServer } from 'node:http';
-import { readdir, readFile as readAsset, stat } from 'node:fs/promises';
+import { readdir, readFile as readAsset, stat, access, mkdir, open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, setProtection, protection } from '../../packages/files/index.mjs';
-import { createMission } from './mission.mjs';
+import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection } from '../../packages/files/index.mjs';
+import { createMission, parseSettings } from './mission.mjs';
 import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
@@ -41,6 +42,12 @@ const upgradeRoute = (url) => {
   try { return new URL(url, 'http://p9.invalid').pathname; } catch { return null; }
 };
 const refuse = (socket, status) => socket.end('HTTP/1.1 ' + status + ' Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+// The setup wizard's starter files (threat model row 17): settings.json's three required paths and the two notes.
+const STARTER_SETTINGS = Object.freeze({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' });
+const STARTER_AGENTS = '# My workspace\n\nAgents working in this folder read this file first. Write here what they should know: your projects,\n'
+  + 'where things live, and how you like work done.\n';
+const STARTER_WAITING = '# Needs you\n\nAgents put a note here when they need your answer or your OK. Each .md file in this folder shows\n'
+  + 'on Mission Control as an item that needs you, until it is moved or deleted.\n';
 const webRoot = fileURLToPath(new URL('../web/dist/', import.meta.url));
 const types = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
@@ -76,8 +83,8 @@ export function authorizeRemote(headers, method, route, auth, remote) {
 
 export function createListener({ workspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
-  const mission = createMission({ workspace, recovery, settings, instance, lifecycle });
-  const hub = createHub({ workspace, settings });
+  let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
+  let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
@@ -110,7 +117,8 @@ export function createListener({ workspace, recovery, credentials, transport, se
   // The routes both listeners serve. Device management is desktop-only and the login routes are remote-only.
   const api = new Hono();
   api.onError(onError);
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', workspace,
+  // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
   api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));
@@ -168,7 +176,8 @@ export function createListener({ workspace, recovery, credentials, transport, se
     catch (error) {
       if (error.code === 'EEXIST') return reply(c, { status: 409, error: `${file} already exists` });
       if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return reply(c, { status: 404, error: 'no _ideas folder' });
-      return reply(c, { status: 400, error: error.message });
+      // F2: onError answers with an allowlisted code; a system error's message names the file's full path.
+      throw error;
     }
     return reply(c, { status: 201, path: relative });
   });
@@ -178,16 +187,10 @@ export function createListener({ workspace, recovery, credentials, transport, se
   api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));
   api.post('/pages/:id/launch', async (c) => reply(c, await mission.launch('pages', c.req.param('id'), await json(c))));
   api.get('/agent-lock', (c) => reply(c, chat.lock()));
-  // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
-  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
-  api.get('/setup', async (c) => {
-    const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
-    return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: await present(settingsFile),
-      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
-  });
   api.get('/chat', (c) => c.json({ conversations: chat.list() }));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
-  api.get('/chat/events', async (c) => reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0))));
+  api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until');
+    return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until))); });
   api.get('/usage', async (c) => { const { claudeLive, ...usage } = ledger.usage(); return c.json({ ...usage, limits: await planLimits({ home: os.homedir(), claudeLive }) }); });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
@@ -195,7 +198,10 @@ export function createListener({ workspace, recovery, credentials, transport, se
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
   if (terminals) {
-    api.get('/terminals', async (c) => c.json({ terminals: await terminals.list() }));
+    api.get('/terminals', async (c) => {
+      try { return c.json({ terminals: await terminals.list() }); }
+      catch (error) { if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503); throw error; }
+    });
     api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
     api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
   }
@@ -239,6 +245,65 @@ export function createListener({ workspace, recovery, credentials, transport, se
     try { return c.json(await createFile(workspace, input.path, input.content), 201); }
     catch (error) { if (error.code === 'EEXIST') return c.json({ error: 'file-exists' }, 409); throw error; }
   });
+  // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
+  // Desktop only (F2): it names the workspace and settings file, which the phone never shows.
+  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
+  // Every call re-reads the disk (the wizard stores no progress): the settings file as it is now, not as it was at start.
+  const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
+  const settingsOnDisk = async () => {
+    let text;
+    if (!settingsFile) return {};
+    try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+    try { return { text, parsed: parseSettings(text) }; } catch (error) { return { text, error: String(error.message).slice(0, 200) }; }
+  };
+  app.get('/setup', async (c) => {
+    const disk = await settingsOnDisk(), paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
+    return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: disk.text !== undefined,
+      settingsInvalid: Boolean(disk.error), settingsError: disk.error ?? null,
+      writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: !(await readdir(workspace)).length,
+      agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
+      // null off Linux: the dock's terminals are tmux sessions there only.
+      tmux: terminals ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
+      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
+  });
+  // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
+  // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.
+  // The new settings load live: with no settings every Mission route answered 503, so no run exists to lose here.
+  app.post('/setup/starter', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
+    if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
+    const disk = await settingsOnDisk();
+    if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
+    const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
+    const made = (promise) => promise.then(() => true, (error) => { if (error.code === 'EEXIST') return false; throw error; });
+    const folders = async (relative) => { for (let i = 1; i < relative.length; i++) await made(createDirectory(workspace, relative.slice(0, i).join('/'))); };
+    const created = [];
+    for (const [relative, content] of [[paths.primary, STARTER_AGENTS], [paths.registry, '{"scripts":[],"apps":[],"pages":[]}\n'], [paths.waiting + '/AGENTS.md', STARTER_WAITING]]) {
+      await folders(relative.split('/'));
+      if (await made(createFile(workspace, relative, content))) created.push(relative);
+    }
+    if (await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
+    if (disk.text === undefined) {
+      await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 });
+      const file = await open(settingsFile, 'wx', 0o600).catch((error) => { if (error.code === 'EEXIST') return null; throw error; });
+      if (!file) return c.json({ error: 'settings-changed' }, 409); // written by someone else meanwhile: Retry re-reads it
+      try { await file.writeFile(JSON.stringify(STARTER_SETTINGS, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+      created.push(settingsFile);
+    }
+    if (!settings) {
+      settings = disk.parsed ?? parseSettings(JSON.stringify(STARTER_SETTINGS));
+      settingsInvalid = false;
+      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle });
+      hub = createHub({ workspace, settings });
+    }
+    return c.json({ created, settings: true }, 201);
+  });
+  // Wizard sign-in (threat model row 31), desktop only: main is the only caller, and opens the URL only after its origin check.
+  app.get('/setup/login', (c) => reply(c, chat.login.state()));
+  app.post('/setup/login', async (c) => reply(c, await chat.login.start(await json(c))));
+  app.post('/setup/login/code', async (c) => reply(c, chat.login.code(await json(c))));
+  app.post('/setup/login/stop', async (c) => reply(c, await chat.login.stop(await json(c))));
   app.get('/file-protection', (c) => c.json({ on: protection() }));
   app.post('/file-protection', async (c) => {
     const body = await json(c);

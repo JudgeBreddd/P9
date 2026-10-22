@@ -174,7 +174,7 @@ test('mode picker: each prompt sets the picked mode, unknown modes refused, the 
 
 test('a signed-out agent says how to sign in, not just "Authentication required" (GitHub issue #4)', async (t) => {
   const instance = await start(t);
-  for (const [provider, want] of [['claude', /^Claude Code is not signed in on this computer\. .*run claude and log in/], ['codex', /^Codex is not signed in on this computer\. .*run codex login/]]) {
+  for (const [provider, want] of [['claude', /^Claude Code is not signed in on this computer\. Sign in from Settings → Setup.*run claude and log in/], ['codex', /^Codex is not signed in on this computer\. Sign in from Settings → Setup.*run codex login/]]) {
     const id = await create(instance, provider);
     assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'auth-required' })).status, 202, provider);
     const { hit } = await until(instance, (event) => event.type === 'error' && event.conversation === id);
@@ -393,6 +393,10 @@ test('agents see only allowlisted environment names, in a new session and a resu
   // Locale names pass by category, not by pattern.
   const { childEnv } = await import('../apps/server/child-env.mjs');
   assert.deepEqual(Object.keys(childEnv({ LC_TIME: 'C', LC_ALL: 'C', LC_SECRET_TOKEN: 'sentinel' })), ['LC_TIME', 'LC_ALL']);
+  // A unit without a PATH line still finds tmux in ~/.local/bin, once, after the system directories.
+  assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'linux').PATH, '/usr/bin:/h/.local/bin');
+  assert.equal(childEnv({ HOME: '/h', PATH: '/h/.local/bin:/usr/bin' }, 'linux').PATH, '/h/.local/bin:/usr/bin');
+  assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'darwin').PATH, '/usr/bin');
   console.log(`PASS child env: agent saw ${fresh.length} names (no sentinel, no API key), same after resume; every server spawn passes childEnv`);
 });
 

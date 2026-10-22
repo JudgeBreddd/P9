@@ -45,7 +45,8 @@ The repository is private: you need a GitHub account with access to `JudgeBreddd
 **Windows**
 
 1. Signed in to GitHub, open [the releases page](https://github.com/JudgeBreddd/p9/releases) and download
-   `p9-event-horizon-<version>-windows-x64.exe` from the newest release.
+   `p9-event-horizon-<version>-windows-x64.exe` from the newest release, or `...-windows-arm64.exe` on an ARM
+   laptop (Snapdragon; Settings > System > About says "ARM-based processor").
 2. Double-click it. The installer is unsigned, so SmartScreen says "Windows protected your PC": click
    **More info**, then **Run anyway**, and click through the installer. Checking the download first is
    recommended (next section).
@@ -94,19 +95,19 @@ What each part of the app does is in [docs/guide.md](docs/guide.md).
 
 ## Windows installer: unsigned in v1, check the checksum
 
-v1 packages are **not code-signed**, and Windows SmartScreen will warn. Every release lists a `SHA256SUMS`
-file beside the installer. Check it before you run anything. What it proves: the file you have is the
+v1 packages are **not code-signed**, and Windows SmartScreen will warn. Every release lists a `SHA256SUMS-x64`
+and a `SHA256SUMS-arm64` file beside the installers. Check it before you run anything. What it proves: the file you have is the
 file that was uploaded, not damaged or swapped in transit. What it does not prove: who built it. The
 checksum is downloaded from the same place as the installer, so anyone able to replace one can replace
 both. v1 has no signed releases, so nothing here proves authorship. Building from source lets you read
 what you run: clone, check out a commit you have reviewed (`git checkout <commit>`), then build.
 
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing          # Linux / Git Bash
+sha256sum -c SHA256SUMS-x64 --ignore-missing      # Linux / Git Bash (SHA256SUMS-arm64 for the ARM64 one)
 ```
 
 ```powershell
-(Get-FileHash .\p9-event-horizon-<version>-windows-x64.exe -Algorithm SHA256).Hash   # compare with SHA256SUMS
+(Get-FileHash .\p9-event-horizon-<version>-windows-x64.exe -Algorithm SHA256).Hash   # compare with SHA256SUMS-x64
 ```
 
 A mismatch means do not run it.
@@ -247,7 +248,8 @@ On the first install its workspace is a new, empty `%USERPROFILE%\P9`, and an up
 already has. To use another folder, run `resources\daemon\scripts\install-windows.ps1 -Workspace
 <folder>` from the install folder in PowerShell (it replaces the task). Without `%APPDATA%\P9\settings.json` the daemon still starts and Mission Control says
 `settings-missing`. Uninstalling stops and removes the task; your state in `%LOCALAPPDATA%\P9` stays. Building the installer needs Windows:
-`pnpm package:win` there writes the installer and `SHA256SUMS` to `dist/windows/`.
+`pnpm package:win` there writes the installer for that machine's architecture and its `SHA256SUMS-<arch>` to
+`dist/windows/`.
 
 ## Everyday use
 
@@ -396,7 +398,7 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Status and known gaps
 
-**Version 0.1.2, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.3, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real

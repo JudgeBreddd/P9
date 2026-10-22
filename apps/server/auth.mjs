@@ -59,8 +59,10 @@ export function createAuth({ ledger, rpID, origin, now = Date.now,
     db.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?)').run(hash(token), device, csrf, now() + SESSION_MS);
     return { token, csrf };
   }
+  // Review #11: the deadline counts from the approval once there is one, so a phone that waited 9 minutes for the
+  // desktop still gets 10 to finish; an unapproved request still lapses 10 minutes after it was made.
   function expire() {
-    db.prepare("UPDATE enrollments SET state = 'expired' WHERE state IN ('pending', 'approved', 'verifying') AND created < ?").run(now() - APPROVAL_MS);
+    db.prepare("UPDATE enrollments SET state = 'expired' WHERE state IN ('pending', 'approved', 'verifying') AND COALESCE(approved, created) < ?").run(now() - APPROVAL_MS);
   }
 
   return {
@@ -112,7 +114,7 @@ export function createAuth({ ledger, rpID, origin, now = Date.now,
       // One attempt per approval: a failed or replayed registration burns it, and a new one needs the desktop again.
       // 'verifying' while the check awaits, so a desktop refuse or reset meanwhile cancels it.
       db.prepare("UPDATE enrollments SET state = 'verifying' WHERE id = ?").run(id);
-      const finish = () => db.prepare("UPDATE enrollments SET state = 'used' WHERE id = ? AND state = 'verifying' AND created >= ?").run(id, now() - APPROVAL_MS).changes;
+      const finish = () => db.prepare("UPDATE enrollments SET state = 'used' WHERE id = ? AND state = 'verifying' AND COALESCE(approved, created) >= ?").run(id, now() - APPROVAL_MS).changes;
       let verified;
       try {
         verified = await verify.registration({ response, expectedChallenge: row.challenge, expectedOrigin: origin,

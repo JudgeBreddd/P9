@@ -117,3 +117,39 @@ test('plan limits: missing sources give null, the newer Claude source wins, noth
   await writeFile(path.join(home, '.codex', 'sessions', '2026', '10', '17', 'rollout-a.jsonl'), '{"type":"session_meta"}\n');
   assert.equal((await planLimits({ home, statusLine })).codex, null, 'a session with no rate_limits event is not a figure');
 });
+
+// E5: /usage parsed every update and turn-end in the ledger on each call, image chunks included. It now reads only the
+// rows since its last call, and skips agent chunks in SQL. JSON.parse is counted to prove which rows were read.
+test('usage reads each usage row once and never parses agent chunks', (t) => {
+  const ledger = openLedger(':memory:'), parse = JSON.parse;
+  let parsed = 0;
+  JSON.parse = (...args) => { parsed += 1; return parse(...args); };
+  t.after(() => { JSON.parse = parse; });
+  const used = (amount) => ({ sessionUpdate: 'usage_update', used: 1, size: 10, cost: { amount, currency: 'USD' } });
+  const turn = { usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 2 } };
+  ledger.append('c1', 'update', used(0.5)); ledger.append('c1', 'turn-end', turn);
+  ledger.append('c1', 'update', { sessionUpdate: 'agent_message_chunk', content: { type: 'image', data: 'A'.repeat(100_000) } });
+  ledger.db.prepare("INSERT INTO events (conversation, type, data, at) VALUES ('c1', 'update', '{bad', ?)").run(Date.now());
+  let usage = ledger.usage();
+  assert.deepEqual([parsed, usage.samples, usage.discarded, usage.totals], [3, 1, 1, { inputTokens: 10, outputTokens: 5, cachedTokens: 2, costUsd: 0.5 }]);
+  parsed = 0;
+  ledger.append('c1', 'update', used(0.8)); ledger.append('c1', 'turn-end', turn);
+  usage = ledger.usage();
+  // The cost is the session's running total, so it is counted once (0.8), not added (1.3).
+  assert.deepEqual([parsed, usage.samples, usage.discarded, usage.totals], [2, 2, 1, { inputTokens: 20, outputTokens: 10, cachedTokens: 4, costUsd: 0.8 }]);
+  parsed = 0;
+  assert.deepEqual(ledger.usage().totals, usage.totals);
+  assert.equal(parsed, 0, 'a call with no new rows parses nothing');
+});
+
+// E2: the desktop replays only the chats that are not stopped at launch, and loads a stopped one's history on its own.
+test('ledger.of reads only the chats asked for, up to until, and says how far it got', () => {
+  const ledger = openLedger(':memory:');
+  for (let i = 0; i < 6; i++) ledger.append(i % 2 ? 'b' : 'a', 'update', { i });
+  const of = (...args) => { const r = ledger.of(...args); return [r.events.map((ev) => ev.data.i), r.cursor]; };
+  assert.deepEqual(of(['a'], 0), [[0, 2, 4], 6], 'past the last match: the newest cursor');
+  assert.deepEqual(of(['a', 'b'], 0, 6, 2), [[0, 1], 2], 'a full batch: the last row read');
+  assert.deepEqual(of(['b'], 2, 4), [[3], 4], 'until is the end');
+  assert.deepEqual(of([], 0), [[], 6]);
+  assert.deepEqual(of(['a'], 9), [[], 9], 'never backwards');
+});

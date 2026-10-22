@@ -72,6 +72,11 @@ export function rollbackLedger(file) {
 // then a <file>.migrating marker naming that copy is written. A start that finds the marker (the last migration died
 // part way) restores the copy first. A file newer than this build is refused, never opened for writing.
 // steps: test hook to stand in for a later build's longer migration list.
+const parsed = (row) => {
+  try { return { ...row, data: JSON.parse(row.data) }; }
+  catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }
+};
+
 export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   const marker = file + '.migrating';
   if (file !== ':memory:' && existsSync(marker)) { replaceWith(file, readFileSync(marker, 'utf8')); rmSync(marker); }
@@ -99,35 +104,49 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   // Operation IDs are never forgotten: after a week only the stored reply is dropped, so a later retry is refused
   // (operation-expired) instead of running again. A row is an ID and a hash, about 150 bytes.
   db.prepare("UPDATE operations SET state = 'expired', body = NULL WHERE at < ? AND state != 'expired'").run(Date.now() - WEEK);
+  // E2: one chat's events (or a few chats') without reading the rest. An index, not a schema change: an older build
+  // opens the file unchanged and SQLite keeps the index up to date for it, so it stays outside MIGRATIONS.
+  db.exec('CREATE INDEX IF NOT EXISTS events_conversation ON events (conversation, cursor)');
   const statements = {
     append: db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)'),
     after: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE cursor > ? ORDER BY cursor LIMIT ?'),
-    usage: db.prepare("SELECT e.conversation, e.type, c.provider, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation WHERE e.type IN ('update', 'turn-end') ORDER BY e.cursor"),
+    top: db.prepare('SELECT COALESCE(MAX(cursor), 0) AS n FROM events'),
+    of: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE cursor > ? AND cursor <= ? AND conversation IN (SELECT value FROM json_each(?)) ORDER BY cursor LIMIT ?'),
+    // E5: only rows after the last fold, and only updates that can be usage (or are malformed: those count as discarded).
+    // Agent chunks, images included, are skipped in SQL instead of parsed. JSON.stringify never escapes 'usage_update'.
+    usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
+      + " WHERE e.cursor > ? AND (e.type = 'turn-end' OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
     operation: db.prepare('SELECT * FROM operations WHERE id = ?'),
     recent: db.prepare('SELECT COUNT(*) AS n FROM operations WHERE login = ? AND at > ?'),
     begin: db.prepare("INSERT INTO operations (id, login, fingerprint, state, at) VALUES (?, ?, ?, 'running', ?)"),
     finish: db.prepare("UPDATE operations SET state = 'done', status = ?, body = ? WHERE id = ?"),
   };
+  const fold = { cursor: 0, totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }, contexts: new Map(), costs: new Map(),
+    latest: 0, discarded: 0, samples: 0, claudeLive: null };
   return {
     db,
     append(conversation, type, data) {
       return Number(statements.append.run(conversation, type, JSON.stringify(data), Date.now()).lastInsertRowid);
     },
     after(cursor, limit = 500) {
-      return statements.after.all(cursor, limit).map((row) => {
-        try { return { ...row, data: JSON.parse(row.data) }; }
-        catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }
-      });
+      return statements.after.all(cursor, limit).map(parsed);
+    },
+    // The events of the conversations in only, after cursor and up to until (default: the newest). The cursor returned
+    // is how far the scan got, matching or not, so a caller can carry on from it.
+    of(only, cursor, until = Infinity, limit = 500) {
+      const top = Math.min(until, statements.top.get().n), rows = statements.of.all(cursor, top, JSON.stringify(only), limit);
+      return { events: rows.map(parsed), cursor: rows.length === limit ? rows.at(-1).cursor : Math.max(cursor, top) };
     },
     // What the adapters send (ACP, checked against claude-agent-acp 0.88.0): token counts per turn in the prompt
     // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the
     // session's running total, so each conversation counts its latest cost once.
+    // Events are append-only, so the fold so far is kept and each call reads only the rows after it (E5).
     usage() {
-      const totals = { inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 };
-      const contexts = new Map(), costs = new Map();
       const count = (value) => value === undefined || value === null || (Number.isSafeInteger(value) && value >= 0);
-      let latest = 0, discarded = 0, samples = 0, claudeLive = null;
-      for (const row of statements.usage.all()) {
+      const { totals, contexts, costs } = fold;
+      let { latest, discarded, samples, claudeLive } = fold;
+      for (const row of statements.usage.all(fold.cursor)) {
+        fold.cursor = row.cursor;
         let data;
         try { data = JSON.parse(row.data); } catch { discarded += 1; continue; }
         if (row.type === 'turn-end') {
@@ -150,10 +169,12 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
         }
         latest = Math.max(latest, row.at);
       }
-      for (const amount of costs.values()) totals.costUsd += amount;
+      Object.assign(fold, { latest, discarded, samples, claudeLive });
+      let costUsd = 0;
+      for (const amount of costs.values()) costUsd += amount;
       const any = samples || contexts.size;
       return { state: any ? (Date.now() - latest > 15 * 60 * 1000 ? 'stale' : 'recorded') : 'unavailable',
-        updatedAt: latest || null, samples, discarded, totals, contexts: [...contexts.values()], claudeLive };
+        updatedAt: latest || null, samples, discarded, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive };
     },
     operation: (id) => statements.operation.get(id),
     recent: (login, since) => statements.recent.get(login, since).n,

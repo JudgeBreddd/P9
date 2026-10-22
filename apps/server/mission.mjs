@@ -7,7 +7,10 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { readFile, listDirectory, guardedSave } from '../../packages/files/index.mjs';
-import { launchTree, endTree, stopScopes } from './process-tree.mjs';
+import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
+
+const windows = process.platform === 'win32';
+const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
 
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ITEM = /^[\w.-]{1,120}\.md$/;
@@ -18,6 +21,7 @@ const UNSAFE_ARG = /[\x00-\x1f\x7f;&|`$<>\\]/;
 // ssh joins its remote command with spaces and the remote shell splits and globs it: an ssh button takes one plain word.
 const SSH_WORD = /^[\w.@%+=:,/-]+$/;
 const RUN_LIMIT_MS = 15 * 60 * 1000;
+const PRINT_URL_MS = 30000;
 const OUTPUT_LIMIT = 1024 * 1024;
 const MAX_RUNNING = 4;
 
@@ -174,11 +178,33 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     catch { return { status: 404, error: 'not-found' }; }
   }
 
-  function launchDetached(argv, cwd) {
-    const child = spawn(argv[0], argv.slice(1), { cwd, shell: false, env: childEnv(), detached: true, stdio: 'ignore' });
-    child.on('error', () => {});
-    child.unref();
+  // Resolves false when the program did not start (no konsole or xdg-open, a command not found), so the button says
+  // so instead of "launched" (D1). Windows resolves the command first and runs a .cmd through cmd.exe (D3).
+  function launchDetached(argv, cwd, stdio = 'ignore') {
+    let child;
+    try {
+      const { argv: full, verbatim } = windows ? windowsArgv(argv, childEnv()) : { argv, verbatim: false };
+      child = spawn(full[0], full.slice(1), { cwd, shell: false, env: childEnv(), detached: true, stdio, windowsVerbatimArguments: verbatim });
+    } catch { return Promise.resolve(null); }
+    return new Promise((done) => {
+      child.once('spawn', () => done(child));
+      child.once('error', () => done(null));
+    }).then((started) => { if (started && stdio === 'ignore') started.unref(); return started; });
   }
+  // Linux: konsole. Windows: the host script starts the command in a new console window and exits 0 once it has (D1).
+  function terminal(argv, cwd) {
+    if (!windows) return launchDetached(['konsole', '--workdir', cwd, '-e', ...argv], cwd);
+    let host;
+    try { host = windowsJobCommand(argv, childEnv(), 'Console'); } catch { return Promise.resolve(null); }
+    return new Promise((done) => {
+      const child = spawn(host[0], host.slice(1), { cwd, shell: false, env: childEnv(), stdio: 'ignore', windowsHide: true });
+      child.once('error', () => done(null));
+      child.once('exit', (code) => done(code === 0 ? child : null));
+    });
+  }
+  // Windows opens a URL through its protocol handler, never cmd's start, which would parse an & in the URL (D1).
+  const open = (url) => launchDetached(windows ? [system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url] : ['xdg-open', url], scriptsRoot);
+  const notStarted = { status: 502, error: 'could-not-start' };
   async function resolve(kind, id, body, allowedKeys) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 404, error: 'unknown-id' };
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !allowedKeys.includes(key))) {
@@ -205,10 +231,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     try {
     const target = await resolve('scripts', id, body, ['args', 'confirm']);
     if (target.error) return target;
-    if (target.item.terminal) {
-      launchDetached(['konsole', '--workdir', target.cwd, '-e', ...target.argv], target.cwd);
-      return { status: 200, launched: true };
-    }
+    if (target.item.terminal) return await terminal(target.argv, target.cwd) ? { status: 200, launched: true } : notStarted;
     if ([...runs.values()].filter((entry) => entry.done === false).length >= MAX_RUNNING) return { status: 429, error: 'too-many-runs' };
     // ponytail: runs live in memory (latest 20); a daemon restart forgets them, the hub never kept them either.
     for (const key of [...runs.keys()].slice(0, Math.max(0, runs.size - 19))) if (runs.get(key).done) runs.delete(key);
@@ -255,24 +278,22 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
 
   // A server that prints its URL (hub's vscode-web): run it up to 30 s, open the last stdout line if it is http(s).
-  function printUrl(target) {
+  async function printUrl(target) {
     const allowed = captureAuthority();
-    return new Promise((done) => {
-      const child = spawn(target.argv[0], target.argv.slice(1), { cwd: target.cwd, shell: false, env: childEnv(), detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      let stdout = '';
-      const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 30000);
-      child.stdout.on('data', (chunk) => { if (stdout.length < 65536) stdout += chunk; });
-      const finish = () => {
-        clearTimeout(timer);
-        const url = stdout.trim().split('\n').pop()?.trim() ?? '';
-        if (!web(url)) return done({ status: 502, error: 'no-url-printed' });
-        if (!allowed()) return done({ status: 401, error: 'login-required' });
-        launchDetached(['xdg-open', url], scriptsRoot);
-        done({ status: 200, launched: true, url });
-      };
-      child.on('error', () => { clearTimeout(timer); done({ status: 502, error: 'could-not-start' }); });
-      child.on('close', finish);
-    });
+    const child = await launchDetached(target.argv, target.cwd, ['ignore', 'pipe', 'ignore']);
+    if (!child) return notStarted;
+    // Windows has no process groups: taskkill /T ends the tree (before D1 the kill threw there and the request hung).
+    const kill = () => windows ? spawn(system32('taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { shell: false, env: childEnv(), stdio: 'ignore', windowsHide: true }).on('error', () => {})
+      : process.kill(-child.pid, 'SIGKILL');
+    const timer = setTimeout(() => { try { kill(); } catch {} }, PRINT_URL_MS);
+    let stdout = '';
+    child.stdout.on('data', (chunk) => { if (stdout.length < 65536) stdout += chunk; });
+    await new Promise((closed) => child.on('close', closed));
+    clearTimeout(timer);
+    const url = stdout.trim().split('\n').pop()?.trim() ?? '';
+    if (!web(url)) return { status: 502, error: 'no-url-printed' };
+    if (!allowed()) return { status: 401, error: 'login-required' };
+    return await open(url) ? { status: 200, launched: true, url } : notStarted;
   }
   async function launch(kind, id, body) {
     const release = lifecycle.begin();
@@ -285,15 +306,14 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       const page = (await registry()).pages.find((record) => record.id === id);
       if (!page) return { status: 404, error: 'unknown-id' };
       stillAuthorized();
-      launchDetached(['xdg-open', page.url], scriptsRoot);
-      return { status: 200, launched: true };
+      return await open(page.url) ? { status: 200, launched: true } : notStarted;
     }
     const target = await resolve('apps', id, body, ['args', 'confirm']);
     if (target.error) return target;
     if (target.item.print_url) return await printUrl(target);
-    launchDetached(target.item.terminal ? ['konsole', '--workdir', target.cwd, '-e', ...target.argv] : target.argv, target.cwd);
     const allowed = captureAuthority();
-    if (target.item.url) setTimeout(() => { if (allowed()) launchDetached(['xdg-open', target.item.url], scriptsRoot); }, target.item.url_delay ?? 0).unref();
+    if (!await (target.item.terminal ? terminal(target.argv, target.cwd) : launchDetached(target.argv, target.cwd))) return notStarted;
+    if (target.item.url) setTimeout(() => { if (allowed()) open(target.item.url); }, target.item.url_delay ?? 0).unref();
     return { status: 200, launched: true };
     } finally { release(); }
   }

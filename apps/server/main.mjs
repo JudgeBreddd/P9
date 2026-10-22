@@ -53,6 +53,16 @@ await mkdir(ownershipDirectory, { recursive: true, mode: 0o700 });
 const ownershipStat = await lstat(ownershipDirectory);
 if (!ownershipStat.isDirectory() || inside(workspace, await realpath(ownershipDirectory))
     || (!windows && (ownershipStat.uid !== process.getuid() || (ownershipStat.mode & 0o777) !== 0o700))) throw new Error('unsafe-ownership-directory');
+// Windows has no mode bits: the three folders' ACLs may grant only this user, SYSTEM and Administrators (B8). The
+// installer makes %LOCALAPPDATA%\P9 owner-only; a source run's folders inherit the profile's ACL, which holds those three.
+if (windows) {
+  const folders = Buffer.from([state, recovery, ownershipDirectory].join('\n')).toString('base64');
+  const acl = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', windowsHost, '-Mode', 'Acl', '-Payload', folders], { encoding: 'utf8', env: childEnv() });
+  if (acl.status !== 0) {
+    throw new Error(String(acl.stdout).split(/\r?\n/).includes(ownershipDirectory) ? 'unsafe-ownership-directory' : 'unsafe-private-directory');
+  }
+}
 let workspaceLock;
 if (windows) {
   workspaceLock = createNetServer();

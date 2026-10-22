@@ -236,8 +236,8 @@ test('every workspace-hub registry record parses, and the module never uses a sh
   }
   const source = (await Promise.all(['mission.mjs', 'process-tree.mjs'].map((name) => readFile(path.join(root, 'apps/server', name), 'utf8')))).join('\n');
   assert.equal(/shell:\s*true|\bexec(?:Sync)?\(/.test(source), false);
-  assert.equal((source.match(/spawn\(/g) ?? []).length, 3);
-  assert.equal((source.match(/shell: false/g) ?? []).length, 3);
+  assert.equal((source.match(/spawn\(/g) ?? []).length, 4);
+  assert.equal((source.match(/shell: false/g) ?? []).length, 4);
   console.log(`PASS phase5 registry: ${real ? 'every live workspace-hub record valid' : 'live registry absent (publish checkout)'}; spawn only with shell:false`);
 });
 
@@ -299,7 +299,14 @@ test('the registry is read-only through the file API, and print_url apps open th
   await chmod(path.join(instance.directory, 'bin', 'xdg-open'), 0o755);
   await writeFile(file, JSON.stringify({ scripts: [], pages: [], apps: [
     { id: 'serve', title: 'Serve', print_url: true, cmd: [node, '-e', 'console.log("starting"); console.log("http://127.0.0.1:8123/?tkn=1")'] },
-    { id: 'quiet', title: 'Quiet', print_url: true, cmd: [node, '-e', 'console.log("no url")'] }] }));
+    { id: 'quiet', title: 'Quiet', print_url: true, cmd: [node, '-e', 'console.log("no url")'] },
+    { id: 'gone', title: 'Gone', cmd: ['p9-no-such-command'] },
+    { id: 'gone-url', title: 'Gone URL', print_url: true, cmd: ['p9-no-such-command'] }] }));
+  // D1: a program that does not start says so; before, the button reported launched.
+  for (const id of ['gone', 'gone-url']) {
+    const gone = await call(instance, `/apps/${id}/launch`, 'POST', {});
+    assert.deepEqual([gone.status, JSON.parse(gone.text).error], [502, 'could-not-start'], id + ': ' + gone.text);
+  }
   const served = await call(instance, '/apps/serve/launch', 'POST', {});
   assert.equal(served.status, 200, served.text);
   assert.equal(JSON.parse(served.text).url, 'http://127.0.0.1:8123/?tkn=1');
@@ -327,6 +334,24 @@ test('no hub folder in settings: every hub route answers 404 hub-not-set and run
   const hub = createHub({ workspace: '/nonexistent', settings: { registry: 'r.json' } });
   for (const answer of [await hub.overview(), await hub.text({ kind: 'solo' }), await hub.decide({ name: 'librarian-x', choice: 'merge' })])
     assert.deepEqual(answer, { status: 404, error: 'hub-not-set' });
+});
+
+// D2: on Windows bash is missing or WSL's (which boots a VM every poll), so the hub runs no ICM shell script there.
+test('Windows: hub notices run no shell script', async (t) => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const { createHub } = await import('../apps/server/hub.mjs');
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'p9-hub-'));
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  t.after(async () => { Object.defineProperty(process, 'platform', platform); await rm(workspace, { recursive: true, force: true }); });
+  const scripts = path.join(workspace, '_system', 'scripts');
+  const marker = path.join(workspace, 'ran');
+  await mkdir(scripts, { recursive: true });
+  for (const name of ['heartbeats.sh', 'doctor.sh']) await writeFile(path.join(scripts, name), `echo "${name}" >> '${marker}'\necho 'FAIL marker'\n`);
+  const hub = createHub({ workspace, settings: { hub: 'hub' } });
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  assert.deepEqual(await hub.notices(), []);
+  assert.equal(await access(marker).then(() => true, () => false), false, 'a shell script ran');
 });
 
 // Release r2 R2-7: decide re-checks the phone's session after its read, lands the line by rename, and refuses a file

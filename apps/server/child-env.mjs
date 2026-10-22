@@ -13,5 +13,12 @@ export const allowed = (key, platform = process.platform) => platform === 'win32
   : ALLOW.has(key);
 
 export function childEnv(source = process.env, platform = process.platform) {
-  return Object.fromEntries(Object.entries(source).filter(([key]) => allowed(key, platform)));
+  const env = Object.fromEntries(Object.entries(source).filter(([key]) => allowed(key, platform)));
+  // A unit from before install-service recorded the installer's PATH starts with systemd's bare PATH after a reboot,
+  // so tmux and agent CLIs in ~/.local/bin (systemd's user-binaries directory) went missing. Appended, so it never
+  // shadows a system binary.
+  // ponytail: only ~/.local/bin; a tool elsewhere (nvm, ~/.cargo/bin) still needs the unit's PATH line (UPGRADE.md).
+  const local = env.HOME + '/.local/bin';
+  if (platform === 'linux' && env.HOME && env.PATH !== undefined && !env.PATH.split(':').includes(local)) env.PATH += ':' + local;
+  return env;
 }

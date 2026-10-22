@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { open, realpath, unlink, rename, link, readdir, lstat } from 'node:fs/promises';
+import { open, realpath, unlink, rename, link, readdir, lstat, mkdir } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { MAX_BYTES } from '../protocol/index.mjs';
@@ -190,6 +190,25 @@ export async function createFile(root, relative, content) {
     if (temporary) await unlink(temporary).catch(() => {});
     await Promise.all(handles.map((handle) => handle.close()));
   }
+}
+
+// A new folder only (the setup wizard's starter files, threat model row 17): the same no-symlink walk as createFile,
+// then mkdir (Linux) or FILE_CREATE (Windows), so an existing name fails with EEXIST and is never replaced or followed.
+export async function createDirectory(root, relative) {
+  const parts = partsFor(relative), canonicalRoot = path.resolve(root);
+  if (win) return win.createDirectory(canonicalRoot, parts);
+  const handles = [];
+  try {
+    let parent = await open(canonicalRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    handles.push(parent);
+    if (await realpath(`/proc/self/fd/${parent.fd}`) !== canonicalRoot) throw new Error('path-changed');
+    for (const part of parts.slice(0, -1)) {
+      parent = await open(`/proc/self/fd/${parent.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      handles.push(parent);
+    }
+    await mkdir(`/proc/self/fd/${parent.fd}/${parts.at(-1)}`, 0o755);
+    await parent.sync();
+  } finally { await Promise.all(handles.map((handle) => handle.close())); }
 }
 
 const pending = new Map();
