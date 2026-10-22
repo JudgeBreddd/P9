@@ -162,6 +162,8 @@ jobs:
           Write-Output 'daemon up after install'
           Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | ForEach-Object { 'node: ' + $_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length)) }
           function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' }) }
+          # arm64 job 119704715150: the task ran the runner's node from PATH, so nothing here matched and /Run was refused.
+          if ((Get-Daemon).Count -lt 1) { throw 'the daemon is not the bundled node.exe (node: and hook: lines above)' }
           # A daemon that died on its own (issue #4 item 7) is the case the app restarts with schtasks /Run (main.mjs).
           $before = Get-Date
           Get-Daemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
