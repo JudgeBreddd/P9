@@ -164,7 +164,8 @@ jobs:
           while ((Get-ScheduledTask -TaskName 'P9 Foundation').State -eq 'Running' -and (Get-Date) -lt $end) { Start-Sleep 1 }
           Unregister-ScheduledTask -TaskName 'P9 Foundation' -Confirm:$false
           $before = Get-Date
-          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { repairWindowsTask } = await import(pathToFileURL(process.argv[1]).href); process.exit(await repairWindowsTask(process.argv[2]) ? 0 : 1)" (Resolve-Path scripts/teh.mjs).Path (Join-Path $app 'resources')
+          # teh.mjs as argv[1] would start its own command line (run 39798563746), so the resources folder comes first.
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { repairWindowsTask } = await import(pathToFileURL(process.argv[2]).href); process.exit(await repairWindowsTask(process.argv[1]) ? 0 : 1)" (Join-Path $app 'resources') (Resolve-Path scripts/teh.mjs).Path
           $repair = $LASTEXITCODE
           Get-Content (Join-Path $app 'service-install.log') | Select-Object -Last 15 | ForEach-Object { 'repair log: ' + $_ }
           if ($repair -ne 0) { throw 'the app''s repair failed (repair log: lines above)' }
