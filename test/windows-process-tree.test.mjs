@@ -133,10 +133,12 @@ test('Windows Stop ends detached chat and script children through Job Objects wi
 
   const acl = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
     path.join(root, 'scripts', 'windows-host.ps1'), '-Mode', 'PipeAcl', '-Pipe', instance.credentials.socketPath], { encoding: 'utf8' }).trim();
-  const sid = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], { encoding: 'utf8' }).trim();
+  // SDDL writes well-known accounts as aliases (the runners' built-in Administrator is LA), so compare parsed SIDs.
+  const [sid, ...trustees] = execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    `[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; (New-Object Security.AccessControl.RawSecurityDescriptor('${acl}')).DiscretionaryAcl | ForEach-Object { $_.SecurityIdentifier.Value }`],
+  { encoding: 'utf8' }).trim().split(/\r?\n/);
   assert.match(acl, /^D:P?/);
-  assert.deepEqual([...acl.matchAll(/;;;([^)]+)\)/g)].map((match) => match[1]), [sid]);
+  assert.deepEqual(trustees, [sid]);
 
   const conversation = (await json(call('/chat', 'POST', { provider: 'claude' }))).body.conversation;
   assert.equal((await call(`/chat/${conversation}/prompt`, 'POST', { text: 'detach' })).status, 202);
