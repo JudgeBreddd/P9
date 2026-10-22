@@ -1,9 +1,9 @@
-# Builds the Windows installer on GitHub's Windows machine.
+# Builds the Windows installers, x64 and ARM64, each on a GitHub Windows machine of that architecture (B9).
 # Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag: it builds that
-# tag and attaches the .exe and SHA256SUMS to the release (which must already exist). Tags before v0.1.2 lack the
+# tag and attaches both .exe files and SHA256SUMS-x64 and SHA256SUMS-arm64 to the release (which must already exist). Tags before v0.1.2 lack the
 # packaging fix and fail on this machine (the NSIS 260-character path).
 # A push to a branch other than main that changes the packaging builds the installer too, as a check only: nothing is
-# attached anywhere. Windows minutes count double against the private repo's monthly allowance.
+# attached anywhere. Windows minutes count double against the private repo's monthly allowance, and the ARM64 runner's too.
 name: Windows installer
 
 on:
@@ -21,6 +21,10 @@ on:
       - scripts/installer.nsh
       - scripts/windows-host.ps1
       - scripts/teh.mjs
+      - apps/server/main.mjs
+      - apps/server/process-tree.mjs
+      - apps/server/windows.mjs
+      - test/windows-process-tree.test.mjs
       - package.json
       - pnpm-lock.yaml
       - .github/workflows/windows-installer.yaml
@@ -28,18 +32,28 @@ on:
 permissions:
   contents: write
 
-# One run per branch at a time; a newer push waits and replaces any run still waiting. Not cancel-in-progress: four chunks
-# pushing release/v0.1.3 cancelled the 35-minute job before it ever finished (2026-10-22, run 39724311084).
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   installer:
-    runs-on: windows-latest
+    strategy:
+      # One architecture failing still finishes the other's installer.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: windows-latest
+          - arch: arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    # One run per branch and architecture at a time; a newer push waits and replaces any run still waiting. Not
+    # cancel-in-progress: four chunks pushing release/v0.1.3 cancelled the 35-minute job before it ever finished
+    # (2026-10-22, run 39724311084).
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.arch }}
+      cancel-in-progress: false
     timeout-minutes: 90
     env:
       TAG: ${{ inputs.tag }}
+      P9_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -57,23 +71,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat dist/windows/SHA256SUMS
-          gh release upload "$TAG" dist/windows/*.exe dist/windows/SHA256SUMS --clobber
+          cat dist/windows/SHA256SUMS-$P9_ARCH
+          gh release upload "$TAG" dist/windows/*-$P9_ARCH.exe dist/windows/SHA256SUMS-$P9_ARCH --clobber
       - name: Show the check build
         if: github.event_name == 'push'
         shell: bash
         run: |
-          cat dist/windows/SHA256SUMS
+          cat dist/windows/SHA256SUMS-$P9_ARCH
           ls -l dist/windows/*.exe
       # The check build, to download from the run's page and install by hand (a tester's laptop).
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push'
         with:
-          name: windows-installer
+          name: windows-installer-${{ matrix.arch }}
           path: |
             dist/windows/*.exe
-            dist/windows/SHA256SUMS
+            dist/windows/SHA256SUMS-${{ matrix.arch }}
           retention-days: 14
+      # The Windows-only tests on a real Windows machine of each architecture: the host (.cmd through cmd.exe, a new
+      # console, the folder ACL check, the prebuilt DLL) and Job Object stop. After the upload, so a failure keeps the installer.
+      - name: Windows host and process-tree tests
+        if: github.event_name == 'push'
+        run: node --test test/windows-process-tree.test.mjs
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.
