@@ -299,6 +299,11 @@ export function createListener({ workspace, recovery, credentials, transport, se
     }
     return c.json({ created, settings: true }, 201);
   });
+  // Wizard sign-in (threat model row 31), desktop only: main is the only caller, and opens the URL only after its origin check.
+  app.get('/setup/login', (c) => reply(c, chat.login.state()));
+  app.post('/setup/login', async (c) => reply(c, await chat.login.start(await json(c))));
+  app.post('/setup/login/code', async (c) => reply(c, chat.login.code(await json(c))));
+  app.post('/setup/login/stop', async (c) => reply(c, await chat.login.stop(await json(c))));
   app.get('/file-protection', (c) => c.json({ on: protection() }));
   app.post('/file-protection', async (c) => {
     const body = await json(c);

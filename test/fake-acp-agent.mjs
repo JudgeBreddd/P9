@@ -6,12 +6,29 @@
 // the working directory stalls initialize for 10 s, hang-init never answers it; slow-close stalls session/close for 2 s.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import * as acp from '@agentclientprotocol/sdk';
+
+// Run as the adapter's login CLI (threat model row 31): records its arguments in fake-login-argv, prints the URL in
+// fake-login-url (else a claude.com one) and a paste prompt, and records each stdin line in fake-login-code; "done" exits 0.
+if (process.argv.includes('--cli') || process.argv[3] === 'cli') {
+  writeFileSync('fake-login-argv', JSON.stringify(process.argv.slice(2)));
+  const url = existsSync('fake-login-url') ? readFileSync('fake-login-url', 'utf8').trim() : 'https://claude.com/cai/oauth/authorize?fake=1';
+  process.stdout.write("Opening the browser to sign in\nIf the browser didn't open, visit: " + url + '\nPaste code here if prompted > ');
+  let buffer = '';
+  process.stdin.setEncoding('utf8').on('data', (chunk) => {
+    buffer += chunk;
+    for (let end; (end = buffer.indexOf('\n')) >= 0; buffer = buffer.slice(end + 1)) {
+      appendFileSync('fake-login-code', JSON.stringify(buffer.slice(0, end)) + '\n');
+      if (buffer.slice(0, end) === 'done') process.exit(0);
+    }
+  });
+  await new Promise(() => {});
+}
 
 const cancelled = new Set();
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.

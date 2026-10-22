@@ -3,10 +3,11 @@
 // the new settings without a daemon restart.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { daemon, http, authenticated } from './helpers.mjs';
+import { _electron } from '@playwright/test';
+import { daemon, http, authenticated, root } from './helpers.mjs';
 
 const call = async (instance, route, method = 'GET', body, type = 'application/json') => {
   const result = await http({ socketPath: instance.credentials.socketPath, route, method,
@@ -16,6 +17,11 @@ const call = async (instance, route, method = 'GET', body, type = 'application/j
 };
 const settingsPath = (directory) => process.platform === 'win32' ? path.join(directory, 'roaming-app-data', 'P9', 'settings.json')
   : path.join(directory, '.config', 'p9', 'settings.json');
+const fake = path.join(root, 'test/fake-acp-agent.mjs');
+const until = async (check, what) => {
+  for (let i = 0; i < 100; i++) { const value = await check(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 100)); }
+  throw new Error('timed out: ' + what);
+};
 const STARTER = { primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' };
 
 test('Setup wizard: starter files are create-only and the settings load live (threat model row 17)', { timeout: 60000 }, async (t) => {
@@ -97,4 +103,62 @@ test('Setup wizard: the starter never follows a link out of the workspace (threa
   assert.equal(refused.status, 400, JSON.stringify(refused.body));
   assert.deepEqual(await readdir(outside), [], 'nothing made through the link');
   console.log('PASS starter: a waiting folder under a link to outside is refused and nothing lands outside');
+});
+
+test('Setup wizard sign-in: the daemon runs only the fixed login of the bundled CLI; the code goes to its stdin only (threat model row 31)', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const at = (name) => path.join(instance.workspace, name);
+  for (const body of [{ agent: 'x' }, { agent: 'claude', args: ['--evil'] }, { agent: ['claude'] }, {}]) assert.equal((await call(instance, '/setup/login', 'POST', body)).status, 400, JSON.stringify(body));
+  assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).status, 202);
+  assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).body.error, 'login-running', 'one login per agent');
+  const state = await until(async () => { const s = (await call(instance, '/setup/login')).body; return s.claude.url && s; }, 'the CLI URL');
+  assert.deepEqual(state, { claude: { running: true, url: 'https://claude.com/cai/oauth/authorize?fake=1', exit: null }, codex: { running: false, url: null, exit: null } });
+  assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['claude', '--cli', 'auth', 'login', '--claudeai']);
+  // At most 512 printable characters, one line: never a second line, a second command or an argument.
+  for (const code of ['a\nwhoami', 'a\rb', 'x'.repeat(513), '', 7]) assert.equal((await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code })).status, 400, JSON.stringify(code));
+  assert.equal((await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code: 'abc#123 $(id)' })).status, 202);
+  assert.equal(await until(() => readFile(at('fake-login-code'), 'utf8').catch(() => ''), 'the code'), '"abc#123 $(id)"\n');
+  assert.equal((await call(instance, '/setup/login/stop', 'POST', { agent: 'claude' })).status, 200);
+  assert.equal((await call(instance, '/setup/login')).body.claude.running, false);
+  assert.equal((await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code: 'late' })).body.error, 'login-not-running');
+  // A login that finishes on its own reports its exit code; a new one may start after.
+  assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).status, 202);
+  await until(async () => (await call(instance, '/setup/login')).body.claude.url, 'the second URL');
+  await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code: 'done' });
+  assert.equal(await until(async () => { const s = (await call(instance, '/setup/login')).body.claude; return s.exit !== null && String(s.exit); }, 'the exit'), '0');
+  assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
+  await until(async () => JSON.parse(await readFile(at('fake-login-argv'), 'utf8'))[0] === 'codex', 'the codex start');
+  assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['codex', 'cli', 'login']);
+});
+
+test('Setup wizard sign-in: main opens only the vendor sign-in page, by parsed origin, and the page never sees the URL (threat model row 31)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-login-')), opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" >> ' + opened + '\n');
+  await chmod(browser, 0o755);
+  const env = { ...process.env, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const login = (...args) => page.evaluate((a) => window.p9.agentLogin(...a).then((r) => r, (e) => ({ thrown: e.message })), args);
+  for (const args of [['start', 'x'], ['start', 'claude', 'extra'], ['code', 'claude'], ['state', 'claude'], ['start', ['claude']], ['run', 'claude']]) assert.match((await login(...args)).thrown ?? '', /ipc-sender-refused/, JSON.stringify(args));
+  const tryUrl = async (agent, url) => {
+    await writeFile(path.join(instance.workspace, 'fake-login-url'), url);
+    assert.equal((await login('start', agent)).status, 202);
+    await until(async () => (await call(instance, '/setup/login')).body[agent].url === url, url);
+    const state = await login('state');
+    assert.ok(!JSON.stringify(state).includes('http'), 'the page never gets the URL');
+    const result = await login('open', agent);
+    await login('stop', agent);
+    return [state.body[agent].url, result.status];
+  };
+  for (const url of ['https://claude.com.evil.example/', 'https://claude.com@evil.example/', 'https://evil.example/?https://claude.com', 'https://claude.ai:8443/']) assert.deepEqual(await tryUrl('claude', url), [false, 409], url);
+  assert.deepEqual(await tryUrl('codex', 'https://claude.com/cai/oauth'), [false, 409], 'each agent opens only its own vendor');
+  assert.equal(await readFile(opened, 'utf8').catch(() => ''), '', 'nothing opened');
+  for (const url of ['https://claude.com/cai/oauth/authorize?a=1', 'https://console.anthropic.com/oauth', 'https://claude.ai/x']) assert.deepEqual(await tryUrl('claude', url), [true, 200], url);
+  assert.deepEqual(await tryUrl('codex', 'https://auth.openai.com/oauth/authorize?b=2'), [true, 200]);
+  await until(async () => (await readFile(opened, 'utf8').catch(() => '')).split('\n').length === 5, 'four opens');
+  assert.deepEqual((await readFile(opened, 'utf8')).trim().split('\n'),
+    ['https://claude.com/cai/oauth/authorize?a=1', 'https://console.anthropic.com/oauth', 'https://claude.ai/x', 'https://auth.openai.com/oauth/authorize?b=2']);
 });
