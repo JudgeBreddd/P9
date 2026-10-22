@@ -93,15 +93,14 @@ jobs:
       - name: Windows host and process-tree tests
         if: github.event_name == 'push'
         run: node --test test/windows-process-tree.test.mjs
-      # Diagnostic (chunk 3, round 3): the Stop test's daemon printed nothing in 20 s on both runners (runs 39732594547,
-      # 39736142911). Start the daemon alone once per variant; a timeout prints the processes under the host and the files
-      # the daemon wrote. D3 has no switch of its own: mission.mjs imports its windowsArgv, and it runs when a script
-      # starts, not at daemon start, so it is off only in the last variant. Never fails the job.
-      - name: Daemon start with each chunk-3 suspect off (diagnostic)
+      # Diagnostic (chunk 3, round 4; remove once Windows is green): the A/B for the host's module import. The daemon start
+      # alone with this host, then with the host from 5d8af58 (before the import), which spun with no node child in run
+      # 39738625479. A timeout prints the processes under the host and the files the daemon wrote. Never fails the job.
+      - name: Daemon start with and without the host's module import (diagnostic)
         if: ${{ !cancelled() && github.event_name == 'push' }}
         shell: pwsh
         run: |
-          $before = '381b5eca5761c757696b837d92a7bc9f84265fbe'
+          $before = '5d8af58fd3ae286857ed9f9a642a8749f0c5d16c'
           git fetch --no-tags --depth=1 origin $before
           $results = @()
           function Start-Variant([string]$Name) {
@@ -109,17 +108,10 @@ jobs:
             node --test test/windows-daemon-start.test.mjs
             $script:results += ('{0}: {1}' -f $Name, $(if ($LASTEXITCODE -eq 0) { 'started' } else { 'did not start' }))
           }
-          Start-Variant 'all on'
-          git checkout $before -- apps/server/main.mjs
-          Start-Variant 'B8 folder ACL check off (main.mjs at 381b5ec)'
-          git checkout HEAD -- apps/server/main.mjs
-          Write-Output ('E4 DLL beside the source host: ' + (Test-Path scripts/P9WindowsHost.dll))
-          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/windows-host.ps1 -Mode Compile -Out (Join-Path $PWD 'scripts/P9WindowsHost.dll')
-          Start-Variant 'E4 DLL beside the source host (the installed layout)'
-          Remove-Item scripts/P9WindowsHost.dll
-          git checkout $before -- apps packages scripts
-          Start-Variant 'release before chunk 3 (apps, packages, scripts at 381b5ec; B8, D3, E4 all off)'
-          git checkout HEAD -- apps packages scripts
+          Start-Variant 'module import in (this commit)'
+          git checkout $before -- scripts/windows-host.ps1
+          Start-Variant 'module import out (windows-host.ps1 at 5d8af58)'
+          git checkout HEAD -- scripts/windows-host.ps1
           $results
           exit 0
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the

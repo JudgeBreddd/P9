@@ -11,9 +11,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Acl (the daemon, before it writes anything, B8): each folder in the payload (base64, one per line) may be owned by and
-# grant access to only this user, SYSTEM and Administrators. Prints each folder that fails and exits 1. Needs no C#.
-# .NET calls only: a cmdlet from a module (ConvertFrom-Json, Get-Item) makes a PowerShell with a new LOCALAPPDATA build
-# its module cache first, which may be why the daemon test's start passed 20 s (run 39732594547).
+# grant access to only this user, SYSTEM and Administrators. Prints each folder that fails and exits 1. Needs no C#
+# and no module: .NET calls and Where-Object only.
 if ($Mode -eq 'Acl') {
   $trusted = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
   $folders = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)).Split("`n")
@@ -26,6 +25,13 @@ if ($Mode -eq 'Acl') {
   $bad
   exit ([int]($bad.Count -gt 0))
 }
+
+# Every mode below uses cmdlets from these two modules (Add-Type, ConvertFrom-Json, Test-Path). Imported by path they
+# load at once; left to auto-load, a PowerShell whose LOCALAPPDATA has no module analysis cache scans every module on
+# the machine first. The daemon test's host (a fresh LOCALAPPDATA) spun 17-20 s of CPU there on the GitHub runners and
+# never started node, with or without chunk 3 (run 39738625479).
+Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1",
+  "$PSHOME\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1"
 
 $source = @'
 using System;
