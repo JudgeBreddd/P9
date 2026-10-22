@@ -47,7 +47,11 @@ $Server = Full $Server 'server'
 # The arm64 CI install (job 119704715150) registered the runner's node from PATH though node.exe was in the package.
 Say ('node ' + $Node + ' (bundled ' + (Test-Path -LiteralPath $bundledNode -PathType Leaf) + '), PowerShell ' + $PSHOME +
   ', 64-bit ' + [Environment]::Is64BitProcess + ', ' + $env:PROCESSOR_ARCHITECTURE)
-if (-not (Test-Path -LiteralPath $Node -PathType Leaf)) { throw 'node-not-found' }
+if (-not (Test-Path -LiteralPath $Node -PathType Leaf)) {
+  $dir = Split-Path $Node
+  Say ('in ' + $dir + ': ' + ((Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ' ' + $_.Length }) -join ', '))
+  throw 'node-not-found'
+}
 if (-not (Test-Path -LiteralPath $Server -PathType Leaf)) { throw 'server-not-found' }
 
 $root = Join-Path $env:LOCALAPPDATA 'P9'
