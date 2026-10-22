@@ -34,8 +34,9 @@ What changes for an existing install:
 - **State database.** The first start migrates the ledger to schema 2 (a chat's start folder). The old file is
   copied to `p9.db.v<N>.bak` first; `node scripts/rollback.mjs` restores the newest backup an older build can open.
 - **Service PATH.** New units record the installer's `PATH`, so the service finds the same `tmux` and agent CLIs
-  your shell does. An older unit keeps working; to get the line, run `node scripts/uninstall-service.mjs`, then
-  `node scripts/install-service.mjs "<your workspace>"` again.
+  your shell does. An older unit can start with systemd's bare `PATH` after a reboot; P9 now adds `~/.local/bin`
+  itself, so a `tmux` there is found. For a tool anywhere else, get the line: run `node scripts/uninstall-service.mjs`,
+  then `node scripts/install-service.mjs "<your workspace>"` again.
 - **Settings.** A `settings.json` that does not parse now turns off Mission Control only (`settings-invalid`);
   Chat, terminals and the phone stay up. New optional keys: `space`, `hub`, `server_host` (`README.md`).
 - **Uninstall.** If Stop All or `systemctl disable` fails, the unit is kept so you can stop what still runs;

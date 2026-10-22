@@ -110,7 +110,9 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await card('asks:').locator('.open').click(); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
     await page.check('#mdlBody [data-question] input[value="vitest"]'); await page.click('#mdlBody [data-question] [type="submit"]');
     assert.equal(await page.locator('#mdl').evaluate(el => el.open), false);
-    await page.waitForTimeout(100); assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
+    // The dialog's close event restores the caret as a separate task; a fixed 100 ms wait lost that race on a loaded CI runner.
+    await page.waitForFunction(() => document.activeElement?.id === 'devEd', null, { timeout: 5000 }).catch(() => {});
+    assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
     await focus('mission'); await card('reviews:').locator('.open').click(); await page.keyboard.press('Escape');
     await openWin(panelID); assert.equal(await body.evaluate(p => p.scrollTop), missionTop); await closeWin();
     console.log('PASS phase4 D10-1: asking session moves cards, modal answer handles it, close restores editor caret and Mission scroll');
