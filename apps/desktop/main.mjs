@@ -257,6 +257,33 @@ export async function createDesktop({ state, open } = {}) {
     else await shell.openExternal(open);
     return { status: 200, body: { opened: true } };
   });
+  // Wizard sign-in (threat model row 31): the daemon runs the agent's own login CLI. "Browser didn't open?" opens the
+  // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
+  // and claude.com@evil.example fail). The page sees whether a URL exists, never the URL or any other output.
+  const SIGN_IN_ORIGINS = { claude: ['https://claude.com', 'https://claude.ai', 'https://console.anthropic.com'], codex: ['https://auth.openai.com'] };
+  const vendorUrl = (agent, text) => { try { const url = new URL(text); return SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; } };
+  ipcMain.handle('p9:agent-login', async (event, ...args) => {
+    const [action, agent, code] = args;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || !['state', 'start', 'open', 'code', 'stop'].includes(action) || args.length !== (action === 'code' ? 3 : action === 'state' ? 1 : 2)
+        || (action !== 'state' && (typeof agent !== 'string' || !Object.hasOwn(SIGN_IN_ORIGINS, agent)))) throw new Error('ipc-sender-refused');
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    try {
+      if (action === 'start') return await daemonRequest(state, 'POST', '/setup/login', { agent });
+      if (action === 'code') return await daemonRequest(state, 'POST', '/setup/login/code', { agent, code });
+      if (action === 'stop') return await daemonRequest(state, 'POST', '/setup/login/stop', { agent });
+      const result = await daemonRequest(state, 'GET', '/setup/login');
+      if (result.status !== 200) return result;
+      if (action === 'state') return { status: 200, body: Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map(name => [name,
+        { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && vendorUrl(name, result.body[name].url) !== null,
+          exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
+      const open = typeof result.body[agent]?.url === 'string' ? vendorUrl(agent, result.body[agent].url) : null;
+      if (!open) return { status: 409, body: { error: 'no-sign-in-page' } };
+      if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
+      else await shell.openExternal(open);
+      return { status: 200, body: { opened: true } };
+    } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
   // Mission Control: a fixed list of actions, each mapped to one daemon route; the daemon validates the rest.
   const id = value => (typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value) ? value : null);
   const missionRoutes = {

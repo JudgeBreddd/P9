@@ -230,6 +230,64 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const command = (provider) => adapterOverride ? [process.execPath, adapterOverride, provider] : [process.execPath, adapterEntry(provider)];
 
+  // Wizard sign-in (threat model row 31): the login of the CLI each adapter ships, with fixed arguments and no shell. The
+  // CLI opens the browser itself; its first https:// URL is kept for main, which opens it only after its origin check.
+  // The paste box's code goes to its stdin only. One login per agent; ended after 10 minutes, on Stop or at shutdown.
+  // ponytail: Stop ends the CLI's whole process group (Windows: its job), so a browser the CLI started itself, not
+  // handed to one already running, closes with it.
+  const LOGIN = { claude: ['--cli', 'auth', 'login', '--claudeai'], codex: ['cli', 'login'] };
+  const logins = new Map(); // agent -> { tree, url, exit, timer }
+  const agentName = (value) => typeof value === 'string' && Object.hasOwn(LOGIN, value); // never ['claude'], which hasOwn reads as 'claude'
+  const endLogin = async (agent) => {
+    const login = logins.get(agent);
+    if (!login || login.exit !== undefined) return 'stopped';
+    clearTimeout(login.timer);
+    const result = await endTree(login.tree);
+    if (result === 'stopped') login.exit ??= -1; // gone before its exit event: a new login may start now
+    return result;
+  };
+  const loginRoutes = {
+    state: () => ({ status: 200, ...Object.fromEntries(Object.keys(LOGIN).map((agent) => {
+      const login = logins.get(agent);
+      return [agent, { running: Boolean(login && login.exit === undefined), url: login?.url ?? null, exit: login?.exit ?? null }];
+    })) }),
+    async start(body) {
+      if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'agent' || !agentName(body.agent)) return refused(400, 'request-refused');
+      const { agent } = body;
+      if (closing) return refused(503, 'shutting-down');
+      if (logins.has(agent) && logins.get(agent).exit === undefined) return refused(409, 'login-running');
+      const [program, ...entry] = adapterOverride ? [process.execPath, adapterOverride, agent] : [process.execPath, adapterEntry(agent)];
+      const tree = launchTree([program, ...entry, ...LOGIN[agent]], workspace);
+      const login = { tree, url: null, exit: undefined, timer: setTimeout(() => endLogin(agent), 10 * 60 * 1000) };
+      logins.set(agent, login);
+      let seen = '';
+      const read = (chunk) => {
+        if (login.url || seen.length > 65536) return;
+        seen += chunk;
+        login.url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(seen)?.[0] ?? null;
+      };
+      tree.child.stdout.on('data', read);
+      tree.child.stderr.on('data', read);
+      tree.child.stdin.on('error', () => {});
+      tree.child.on('error', () => { login.exit = -1; clearTimeout(login.timer); });
+      tree.child.on('exit', (code) => { login.exit = code ?? -1; clearTimeout(login.timer); });
+      return { status: 202, started: agent };
+    },
+    code(body) {
+      if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'agent,code' || !agentName(body.agent)
+          || typeof body.code !== 'string' || !/^[\x20-\x7e]{1,512}$/.test(body.code)) return refused(400, 'request-refused');
+      const login = logins.get(body.agent);
+      if (!login || login.exit !== undefined) return refused(409, 'login-not-running');
+      login.tree.child.stdin.write(body.code + '\n');
+      return { status: 202, sent: true };
+    },
+    async stop(body) {
+      if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'agent' || !agentName(body.agent)) return refused(400, 'request-refused');
+      const result = await endLogin(body.agent);
+      return result === 'stopped' ? { status: 200, stopped: body.agent } : refused(500, result);
+    },
+  };
+
   // Stops every scope of this daemon instance that no live or failed conversation owns, and confirms none is left.
   // ponytail: without a systemd user bus a restarted daemon cannot find old process groups, so it reports stopped.
   async function sweep() {
@@ -400,6 +458,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   }
 
   return {
+    login: loginRoutes,
     lock: () => ({ status: 200, on: locked }),
     // Desktop only (server.mjs). Live sessions switch now; one whose mode change fails is stopped rather than left writable.
     async setLock(body) {
@@ -546,6 +605,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     async shutdown() {
       closing = true;
       for (const wake of listeners) wake();
+      await Promise.all(Object.keys(LOGIN).map(endLogin));
       // A startup sweep still stopping a crashed daemon's scopes finishes before exit.
       await recovered;
       // Every conversation that may own work: live, mid-Stop (already out of live), or left by a failed cleanup.
