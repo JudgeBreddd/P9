@@ -78,6 +78,8 @@ test('release r2 R2-1: build.files covers every module the desktop imports; the 
   const packed = hostScript('file:///p9/resources/app.asar/apps/server/process-tree.mjs');
   assert.equal(packed, '/p9/resources/daemon/scripts/windows-host.ps1');
   assert.ok(build.extraResources.some(({ from, to }) => from === 'scripts/windows-host.ps1' && to === 'daemon/scripts/windows-host.ps1'));
+  // electron-builder leaves a file an extraResources entry names out of app.asar (CI 2026-10-22 lost package.json).
+  for (const { from } of build.extraResources) assert.ok(!shipped(from), from + ' is in build.files and extraResources, so app.asar loses it');
   console.log('PASS R2-1: ' + seen.size + ' desktop modules all in build.files; packaged host script is ' + packed);
 });
 

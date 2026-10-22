@@ -54,6 +54,11 @@ const daemonDeps = path.join(build, 'daemon-deps');
 await mkdir(daemonDeps, { recursive: true });
 for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) await copyFile(path.join(root, file), path.join(daemonDeps, file));
 run(process.execPath, [process.env.npm_execpath, 'install', '--prod', '--frozen-lockfile', '--config.node-linker=hoisted'], { cwd: daemonDeps });
+// The daemon's copies of teh.mjs (doctor) and package.json come from .build: electron-builder leaves any file an
+// extraResources entry names out of app.asar, and the app needs both (CI 2026-10-22: "package.json" not found in app.asar).
+const daemonExtra = path.join(build, 'daemon-extra');
+await mkdir(path.join(daemonExtra, 'scripts'), { recursive: true });
+for (const file of ['package.json', 'scripts/teh.mjs']) await copyFile(path.join(root, file), path.join(daemonExtra, file));
 // NSIS 3.0.4 cannot open a path over 260 characters, and pnpm's default dlx cache put electron-builder's StdUtils.nsh at
 // 276 (the Windows desktop 2026-10-17, GitHub's Windows runner 2026-10-20), and D:\p9-cache still gave 263. A 2-letter cache
 // root on the same drive plus 40-character pnpm package folders (Windows default 60) leave about 20 to spare; a cache folder
