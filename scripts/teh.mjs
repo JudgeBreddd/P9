@@ -90,6 +90,18 @@ export function windowsTask() {
   { encoding: 'utf8', timeout: 15000, windowsHide: true }, (error, stdout) => { try { resolve(error ? null : JSON.parse(stdout)); } catch { resolve(null); } }));
 }
 
+// Registers the task again with the installer's own script and command line (installer.nsh): no -Workspace, so it keeps
+// the old task's workspace or makes %USERPROFILE%\P9; no admin, so no UAC prompt. It also starts the daemon. Its output
+// is added to service-install.log beside the app's exe, where the installer writes. resources: the app's resources folder.
+export function repairWindowsTask(resources) {
+  const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-InputFormat', 'None', '-ExecutionPolicy', 'Bypass',
+    '-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe')],
+  { encoding: 'utf8', timeout: 120000, windowsHide: true }, (error, stdout, stderr) =>
+    writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# repair by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
+      .catch(() => {}).then(() => resolve(!error))));
+}
+
 // Windows has no unit or journal: the task stands in for the unit (SubState conhost is this version's task, powershell
 // v0.1.1's) and the last 100 lines of daemon.log for the journal (issue #6 B4).
 export function windowsSources(task, log) {

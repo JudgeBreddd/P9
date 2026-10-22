@@ -1503,7 +1503,7 @@ async function wizRefresh() {
 // Each error a step can get back, as [cause, fix].
 const WIZ_ERR = {
   'daemon-unavailable': ["P9's background service is not answering.", 'It restarts on its own. Retry in a few seconds.'],
-  'workspace-change-unsupported': ["On Windows the folder can't be changed from here yet.", 'In PowerShell, from the install folder, run resources\\daemon\\scripts\\install-windows.ps1 -Workspace followed by the folder, then Retry.'],
+  'workspace-change-unsupported': ["On Windows the folder can't be changed yet.", 'It comes in the next version.'],
   'workspace-refused': ["That folder can't be the workspace.", "Pick a folder of your own: not your home folder itself, a drive's root or P9's own state folder."],
   'service-missing': ["P9's background service is not installed.", "Run P9's installer again (the README's Install section), then Retry."],
   'stop-all-failed': ['Something running would not stop, so the folder stayed the same.', 'Stop it in Chat or the terminal dock, then Change the folder again.'],

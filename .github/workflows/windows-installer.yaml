@@ -157,6 +157,21 @@ jobs:
           schtasks.exe /Run /TN 'P9 Foundation'
           Wait-Daemon $before
           Write-Output 'daemon up again after it died and schtasks /Run (what the app does)'
+          # No task at all (deleted, or the installer's own run failed): the app runs the installer's script again, once per
+          # launch (main.mjs wake). This runs that same function, teh.mjs repairWindowsTask, on this install's resources folder.
+          Get-Daemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+          $end = (Get-Date).AddSeconds(30)
+          while ((Get-ScheduledTask -TaskName 'P9 Foundation').State -eq 'Running' -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          Unregister-ScheduledTask -TaskName 'P9 Foundation' -Confirm:$false
+          $before = Get-Date
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { repairWindowsTask } = await import(pathToFileURL(process.argv[1]).href); process.exit(await repairWindowsTask(process.argv[2]) ? 0 : 1)" (Resolve-Path scripts/teh.mjs).Path (Join-Path $app 'resources')
+          $repair = $LASTEXITCODE
+          Get-Content (Join-Path $app 'service-install.log') | Select-Object -Last 15 | ForEach-Object { 'repair log: ' + $_ }
+          if ($repair -ne 0) { throw 'the app''s repair failed (repair log: lines above)' }
+          $t = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
+          if (-not $t -or $t.Actions[0].Execute -ne 'conhost.exe') { throw 'the repair did not register the headless task' }
+          Wait-Daemon $before
+          Write-Output 'daemon up again after the task was deleted and the app repaired it'
           # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
           # alone left the daemon running (run 39540753837), which an update over this version would hit too.
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName
