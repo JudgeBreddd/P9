@@ -93,12 +93,14 @@ export function windowsTask() {
 // Registers the task again with the installer's own script and command line (installer.nsh): no -Workspace, so it keeps
 // the old task's workspace or makes %USERPROFILE%\P9; no admin, so no UAC prompt. It also starts the daemon. Its output
 // is added to service-install.log beside the app's exe, where the installer writes. resources: the app's resources folder.
-export function repairWindowsTask(resources) {
+// workspace: Setup's Change the folder (threat model row 32) passes the new folder, the one thing the new task differs in.
+export function repairWindowsTask(resources, workspace) {
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-InputFormat', 'None', '-ExecutionPolicy', 'Bypass',
-    '-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe')],
+    '-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe'),
+    ...(workspace ? ['-Workspace', workspace] : [])],
   { encoding: 'utf8', timeout: 120000, windowsHide: true }, (error, stdout, stderr) =>
-    writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# repair by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
+    writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# ${workspace ? 'workspace change' : 'repair'} by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
       .catch(() => {}).then(() => resolve(!error))));
 }
 

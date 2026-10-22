@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, symlink, readdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, symlink, readdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { spawnSync, spawn } from 'node:child_process';
 import path from 'node:path';
-import { fixture, root, daemon, http, authenticated } from './helpers.mjs';
+import { fixture, root, daemon, restart, http, authenticated } from './helpers.mjs';
 import { once } from 'node:events';
 import { hash } from '../packages/files/index.mjs';
 
@@ -104,4 +104,22 @@ test('canonical workspace has one live daemon across state directories; SIGKILL 
   const [output] = await once(restarted.stdout, 'data', { signal: AbortSignal.timeout(3000) });
   assert.match(String(output), /P9_READY/);
   console.log('PASS workspace ownership: second real daemon with separate state refused; alias covered; SIGKILL permits restart');
+});
+
+// Fable review finding 1: a saved folder on a drive that is not there at start (unplugged, locked, offline) was replaced for
+// good on Windows and crash-looped the Linux unit. This run uses the default folder and /health names both; the next start,
+// with the folder back, uses the saved folder again.
+test('a saved workspace that is not there at start: this run uses the default folder, the next start the saved one', async (t) => {
+  const first = await daemon(t, undefined, false, async (paths) => { paths.workspace = path.join(paths.directory, 'drive', 'work'); return {}; });
+  const fallback = await realpath(path.join(first.directory, process.platform === 'win32' ? 'P9' : 'work'));
+  const health = async (instance) => JSON.parse((await http({ socketPath: instance.credentials.socketPath, headers: authenticated(instance.credentials) })).text);
+  assert.deepEqual(await health(first).then(({ workspace, savedWorkspace }) => ({ workspace, savedWorkspace })), { workspace: fallback, savedWorkspace: first.workspace });
+  first.child.kill('SIGTERM');
+  await once(first.child, 'exit');
+  await mkdir(first.workspace, { recursive: true });
+  const back = await restart(t, first, 'state-back');
+  const after = await health(back);
+  assert.equal(after.workspace, await realpath(first.workspace));
+  assert.equal(after.savedWorkspace, undefined);
+  console.log('PASS missing saved workspace: default for this run, named in /health; the saved folder again once it is back');
 });

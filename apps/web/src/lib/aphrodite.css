@@ -1,0 +1,45 @@
+/* Aphrodite: two dark-only looks. Specificity follows Command Center so core
+   neutral-generation rules cannot tint the surfaces, in either import order. */
+.dark[data-theme="aphrodite-blue"] {
+  --nh: 255; --nc: .025; --primary: #bdcce8; --glow2: #dbc39e;
+}
+.dark[data-theme="aphrodite-charcoal"] {
+  --nh: 85; --nc: .002; --primary: #e7aec0; --glow2: #d9bf96;
+}
+.dark.dark.dark[data-theme="aphrodite-blue"] {
+  --foreground: #e8eef5; --muted-foreground: #b1c0d2;
+  --border: #3c4c62; --input: #3c4c62; --ring: #c0d6f3;
+  --success: #abd3c7; --primary-foreground: #17283e; --pearl: #edf0f7; --champagne: #dbc39e;
+  --horizon: linear-gradient(115deg, #e7eaf3, #b9cce5);
+}
+.dark.dark.dark[data-theme="aphrodite-charcoal"] {
+  --foreground: #f0ebe5; --muted-foreground: #bdb8b2;
+  --border: #494641; --input: #494641; --ring: #e7aec0;
+  --success: #b1d5c3; --primary-foreground: #301b24; --pearl: #f5eade; --champagne: #d9bf96;
+  --horizon: linear-gradient(115deg, #f5d9cf, #eab5c6);
+}
+.dark.dark[data-theme="aphrodite-blue"]:not([data-amoled]) {
+  --background: #101925; --card: #192536; --popover: #243348;
+  --muted: #2c3a4e; --secondary: #2c3a4e; --accent: #2c3a4e;
+  --sidebar: #101925; --sidebar-accent: #2c3a4e;
+}
+.dark.dark[data-theme="aphrodite-charcoal"]:not([data-amoled]) {
+  --background: #191918; --card: #242423; --popover: #30302e;
+  --muted: #343330; --secondary: #343330; --accent: #343330;
+  --sidebar: #191918; --sidebar-accent: #343330;
+}
+.dark.dark.dark:is([data-theme="aphrodite-blue"], [data-theme="aphrodite-charcoal"]) {
+  --card-foreground: var(--foreground); --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground); --accent-foreground: var(--foreground);
+  --sidebar-foreground: var(--foreground); --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent-foreground: var(--foreground); --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring); --app-display: "Fraunces", Georgia, serif;
+  --radius: 1rem;
+}
+/* One extra specificity part beats core gradient titles without changing other packs. */
+.dark.dark.dark.dark:is([data-theme="aphrodite-blue"], [data-theme="aphrodite-charcoal"]) .fx-title {
+  font-family: var(--app-display); font-style: italic; font-weight: 400;
+  letter-spacing: -.035em; background: none; color: var(--pearl);
+  -webkit-text-fill-color: currentColor;
+}

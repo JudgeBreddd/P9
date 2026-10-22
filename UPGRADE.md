@@ -1,5 +1,20 @@
 # Upgrading P9
 
+## To 0.1.4 (beta)
+
+The Windows installer unpacks far fewer files: the background service now ships as two bundled files plus the agents'
+own programs, not 26,000 loose package files (0.1.3), so it installs faster. Its licence notices are in
+`resources\licenses\daemon-NOTICES.md`. **Change the folder** in setup now works on Windows too: P9 stops what is
+running, moves the `P9 Foundation` task to the new folder, and goes back to the old one if the service does not start.
+
+The Look picker has two new looks, **Aphrodite Blue** and **Aphrodite Charcoal**. AMOLED (on by default) shows them
+on black, so switch AMOLED off in the Look picker to see their colours.
+
+- **Linux:** update as `README.md` § Update says, then reopen the window (the desktop main process changed).
+- **Windows:** run the 0.1.4 installer over the old one: `windows-arm64` on an ARM laptop, `windows-x64` otherwise.
+  Your workspace and the `P9 Foundation` task are kept; a task whose saved settings cannot be read is set up again on
+  the default folder, `%USERPROFILE%\P9`.
+
 ## To 0.1.3 (beta)
 
 Windows gets a native ARM64 installer next to the x64 one, and the installer now works for a standard (non-admin)

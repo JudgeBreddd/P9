@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { missingWindowsBinaries } from '../apps/server/windows.mjs';
+import { bundleDaemon } from './bundle-daemon.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const version = '26.10.0';
@@ -59,17 +60,13 @@ for (const font of fonts) await copyFile(path.join(root, 'node_modules', font, '
 if (process.env.P9_PREPARE_ONLY === '1') process.exit(0);
 const missing = missingWindowsBinaries(await readdir(path.join(root, 'node_modules', '.pnpm')), arch);
 if (missing.length) throw new Error(`windows-platform-binaries-not-installed:${missing.join(',')};build-on-windows`);
-// The daemon gets its own production-only, hoisted node_modules. Copying the pnpm tree turns its top-level junctions into
-// plain folders, so packages then miss their dependencies (installed daemon failed: zod not found, 2026-10-17).
-const daemonDeps = path.join(build, 'daemon-deps');
-await mkdir(daemonDeps, { recursive: true });
-for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) await copyFile(path.join(root, file), path.join(daemonDeps, file));
-run(process.execPath, [process.env.npm_execpath, 'install', '--prod', '--frozen-lockfile', '--config.node-linker=hoisted'], { cwd: daemonDeps });
 // The daemon's copies of teh.mjs (doctor) and package.json come from .build: electron-builder leaves any file an
 // extraResources entry names out of app.asar, and the app needs both (CI 2026-10-22: "package.json" not found in app.asar).
 const daemonExtra = path.join(build, 'daemon-extra');
 await mkdir(path.join(daemonExtra, 'scripts'), { recursive: true });
 for (const file of ['package.json', 'scripts/teh.mjs']) await copyFile(path.join(root, file), path.join(daemonExtra, file));
+// B10: the daemon and its agents ship as bundles plus their native packages (bundle-daemon.mjs), not a node_modules install.
+await writeFile(path.join(licenses, 'daemon-NOTICES.md'), await bundleDaemon(root, daemonExtra, 'win32-' + arch));
 // E4: the host's C# compiled once here, so an installed host loads it instead of compiling (1-3 s) on every start.
 run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts', 'windows-host.ps1'),
   '-Mode', 'Compile', '-Out', path.join(daemonExtra, 'scripts', 'P9WindowsHost.dll')]);

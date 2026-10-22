@@ -146,9 +146,11 @@ export async function createDesktop({ state, open } = {}) {
   // installer's script again, once per launch (no retry loop). If that fails too, reason says reinstall.
   // Fixed argv, no shell, the user's own task. At most every 30 s, since each look runs PowerShell.
   // ponytail: a daemon that is running but hung stays hung (/Run on a running task does nothing); the page says not-answering.
-  let reason = 'not-answering', woke = 0, repaired = false;
+  // changing: p9:workspace-change is between Stop All and the new task's start; a /Run then restarted the old task on the
+  // old folder and the change rolled back (Fable review finding 3).
+  let reason = 'not-answering', woke = 0, repaired = false, changing = false;
   const wake = async () => {
-    if (Date.now() - woke < 30000) return;
+    if (changing || Date.now() - woke < 30000) return;
     woke = Date.now();
     const task = await windowsTask();
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
@@ -233,7 +235,11 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9:get-status', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
-    try { if (state && (await health(state)).status === 'ok') return { status: 'ok' }; } catch {}
+    // savedWorkspace: the saved folder was not there at the daemon's start, so it runs on the default (apps/server/main.mjs).
+    try {
+      const h = state && await health(state);
+      if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
+    } catch {}
     if (process.platform !== 'win32' || !state) return { status: 'unavailable' };
     await wake();
     return { status: 'unavailable', reason };
@@ -587,19 +593,23 @@ export async function createDesktop({ state, open } = {}) {
   // Setup's Change the folder (threat model row 32): no argument; the native picker, then a native confirm naming the folder. Main writes
   // no unit: it re-runs the installed copy's own uninstall-service.mjs and install-service.mjs with only the folder, with the unit's own
   // node and PATH so the new unit differs only in --workspace, and installs the old folder again when the new one does not come up.
-  // ponytail: Linux only; Windows answers workspace-change-unsupported until install-windows.ps1 -Workspace is wired in (v0.1.4).
+  // Windows: the installed copy's own install-windows.ps1 -Workspace through repairWindowsTask, as the launch repair runs it; the
+  // script stops the old daemon itself. P9's private folder there is %LOCALAPPDATA%\P9, the state folder's parent.
   ipcMain.handle('p9:workspace-change', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
     const old = state && (await health(state).catch(() => null))?.workspace;
     if (!old) return { error: 'daemon-unavailable' };
-    if (process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
+    const win = process.platform === 'win32';
+    if (!win && process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
     const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
       properties: ['openDirectory', 'createDirectory'], defaultPath: old });
     if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
     // Never the home folder, a root, or a folder that holds or is inside P9's private state (the daemon refuses those at start too).
     const folder = await realpath(pick.filePaths[0]).catch(() => null), home = await realpath(os.homedir());
-    const near = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
-    const kept = [await realpath(state).catch(() => path.resolve(state)), path.join(home, '.local', 'state', 'p9-foundation')];
+    const key = p => win ? p.toLowerCase() : p; // Windows paths compare without case.
+    const near = (a, b) => ([a, b] = [key(a), key(b)], a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep));
+    const stateReal = await realpath(state).catch(() => path.resolve(state));
+    const kept = [stateReal, win ? path.dirname(stateReal) : path.join(home, '.local', 'state', 'p9-foundation')];
     if (!folder || !(await stat(folder)).isDirectory() || folder === home || path.dirname(folder) === folder || kept.some(p => near(folder, p))) {
       return { error: 'workspace-refused', workspace: old };
     }
@@ -607,6 +617,22 @@ export async function createDesktop({ state, open } = {}) {
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Change the workspace folder?', message: 'Use ' + folder + ' as the workspace?',
       detail: 'P9 restarts its background service. Running chats, scripts and terminals stop.', buttons: ['Cancel', 'Change folder'], defaultId: 0, cancelId: 0, noLink: true });
     if (response !== 1) return { workspace: old };
+    if (win) {
+      if (!await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing', workspace: old };
+      if ((await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => null))?.status !== 200) return { error: 'stop-all-failed', workspace: old };
+      // The script returns once the task is started; the new daemon is up when /health names the folder.
+      const on = async (want) => { for (const end = Date.now() + 60_000; Date.now() < end; await new Promise(r => setTimeout(r, 1000))) {
+        if ((await health(state).catch(() => null))?.workspace?.toLowerCase() === want.toLowerCase()) return true; } return false; };
+      changing = true;
+      try {
+        const ran = await repairWindowsTask(process.resourcesPath, folder);
+        if (ran && await on(folder)) return { workspace: folder };
+        await repairWindowsTask(process.resourcesPath, old);
+        await on(old);
+        return { error: 'workspace-not-started', detail: ran ? 'daemon-not-answering' : 'install-windows.ps1 failed (service-install.log)',
+          workspace: (await health(state).catch(() => null))?.workspace ?? null };
+      } finally { changing = false; }
+    }
     // The unit as install-service.mjs quoted it: ExecStart's node and server, and Environment's PATH.
     const unit = await readFile(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service'), 'utf8').catch(() => '');
     const unquote = s => s.replace(/\\(.)/g, '$1').replaceAll('%%', '%').replaceAll('$$', '$');

@@ -81,7 +81,7 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
-export function createListener({ workspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, remote, anymouse = createAnymouse() }) {
+export function createListener({ workspace, savedWorkspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
@@ -118,7 +118,8 @@ export function createListener({ workspace, recovery, credentials, transport, se
   const api = new Hono();
   api.onError(onError);
   // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace }),
+  // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
   api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));

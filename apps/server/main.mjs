@@ -25,7 +25,18 @@ if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbs
 }
 process.umask(0o077);
 const windows = process.platform === 'win32';
-const workspace = await realpath(values.workspace);
+// A saved folder that is not there at start (an unplugged drive, a locked or offline share, a deleted folder) does not stop
+// the daemon: this run uses the installer's default folder, /health names both, and the next start tries the saved folder
+// again, which the task or unit still holds (Fable review finding 1; before, Windows replaced it for good and Linux crash-looped).
+const saved = path.resolve(values.workspace);
+let workspace = await realpath(saved).then(async (real) => (await lstat(real)).isDirectory() ? real : null).catch(() => null);
+let savedWorkspace;
+if (!workspace) {
+  const fallback = path.join(os.homedir(), windows ? 'P9' : 'work');
+  await mkdir(fallback, { recursive: true });
+  workspace = await realpath(fallback);
+  if (workspace !== saved) savedWorkspace = saved;
+}
 function inside(parent, child) {
   const relative = path.relative(parent, child);
   return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative));
@@ -126,7 +137,7 @@ delete process.env.P9_GITHUB_TOKEN;
 // ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
-const server = createListener({ workspace, recovery, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
+const server = createListener({ workspace, savedWorkspace, recovery, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
 try {
   await new Promise((resolve, reject) => {
     server.once('error', reject);

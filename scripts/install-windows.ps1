@@ -20,13 +20,25 @@ function Full([string]$Value, [string]$Name) {
 
 # No -Workspace (the installer, and every update): keep the installed task's workspace, else a new %USERPROFILE%\P9
 # (release r2 R2-6). Re-registering on update also gives an older task this version's settings.
+$away = $false
 if (-not $Workspace) {
   $installed = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
   if ($installed -and $installed.Actions[0].Arguments -match '-Payload (\S+)') {
-    $old = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1])) | ConvertFrom-Json
-    # An older task with no --workspace gave IndexOf -1, so argv[0], node.exe, became the workspace (issue #6 B7).
-    $i = [Array]::IndexOf([string[]]$old.argv, '--workspace')
-    if ($i -ge 0) { $Workspace = $old.argv[$i + 1] }
+    # A payload this cannot read (not base64, not JSON, no argv: hand-edited, cut short, a later format) falls to the
+    # default folder; before, it failed every reinstall and the app's launch repair (v0.1.3 review finding 2).
+    try {
+      $old = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1])) | ConvertFrom-Json
+      # An older task with no --workspace gave IndexOf -1, so argv[0], node.exe, became the workspace (issue #6 B7).
+      $i = [Array]::IndexOf([string[]]$old.argv, '--workspace')
+      if ($i -ge 0) { $Workspace = $old.argv[$i + 1] }
+      # A saved folder that is not there now (an unplugged drive, a locked or offline share) failed every reinstall with
+      # workspace-not-found. The task keeps it; the daemon runs on the default folder until it is back and /health says so
+      # (the owner 2026-10-22, Fable review finding 1). An explicit -Workspace that does not exist still fails below.
+      if ($Workspace -and -not (Test-Path -LiteralPath $Workspace -PathType Container)) {
+        Say ('saved workspace ' + $Workspace + ' is not there now; the task keeps it and the daemon uses the default ' + (Join-Path $env:USERPROFILE 'P9') + ' until it is back')
+        $away = $true
+      }
+    } catch { Say ('task payload unreadable, so the default workspace: ' + $_); $Workspace = $null }
   }
   if (-not $Workspace) {
     $Workspace = Join-Path $env:USERPROFILE 'P9'
@@ -36,7 +48,7 @@ if (-not $Workspace) {
 Say ('workspace ' + $Workspace)
 $Workspace = Full $Workspace 'workspace'
 $Settings = Full $Settings 'settings'
-if (-not (Test-Path -LiteralPath $Workspace -PathType Container)) { throw 'workspace-not-found' }
+if (-not $away -and -not (Test-Path -LiteralPath $Workspace -PathType Container)) { throw 'workspace-not-found' }
 # No settings file yet is fine: the daemon starts and Mission Control says settings-missing (release r1 R1-2).
 
 $bundledNode = Join-Path $PSScriptRoot '..\node.exe'
@@ -88,16 +100,25 @@ $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ('--headless 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
 $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+# Every caller (the installer, the app's repair, Setup's Change the folder, a hand run) stops the running daemon here, as
+# installer.nsh customInit does: Register -Force leaves it running, and Start-ScheduledTask on a running task is refused
+# (v0.1.3 review finding 1). Stop-ScheduledTask ends only conhost.exe, so the bundled node.exe is ended too; its host exits.
+# ponytail: a daemon on a node from PATH (a source run) is not ended, so it keeps the lock and the new one exits.
+Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
+$bundled = Full $bundledNode 'node'
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -eq $bundled } | ForEach-Object {
+  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+  Say ('stopped the daemon ' + $_.ProcessId) }
 Register-ScheduledTask -TaskName 'P9 Foundation' -Action $action -Trigger $trigger -Principal $principal -Settings $taskSettings -Force | Out-Null
 Say 'task registered'
 Start-ScheduledTask -TaskName 'P9 Foundation'
 Say 'task started'
 # Each install leaves an ns*.tmp folder in %TEMP% when its files stay locked (the leftover in a tester's %TEMP%, issue #6 B6).
-# Only finished electron-builder ones: older than an hour and holding what its installer unpacks.
-# ponytail: this also clears other electron-builder apps' dead installer folders; they are leftovers too.
+# Only P9's own: older than an hour and holding the marker P9's installer writes there (installer.nsh customInit). Any
+# electron-builder installer holds app-64.7z, so another app's, left open on a page for an hour, lost its files (v0.1.3
+# review finding 3). ponytail: a P9 installer itself left open over an hour while the app repairs the task loses its folder.
 Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ns*.tmp' -ErrorAction SilentlyContinue |
-  Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) -and (Get-ChildItem -LiteralPath $_.FullName -Name -ErrorAction SilentlyContinue |
-    Where-Object { @('app-64.7z', 'app-arm64.7z', 'old-uninstaller.exe', 'old-install') -contains $_ }) } |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) -and (Test-Path -LiteralPath (Join-Path $_.FullName 'p9-event-horizon.marker') -PathType Leaf) } |
   ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; Say ('removed ' + $_.FullName) }
 # ponytail: started, not proven answering (release r2 R2-8); the app shows daemon-unreachable if it never comes up.
 Write-Output 'P9_WINDOWS_TASK_INSTALLED'
