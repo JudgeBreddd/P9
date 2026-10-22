@@ -174,7 +174,7 @@ test('mode picker: each prompt sets the picked mode, unknown modes refused, the 
 
 test('a signed-out agent says how to sign in, not just "Authentication required" (GitHub issue #4)', async (t) => {
   const instance = await start(t);
-  for (const [provider, want] of [['claude', /^Claude Code is not signed in on this computer\. .*run claude and log in/], ['codex', /^Codex is not signed in on this computer\. .*run codex login/]]) {
+  for (const [provider, want] of [['claude', /^Claude Code is not signed in on this computer\. Sign in from Settings → Setup.*run claude and log in/], ['codex', /^Codex is not signed in on this computer\. Sign in from Settings → Setup.*run codex login/]]) {
     const id = await create(instance, provider);
     assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'auth-required' })).status, 202, provider);
     const { hit } = await until(instance, (event) => event.type === 'error' && event.conversation === id);

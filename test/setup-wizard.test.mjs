@@ -27,12 +27,16 @@ const until = async (check, what) => {
 const STARTER = { primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' };
 
 test('Setup wizard: starter files are create-only and the settings load live (threat model row 17)', { timeout: 60000 }, async (t) => {
-  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
     await writeFile(path.join(workspace, 'AGENTS.md'), 'mine'); // an existing file counts as done
+    await mkdir(path.join(directory, '.claude'), { recursive: true });
+    await writeFile(path.join(directory, '.claude', '.credentials.json'), '{"token":"p9-credential-marker"}');
     return {};
   });
   const file = settingsPath(instance.directory);
   let s = (await call(instance, '/setup')).body;
+  // The credential file is stat'ed, never opened: only "present" reaches the page.
+  assert.deepEqual([s.claude, s.codex, JSON.stringify(s).includes('p9-credential-marker')], [true, false, false]);
   assert.deepEqual([s.settings, s.settingsPresent, s.settingsInvalid, s.settingsError, s.writable, s.workspaceEmpty, s.agentsFile, s.registryFile],
     [false, false, false, null, true, false, true, false]);
   assert.equal(s.tmux === null, process.platform !== 'linux');
