@@ -828,6 +828,16 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   await page.reload(); await page.click('#rMission');
   await page.waitForFunction(() => document.querySelector('#fMission .needs [data-list] li .txt')?.textContent === 'Made by the chat', null, { timeout: 10000 });
   assert.equal(await sort.inputValue(), 'project', 'the choice survives a reload');
+  // An item with no A. line (Builder, 2026-10-21: Q1:/Q2: lines, "changed on disk" for days): Save says why, nothing written.
+  const noLine = '# No answer line\n\nQ1:\nQ2:\n';
+  await writeFile(path.join(instance.workspace, '_tyler/qa-lines.md'), noLine);
+  await turn(id, 'qa');
+  await page.locator('#fMission .needs [data-list] li button', { hasText: 'No answer line' }).click();
+  await page.locator('#mdlBody textarea').fill('Q1 yes, Q2 yes');
+  await page.click('#mdlFoot [data-save]');
+  await page.locator('#toasts', { hasText: 'qa-lines.md has no empty A. line' }).waitFor({ timeout: 10000 });
+  assert.equal(await readFile(path.join(instance.workspace, '_tyler/qa-lines.md'), 'utf8'), noLine);
+  await page.keyboard.press('Escape');
   await page.click('#rChat');
   // The tab's x stops the chat, like VS Code (Builder, 2026-10-18: two robot heads for one open tab): its robot head goes.
   await page.locator('#tabs .tab[data-id="' + id + '"] .close').click();
@@ -1187,6 +1197,43 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   await page.waitForTimeout(1500);
   assert.deepEqual([await page.locator('#cards [data-key^="done:"]').count(), await page.evaluate(() => window.__notes)], [0, []], 'replayed turn-end made a card or notice');
   console.log('PASS turn finished: 1 notice with P9 words only, 1 card, opening clears it, replay makes none');
+});
+
+test('Interrupt and send: a queued message sent with the bolt, or Ctrl+Enter, reaches the agent after the cancel; a refused one goes back in the box', { timeout: 120000 }, async (t) => {
+  // Builder, 2026-10-21: "I sent a message. it went to the waiting queue. i hit the button to interupt and send the message now,
+  // and it didnt send my message, and it cancelled your turn."
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-interrupt-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
+  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  const pane = page.locator('#chats .pane[data-id="' + id + '"]'), box = pane.locator('.composer textarea');
+  const agentSaid = (text) => pane.locator('.msg.agent', { hasText: text }).last().waitFor({ timeout: 15000 });
+  await agentSaid('echo:hello');
+  const slowTurn = async (n) => { await box.fill('slow'); await box.press('Enter'); await page.waitForFunction((k) => document.querySelectorAll('#chats .pane .msg.agent').length && [...document.querySelectorAll('#chats .pane .msg.agent')].filter((m) => m.textContent.includes('working')).length === k, n); };
+  // The bolt on a queued message.
+  await slowTurn(1);
+  await box.fill('queued one'); await box.press('Enter');
+  await pane.locator('.queue .q', { hasText: 'queued one' }).waitFor();
+  await pane.locator('.queue [data-qnow="0"]').click();
+  await agentSaid('echo:queued one');
+  // Ctrl+Enter on a new message while the agent works.
+  await slowTurn(2);
+  await box.fill('right now'); await box.press('Control+Enter');
+  await agentSaid('echo:right now');
+  assert.deepEqual(await pane.evaluate((p) => ({ users: [...p.querySelectorAll('.msg.user')].map((m) => m.lastChild.textContent), queue: p.querySelectorAll('.queue .q').length })),
+    { users: ['hello', 'slow', 'queued one', 'slow', 'right now'], queue: 0 });
+  // A prompt the daemon refuses (over 100,000 characters) comes back to the box instead of vanishing.
+  const long = 'x'.repeat(100001);
+  await box.fill(long); await box.press('Enter');
+  await page.waitForFunction((n) => document.querySelector('#chats .pane .composer textarea')?.value.length === n, long.length, { timeout: 10000 });
+  console.log('PASS interrupt and send: bolt and Ctrl+Enter both reach the agent after the cancel, queue empty, refused text back in the box');
 });
 
 test('Terminal dock: a real shell, one of P9\'s own tmux sessions, through the desktop\'s relay; the page never holds the socket (threat model row 13)', { timeout: 120000 }, async (t) => {

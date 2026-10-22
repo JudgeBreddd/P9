@@ -526,7 +526,7 @@ function paint(root, ss) {
     ta.oninput = () => { s.draft = ta.value; showSlash(); };
     if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; c.focus(); c.setSelectionRange(caret.s, caret.e); }
     // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now
-    const go = now => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; s.draft = ''; if (busy(s) && !now) { s.queue.push(t); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } if (busy(s)) cancelTurn(s); startTurn(s, t); if (bare && settings.closeOnSend) closeModal(); };
+    const go = now => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; s.draft = ''; if (busy(s) && !now) { s.queue.push(t); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } interrupt(s, t); if (bare && settings.closeOnSend) closeModal(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(e.ctrlKey || e.metaKey); }
@@ -534,7 +534,7 @@ function paint(root, ss) {
     p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
     const cancel = p.querySelector('[data-cancel]'); if (cancel) cancel.onclick = () => { cancelTurn(s); renderTabs(); renderChats(); };
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); renderChats(); });
-    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); if (busy(s)) cancelTurn(s); startTurn(s, t); });
+    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); interrupt(s, t); });
     // note 7: a mode picked mid-turn shows at once but applies when the turn ends
     p.querySelector('[data-mode]').onchange = async e => {
       const m = e.target.value;
@@ -598,6 +598,13 @@ function startTurn(s, t) {
   renderTabs(); renderChats();
   setTimeout(() => { if (s.turn !== turn) return; s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress' && e.title.startsWith('Thinking'))); reply(s, s.agent === 'claude' ? 'On it. I will check the record before changing anything, then show you the diff before it lands.' : 'Acknowledged. I will stop at the first write that needs you.'); }, 1200);
 }
+// Builder, 2026-10-21 (an interrupt-and-send message was lost): the daemon refuses a prompt while the cancelled turn is
+// still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
+function interrupt(s, t) {
+  if (!busy(s)) return startTurn(s, t);
+  if (s.live) { s.queue.unshift(t); cancelTurn(s); renderChats(); return; }
+  cancelTurn(s); startTurn(s, t);
+}
 function cancelTurn(s, quiet) {
   if (s.live) { if (!quiet) liveChat.call('cancel', { id: s.id }); return; }
   s.turn = (s.turn || 0) + 1; s.streaming = false; // stale timers see a new turn number and stop
@@ -616,8 +623,7 @@ function finished(s) {
 }
 function turnEnd(s) {
   if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
-  const next = s.queue.shift();
-  if (next) startTurn(s, next); else { renderTabs(); renderChats(); }
+  if (s.queue.length) startTurn(s, s.queue.shift()); else { renderTabs(); renderChats(); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -801,6 +807,8 @@ async function answerLive(r) {
   if (!answer) return toast({ kind: 'not saved', txt: 'Write an answer first.', level: 'warn' }, true);
   const res = await window.p9.mission('answer', { name: r.name, hash: r.hash, answer });
   if (res.status === 200) { toast({ kind: 'saved', txt: 'Answer saved to ' + r.file, level: 'ok' }, true); r.draft = ''; }
+  // Builder, 2026-10-21: an item with Q1:/Q2: lines and no A. line said "changed on disk" for days, so he kept retrying
+  else if (res.body?.error === 'no-empty-answer-line') toast({ kind: 'not saved', txt: r.file + ' has no empty A. line, so P9 cannot write your answer. Ask an agent to add one; your answer is still here.', level: 'bad' }, true);
   else if (res.status === 409) toast({ kind: 'not saved', txt: r.file + ' changed on disk since you opened it. Reloaded it; your answer is still here.', level: 'warn' }, true);
   else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ' (' + (res.body?.error || res.status) + ')', level: 'bad' }, true);
   await loadMission();
@@ -1484,7 +1492,8 @@ liveChat.create = async (agent, folder = '') => {
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;
 };
-liveChat.prompt = async (s, text, images = []) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status !== 202) { s.images = [...images, ...(s.images || [])].slice(0, 4); s.working = false; renderTabs(); renderChats(); } };
+// Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
+liveChat.prompt = async (s, text, images = []) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status !== 202) { s.images = [...images, ...(s.images || [])].slice(0, 4); s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); } };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
   const q = s.events.find(e => e.t === 'question'); if (!q || q.unsupported) return;

@@ -1,22 +1,42 @@
 # P9 — Event Horizon
 
+A desktop app that runs your Claude and Codex agents, an editor and your own scripts in one window, on your
+own machine, and keeps the agents working after you close it.
+
 ![P9 — Event Horizon](docs/brand/hero-1536x1024.jpg)
 
 One workspace. Every agent. Your focus.
 
-**Version 0.1.2, beta.** It is for testers: expect rough edges, and file what you hit as an issue
-(`pnpm teh doctor` below prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
+## Why it's worth it
 
-P9 is a desktop app with three focus modes in one window:
+- **Your agents keep working when you close the window.** A small daemon runs as your own user (a systemd
+  user service on Linux, a Scheduled Task on Windows) and owns the chats and tmux terminals; the window is
+  only a view onto it.
+- **Claude and Codex side by side, with your existing logins.** P9 starts each provider's Agent Client
+  Protocol adapter and shows its approvals, models and Stop in one chat UI. It never stores your provider login.
+- **No save silently overwrites a change on disk.** Every save carries the hash of the text it started from;
+  if the file changed since, P9 refuses, shows the conflict and keeps your text as a recovery draft.
+- **Your scripts become buttons, with limits.** Mission Control runs commands from a registry file you
+  write, without a shell, at most 4 at once, 1 MiB of output, 15 minutes each.
+- **Your phone joins only when you approve it.** The optional phone view goes over Tailscale; a phone
+  enrolls with a 6-digit code you approve on the computer, then signs in with a passkey.
 
-- **Chat Focus**: Claude and Codex chats over the Agent Client Protocol, with approvals, history and Stop.
-- **Dev Focus**: a VS Code–style editor (VSCodium's remote server) whose saves go through P9's guarded save.
-- **Mission Control**: your scripts as buttons, your apps and pages, and a "waiting on you" queue.
+## Is it for you?
 
-A small daemon runs as your own user and owns the work: closing the window leaves chats and P9 terminals
-running. An optional phone view reaches the same daemon through Tailscale, signed in with a passkey.
-Read [SECURITY.md](SECURITY.md) before you use it: it says what P9 protects and what it does not.
-What each part of the app does is in [docs/guide.md](docs/guide.md).
+**It fits when** you run Claude Code and/or Codex most of the day on a Linux desktop (or Windows), want
+long agent runs to survive a closed window, and like one place for chats, an editor and your own scripts.
+
+**Skip it when** you are on macOS (not supported in v1), want a hosted or team tool (P9 is one user on one
+machine), need a sandbox for your agents (the workspace bounds P9's own file routes only; agents, terminals
+and buttons run as you), or need a signed, audited installer (v1 is an unsigned beta for testers).
+
+**You need:** Linux with a graphical session and systemd user services (or Windows, per-user install, no
+admin), the Claude and/or Codex CLI already signed in, and access to this private repo. Dev Focus also needs
+VSCodium's remote server at one pinned release. Full list: [Requirements](#requirements).
+
+**Real cost:** P9 itself is free under PolyForm Shield (see [Licenses](#licenses)); you pay for your own
+Claude or Codex plan. Linux installs from source (`pnpm install` and `pnpm build`, Node 26.10.0 fetched if
+missing); install time was not measured.
 
 ## Install
 
@@ -47,6 +67,30 @@ to add to `~/.bashrc`. If the clone worked but a later step failed, fix what it 
 `bash ~/p9/scripts/install.sh`. P9's workspace is `~/work`; for another folder, run
 `bash ~/p9/scripts/install.sh <folder>` instead of the last part. Step by step:
 [Install on Linux](#install-on-linux-per-user-from-source).
+
+**When it worked:** the Linux script ends with `Open P9:` and the command to paste; the window opens on your
+workspace. If something looks wrong, `pnpm teh doctor --state "$XDG_RUNTIME_DIR/p9-foundation"` exits 0 when
+the daemon answers ([Check the daemon](#install-on-linux-per-user-from-source)).
+
+## What you get / how it works
+
+One window, three focus modes:
+
+- **Chat Focus**: Claude and Codex chats over the Agent Client Protocol, with approvals, history and Stop.
+- **Dev Focus**: a VS Code–style editor (VSCodium's remote server) whose saves go through P9's guarded save.
+- **Mission Control**: your scripts as buttons, your apps and pages, and a "waiting on you" queue.
+
+```text
+window (Electron) ──┐                       ┌─ agent chats (Claude / Codex ACP adapters)
+                    ├─ Unix socket ─ daemon ┼─ P9 tmux terminals
+phone (optional) ───┘  (Tailscale +         ├─ Mission Control button runs
+                        passkey)            └─ guarded saves into your workspace
+```
+
+A small daemon runs as your own user and owns the work: closing the window leaves chats and P9 terminals
+running. An optional phone view reaches the same daemon through Tailscale, signed in with a passkey.
+Read [SECURITY.md](SECURITY.md) before you use it: it says what P9 protects and what it does not.
+What each part of the app does is in [docs/guide.md](docs/guide.md).
 
 ## Windows installer: unsigned in v1, check the checksum
 
@@ -349,6 +393,22 @@ GitHub's Ubuntu runner and runs the suite on every push to a branch other than `
 
 To publish your own copy, run `git config core.hooksPath .githooks`: the commit hook scans the staged
 index for secrets, and the push hook runs gitleaks and a private-path scan over the full history.
+
+## Status and known gaps
+
+**Version 0.1.2, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+(`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
+
+- **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
+  daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
+  branch other than `main`; the Windows installer is built, installed, restarted and uninstalled on GitHub's
+  Windows runner (a runner session, not a real desktop).
+- **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
+  that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`).
+- **Not supported:** macOS.
+- **Known gaps:** installers are unsigned (checksum only, see above); a daemon restart cuts off the chat turn
+  in progress (reopen to resume); Dev Focus refuses folder creation, rename and delete; recovery drafts have
+  no screen yet; the phone view uses the browser's online flag, so it can miss a daemon that is unreachable.
 
 ## Licenses
 
