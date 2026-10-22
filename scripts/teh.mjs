@@ -26,12 +26,15 @@ export async function health(state) {
   });
 }
 
+// A request that starts an agent waits for it: the daemon allows 45 s for the start (chat.mjs START_MS), then up to 5 s each for the
+// mode, model and up to 6 effort settings. Everything else keeps the 10 s default.
+export const AGENT_START_MS = 90_000;
 // One authenticated request to the daemon over its Unix socket; resolves { status, body }.
-export async function daemonRequest(state, method, route, body, op = randomUUID()) {
+export async function daemonRequest(state, method, route, body, op = randomUUID(), timeout = 10000) {
   const credentials = JSON.parse(await readFile(path.join(state, 'desktop.json'), 'utf8'));
   const data = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout: 10000,
+    const req = request({ socketPath: credentials.socketPath ?? path.join(state, 'daemon.sock'), path: route, method, timeout,
       headers: { host: 'p9.local', origin: ORIGIN, cookie: `p9=${credentials.cookie}`, 'x-p9-csrf': credentials.csrf,
         ...(method === 'GET' ? {} : { 'x-p9-op': op }), ...(data ? { 'content-type': 'application/json' } : {}) } }, (res) => {
       let text = '';

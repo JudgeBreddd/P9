@@ -1,6 +1,6 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, md } from './helpers.mjs';
-import { createTerminal } from './terminal.mjs';
+import { createTerminal, TMUX_MISSING } from './terminal.mjs';
 
 type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
@@ -208,13 +208,13 @@ async function loadTerminals() {
     select.innerHTML = running.map((item) => `<option value="${escape(item.id)}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
     if (running.some((item) => item.id === was)) select.value = was;
     attach();
-  } catch { termState('Terminals are unavailable'); }
+  } catch (error) { termState((error as Error).message === 'tmux-not-found' ? TMUX_MISSING : 'Terminals are unavailable'); }
 }
 one<HTMLSelectElement>('#terminal').onchange = attach;
 one<HTMLButtonElement>('#refreshTerminal').onclick = () => void loadTerminals();
 one<HTMLButtonElement>('#newTerminal').onclick = async () => {
   const result = await mutate('/terminals', {});
-  if (result.status !== 201) return termState('Not started: ' + String(result.body.error ?? result.status));
+  if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING : 'Not started: ' + String(result.body.error ?? result.status));
   one<HTMLSelectElement>('#terminal').value = ''; await loadTerminals();
   one<HTMLSelectElement>('#terminal').value = String(result.body.terminal); attach();
 };
