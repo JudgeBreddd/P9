@@ -80,6 +80,8 @@ test('release r2 R2-1: build.files covers every module the desktop imports; the 
   assert.ok(build.extraResources.some(({ from, to }) => from === 'scripts/windows-host.ps1' && to === 'daemon/scripts/windows-host.ps1'));
   // electron-builder leaves a file an extraResources entry names out of app.asar (CI 2026-10-22 lost package.json).
   for (const { from } of build.extraResources) assert.ok(!shipped(from), from + ' is in build.files and extraResources, so app.asar loses it');
+  // B10: electron-builder drops a node_modules folder at the top of an extraResources source, so bundleDaemon's needs its own entry.
+  assert.ok(build.extraResources.some(({ from, to }) => from === '.build/daemon-extra/node_modules' && to === 'daemon/node_modules'));
   console.log('PASS R2-1: ' + seen.size + ' desktop modules all in build.files; packaged host script is ' + packed);
 });
 
@@ -110,7 +112,7 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   // Issue #6 B7: a task with no --workspace gave IndexOf -1, so argv[0] (node.exe) became the workspace.
   assert.doesNotMatch(ps1, /IndexOf\([^)]*'--workspace'\) \+ 1/);
-  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}\s*\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
+  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}\s*(\} catch \{[^\n]*\}\s*)?\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
   // Issue #6 B6 and B4: timestamped lines and the failing line in service-install.log; the task's daemon writes daemon.log.
   assert.match(ps1, /^trap \{ Say \('failed at line '/m);
   assert.match(ps1, /'-Mode', 'Daemon', '-Log', \('"' \+ \$log \+ '"'\)/);
@@ -119,6 +121,27 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
+});
+
+// v0.1.3 review findings 1-3 and threat model row 32's Windows half; windows-installer.yaml runs them on Windows.
+test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, survives a bad payload, clears only P9 temp folders (text)', () => {
+  const nsh = readFileSync(path.join(root, 'scripts', 'installer.nsh'), 'utf8'), ps1 = readFileSync(path.join(root, 'scripts', 'install-windows.ps1'), 'utf8');
+  const teh = readFileSync(path.join(root, 'scripts', 'teh.mjs'), 'utf8'), main = readFileSync(path.join(root, 'apps', 'desktop', 'main.mjs'), 'utf8');
+  // Finding 1: Register -Force and Start-ScheduledTask left a running daemon on the old folder.
+  const stop = ps1.slice(0, ps1.indexOf('Register-ScheduledTask'));
+  assert.match(stop, /Stop-ScheduledTask -TaskName 'P9 Foundation'[^]*\$_\.ExecutablePath -eq \$bundled[^]*Stop-Process[^]*Wait-Process/, 'the script ends the bundled daemon before it registers');
+  // Finding 2: a payload it cannot read threw, so every reinstall and the app's repair failed.
+  assert.match(ps1, /try \{\s*\$old = [^\n]*FromBase64String[^]*\} catch \{[^\n]*\$Workspace = \$null \}\s*\}\s*if \(-not \$Workspace\)/, 'an unreadable payload falls to the default folder');
+  // Finding 3: any electron-builder installer's folder matched app-64.7z.
+  assert.doesNotMatch(ps1, /'app-64\.7z'/);
+  assert.match(ps1, /ns\*\.tmp[^]*Test-Path -LiteralPath \(Join-Path \$_\.FullName 'p9-event-horizon\.marker'\)[^]*Remove-Item/);
+  assert.match(nsh.slice(nsh.indexOf('!macro customInit')), /^[^]*?InitPluginsDir\s+FileOpen \$0 "\$PLUGINSDIR\\p9-event-horizon\.marker" w\s+FileClose \$0/, 'the installer marks its own folder');
+  // Row 32: the app passes the folder to the same script and function the launch repair uses.
+  assert.match(teh, /export function repairWindowsTask\(resources, workspace\)[^]*\.\.\.\(workspace \? \['-Workspace', workspace\] : \[\]\)/);
+  const change = main.slice(main.indexOf("ipcMain.handle('p9:workspace-change'"), main.indexOf("ipcMain.handle('p9:pet-remove'"));
+  assert.match(change, /if \(win\) \{[^]*\/stop-all[^]*repairWindowsTask\(process\.resourcesPath, folder\)[^]*repairWindowsTask\(process\.resourcesPath, old\)[^]*workspace-not-started/, 'Stop All, then the script, else the old folder again');
+  assert.match(change, /win \? path\.dirname\(stateReal\)/, "on Windows %LOCALAPPDATA%\\P9, the state folder's parent, is refused");
+  console.log('PASS v0.1.4 (text): findings 1-3 and the Windows workspace change are wired');
 });
 
 // scripts/install.sh, the one-command Linux install, run against stand-in tools: a PATH that holds only the stubs

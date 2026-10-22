@@ -45,6 +45,11 @@
 ; left its daemon running and holding files open (issue #6 B10). electron-builder runs customInit in .onInit after
 ; initMultiUser, so $INSTDIR is already the install folder.
 !macro customInit
+  ; Marks this installer's own %TEMP%\ns*.tmp ($PLUGINSDIR), so install-windows.ps1 clears only P9's leftovers (v0.1.3
+  ; review finding 3). customInit runs before the template's InitPluginsDir; a second InitPluginsDir does nothing.
+  InitPluginsDir
+  FileOpen $0 "$PLUGINSDIR\p9-event-horizon.marker" w
+  FileClose $0
   ${If} ${RunningX64}
     ${DisableX64FSRedirection}
   ${EndIf}
