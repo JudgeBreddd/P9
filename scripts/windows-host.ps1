@@ -10,13 +10,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Acl (the daemon, before it writes anything, B8): each folder in the payload (base64 JSON list) may be owned by and grant
-# access to only this user, SYSTEM and Administrators. Prints each folder that fails and exits 1. Needs no C#.
+# Acl (the daemon, before it writes anything, B8): each folder in the payload (base64, one per line) may be owned by and
+# grant access to only this user, SYSTEM and Administrators. Prints each folder that fails and exits 1. Needs no C#.
+# .NET calls only: a cmdlet from a module (ConvertFrom-Json, Get-Item) makes a PowerShell with a new LOCALAPPDATA build
+# its module cache first, which may be why the daemon test's start passed 20 s (run 39732594547).
 if ($Mode -eq 'Acl') {
   $trusted = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
-  $folders = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)) | ConvertFrom-Json
+  $folders = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)).Split("`n")
   $bad = @($folders | Where-Object {
-    $security = (Get-Item -LiteralPath $_ -Force).GetAccessControl('Access, Owner')
+    $security = [IO.Directory]::GetAccessControl($_, [Security.AccessControl.AccessControlSections]'Access, Owner')
     $grants = @($security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object AccessControlType -eq 'Allow')
     ($trusted -notcontains $security.GetOwner([Security.Principal.SecurityIdentifier]).Value) -or
       @($grants | Where-Object { $trusted -notcontains $_.IdentityReference.Value }).Count -gt 0

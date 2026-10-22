@@ -56,7 +56,7 @@ if (!ownershipStat.isDirectory() || inside(workspace, await realpath(ownershipDi
 // Windows has no mode bits: the three folders' ACLs may grant only this user, SYSTEM and Administrators (B8). The
 // installer makes %LOCALAPPDATA%\P9 owner-only; a source run's folders inherit the profile's ACL, which holds those three.
 if (windows) {
-  const folders = Buffer.from(JSON.stringify([state, recovery, ownershipDirectory])).toString('base64');
+  const folders = Buffer.from([state, recovery, ownershipDirectory].join('\n')).toString('base64');
   const acl = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', windowsHost, '-Mode', 'Acl', '-Payload', folders], { encoding: 'utf8', env: childEnv() });
   if (acl.status !== 0) {

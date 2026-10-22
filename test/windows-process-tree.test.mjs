@@ -90,11 +90,17 @@ test('Windows host: a .cmd runs with & intact, Console starts a program, Acl ref
   const shared = path.join(dir, 'shared');
   await mkdir(shared);
   execFileSync('icacls.exe', [shared, '/grant', '*S-1-1-0:(R)']);
-  const payload = (folders) => Buffer.from(JSON.stringify(folders)).toString('base64');
+  const payload = (folders) => Buffer.from(folders.join('\n')).toString('base64');
   const acl = ps(['-File', host, '-Mode', 'Acl', '-Payload', payload([dir, shared])]);
   assert.equal(acl.status, 1, acl.stderr);
   assert.deepEqual(acl.stdout.trim().split(/\r?\n/), [shared]);
-  assert.equal(ps(['-File', host, '-Mode', 'Acl', '-Payload', payload([dir])]).status, 0);
+  // The daemon's own call: its allowlisted environment and a LOCALAPPDATA no PowerShell has used, as in daemon().
+  await mkdir(path.join(dir, 'cold'));
+  const began = Date.now();
+  const cold = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', host,
+    '-Mode', 'Acl', '-Payload', payload([dir])], { encoding: 'utf8', env: { ...childEnv(), LOCALAPPDATA: path.join(dir, 'cold') } });
+  assert.equal(cold.status, 0, cold.stdout + cold.stderr);
+  console.log(`B8 Acl check, new LOCALAPPDATA: ${Date.now() - began} ms`);
   // E4: the compiled class beside a copy of the host is what it loads; time one start each way.
   const copy = path.join(dir, 'host');
   await mkdir(copy);
