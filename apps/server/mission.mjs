@@ -283,7 +283,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const child = await launchDetached(target.argv, target.cwd, ['ignore', 'pipe', 'ignore']);
     if (!child) return notStarted;
     // Windows has no process groups: taskkill /T ends the tree (before D1 the kill threw there and the request hung).
-    const kill = () => windows ? spawn(system32('taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { shell: false, stdio: 'ignore', windowsHide: true }).on('error', () => {})
+    const kill = () => windows ? spawn(system32('taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { shell: false, env: childEnv(), stdio: 'ignore', windowsHide: true }).on('error', () => {})
       : process.kill(-child.pid, 'SIGKILL');
     const timer = setTimeout(() => { try { kill(); } catch {} }, PRINT_URL_MS);
     let stdout = '';

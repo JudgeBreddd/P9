@@ -53,12 +53,14 @@ async function startDaemon(t, entry, fixturePaths, extra) {
     path.join(root, 'scripts', 'windows-host.ps1'), '-Mode', 'Daemon', '-Payload', payload] : daemonArgs;
   const child = spawn(command, args, { cwd: root,
     env: environment, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-  let output = '';
+  let output = '', errors = '';
   child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { errors += chunk; });
+  const said = () => `\nstdout: ${output.slice(-2000)}\nstderr: ${errors.slice(-2000)}`;
   const ready = new Promise((resolve, reject) => {
-    // Windows pays two PowerShell starts and an Add-Type compile before P9_READY.
-    const timer = setTimeout(() => reject(new Error('daemon-timeout')), process.platform === 'win32' ? 20000 : 5000);
-    child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`daemon-exit-${code}`)); });
+    // Windows pays three PowerShell starts (host, folder ACL check, pipe lock) and an Add-Type compile before P9_READY.
+    const timer = setTimeout(() => reject(new Error('daemon-timeout' + said())), process.platform === 'win32' ? 20000 : 5000);
+    child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`daemon-exit-${code}` + said())); });
     child.stdout.on('data', () => { if (output.includes('P9_READY')) { clearTimeout(timer); resolve(); } });
   });
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); } });
