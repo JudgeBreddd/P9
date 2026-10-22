@@ -39,3 +39,17 @@
     ${EnableX64FSRedirection}
   ${EndIf}
 !macroend
+
+; Before an install or update replaces any file: the same stop as customUnInstall, for an older version whose uninstaller
+; left its daemon running and holding files open (issue #6 B10). electron-builder runs customInit in .onInit after
+; initMultiUser, so $INSTDIR is already the install folder.
+!macro customInit
+  ${If} ${RunningX64}
+    ${DisableX64FSRedirection}
+  ${EndIf}
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -InputFormat None -Command "Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter 'Name = ''node.exe''' | Where-Object { $$_.ExecutablePath -eq '$INSTDIR\resources\daemon\node.exe' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  Pop $0
+  ${If} ${RunningX64}
+    ${EnableX64FSRedirection}
+  ${EndIf}
+!macroend

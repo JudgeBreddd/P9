@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -77,6 +77,24 @@ function command(command, args) {
   catch { return ''; }
 }
 
+// The 'P9 Foundation' task: { state, execute, arguments }, or null when there is none. execute is conhost.exe for this
+// version's task and powershell.exe for v0.1.1's visible one (issue #6). The desktop app uses it to say which (B3).
+export function windowsTask() {
+  const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    "$t = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; if ($t) { @{ state = [string]$t.State; "
+    + "execute = $t.Actions[0].Execute; arguments = $t.Actions[0].Arguments } | ConvertTo-Json -Compress } else { 'null' }"],
+  { encoding: 'utf8', timeout: 15000, windowsHide: true }, (error, stdout) => { try { resolve(error ? null : JSON.parse(stdout)); } catch { resolve(null); } }));
+}
+
+// Windows has no unit or journal: the task stands in for the unit (SubState conhost is this version's task, powershell
+// v0.1.1's) and the last 100 lines of daemon.log for the journal (issue #6 B4).
+export function windowsSources(task, log) {
+  return { status: 'ActiveState=' + (task ? String(task.state).toLowerCase() : 'missing')
+      + '\nSubState=' + (task ? path.win32.basename(String(task.execute), '.exe').toLowerCase() : 'missing'),
+    journal: log.split(/\r?\n/).filter(Boolean).slice(-100).map((line) => JSON.stringify({ MESSAGE: line })).join('\n') };
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     state: { type: 'string' }, bundle: { type: 'string' },
@@ -94,10 +112,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } else {
   if (positionals.join(' ') !== 'doctor' || !values.state) throw new Error('use-doctor-or-devices-with-state');
   const daemon = await health(values.state).catch(() => ({ status: 'unavailable' }));
-  const bundle = collectBundle({ daemon,
+  // daemon.log sits next to the runtime folder (install-windows.ps1).
+  const bundle = collectBundle({ daemon, ...(process.platform === 'win32' ? windowsSources(await windowsTask(),
+    await readFile(path.join(values.state, '..', 'daemon.log'), 'utf8').catch(() => '')) : {
     status: command('systemctl', ['--user', 'show', 'p9-foundation.service', '--property=ActiveState,SubState,Result']),
     journal: command('journalctl', ['--user', '-u', 'p9-foundation.service', '-n', '100', '-o', 'json', '--no-pager']),
-  });
+  }) });
   const text = JSON.stringify(bundle, null, 2) + '\n';
   if (values.bundle) await writeFile(values.bundle, text, { flag: 'wx', mode: 0o600 });
   else process.stdout.write(text);

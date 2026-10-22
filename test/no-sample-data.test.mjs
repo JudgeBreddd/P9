@@ -7,7 +7,8 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, root } from './helpers.mjs';
+import { once } from 'node:events';
+import { daemon, restart, root } from './helpers.mjs';
 
 // Text only the sample data has: chat titles, a sample file, the personal-looking project rows.
 const MARKERS = ['Refactor provider lease', 'Pick a colour', 'LEASE_GRACE_MS', 'DD-214', 'va-claims-assistant', 'agent-first-workspace'];
@@ -57,4 +58,15 @@ test('no daemon at all shows empty lists and says the background service is not 
   await page.locator('[data-mission-note]', { hasText: /not answering/ }).waitFor({ timeout: 15000 });
   await noSamples(page);
   console.log('PASS no daemon: no sample tabs, text or waiting items; the note says not answering and retries');
+});
+
+// GitHub issue #6 B3: the status bar asked once at launch, so a daemon that came up later still read unavailable.
+test('the status bar asks again until a daemon that starts after the app answers', { timeout: 60000 }, async t => {
+  const instance = await daemon(t);
+  instance.child.kill('SIGTERM'); await once(instance.child, 'exit');
+  const page = await open(t, instance.state);
+  await page.locator('#daemonStatus', { hasText: 'Daemon unavailable' }).waitFor({ timeout: 15000 });
+  await restart(t, instance, 'state');
+  await page.locator('#daemonStatus', { hasText: 'Daemon connected' }).waitFor({ timeout: 15000 });
+  console.log('PASS B3: unavailable at launch, connected once the daemon came up, with no relaunch');
 });

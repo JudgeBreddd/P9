@@ -157,6 +157,14 @@
       {
         "from": "scripts/install-windows.ps1",
         "to": "daemon/scripts/install-windows.ps1"
+      },
+      {
+        "from": "scripts/teh.mjs",
+        "to": "daemon/scripts/teh.mjs"
+      },
+      {
+        "from": "package.json",
+        "to": "daemon/package.json"
       }
     ],
     "win": {

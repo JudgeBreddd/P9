@@ -96,9 +96,21 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   // The installer is 32-bit: with redirection on, $SYSDIR's PowerShell is the 32-bit one, not the one a user opens.
   for (const part of [install, uninstall]) assert.match(part, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^]*\$\{EnableX64FSRedirection\}/, 'every PowerShell call runs with WOW64 redirection off');
   for (const part of [install, uninstall]) assert.ok(part.indexOf('${DisableX64FSRedirection}') < part.indexOf('nsExec'), 'redirection goes off before the first PowerShell call');
-  // Windows PowerShell under a PowerShell 7 parent loads 7's Set-Acl module and fails (GitHub run 39535290300: no task).
-  assert.ok(ps1.search(/PSModulePath = .*-notmatch '\\\\PowerShell\\\\'/) >= 0 && ps1.search(/PSModulePath =/) < ps1.indexOf('Set-Acl -LiteralPath'), "7's module folders leave PSModulePath before Set-Acl");
+  // Windows PowerShell under a PowerShell 7 parent loads 7's modules and fails (GitHub run 39535290300: no task).
+  assert.ok(ps1.search(/PSModulePath = .*-notmatch '\\\\PowerShell\\\\'/) >= 0 && ps1.search(/PSModulePath =/) < ps1.indexOf('Register-ScheduledTask'), "7's module folders leave PSModulePath before the task is registered");
+  // Issue #6 B1: Set-Acl threw PrivilegeNotHeldException for a standard user over an earlier install; icacls, checked, instead.
+  assert.doesNotMatch(ps1, /^[^#\n]*Set-Acl/m, 'no Set-Acl outside comments');
+  assert.match(ps1, /icacls\.exe \$root \/inheritance:r \/grant:r \('\*' \+ \$sid \+ ':\(OI\)\(CI\)F'\)[^\n]*\n\s*if \(\$LASTEXITCODE -ne 0\) \{ throw/, 'owner-only through icacls, exit code checked');
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
+  // Issue #6 B7: a task with no --workspace gave IndexOf -1, so argv[0] (node.exe) became the workspace.
+  assert.doesNotMatch(ps1, /IndexOf\([^)]*'--workspace'\) \+ 1/);
+  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}\s*\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
+  // Issue #6 B6 and B4: timestamped lines and the failing line in service-install.log; the task's daemon writes daemon.log.
+  assert.match(ps1, /^trap \{ Say \('failed at line '/m);
+  assert.match(ps1, /'-Mode', 'Daemon', '-Log', \('"' \+ \$log \+ '"'\)/);
+  // Issue #6 B10: the installer stops the old task and daemon before it replaces files, as the uninstaller does.
+  const init = nsh.slice(nsh.indexOf('!macro customInit'));
+  assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
 });
