@@ -268,7 +268,8 @@ jobs:
           gh release download v0.1.3 -R $env:GITHUB_REPOSITORY -D $old -p "p9-event-horizon-0.1.3-windows-$env:P9_ARCH.exe" -p "SHA256SUMS-$env:P9_ARCH" --clobber
           if ($LASTEXITCODE -ne 0) { throw 'gh release download v0.1.3 failed' }
           $oldExe = Join-Path $old "p9-event-horizon-0.1.3-windows-$env:P9_ARCH.exe"
-          $want = ((Get-Content (Join-Path $old "SHA256SUMS-$env:P9_ARCH")) -match [regex]::Escape((Split-Path $oldExe -Leaf)) -split '\s+')[0]
+          # @(): the file is one line, and -match on a lone string returns $true, not the line (run 39826320042).
+          $want = (@(Get-Content (Join-Path $old "SHA256SUMS-$env:P9_ARCH")) -match [regex]::Escape((Split-Path $oldExe -Leaf)) -split '\s+')[0]
           if ((Get-FileHash $oldExe -Algorithm SHA256).Hash -ne $want) { throw 'the v0.1.3 installer does not match its SHA256SUMS' }
           $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
           $file = Join-Path $env:LOCALAPPDATA 'P9\runtime\desktop.json'
