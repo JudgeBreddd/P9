@@ -252,6 +252,7 @@ jobs:
           New-Item -ItemType Directory -Force (Join-Path $ws 'waiting') | Out-Null
           @{ scripts = @(@{ id = 'keep'; title = 'Keep'; detach = $true; cmd = @($node, $keep, $childPid) }); apps = @(@{ id = 'keep'; title = 'Keep'; cmd = @($node, $keep, $appPid, 'child') }); pages = @() } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ws 'registry.json')
           $settingsFile = Join-Path $env:APPDATA 'P9\settings.json'
+          New-Item -ItemType Directory -Force (Split-Path $settingsFile) | Out-Null
           @{ primary = 'primary.md'; registry = 'registry.json'; waiting = 'waiting' } | ConvertTo-Json | Set-Content -LiteralPath $settingsFile
           $before = Get-Date
           schtasks.exe /Run /TN 'P9 Foundation'
