@@ -222,7 +222,13 @@ Each `cmd` is an argv list run without a shell. **The registry is executable con
 button runs that command as you. Read it before you use it. P9's own routes never write it, but any
 program running as your user (an agent, a terminal, an extension) can edit the file, so treat changes to
 it like changes to a script. Optional `scripts_root` (absolute) is where button
-scripts run from; it defaults to the workspace and may point outside it. A button run is bounded: at most
+scripts run from; it defaults to the workspace and may point outside it. Settings, registry and space
+changes show in Mission within one refresh, with no restart. Optional `page_schemes` (a list such as
+`["obsidian", "ms-settings"]`) lets registry pages use those link types; P9 shows the full link and asks first,
+and `javascript:`, `file:` and `data:` are never allowed. Button arguments may be any text except control
+characters; for batch (.cmd/.bat) and ssh targets only, shell characters are refused and the message names
+the character. An argument entry with `choices: [...]` shows a dropdown and the server accepts only those
+values. A button run is bounded: at most
 4 at once, 1 MiB of output kept, 15 minutes, and it is tracked in memory only (a daemon restart or update stops
 it; after a crash the next start does). Without the file, Mission Control says
 `settings-missing` and the other focus modes work normally. P9 never writes the registry.
@@ -309,7 +315,7 @@ already has. To use another folder, run `resources\daemon\scripts\install-window
   nothing else. What is sent: your note, its kind (as the issue label) and the name of the focus mode you
   were in, as an issue on `JudgeBreddd/p9`, visible to everyone who can see that repo. Without a token the
   whole note goes into the new-issue URL, so it also lands in your browser history. Never paste secrets
-  into a note. Notes are capped at 2000 characters and 10 per 10 minutes.
+  into a note. Notes are capped at 50,000 characters (the box shows a live count and keeps your text if you go over) and 10 per 10 minutes. Without a token, GitHub's link limit cuts the prefilled text at 7,000 characters and the box says so.
   To remove the token: delete both `anymouse.*` files in that folder, then run
   `systemctl --user daemon-reload && systemctl --user restart p9-foundation`.
 - **Phone** (optional, needs Tailscale on both devices). **An enrolled phone can do what you can do in

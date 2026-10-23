@@ -126,3 +126,5 @@ dialog[open]{animation:pop .18s ease}
 /* ---- Status colours each DUWOP theme lacks; derived from the palette so they follow the theme ---- */
 [data-theme]{--ok:oklch(0.75 0.14 165);--warn:oklch(0.78 0.14 70)}
 :is([data-theme="event-horizon"], [data-theme="event-horizon-prime"]){--warn:oklch(0.62 0.12 55)}  /* Event Horizon's copper attention colour */
+#amCount.over{color:var(--destructive);font-weight:600}
+#amText[aria-invalid="true"]{border-color:var(--destructive)}

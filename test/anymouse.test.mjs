@@ -45,7 +45,7 @@ test('Anymouse through the daemon: token files an issue, no token returns the pr
   assert.match(req.body.body, /Sent with Anymouse from P9 \(chat\)/);
   assert.equal(JSON.stringify(filed).includes(TOKEN), false);
   assert.equal((await call(withToken, { kind: 'idea', text: '   ' })).status, 400);
-  assert.equal((await call(withToken, { kind: 'idea', text: 'x'.repeat(2001) })).status, 400);
+  assert.equal((await call(withToken, { kind: 'idea', text: 'x'.repeat(50_001) })).status, 400);
   assert.equal(gh.seen.length, 1, 'refused notes never reach GitHub');
 
   const noToken = await daemon(t);
@@ -101,4 +101,83 @@ test('Anymouse in the desktop: the box sends, and with no token main opens only 
     return results;
   });
   assert.deepEqual(refused, [true, true, true]);
+});
+
+test('M4: 50,000 characters go through; one more is refused with its count; a tokenless link keeps to GitHub\'s size and says it cut', async (t) => {
+  const gh = await fakeGitHub(t);
+  const send = createAnymouse({ token: TOKEN, api: gh.api });
+  assert.equal((await send({ text: 'x'.repeat(50_000) })).status, 200);
+  const over = await send({ text: 'x'.repeat(50_001) });
+  assert.deepEqual(over, { status: 400, error: 'keep it under 50,000 characters (it is 50,001)' });
+  assert.equal(gh.seen.length, 1);
+  const link = await createAnymouse()({ text: 'y'.repeat(50_000) });
+  assert.equal(link.status, 200);
+  assert.equal(link.cut, true);
+  assert.ok(link.open.length <= 7200, String(link.open.length));
+  assert.equal((await createAnymouse()({ text: 'short' })).cut, undefined);
+});
+
+// ---- v0.1.5 chunk 3: the screenshots the owner opens. The run's volume is thrown away, so each PNG is also printed to the log as
+// "P9_SHOT <name> <base64>". Also asserts what the pictures show.
+test('v0.1.5 c3 screenshots: counter, dropdown, refused character, restart notice', { timeout: 60000 }, async (t) => {
+  const { mkdir } = await import('node:fs/promises');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c3shots-'));
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    const settings = path.join(paths.directory, 'settings.json');
+    await writeFile(settings, JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'projects/AGENTS.md' }));
+    const ws = path.join(paths.directory, 'work'); // the default folder the daemon falls back to
+    for (const dir of ['_waiting', 'hub', 'projects/event-horizon']) await mkdir(path.join(ws, dir), { recursive: true });
+    await writeFile(path.join(ws, 'hub/registry.json'), JSON.stringify({ scripts: [
+      { id: 'tag', title: 'Tag release', cmd: ['tag.cmd'], args: ['Tag name'] },
+      { id: 'mode', title: 'Pick mode', cmd: ['true'], args: [{ label: 'Mode', choices: ['fast', 'slow'] }] }] }));
+    await writeFile(path.join(ws, 'projects/AGENTS.md'), '# Projects\n\n**Main project: P9 — Event Horizon** (`event-horizon/`)\n');
+    await writeFile(path.join(ws, 'projects/event-horizon/AGENTS.md'), '# P9\n\n**Status:** **Open**\n');
+    await writeFile(path.join(ws, '_waiting/AGENTS.md'), '# How this folder works\n');
+    // The later --workspace wins: a saved folder that is not there at start, which is the one restart reason.
+    return { args: ['--settings', settings, '--workspace', path.join(home, 'gone')] };
+  });
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const shot = async (name, locator) => {
+    const png = await locator.screenshot({ type: 'png' });
+    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
+  };
+  const closeModal = async () => { await page.click('#mdlX'); await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 }); };
+  const openScript = async (title) => {
+    const tiles = page.locator('#fMission [data-group]');
+    for (let i = 0; i < await tiles.count(); i++) {
+      await tiles.nth(i).click();
+      const item = page.locator('#mdlBody li button', { hasText: title });
+      if (await item.count()) { await item.first().click(); return; }
+      await closeModal();
+    }
+    throw new Error('no script ' + title);
+  };
+  await page.click('#rMission');
+  const notice = page.locator('#fMission [data-restart]');
+  await notice.waitFor({ timeout: 15000 });
+  assert.match(await notice.innerText(), /Restart P9 to apply/);
+  await shot('restart-notice', page.locator('#fMission'));
+  await openScript('Pick mode');
+  const select = page.locator('#mdlBody select[data-arg]');
+  assert.deepEqual(await select.locator('option').allInnerTexts(), ['(none)', 'fast', 'slow']);
+  await select.selectOption('slow');
+  await shot('choices-dropdown', page.locator('#mdl'));
+  await closeModal();
+  await openScript('Tag release');
+  await page.locator('#mdlBody input[data-arg]').fill('v1&v2');
+  await page.click('#mdlFoot [data-run]');
+  await page.locator('#mdlBody .out', { hasText: '&' }).waitFor({ timeout: 10000 });
+  await shot('refused-character', page.locator('#mdl'));
+  await closeModal();
+  await page.click('#amBtn');
+  await page.locator('#amText').fill('x'.repeat(50001));
+  assert.match(await page.locator('#amCount').innerText(), /50,001 \/ 50,000.*1 too many/);
+  assert.equal(await page.locator('#amSend').isDisabled(), true);
+  assert.equal((await page.locator('#amText').inputValue()).length, 50001, 'the text is kept');
+  await shot('anymouse-counter', page.locator('#amDlg'));
 });

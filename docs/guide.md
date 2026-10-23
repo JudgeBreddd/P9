@@ -62,7 +62,7 @@ Mission Control reads `~/.config/p9/settings.json`. Paths are relative to your w
 | `scripts_root` (optional, absolute) | where buttons run from; defaults to the workspace |
 | `space` (optional) | a JSON file of your own sections (below) |
 
-P9 reads the file when the daemon starts, so restart P9 after changing it.
+P9 re-reads the file every time Mission refreshes, so changes show within one refresh with no restart. If the file is broken, Mission keeps the last good settings and says so. The one case that asks you to restart is a saved workspace folder that was missing at start; the notice has a **Restart P9 to apply** button.
 
 ### Buttons, apps and pages
 

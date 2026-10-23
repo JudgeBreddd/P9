@@ -135,16 +135,36 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   api.put('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
     const input = parseSave(await c.req.json());
+    await reloadSettings();
     if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
     const result = await guardedSave(workspace, input.path, input.hash, input.content, recovery);
     if (result.draftRetained) console.error(JSON.stringify({ event: 'P9_DRAFT_RETAINED' }));
     if (result.kind === 'failed') console.error(JSON.stringify({ event: 'P9_REQUEST_FAILED', code: result.code }));
     return c.json(result, result.kind === 'saved' ? 200 : result.kind === 'conflict' ? 409 : statuses[result.code] ?? 500);
   });
+  // M2: the settings file is read again on every Mission request and swapped in when its text changed, so an edit shows
+  // in the next refresh with no restart. A file that no longer parses keeps the last good settings (the overview says so).
+  // ponytail: one small file read per Mission request; a watcher if that ever shows up in a profile.
+  let settingsText, settingsError = null;
+  const reloadSettings = async () => {
+    if (!settingsFile) return;
+    let text;
+    try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') return; }
+    if (text === settingsText) return;
+    settingsText = text;
+    if (text === undefined) { settingsError = null; return; } // deleted: the last good settings stay until a valid file returns
+    try { settings = parseSettings(text); settingsInvalid = false; settingsError = null; }
+    catch (error) { settingsError = String(error.message).slice(0, 200); if (!settings) settingsInvalid = true; return; }
+    mission.setSettings(settings);
+    hub = createHub({ workspace, settings });
+  };
+  // What a restart would apply: no settings.json key needs one (all of them are read per request), so the only reason is a
+  // saved workspace folder that was missing at start (main.mjs); the desktop button restarts the service once it is back.
+  const restart = () => (savedWorkspace ? { needed: true, reason: 'workspace-folder-missing', folder: savedWorkspace } : { needed: false });
   for (const route of ['/mission', '/mission/*', '/scripts/*', '/runs/*', '/apps/*', '/pages/*']) {
-    api.use(route, async (c, next) => (settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503)));
+    api.use(route, async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); });
   }
-  api.get('/mission', async (c) => c.json(await mission.overview()));
+  api.get('/mission', async (c) => c.json({ ...(await mission.overview()), settingsError, restart: restart() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
   api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
   // A space log view rides the hub text route, so both clients open it like any other log.

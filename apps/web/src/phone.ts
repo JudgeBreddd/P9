@@ -273,7 +273,9 @@ async function loadMission() {
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
     const groups = new Map<string, string[]>();
     (data.scripts as Item[]).forEach((item, index) => {
-      const inputs = item.args.map((label) => `<label>${escape(label)}<input maxlength="1000" autocomplete="off" /></label>`).join('');
+      const inputs = (item.args as unknown as (string | { label: string; choices?: string[] })[]).map((arg) => typeof arg === 'string'
+        ? `<label>${escape(arg)}<input maxlength="8000" autocomplete="off" /></label>`
+        : `<label>${escape(arg.label)}<select><option value="">(none)</option>${(arg.choices ?? []).map((choice) => `<option>${escape(choice)}</option>`).join('')}</select></label>`).join('');
       const body = `${item.desc ? `<p>${escape(item.desc)}</p>` : ''}` + (item.terminal
         ? '<p class="muted">Laptop only: this script opens a terminal window.</p>'
         : `<form data-run="${index}">${inputs}<button type="submit">${item.confirm ? 'Run (asks first)' : 'Run'}</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`);
@@ -285,10 +287,13 @@ async function loadMission() {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
       groups.set(space.title, [...(groups.get(space.title) ?? []), ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
     }
-    const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`).join('');
+    const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
+      ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
+      // M6: another program's link opens on the laptop only after the full link was shown and confirmed.
+      : `<li><button type="button" class="link" data-open-page="${escape(item.id)}" data-url="${escape(item.url)}">${escape(item.title)} (opens on the laptop)</button></li>`)).join('');
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
-    keepOpen(() => { one('#mission').innerHTML = (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
+    keepOpen(() => { one('#mission').innerHTML = (data.restart?.needed ? `<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
       + '<div class="tiles">'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
@@ -360,10 +365,10 @@ one('#mission').addEventListener('submit', async (event) => {
     // Copy (Builder, 2026-10-18: "Yes" to phone Copy): a plain-text write from this tap only; the page never reads the clipboard (threat model row 19).
     const copy = output.nextElementSibling as HTMLButtonElement; copy.hidden = false; copy.textContent = 'Copy';
     copy.onclick = () => navigator.clipboard.writeText(output.textContent ?? '').then(() => 'Copied', () => 'Copy failed').then((said) => { copy.textContent = said; });
-    const args = [...form.querySelectorAll('input')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
+    const args = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
     const result = await mutate(`/scripts/${encodeURIComponent(item.id)}/run`, { args, ...(item.confirm && { confirm: true }) });
     if (result.status === 202) await follow(String(result.body.run), output).catch(() => { output.textContent += '\n[lost the run output]'; });
-    else output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.error ?? result.status}`;
+    else output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.reason ?? result.body.error ?? result.status}`;
   } else if (form.dataset.idea !== undefined) {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
@@ -380,6 +385,12 @@ one('#mission').addEventListener('submit', async (event) => {
     if (result.status === 200) { note.textContent = 'Answer saved.'; setTimeout(() => void loadMission(), 900); }
     else note.textContent = result.status === 409 ? 'The file changed since it loaded. Refresh and answer again.' : `Not saved: ${result.body.error ?? result.status}`;
   }
+});
+one('#mission').addEventListener('click', async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-open-page]');
+  if (!button || !confirm(`Open this link on the laptop?\n\n${button.dataset.url}`)) return;
+  const result = await mutate(`/pages/${encodeURIComponent(button.dataset.openPage!)}/launch`, { confirm: true });
+  button.textContent = result.status === 200 ? 'Opened on the laptop' : `Not opened: ${result.body.reason ?? result.body.error ?? result.status}`;
 });
 one<HTMLButtonElement>('#refreshMission').onclick = () => void loadMission();
 

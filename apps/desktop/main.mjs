@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask, repairWindowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -266,7 +266,7 @@ export async function createDesktop({ state, open } = {}) {
     if (typeof open !== 'string' || !open.startsWith(NEW_ISSUE) || /[\s]/.test(open)) return { status: 502, body: { error: 'request-refused' } };
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(open);
-    return { status: 200, body: { opened: true } };
+    return { status: 200, body: { opened: true, cut: result.body.cut === true } };
   });
   // Wizard sign-in (threat model row 31): the daemon runs the agent's own login CLI. "Browser didn't open?" opens the
   // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
@@ -651,6 +651,25 @@ export async function createDesktop({ state, open } = {}) {
     const why = detail;
     await run('install-service.mjs', old);
     return { error: 'workspace-not-started', detail: why, workspace: (await health(state).catch(() => null))?.workspace ?? null };
+  });
+  // Mission's "Restart P9 to apply" (M2): restarts the background service on the folder it already has; asks first, since running
+  // chats, scripts and terminals stop. Windows runs the installed copy's install-windows.ps1 as the launch repair does; the stop of the
+  // old daemon is that script's (chunk 2's W3 hardens the stop itself, this calls it and does not write another).
+  ipcMain.handle('p9:restart-service', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!state) return { error: 'daemon-unavailable' };
+    const win = process.platform === 'win32';
+    if (!win && process.platform !== 'linux') return { error: 'restart-unsupported' };
+    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart P9?', message: 'Restart P9\'s background service?',
+      detail: 'Running chats, scripts and terminals stop.', buttons: ['Cancel', 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
+    if (response !== 1) return { cancelled: true };
+    if ((await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => null))?.status !== 200) return { error: 'stop-all-failed' };
+    if (win) {
+      changing = true;
+      // W3's restart: ends the task (the daemon and its host go with it), waits for the pipe, runs the task again.
+      try { return (await restartWindowsTask(state)) ? { restarted: true } : { error: 'restart-failed' }; } finally { changing = false; }
+    }
+    return await new Promise(resolve => execFile('systemctl', ['--user', 'restart', 'p9-foundation'], { timeout: 60_000 }, error => resolve(error ? { error: 'restart-failed' } : { restarted: true })));
   });
   ipcMain.handle('p9:pet-remove', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL

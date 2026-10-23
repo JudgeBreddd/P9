@@ -129,7 +129,8 @@
         <button type="button" data-slot="button" data-variant="outline" role="radio" aria-checked="false" data-kind="bug">Bug</button>
         <button type="button" data-slot="button" data-variant="outline" role="radio" aria-checked="false" data-kind="gripe">Gripe</button>
       </div>
-      <textarea data-slot="textarea" id="amText" aria-label="Your note" placeholder="What should we know?" maxlength="2000" rows="6"></textarea>
+      <textarea data-slot="textarea" id="amText" aria-label="Your note" placeholder="What should we know?" rows="6"></textarea>
+      <p id="amCount" class="muted sm" aria-live="polite">0 / 50,000</p>
       <p id="amNote" role="status" class="muted sm"></p>
     </div>
     <div class="dlg-foot"><button type="button" data-slot="button" data-variant="outline" id="amClose">Close</button><button type="submit" data-slot="button" data-variant="default" id="amSend" disabled>Send</button></div>

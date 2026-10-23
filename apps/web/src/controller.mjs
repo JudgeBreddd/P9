@@ -762,8 +762,12 @@ async function loadMission() {
     else { live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.'; if (!lifetime.signal.aborted) setTimeout(loadMission, 5000); }
     return renderMission();
   }
-  const o = r.body;
-  live.on = true; live.note = ''; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
+  applyOverview(r.body);
+  renderMission(); renderTabs(); loadHub();
+}
+// Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
+function applyOverview(o) {
+  live.on = true; live.note = ''; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
   M.scripts = {}; M.tools = [];
   for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id]);
@@ -772,11 +776,23 @@ async function loadMission() {
   M.space = o.space || [];
   for (const s of M.space) M.scripts[s.title] ||= [];
   applyQueue(o);
-  renderMission(); renderTabs(); loadHub();
 }
+// M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
+// showing; renderMission writes only what changed, so an idle poll costs one local request.
+let lastOverview = '';
+async function refreshMission() {
+  if (!live.on || document.hidden || S.focus !== 'mission' || lifetime.signal.aborted) return;
+  const r = await window.p9.mission('overview').catch(() => null);
+  if (r?.status !== 200 || lifetime.signal.aborted) return;
+  const key = JSON.stringify(r.body); if (key === lastOverview) return; lastOverview = key;
+  applyOverview(r.body); renderMission(); renderTabs();
+  if (S.modal?.kind === 'scripts' && !M.scripts[S.modal.g]) closeModal(); // its group is gone
+  else if (['scripts', 'win', 'reviews', 'center'].includes(S.modal?.kind)) renderModal();
+}
+const pollMission = () => { refreshMission(); setTimeout(pollMission, 20000); };
 // _tyler/ items a chat makes get their card when its turn ends (Builder, 2026-10-17); otherwise the queue is read at start.
 let queueTimer = 0;
-const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { applyQueue(r.body); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
+const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { lastOverview = JSON.stringify(r.body); applyOverview(r.body); renderMission(); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
 function applyQueue(o) {
   const drafts = Object.fromEntries(S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
@@ -828,7 +844,7 @@ async function answerLive(r) {
 async function runLive(m, id) {
   const res = await window.p9.mission('run', { id, args: m.args, ...(m.armedRun ? { confirm: true } : {}) });
   if (res.status === 200 && res.body.launched) { m.out = ['Opened in a terminal.']; return S.modal === m && renderModal(); }
-  if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.error || res.status)]; return S.modal === m && renderModal(); }
+  if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.reason || res.body?.error || res.status)]; return S.modal === m && renderModal(); }
   let text = '', from = 0;
   for (;;) {
     const o = await window.p9.mission('output', { run: res.body.run, from });
@@ -880,16 +896,29 @@ function renderMission() {
   const groups = Object.entries(M.scripts);
   setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}</p>` : '')
+    + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
+    + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-restart-btn>Restart P9</button>' : ''}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
     + '<div class="mrow"><section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>'
     + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
+  $('#fMission [data-restart-btn]')?.addEventListener('click', async e => {
+    e.currentTarget.disabled = true;
+    const r = await window.p9.restartService().catch(() => ({ error: 'restart-failed' }));
+    if (r.cancelled) { e.currentTarget.disabled = false; return; }
+    toast({ kind: r.restarted ? 'restarted' : 'not restarted', txt: r.restarted ? 'P9 restarted.' : 'Could not restart P9 (' + r.error + ')', level: r.restarted ? 'ok' : 'bad' }, true);
+    if (r.restarted) setTimeout(loadMission, 3000); else e.currentTarget.disabled = false;
+  });
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
+}
+async function launchLive(name, req) {
+  const res = await window.p9.mission('launch', req);
+  toast({ kind: res.status === 200 ? 'launched' : 'not launched', txt: name + (res.status === 200 ? '' : ' (' + (res.body?.reason || res.body?.error || res.status) + ')'), level: res.status === 200 ? 'ok' : 'bad' }, true);
 }
 // A section window's buttons; back returns to the window
 function bindWin(root, m) {
@@ -900,8 +929,10 @@ function bindWin(root, m) {
   root.querySelectorAll('[data-handoffs]').forEach(b => b.onclick = () => openModal({ kind: 'handoffs', back: m }));
   root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
     if (!live.on) return toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
-    const res = await window.p9.mission('launch', b.dataset.page ? { kind: 'pages', id: M.pages[+b.dataset.page][2] } : { kind: 'apps', id: M.apps[+b.dataset.app][3] });
-    toast({ kind: res.status === 200 ? 'launched' : 'not launched', txt: b.dataset.launch + (res.status === 200 ? '' : ' (' + (res.body?.error || res.status) + ')'), level: res.status === 200 ? 'ok' : 'bad' }, true);
+    // A link that is not http(s) opens another program: the full link is shown first, and only Open sends confirm (M6).
+    const page = b.dataset.page ? M.pages[+b.dataset.page] : null;
+    if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back: m });
+    launchLive(b.dataset.launch, b.dataset.page ? { kind: 'pages', id: page[2] } : { kind: 'apps', id: M.apps[+b.dataset.app][3] });
   });
 }
 // The parts that change: the queue and notices are the same S.reviews and S.alerts the cards use. Redraws the
@@ -933,19 +964,25 @@ function missionModal(m, body, row) {
     bindWin(body, m); missionLive();
     body.onscroll = () => { winTop[m.id] = body.scrollTop; };
   } else if (m.kind === 'scripts') {
+    if (!M.scripts[m.g]) return closeModal();
     const l = M.scripts[m.g], tools = m.g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === m.g);
     $('#mdlT').textContent = `${m.g} · ${l.length} script${l.length === 1 ? '' : 's'}`;
     body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
     body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
+  } else if (m.kind === 'link') {
+    $('#mdlT').textContent = 'Open ' + m.page[0] + '?';
+    body.innerHTML = `<div class="review"><p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(m.page[1])}</pre><p class="muted sm">It is on your allowed-schemes list in settings.json. Only open it if you recognise it.</p></div>`;
+    $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open link</button>`;
+    $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
+    $('#mdlFoot [data-open]').onclick = () => { launchLive(m.page[0], { kind: 'pages', id: m.page[2], confirm: true }); m.back ? openModal(m.back) : closeModal(); };
   } else if (m.kind === 'script') {
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
-    // ponytail: registry {label, choices} args get a typed input; the hub's pick list (e.g. plans) comes later
     m.args ||= (x.args || []).map(() => '');
     $('#mdlT').textContent = name;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : ''}</div>`;
-    body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = () => { m.args[+inp.dataset.arg] = inp.value; });
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : ''}</div>`;
+    body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = inp.onchange = () => { m.args[+inp.dataset.arg] = inp.value; });
     $('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${m.out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
     $('#mdlFoot [data-run]').onclick = () => {
       if (x.confirm && !m.armed) { m.armed = true; return renderModal(); }
@@ -1056,6 +1093,7 @@ onLookChange(look => { focusLooks[S.focus] = look; try { localStorage.setItem('p
 function setFocus(f, stay = false) {
   if (!settings.focus[f]) return; // turned off in Settings
   S.focus = f;
+  if (f === 'mission') refreshMission();
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
   if (focusLooks[f]?.theme) { applyLook(focusLooks[f]); DUWOP.init(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
@@ -1773,7 +1811,7 @@ async function loadChat() {
 }
 
 addEventListener('focus', () => renderChats());
-renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission(); pollUsage(); loadChat(); checkSetup();
+renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
 // bell with test data (Builder, 2026-10-18); live notices come from loadHub.
@@ -1781,15 +1819,23 @@ if (!window.p9?.mission) M.notifications.forEach((n, i) => setTimeout(() => toas
 
 // Anymouse: DUWOP's idea / bug / gripe box. The desktop main process sends it; the daemon files it or main opens
 // GitHub's prefilled page. Only textContent here: nothing the note or GitHub returns becomes markup.
-const amDlg = $('#amDlg'), amText = $('#amText'), amNote = $('#amNote'), amSend = $('#amSend');
+const amDlg = $('#amDlg'), amText = $('#amText'), amNote = $('#amNote'), amSend = $('#amSend'), amCount = $('#amCount');
+const AM_MAX = 50000; // the daemon's limit (anymouse.mjs MAX_NOTE); a longer note stays in the box, marked, and does not send
 let amKind = 'idea';
-$('#amBtn').onclick = () => { amNote.textContent = ''; amDlg.showModal(); amText.focus(); };
+$('#amBtn').onclick = () => { amNote.textContent = ''; amCheck(); amDlg.showModal(); amText.focus(); };
 $('#amClose').onclick = () => amDlg.close();
 amDlg.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
   amKind = b.dataset.kind;
   amDlg.querySelectorAll('[data-kind]').forEach(x => { x.setAttribute('aria-checked', String(x === b)); x.dataset.variant = x === b ? 'default' : 'outline'; });
 });
-amText.oninput = () => { amSend.disabled = !amText.value.trim(); };
+// Live counter; over the limit nothing is cut, the count turns into the message and Send waits.
+const amCheck = () => {
+  const n = amText.value.trim().length, over = n > AM_MAX;
+  amCount.textContent = over ? n.toLocaleString('en-US') + ' / 50,000: ' + (n - AM_MAX).toLocaleString('en-US') + ' too many. Your text is kept; shorten it to send.' : n.toLocaleString('en-US') + ' / 50,000';
+  amCount.classList.toggle('over', over); amText.setAttribute('aria-invalid', String(over));
+  amSend.disabled = !n || over;
+};
+amText.oninput = amCheck;
 $('#amForm').onsubmit = async (e) => {
   e.preventDefault(); amSend.disabled = true; amNote.textContent = '';
   try {
@@ -1798,9 +1844,9 @@ $('#amForm').onsubmit = async (e) => {
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
     // P9's repo is private: GitHub shows 404 to anyone not signed in with access (GitHub issue #4 item 6), so the note stays to copy.
     if (!r.body.opened) amText.value = '';
-    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. P9\'s repo is private, so GitHub shows "404" unless you are signed in with an account that has access. Your note is still here to copy.' : 'Sent as issue #' + r.body.number + '. Thanks.';
+    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. P9\'s repo is private, so GitHub shows "404" unless you are signed in with an account that has access. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
   } catch (err) { amNote.textContent = err.message; }
-  finally { amSend.disabled = !amText.value.trim(); }
+  finally { amCheck(); }
 };
 
 return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };

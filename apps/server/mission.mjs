@@ -16,8 +16,15 @@ const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ITEM = /^[\w.-]{1,120}\.md$/;
 // The answer line: empty "A.", or "A:" holding only an _italic placeholder_ (some live _tyler items use that form).
 const EMPTY_ANSWER = /^A[.:][ \t]*(?:_[^_\n]*_[ \t]*)?$/m;
-// The checkpoint button appends its argument to an ssh remote command, which a remote shell parses.
-const UNSAFE_ARG = /[\x00-\x1f\x7f;&|`$<>\\]/;
+// Every argument: no control characters (a NUL ends the C string the program gets).
+const CONTROL = /[\x00-\x1f\x7f]/;
+// Only a batch file (cmd.exe parses its line again) or ssh (its remote shell parses the command) can read these as syntax;
+// any other target gets the argument as one plain argv entry (spawn has no shell).
+const STRICT = /[;&|`$<>\\]/;
+const STRICT_MAX = 1000;
+// ponytail: 8,000 is under cmd.exe's 8,191-character line and far under Linux's 128 KiB per argument; a longer total
+// command line is refused by the OS and shows as "could not start", so no total is counted here.
+const ARG_MAX = 8000;
 // ssh joins its remote command with spaces and the remote shell splits and globs it: an ssh button takes one plain word.
 const SSH_WORD = /^[\w.@%+=:,/-]+$/;
 const RUN_LIMIT_MS = 15 * 60 * 1000;
@@ -29,12 +36,22 @@ function relativePath(value) {
   return typeof value === 'string' && value && !path.isAbsolute(value) && !value.split('/').some((part) => !part || part === '.' || part === '..');
 }
 
+// Windows editors save UTF-8 with a leading U+FEFF, which JSON.parse refuses; one is dropped (M1). Settings, registry and space all read through here.
+const stripBom = (text) => (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
+
+// A page may open with a scheme the user listed in settings.page_schemes. These never open, even when listed (they run code or read files).
+const NEVER_SCHEMES = new Set(['javascript', 'file', 'data', 'vbscript', 'blob']);
+// Two letters at least, so a Windows drive path (c:\...) is never a scheme.
+const SCHEME = /^[a-z][a-z0-9+.-]{1,31}$/;
+const schemeOf = (url) => url.match(/^([a-z][a-z0-9+.-]*):/i)?.[1].toLowerCase();
+
 export function parseSettings(text) {
-  const settings = JSON.parse(text);
+  const settings = JSON.parse(stripBom(text));
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)
       || !['primary', 'registry', 'waiting'].every((key) => relativePath(settings[key]))
-      || !Object.keys(settings).every((key) => ['primary', 'registry', 'waiting', 'scripts_root', 'hub', 'space', 'server_host'].includes(key))
+      || !Object.keys(settings).every((key) => ['primary', 'registry', 'waiting', 'scripts_root', 'hub', 'space', 'server_host', 'page_schemes'].includes(key))
       || !optional(settings, 'hub', relativePath) || !optional(settings, 'space', relativePath)
+      || !optional(settings, 'page_schemes', (value) => Array.isArray(value) && value.length >= 1 && value.length <= 16 && value.every((scheme) => typeof scheme === 'string' && SCHEME.test(scheme)))
       || !optional(settings, 'server_host', (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value))
       || !optional(settings, 'scripts_root', (value) => typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0'))) throw new Error('invalid-settings');
   return Object.freeze(settings);
@@ -43,14 +60,20 @@ export function parseSettings(text) {
 const strings = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string' && item && !item.includes('\0'));
 const optional = (record, key, check) => !(key in record) || check(record[key]);
 const web = (value) => typeof value === 'string' && /^https?:\/\/[^\s]+$/.test(value);
+// A page link: http(s), or a scheme from settings.page_schemes that is not on the never list (M6).
+const pageUrl = (value, schemes = []) => web(value) || (typeof value === 'string' && value.length <= 2000 && !/[\s\x00-\x1f\x7f]/.test(value)
+  && schemeOf(value) !== undefined && !NEVER_SCHEMES.has(schemeOf(value)) && schemes.includes(schemeOf(value)) && value.length > schemeOf(value).length + 1);
+// A button argument may be a plain label or {label, choices: [...]}: the server then accepts only those values (M5).
+const argSpec = (arg) => typeof arg === 'string' || (arg && typeof arg === 'object' && typeof arg.label === 'string'
+  && optional(arg, 'choices', (choices) => Array.isArray(choices) && choices.length >= 1 && choices.length <= 50
+    && choices.every((choice) => typeof choice === 'string' && choice && choice.length <= 200)));
 
-function validRecord(record, kind) {
+function validRecord(record, kind, schemes) {
   if (!record || typeof record !== 'object' || Array.isArray(record) || typeof record.id !== 'string' || !ID.test(record.id)
       || typeof record.title !== 'string') return false;
-  if (kind === 'pages') return web(record.url);
+  if (kind === 'pages') return pageUrl(record.url, schemes);
   return strings(record.cmd) && record.cmd.length > 0
-    && optional(record, 'args', (args) => Array.isArray(args) && args.length <= 4 && args.every((arg) => typeof arg === 'string'
-      || (arg && typeof arg === 'object' && typeof arg.label === 'string')))
+    && optional(record, 'args', (args) => Array.isArray(args) && args.length <= 4 && args.every(argSpec))
     && optional(record, 'tail', strings) && optional(record, 'cwd', relativePath) && optional(record, 'url', web)
     && ['terminal', 'confirm', 'print_url', 'detach'].every((key) => optional(record, key, (value) => typeof value === 'boolean'))
     && optional(record, 'url_delay', (value) => Number.isSafeInteger(value) && value >= 0 && value <= 30000)
@@ -58,8 +81,8 @@ function validRecord(record, kind) {
 }
 
 // Malformed records and every record sharing a duplicated ID are dropped and reported, never run.
-export function parseRegistry(text) {
-  const registry = JSON.parse(text);
+export function parseRegistry(text, schemes = []) {
+  const registry = JSON.parse(stripBom(text));
   if (!registry || typeof registry !== 'object' || Array.isArray(registry)) throw new Error('invalid-registry');
   const result = { invalid: [] };
   for (const kind of ['scripts', 'apps', 'pages']) {
@@ -68,7 +91,7 @@ export function parseRegistry(text) {
     for (const record of records) if (typeof record?.id === 'string') counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
     result[kind] = [];
     records.forEach((record, index) => {
-      if (!validRecord(record, kind)) result.invalid.push({ kind, index, reason: 'malformed-record' });
+      if (!validRecord(record, kind, schemes)) result.invalid.push({ kind, index, reason: 'malformed-record' });
       else if (counts.get(record.id) > 1) result.invalid.push({ kind, index, id: record.id, reason: 'duplicate-id' });
       else result[kind].push(record);
     });
@@ -79,7 +102,7 @@ export function parseRegistry(text) {
 // The free-form space (settings.space, one JSON file): sections, each with optional text, buttons and log views.
 // A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file.
 export function parseSpace(text) {
-  const space = JSON.parse(text);
+  const space = JSON.parse(stripBom(text));
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
   const result = { sections: [], invalid: [] };
   space.sections.forEach((section, index) => {
@@ -118,15 +141,37 @@ export function argvFor(item, args, scriptsRoot) {
   return [...item.cmd.map(expand), ...args.filter((arg) => arg.trim()), ...(item.tail ?? []).map(expand)];
 }
 
+// Why an argument is refused, naming the character, or undefined when it is fine (M5). Control characters and length apply to
+// every target; the shell-syntax set only to a batch file or ssh, where something downstream parses it again.
+const shown = (char) => (/[\x00-\x1f\x7f]/.test(char) ? 'U+' + char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0') : '"' + char + '"');
+export function argRefusal(item, arg, index) {
+  const name = 'argument ' + (index + 1);
+  if (typeof arg !== 'string') return name + ' is not text';
+  const target = item.cmd[0].split(/[\\/]/).pop().toLowerCase(), strict = target === 'ssh' || /\.(cmd|bat)$/.test(target);
+  const max = strict ? STRICT_MAX : ARG_MAX;
+  if (arg.length > max) return name + ' is ' + arg.length + ' characters; the limit is ' + max;
+  const control = arg.match(CONTROL)?.[0];
+  if (control) return name + ' contains the control character ' + shown(control);
+  const spec = item.args?.[index];
+  if (spec?.choices && arg !== '' && !spec.choices.includes(arg)) return name + ' must be one of the listed choices';
+  if (strict) {
+    const bad = arg.match(STRICT)?.[0];
+    if (bad) return name + ' contains ' + shown(bad) + ', which ' + (target === 'ssh' ? 'the remote shell' : 'cmd.exe') + ' would read as syntax';
+  }
+  if (target === 'ssh' && !SSH_WORD.test(arg)) return name + ' may use only letters, digits and . @ % + = : , / -';
+}
+
 export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle }) {
+  // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
+  const setSettings = (next) => { settings = next; };
   const runs = new Map();
   const recovered = stopScopes('p9-run', instance);
   // Registry commands run where the registry's relative paths resolve: the hub's ~/workspace, which can sit above P9's workspace.
-  const scriptsRoot = settings?.scripts_root ?? workspace;
+  const root = () => settings?.scripts_root ?? workspace;
   // The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
   async function registry() {
     if (!settings) throw new Error('settings-missing');
-    const reg = parseRegistry((await readFile(workspace, settings.registry)).content);
+    const reg = parseRegistry((await readFile(workspace, settings.registry)).content, settings.page_schemes);
     let space = { sections: [], invalid: [] };
     if (settings.space) {
       try { space = parseSpace((await readFile(workspace, settings.space)).content); }
@@ -164,7 +209,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   async function overview() {
     const reg = await registry();
     const strip = ({ id, title, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
-      ({ id, title, desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.label)), confirm, terminal, url });
+      ({ id, title, desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid,
       space: reg.space.map(({ title, text, logs }) => ({ title, text, logs: logs.map(({ id, title: name }) => ({ id, title: name })) })),
       queue: await queue(), primary: await primary() };
@@ -206,7 +251,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   const terminal = (argv, cwd) => windows ? hosted(argv, cwd, 'Console') : launchDetached(['konsole', '--workdir', cwd, '-e', ...argv], cwd);
   const app = (argv, cwd) => windows ? hosted(argv, cwd, 'Launch') : launchDetached(argv, cwd);
   // Windows opens a URL through its protocol handler, never cmd's start, which would parse an & in the URL (D1).
-  const open = (url) => windows ? app([system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url], scriptsRoot) : launchDetached(['xdg-open', url], scriptsRoot);
+  const open = (url) => windows ? app([system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url], root()) : launchDetached(['xdg-open', url], root());
   const notStarted = { status: 502, error: 'could-not-start' };
   async function resolve(kind, id, body, allowedKeys) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 404, error: 'unknown-id' };
@@ -217,14 +262,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!item) return { status: 404, error: 'unknown-id' };
     const declared = item.args?.length ?? 0;
     const args = body.args ?? [];
-    if (!Array.isArray(args) || args.length > declared || !args.every((arg) => typeof arg === 'string' && arg.length <= 1000 && !UNSAFE_ARG.test(arg)
-      && (path.basename(item.cmd[0]) !== 'ssh' || SSH_WORD.test(arg)))) {
-      return { status: 400, error: 'request-refused' };
-    }
+    if (!Array.isArray(args) || args.length > declared) return { status: 400, error: 'request-refused', reason: 'too many arguments' };
+    const refused = args.map((arg, index) => argRefusal(item, arg, index)).find(Boolean);
+    if (refused) return { status: 400, error: 'request-refused', reason: refused };
     if (item.confirm && body.confirm !== true) return { status: 409, error: 'confirm-required' };
-    const argv = argvFor(item, args, scriptsRoot);
+    const argv = argvFor(item, args, root());
     stillAuthorized();
-    return { item, argv, cwd: path.join(scriptsRoot, item.cwd ?? '') };
+    return { item, argv, cwd: path.join(root(), item.cwd ?? '') };
   }
 
   async function run(id, body) {
@@ -307,11 +351,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!release) return { status: 503, error: 'stop-all-running' };
     try {
     if (kind === 'pages') {
-      if (typeof id !== 'string' || !ID.test(id) || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) {
+      if (typeof id !== 'string' || !ID.test(id) || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'confirm')) {
         return { status: id && ID.test(id) ? 400 : 404, error: id && ID.test(id) ? 'request-refused' : 'unknown-id' };
       }
       const page = (await registry()).pages.find((record) => record.id === id);
       if (!page) return { status: 404, error: 'unknown-id' };
+      // A link that is not http(s) opens another program (M6): the page must have shown the full link and sent confirm:true.
+      if (!web(page.url) && body.confirm !== true) return { status: 409, error: 'confirm-required', url: page.url };
       stillAuthorized();
       return await open(page.url) ? { status: 200, launched: true } : notStarted;
     }
@@ -353,5 +399,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return results.at(-1) === 'cleanup-failed' ? 'cleanup-failed-reconcile' : 'cleanup-failed-runs';
   }
 
-  return { overview, run, output, launch, answer, stopAll, spaceLog };
+  return { overview, run, output, launch, answer, stopAll, spaceLog, setSettings };
 }

@@ -166,8 +166,9 @@ test('a "detach": true run is done when its script exits, though a child it left
 function watch(pid) {
   const seen = new Set();
   let running = true;
+  const end = Date.now() + 60000; // a test that throws before stopping the watch must not keep the runner alive
   const loop = (async () => {
-    while (running) {
+    while (running && Date.now() < end) {
       for (const task of await readdir(`/proc/${pid}/task`).catch(() => [])) {
         for (const child of (await readFile(`/proc/${pid}/task/${task}/children`, 'utf8').catch(() => '')).split(' ').filter(Boolean)) seen.add(child);
       }
@@ -211,10 +212,10 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
     ['/scripts/echo/run', { args: ['a', 'extra'] }], ['/scripts/echo/run', { args: [['nested']] }], ['/scripts/echo/run', { args: 'a' }],
     ['/scripts/echo%2F..%2F..%2Fx/run', {}], ['/scripts/..%2Fecho/run', {}], ['/scripts/echo%3Btouch/run', {}], ['/scripts/echo%00/run', {}],
     ['/scripts/%2e%2e/run', {}], ['/scripts/echo%0Atouch/run', {}],
-    ['/scripts/echo;touch/run', {}], ['/scripts/$(touch)/run', {}], ['/scripts/echo/run', { args: [`x; touch ${sentinel}`] }],
-    ['/scripts/echo/run', { args: [`$(touch ${sentinel})`] }], ['/scripts/echo/run', { args: [`\`touch ${sentinel}\``] }],
-    ['/scripts/echo/run', { args: [`a | touch ${sentinel}`] }], ['/scripts/echo/run', { args: [`a && touch ${sentinel}`] }],
-    ['/scripts/echo/run', { args: [`a\ntouch ${sentinel}`] }], ['/scripts/echo/run', { args: [`> ${sentinel}`] }],
+    ['/scripts/echo;touch/run', {}], ['/scripts/$(touch)/run', {}],
+    ['/scripts/echo/run', { args: [`a\ntouch ${sentinel}`] }], ['/scripts/echo/run', { args: ['a\u0007b'] }],
+    // M5: shell syntax is refused only where something parses it again (ssh, .cmd); a plain target takes it as one literal argv word (checked below).
+    ['/scripts/remote/run', { args: [`x; touch ${sentinel}`] }], ['/scripts/remote/run', { args: ['a&b'] }],
     ['/scripts/confirm/run', {}], ['/scripts/confirm/run', { confirm: 'yes' }],
     // A remote shell would split or glob these (cold-read M1); argv-only buttons still take free text.
     ...['*', 'a b', "'q'", '"q"', '[x]', '?', '~', '{a,b}', '#x', '!x', 'a\tb'].map((arg) => ['/scripts/remote/run', { args: [arg] }]),
@@ -239,6 +240,10 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
   const result = await finished(instance, started.run);
   assert.equal((await control()).size, 1);
   assert.ok(result.output.includes('ok'));
+  // The shell-syntax text a plain target now takes is one argv word: echoed back as text, nothing run, sentinel never written.
+  const literal = `x; touch ${sentinel} && $(touch ${sentinel}) | \`touch ${sentinel}\``;
+  const word = await finished(instance, JSON.parse((await call(instance, '/scripts/echo/run', 'POST', { args: [literal] })).text).run);
+  assert.ok(word.output.includes(literal), word.output);
   await assert.rejects(access(sentinel));
   console.log(`PASS phase5 surface 8: ${refused.length + 5} hostile requests refused, process watcher saw 0 children (control run: 1), sentinel never written`);
 });
@@ -397,4 +402,83 @@ test('release r2 R2-7: hub decide is revocable, atomic, and refuses a changed fi
   assert.notEqual(statSync(file).ino, inode, 'landed by rename, not rewritten in place');
   assert.deepEqual(readdirSync(branch), ['_decision.md'], 'no temp file left');
   console.log('PASS R2-7: revoked = session-ended, nothing written; changed after read = 409, change kept; save lands by rename');
+});
+
+// ---- v0.1.5 chunk 3: Mission live (M1, M2/M3, M5, M6) ----
+import { parseSettings, parseSpace, argRefusal } from '../apps/server/mission.mjs';
+
+test('M1: one leading U+FEFF is dropped from settings, registry and space', () => {
+  const bom = (value) => '\uFEFF' + JSON.stringify(value);
+  assert.equal(parseSettings(bom(BUILDER)).waiting, BUILDER.waiting);
+  assert.deepEqual(parseRegistry(bom({ scripts: [{ id: 'a', title: 'A', cmd: ['true'] }] })).scripts.map((s) => s.id), ['a']);
+  assert.deepEqual(parseSpace(bom({ sections: [] })).sections ?? [], []);
+  assert.throws(() => parseSettings('\uFEFF\uFEFF' + JSON.stringify(BUILDER)), 'only one is dropped');
+});
+
+test('M2/M3: a settings change shows in the next /mission with no restart; a broken one keeps the last good settings', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, BUILDER);
+  const settingsFile = path.join(instance.directory, 'settings.json');
+  const pagesOf = async () => JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual((await pagesOf()).pages.map((p) => p.id), ['dash']);
+  const file = path.join(instance.workspace, BUILDER.registry);
+  const registry = JSON.parse(await readFile(file, 'utf8'));
+  registry.pages.push({ id: 'notes', title: 'Notes', url: 'obsidian://open?vault=x' });
+  await writeFile(file, JSON.stringify(registry));
+  assert.deepEqual((await pagesOf()).pages.map((p) => p.id), ['dash'], 'obsidian is not allowed yet');
+  await writeFile(settingsFile, JSON.stringify({ ...BUILDER, page_schemes: ['obsidian'] }));
+  const live = await pagesOf();
+  assert.deepEqual(live.pages.map((p) => p.id), ['dash', 'notes']);
+  assert.equal(live.settingsError, null);
+  await writeFile(settingsFile, '{ "primary": ');
+  const broken = await pagesOf();
+  assert.deepEqual(broken.pages.map((p) => p.id), ['dash', 'notes'], 'last good settings kept');
+  assert.ok(broken.settingsError);
+  assert.equal(broken.restart.needed, false);
+});
+
+test('M5: argRefusal names the character, only for batch files and ssh; choices bind', () => {
+  const cmd = { cmd: ['C:\\tools\\run.cmd'] }, ssh = { cmd: ['ssh', 'server'] }, plain = { cmd: ['/usr/bin/tool'] };
+  assert.match(argRefusal(cmd, 'a&b', 0), /argument 1 contains "&"/);
+  assert.match(argRefusal(ssh, 'a&b', 0), /argument 1 contains "&"/);
+  assert.equal(argRefusal(plain, 'a&b "quoted" $(x)', 0), undefined, 'a plain target takes any printable text');
+  assert.match(argRefusal(plain, 'a\u0007b', 0), /control character U\+0007/);
+  assert.equal(argRefusal(plain, 'x'.repeat(8000), 0), undefined);
+  assert.match(argRefusal(plain, 'x'.repeat(8001), 0), /limit is 8000/);
+  assert.match(argRefusal(cmd, 'x'.repeat(1001), 0), /limit is 1000/);
+  const pick = { cmd: ['/usr/bin/tool'], args: [{ label: 'Mode', choices: ['fast', 'slow'] }] };
+  assert.equal(argRefusal(pick, 'fast', 0), undefined);
+  assert.match(argRefusal(pick, 'turbo', 0), /one of the listed choices/);
+  assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: ['a'] }] }] })).scripts.length, 1);
+  assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: [] }] }] })).invalid.length, 1);
+});
+
+test('M5: the daemon refuses with the reason and starts nothing; choices come back in the overview', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, BUILDER, [{ id: 'pick', title: 'Pick', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Mode', choices: ['fast', 'slow'] }] },
+    { id: 'batch', title: 'Batch', cmd: ['C:\\x\\run.cmd'], args: ['Name'] }]);
+  const overview = JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual(overview.scripts[0].args, [{ label: 'Mode', choices: ['fast', 'slow'] }]);
+  const bad = await call(instance, '/scripts/pick/run', 'POST', { args: ['turbo'] });
+  assert.equal(bad.status, 400);
+  assert.match(JSON.parse(bad.text).reason, /listed choices/);
+  const amp = await call(instance, '/scripts/batch/run', 'POST', { args: ['a&b'] });
+  assert.equal(amp.status, 400);
+  assert.match(JSON.parse(amp.text).reason, /"&"/);
+});
+
+test('M6: page_schemes pages need confirm; javascript, file and data are refused even when listed', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, { ...BUILDER, page_schemes: ['obsidian', 'javascript', 'file', 'data'] });
+  const file = path.join(instance.workspace, BUILDER.registry);
+  const registry = JSON.parse(await readFile(file, 'utf8'));
+  registry.pages.push({ id: 'notes', title: 'Notes', url: 'obsidian://open?vault=x' }, { id: 'js', title: 'J', url: 'javascript:alert(1)' },
+    { id: 'fl', title: 'F', url: 'file:///etc/passwd' }, { id: 'dt', title: 'D', url: 'data:text/html,x' });
+  await writeFile(file, JSON.stringify(registry));
+  const overview = JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual(overview.pages.map((p) => p.id), ['dash', 'notes']);
+  assert.equal(overview.invalid.length, 3);
+  const unconfirmed = await call(instance, '/pages/notes/launch', 'POST', {});
+  assert.equal(unconfirmed.status, 409);
+  assert.deepEqual(JSON.parse(unconfirmed.text), { error: 'confirm-required', url: 'obsidian://open?vault=x' });
+  assert.equal((await call(instance, '/pages/js/launch', 'POST', { confirm: true })).status, 404);
+  assert.equal(parseRegistry(JSON.stringify({ pages: [{ id: 'x', title: 'X', url: 'javascript:1' }] }), ['javascript']).pages.length, 0);
+  assert.throws(() => parseSettings(JSON.stringify({ ...BUILDER, page_schemes: ['x'] })), 'a one-letter scheme (a Windows drive) is not a scheme');
 });
