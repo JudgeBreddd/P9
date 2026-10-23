@@ -146,6 +146,22 @@ test('Stop All ends an active registry script tree', async (t) => {
   console.log(`PASS Stop All: active registry script tree ${pid} ended`);
 });
 
+test('a "detach": true run is done when its script exits, though a child it left holds the output pipe (v0.1.5 W1)', async (t) => {
+  const instance = await start(t, BUILDER, [{ id: 'leave', title: 'Leave', detach: true, cmd: [node, '-e',
+    'const c = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit" }); c.unref(); console.log("left:" + c.pid)'] }]);
+  const run = JSON.parse((await call(instance, '/scripts/leave/run', 'POST', {})).text).run;
+  let body;
+  for (let i = 0; i < 50 && !body?.done; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    body = JSON.parse((await call(instance, `/runs/${run}`)).text);
+  }
+  const left = Number(body.output.match(/left:(\d+)/)?.[1]);
+  t.after(() => { try { process.kill(left); } catch {} });
+  assert.ok(left, body.output);
+  assert.ok(body.done, 'the run waited for the child holding its pipe');
+  assert.match(body.output, /\[exit 0 in/);
+});
+
 // Children of the daemon, polled every millisecond while the hostile requests run.
 function watch(pid) {
   const seen = new Set();

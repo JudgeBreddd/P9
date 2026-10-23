@@ -258,6 +258,9 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     entry.proc = proc;
     child.stdout.on('data', append);
     child.stderr.on('data', append);
+    // A detach script's kept children inherit its output pipes, so 'close' would wait for them: once the script exits,
+    // read what is buffered, then let go. ponytail: a 1 s drain; what a kept child writes after that is not shown.
+    if (target.item.detach === true) child.once('exit', () => setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 1000).unref());
     const timer = setTimeout(() => { endTree(proc).then(() => append('\n[stopped: 15 minute limit]\n')); }, RUN_LIMIT_MS);
     const finish = (code, message) => {
       if (entry.done) return;
