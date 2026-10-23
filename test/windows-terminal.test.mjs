@@ -9,7 +9,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
 // the way the desktop dock reaches it: open, run a command, read its output back, stop, and nothing left running.
 test('Windows terminal: open, run a command, read its output, stop; the shell is gone', {
   skip: process.platform !== 'win32' && 'requires ConPTY',
-  timeout: 90000,
+  timeout: 150000,
 }, async (t) => {
   const { default: WebSocket } = await import('ws');
   const instance = await daemon(t);
@@ -30,16 +30,27 @@ test('Windows terminal: open, run a command, read its output, stop; the shell is
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
   t.after(() => ws.close());
   // The typed line echoes back too, so the marker is joined by PowerShell: only its output holds P9-CONPTY-OK.
+  // ponytail: 60 s wait; Windows CI 40002351743 x64 had the line accepted and no output in 30 s.
   const until = async (pattern) => {
-    for (let i = 0; i < 300 && !pattern.test(output); i++) await wait(100);
+    for (let i = 0; i < 600 && !pattern.test(output); i++) await wait(100);
     const match = pattern.exec(output);
     assert.ok(match, 'no ' + pattern + ' in the output: ' + JSON.stringify(output.slice(-500)));
     return match;
   };
-  await keys.keys("Write-Output ('P9-' + 'CONPTY-OK'); Write-Output ('SHELL' + 'PID=' + $PID)\r");
+  // Type only once the prompt is drawn, the way a person does.
+  await until(/PS [^\r\n]*> /);
+  // Bare expressions, no cmdlet: PowerShell 5.1's first cmdlet can wait on module discovery (CI 40002351743 x64).
+  const sent = Date.now();
+  await keys.keys("('P9-' + 'CONPTY-OK'); ('SHELL' + 'PID=' + $PID)\r");
   await until(/P9-CONPTY-OK/);
+  console.log('expression output after ' + (Date.now() - sent) + ' ms');
   const pid = Number((await until(/SHELLPID=(\d+)/))[1]);
   assert.equal(alive(pid), true);
+  // Cause check for CI 40002351743 x64, logged and not failed on: the same kind of line through a cmdlet, timed.
+  const cmdlet = Date.now();
+  await keys.keys("Write-Output ('P9-' + 'CMDLET-OK')\r");
+  for (let i = 0; i < 450 && !/P9-CMDLET-OK/.test(output); i++) await wait(100);
+  console.log(/P9-CMDLET-OK/.test(output) ? 'cmdlet output after ' + (Date.now() - cmdlet) + ' ms' : 'no cmdlet output in 45 s');
   const stopped = await call('/terminals/' + id + '/stop', 'POST', {});
   assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
   for (let i = 0; i < 50 && alive(pid); i++) await wait(100);
