@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
+import { connect } from 'node:net';
 import { readFile, writeFile } from 'node:fs/promises';
 import { execFile, execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -102,6 +103,26 @@ export function repairWindowsTask(resources, workspace) {
   { encoding: 'utf8', timeout: 120000, windowsHide: true }, (error, stdout, stderr) =>
     writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# ${workspace ? 'workspace change' : 'repair'} by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
       .catch(() => {}).then(() => resolve(!error))));
+}
+
+// Restarts the 'P9 Foundation' task (W3): /End stops its conhost, the host sees its parent gone and closes the job, which
+// ends node.exe; the old socket is waited out (up to 15 s) so the next start does not hit daemon-already-running. Call it
+// from outside the daemon's job (the desktop app), never from the daemon. state: the runtime folder.
+export async function restartWindowsTask(state) {
+  const schtasks = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'schtasks.exe');
+  const run = (args) => new Promise((resolve) => execFile(schtasks, args, { timeout: 30000, windowsHide: true }, (error) => resolve(!error)));
+  await run(['/End', '/TN', 'P9 Foundation']);
+  const socketPath = await readFile(path.join(state, 'desktop.json'), 'utf8').then((text) => JSON.parse(text).socketPath, () => null);
+  for (let tries = 0; socketPath && tries < 60; tries++) {
+    const gone = await new Promise((resolve) => {
+      const socket = connect(socketPath);
+      socket.once('connect', () => { socket.destroy(); resolve(false); });
+      socket.once('error', (error) => resolve(error.code === 'ENOENT'));
+    });
+    if (gone) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return run(['/Run', '/TN', 'P9 Foundation']);
 }
 
 // Windows has no unit or journal: the task stands in for the unit (SubState conhost is this version's task, powershell

@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('Job', 'Daemon', 'Console', 'PipeAcl', 'PipeLock', 'Acl', 'Compile')]
+  [ValidateSet('Job', 'Daemon', 'Console', 'Launch', 'PipeAcl', 'PipeLock', 'Acl', 'Compile')]
   [string]$Mode,
   [string]$Payload,
   [string]$Pipe,
@@ -45,12 +45,17 @@ using System.Text;
 
 public static class P9WindowsHost {
     const uint CREATE_SUSPENDED = 0x00000004;
+    const uint DETACHED_PROCESS = 0x00000008;
     const uint CREATE_NEW_CONSOLE = 0x00000010;
     const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
     const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
     const uint STARTF_USESTDHANDLES = 0x00000100;
     const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800;
+    const uint JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000;
+    const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     const uint TOKEN_QUERY = 0x0008;
     const uint TOKEN_ADJUST_DEFAULT = 0x0080;
     const int JobObjectExtendedLimitInformation = 9;
@@ -81,6 +86,8 @@ public static class P9WindowsHost {
     [StructLayout(LayoutKind.Sequential)]
     struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public uint dwProcessId; public uint dwThreadId; }
     [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_BASIC_INFORMATION { public IntPtr ExitStatus, PebBaseAddress, AffinityMask, BasePriority, UniqueProcessId, InheritedFromUniqueProcessId; }
+    [StructLayout(LayoutKind.Sequential)]
     struct IO_COUNTERS {
         public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount;
     }
@@ -110,6 +117,10 @@ public static class P9WindowsHost {
     [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
     [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
     [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForMultipleObjects(uint count, IntPtr[] handles, bool all, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint id);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int infoClass, ref PROCESS_BASIC_INFORMATION info, int length, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
@@ -144,11 +155,14 @@ public static class P9WindowsHost {
         }
         return output.Append('\\', slashes * 2).Append('"').ToString();
     }
-    static IntPtr CreateKillJob() {
+    // breakaway: BREAKAWAY_OK on the daemon's job lets a process created with CREATE_BREAKAWAY_FROM_JOB (an app, a page, a
+    // terminal, a detach script; W1, W2) leave it; nothing else does. SILENT_BREAKAWAY_OK on a detach script's job: every
+    // process the script starts leaves it.
+    static IntPtr CreateKillJob(uint breakaway) {
         IntPtr job = CreateJobObject(IntPtr.Zero, null);
         if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject");
         var limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | breakaway;
         int size = Marshal.SizeOf(limits); IntPtr memory = Marshal.AllocHGlobal(size);
         try { Marshal.StructureToPtr(limits, memory, false); Check(SetInformationJobObject(job, JobObjectExtendedLimitInformation, memory, (uint)size), "SetInformationJobObject"); }
         catch { CloseHandle(job); throw; }
@@ -212,23 +226,48 @@ public static class P9WindowsHost {
         if (command == null || command.Length < 1) throw new ArgumentException("command-required");
         return verbatim ? Quote(command[0]) + " " + String.Join(" ", command, 1, command.Length - 1) : String.Join(" ", Array.ConvertAll(command, Quote));
     }
-    // A terminal button (D1): the child gets a new console window and outlives this host. No job of its own, no wait.
-    // ponytail: it stays in the daemon's job, so a daemon restart closes the window; CREATE_BREAKAWAY_FROM_JOB if that matters.
-    public static int Start(string[] command, IDictionary environment, bool verbatim) {
+    // Outside every job that allows it first (W1, W2). A job that does not (a source run under another tool's job) fails
+    // CreateProcess with access denied; the child then starts inside, as before.
+    static bool CreateOutside(string application, string line, bool inherit, uint flags, IntPtr environment, ref STARTUPINFOEX startup, out PROCESS_INFORMATION process) {
+        return CreateProcessW(application, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, inherit, flags | CREATE_BREAKAWAY_FROM_JOB,
+            environment, Environment.CurrentDirectory, ref startup, out process)
+            || CreateProcessW(application, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, inherit, flags,
+            environment, Environment.CurrentDirectory, ref startup, out process);
+    }
+    // A terminal button (Console, D1) gets a new console window; an app or a page (Launch) none, like Node's detached spawn.
+    // Either outlives this host and, outside the daemon's job, a daemon restart (W2). No job of its own, no wait.
+    public static int Start(string[] command, IDictionary environment, bool verbatim, bool console) {
         string line = Line(command, verbatim);
         IntPtr environmentBlock = EnvironmentBlock(environment);
         try {
             var startup = new STARTUPINFOEX(); startup.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
             PROCESS_INFORMATION process;
-            Check(CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, false, CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT,
-                environmentBlock, Environment.CurrentDirectory, ref startup, out process), "CreateProcess");
+            Check(CreateOutside(command[0], line, false, (console ? CREATE_NEW_CONSOLE : DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) | CREATE_UNICODE_ENVIRONMENT,
+                environmentBlock, ref startup, out process), "CreateProcess");
             CloseHandle(process.hThread); CloseHandle(process.hProcess);
             return 0;
         } finally { Marshal.FreeHGlobal(environmentBlock); }
     }
-    public static int Run(string mode, string[] command, IDictionary environment, string log, bool verbatim) {
+    // W3: the task runs conhost, which runs this host. Stopping the task (schtasks /end, Stop-ScheduledTask) ends conhost
+    // only, so the Daemon host waits on its parent too; once that is gone it returns and closing the job ends node and its
+    // tree. A parent already gone, or a PID reused since (created after this process), is not watched.
+    static IntPtr Parent() {
+        var information = new PROCESS_BASIC_INFORMATION();
+        IntPtr self = GetCurrentProcess();
+        if (NtQueryInformationProcess(self, 0, ref information, Marshal.SizeOf(information), IntPtr.Zero) != 0) return IntPtr.Zero;
+        IntPtr parent = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)information.InheritedFromUniqueProcessId.ToInt64());
+        if (parent == IntPtr.Zero) return IntPtr.Zero;
+        long parentStart, selfStart, exit, kernel, user;
+        if (GetProcessTimes(parent, out parentStart, out exit, out kernel, out user) && GetProcessTimes(self, out selfStart, out exit, out kernel, out user)
+            && parentStart <= selfStart) return parent;
+        CloseHandle(parent);
+        return IntPtr.Zero;
+    }
+    // detach (a script record's "detach": true, W1): the script leaves the daemon's job into its own, and whatever it starts
+    // leaves that one too, so Stop ends the script process and nothing it started.
+    public static int Run(string mode, string[] command, IDictionary environment, string log, bool verbatim, bool detach) {
         string line = Line(command, verbatim);
-        IntPtr job = CreateKillJob(), attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero, logHandle = IntPtr.Zero;
+        IntPtr job = CreateKillJob(mode == "Daemon" ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : detach ? JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK : 0), parent = IntPtr.Zero, attributes = IntPtr.Zero, jobPointer = IntPtr.Zero, environmentBlock = IntPtr.Zero, logHandle = IntPtr.Zero;
         PROCESS_INFORMATION process = new PROCESS_INFORMATION();
         try {
             IntPtr size = IntPtr.Zero;
@@ -248,11 +287,13 @@ public static class P9WindowsHost {
                 startup.StartupInfo.hStdOutput = logHandle; startup.StartupInfo.hStdError = logHandle;
             }
             environmentBlock = EnvironmentBlock(environment);
-            Check(CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true,
-                CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+            uint flags = CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+            Check(detach ? CreateOutside(command[0], line, true, flags, environmentBlock, ref startup, out process)
+                : CreateProcessW(command[0], new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true, flags,
                 environmentBlock, Environment.CurrentDirectory, ref startup, out process), "CreateProcess");
-            if (mode == "Daemon") RestrictDefaultDacl(process.hProcess);
+            if (mode == "Daemon") { RestrictDefaultDacl(process.hProcess); parent = Parent(); }
             if (ResumeThread(process.hThread) == 0xffffffff) throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread");
+            if (parent != IntPtr.Zero && WaitForMultipleObjects(2, new [] { process.hProcess, parent }, false, INFINITE) == 1) return 1;
             WaitForSingleObject(process.hProcess, INFINITE);
             uint code; Check(GetExitCodeProcess(process.hProcess, out code), "GetExitCodeProcess");
             return unchecked((int)code);
@@ -262,6 +303,7 @@ public static class P9WindowsHost {
         } finally {
             if (process.hThread != IntPtr.Zero) CloseHandle(process.hThread);
             if (process.hProcess != IntPtr.Zero) CloseHandle(process.hProcess);
+            if (parent != IntPtr.Zero) CloseHandle(parent);
             if (attributes != IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); }
             if (jobPointer != IntPtr.Zero) Marshal.FreeHGlobal(jobPointer);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
@@ -302,5 +344,5 @@ if ($Log) {
   Add-Content -LiteralPath $Log -Value ((Get-Date -Format o) + ' host started')
 }
 $verbatim = [bool]$decoded.verbatim
-if ($Mode -eq 'Console') { exit [P9WindowsHost]::Start($command, $environment, $verbatim) }
-exit [P9WindowsHost]::Run($Mode, $command, $environment, $Log, $verbatim)
+if ($Mode -eq 'Console' -or $Mode -eq 'Launch') { exit [P9WindowsHost]::Start($command, $environment, $verbatim, $Mode -eq 'Console') }
+exit [P9WindowsHost]::Run($Mode, $command, $environment, $Log, $verbatim, [bool]$decoded.detach)

@@ -175,6 +175,7 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
     { id: 'nul', title: 'Malformed', cmd: [node, '-e\0', 'x'] },
     { id: 'confirm', title: 'Confirm', cmd: pwn('confirm'), confirm: true },
     { id: 'remote', title: 'Remote', cmd: ['ssh', '-o', 'BatchMode=yes', 'p9-no-such-host.invalid', 'true'], args: ['label (one word)'] },
+    { id: 'detach-text', title: 'Malformed', cmd: pwn('detach-text'), detach: 'yes' },
   ];
   const instance = await daemon(t, undefined, false, async (paths) => {
     sentinel = path.join(paths.directory, 'pwned');
@@ -184,13 +185,13 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
   });
   const overview = JSON.parse((await call(instance, '/mission')).text);
   assert.deepEqual(overview.scripts.map((s) => s.id), ['echo', 'confirm', 'remote']);
-  assert.deepEqual(overview.invalid.map((x) => x.reason), ['duplicate-id', 'duplicate-id', 'malformed-record', 'malformed-record', 'malformed-record', 'malformed-record']);
+  assert.deepEqual(overview.invalid.map((x) => x.reason), ['duplicate-id', 'duplicate-id', 'malformed-record', 'malformed-record', 'malformed-record', 'malformed-record', 'malformed-record']);
 
   const stop = watch(instance.child.pid);
   const refused = [
     ['/scripts/echo/run', { cmd: ['touch', sentinel] }], ['/scripts/echo/run', { command: `touch ${sentinel}` }],
     ['/scripts/echo/run', { args: ['a'], argv: ['touch', sentinel] }], ['/scripts/run', { id: 'echo', cmd: ['touch', sentinel] }],
-    ['/scripts/nope/run', {}], ['/scripts/dup/run', {}], ['/scripts/string-cmd/run', {}], ['/scripts/bad%20id/run', {}], ['/scripts/nul/run', {}],
+    ['/scripts/nope/run', {}], ['/scripts/dup/run', {}], ['/scripts/detach-text/run', {}], ['/scripts/string-cmd/run', {}], ['/scripts/bad%20id/run', {}], ['/scripts/nul/run', {}],
     ['/scripts/echo/run', { args: ['a', 'extra'] }], ['/scripts/echo/run', { args: [['nested']] }], ['/scripts/echo/run', { args: 'a' }],
     ['/scripts/echo%2F..%2F..%2Fx/run', {}], ['/scripts/..%2Fecho/run', {}], ['/scripts/echo%3Btouch/run', {}], ['/scripts/echo%00/run', {}],
     ['/scripts/%2e%2e/run', {}], ['/scripts/echo%0Atouch/run', {}],

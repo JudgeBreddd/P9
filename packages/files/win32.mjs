@@ -3,9 +3,12 @@
 // (a junction or symlink opens as itself and is refused), and the opened handle's final path must be the expected one
 // (this also refuses case and 8.3 short-name variants). Reads, writes, renames and deletes go through the same handles.
 // ponytail: node:ffi is experimental in Node 26.10 and these calls are synchronous; files are capped at MAX_BYTES (2 MiB).
-import ffi from 'node:ffi';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+
+// Loaded here, not imported: the installed daemon is one bundle (bundle-daemon.mjs), which hoists a static import to its top,
+// before index.mjs's quietFfi could drop the experimental warning (W4).
+const ffi = process.getBuiltinModule('node:ffi');
 
 const kernel32 = ffi.dlopen('kernel32.dll', {
   CreateFileW: { return: 'pointer', arguments: ['buffer', 'uint32', 'uint32', 'pointer', 'uint32', 'uint32', 'pointer'] },

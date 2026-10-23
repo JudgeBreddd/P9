@@ -299,6 +299,17 @@ the Dev Focus editor host (its own `p9-editor-host-*` scope, stopped when the wi
 and pages launched from Mission Control, and registry entries marked `terminal: true`, which start
 detached in their own Konsole window.
 
+Windows: each chat and registry script runs in its own kill-on-close Job Object
+(scripts/windows-host.ps1), and Stop or Stop All closes it, which ends everything inside. One exception: a script
+record marked `detach: true` in the registry or space file (P9's file API cannot write either while file
+protection is on). That script still ends, but whatever it starts leaves its job and keeps running past
+Stop, Stop All and a daemon restart. Apps, pages and terminal entries start outside the daemon's job, so a daemon
+restart leaves them running, as on Linux. A `print_url` server stays in the daemon's job and ends with it (known gap).
+Stopping the task (schtasks /end, Stop-ScheduledTask) ends only its conhost. The daemon's host watches that
+parent process and closes the daemon's job when it ends, so node and every process still inside go too.
+A Job Object is not a security boundary on Windows: any process can already start another outside it (through WMI or
+Task Scheduler).
+
 Linux terminal sessions are real tmux sessions recorded in the daemon ledger and
 reconciled against the dedicated socket at startup. The tmux server runs as its own
 transient user unit with only P9's allowlisted environment, and tmux puts each pane in a

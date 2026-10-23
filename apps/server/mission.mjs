@@ -52,7 +52,7 @@ function validRecord(record, kind) {
     && optional(record, 'args', (args) => Array.isArray(args) && args.length <= 4 && args.every((arg) => typeof arg === 'string'
       || (arg && typeof arg === 'object' && typeof arg.label === 'string')))
     && optional(record, 'tail', strings) && optional(record, 'cwd', relativePath) && optional(record, 'url', web)
-    && ['terminal', 'confirm', 'print_url'].every((key) => optional(record, key, (value) => typeof value === 'boolean'))
+    && ['terminal', 'confirm', 'print_url', 'detach'].every((key) => optional(record, key, (value) => typeof value === 'boolean'))
     && optional(record, 'url_delay', (value) => Number.isSafeInteger(value) && value >= 0 && value <= 30000)
     && ['desc', 'group', 'where'].every((key) => optional(record, key, (value) => typeof value === 'string'));
 }
@@ -191,19 +191,22 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       child.once('error', () => done(null));
     }).then((started) => { if (started && stdio === 'ignore') started.unref(); return started; });
   }
-  // Linux: konsole. Windows: the host script starts the command in a new console window and exits 0 once it has (D1).
-  function terminal(argv, cwd) {
-    if (!windows) return launchDetached(['konsole', '--workdir', cwd, '-e', ...argv], cwd);
+  // Windows: the host script starts the command outside the daemon's job, so it outlives a daemon restart (W2), and exits 0
+  // once it has (D1). Console gives it a new console window, Launch none.
+  function hosted(argv, cwd, mode) {
     let host;
-    try { host = windowsJobCommand(argv, childEnv(), 'Console'); } catch { return Promise.resolve(null); }
+    try { host = windowsJobCommand(argv, childEnv(), mode); } catch { return Promise.resolve(null); }
     return new Promise((done) => {
       const child = spawn(host[0], host.slice(1), { cwd, shell: false, env: childEnv(), stdio: 'ignore', windowsHide: true });
       child.once('error', () => done(null));
       child.once('exit', (code) => done(code === 0 ? child : null));
     });
   }
+  // Linux: konsole.
+  const terminal = (argv, cwd) => windows ? hosted(argv, cwd, 'Console') : launchDetached(['konsole', '--workdir', cwd, '-e', ...argv], cwd);
+  const app = (argv, cwd) => windows ? hosted(argv, cwd, 'Launch') : launchDetached(argv, cwd);
   // Windows opens a URL through its protocol handler, never cmd's start, which would parse an & in the URL (D1).
-  const open = (url) => launchDetached(windows ? [system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url] : ['xdg-open', url], scriptsRoot);
+  const open = (url) => windows ? app([system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url], scriptsRoot) : launchDetached(['xdg-open', url], scriptsRoot);
   const notStarted = { status: 502, error: 'could-not-start' };
   async function resolve(kind, id, body, allowedKeys) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 404, error: 'unknown-id' };
@@ -245,7 +248,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     // ponytail: the unit's KillMode=process lets a running script outlive a daemon stop; per-run cgroups (systemd-run --scope) if that matters.
     let proc;
     // Windows resolves the executable before launch and throws when it is missing; the run must still finish and free its slot.
-    try { proc = launchTree(target.argv, target.cwd, { instance, prefix: 'p9-run', scope: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    try { proc = launchTree(target.argv, target.cwd, { instance, prefix: 'p9-run', scope: true, stdio: ['ignore', 'pipe', 'pipe'], detach: target.item.detach === true }); }
     catch (error) {
       append(`[could not start: ${error.message}]\n\n[exit 127 in 0.0s]\n`);
       Object.assign(entry, { done: true, code: 127 });
@@ -278,6 +281,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
 
   // A server that prints its URL (hub's vscode-web): run it up to 30 s, open the last stdout line if it is http(s).
+  // ponytail: on Windows it stays in the daemon's job (the host gives no stdout back), so a daemon restart ends what it left running.
   async function printUrl(target) {
     const allowed = captureAuthority();
     const child = await launchDetached(target.argv, target.cwd, ['ignore', 'pipe', 'ignore']);
@@ -312,7 +316,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (target.error) return target;
     if (target.item.print_url) return await printUrl(target);
     const allowed = captureAuthority();
-    if (!await (target.item.terminal ? terminal(target.argv, target.cwd) : launchDetached(target.argv, target.cwd))) return notStarted;
+    if (!await (target.item.terminal ? terminal(target.argv, target.cwd) : app(target.argv, target.cwd))) return notStarted;
     if (target.item.url) setTimeout(() => { if (allowed()) open(target.item.url); }, target.item.url_delay ?? 0).unref();
     return { status: 200, launched: true };
     } finally { release(); }

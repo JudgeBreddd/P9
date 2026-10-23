@@ -41,6 +41,9 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
   }
   assert.equal(JSON.parse(Buffer.from(windowsJobCommand([npm, 'test'], windowsRoot).at(-1), 'base64').toString()).verbatim, true);
   assert.deepEqual(windowsJobCommand([npm, 'test'], windowsRoot, 'Console').slice(-4, -1), ['-Mode', 'Console', '-Payload']);
+  // W1, W2: a detach run carries the flag to the host; Launch starts an app or a page with no window.
+  assert.equal(JSON.parse(Buffer.from(windowsJobCommand([npm, 'test'], windowsRoot, 'Job', true).at(-1), 'base64').toString()).detach, true);
+  assert.deepEqual(windowsJobCommand([npm, 'test'], windowsRoot, 'Launch').slice(-4, -1), ['-Mode', 'Launch', '-Payload']);
   assert.deepEqual(childEnv({ Path: 'safe', ComSpec: 'safe', PSModulePath: 'leak' }, 'win32'), { Path: 'safe', ComSpec: 'safe' });
   assert.equal(allowed('pAtH', 'win32'), true);
   assert.notEqual(windowsLockEndpoint('C:\\Users\\one\\AppData\\Local\\P9'), windowsLockEndpoint('C:\\Users\\two\\AppData\\Local\\P9'));
@@ -86,6 +89,13 @@ test('Windows host: a .cmd runs with & intact, Console starts a program, Acl ref
   assert.equal(consoleRun.status, 0, consoleRun.stderr);
   for (let i = 0; i < 50 && !existsSync(marker); i += 1) await new Promise((resolve) => setTimeout(resolve, 200));
   assert.ok(existsSync(marker), 'Console did not start the program');
+  // W2: Launch does the same with no window.
+  const launchMarker = path.join(dir, 'launch.txt');
+  const launch = windowsJobCommand([process.execPath, '-e', `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(launchMarker)},'up'),500)`], { ...process.env }, 'Launch');
+  const launchRun = spawnSync(launch[0], launch.slice(1), { encoding: 'utf8' });
+  assert.equal(launchRun.status, 0, launchRun.stderr);
+  for (let i = 0; i < 50 && !existsSync(launchMarker); i += 1) await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.ok(existsSync(launchMarker), 'Launch did not start the program');
   // B8: a folder Everyone can read fails; the folder this user's profile made passes.
   const shared = path.join(dir, 'shared');
   await mkdir(shared);
@@ -121,6 +131,7 @@ test('Windows Stop ends detached chat and script children through Job Objects wi
     await mkdir(path.join(paths.workspace, 'waiting'));
     await writeFile(path.join(paths.workspace, 'registry.json'), JSON.stringify({ scripts: [
       { id: 'detach', title: 'Detached fixture', cmd: [process.execPath, path.join(root, 'test', 'windows-detached-script.mjs')] },
+      { id: 'keep', title: 'Kept fixture', detach: true, cmd: [process.execPath, path.join(root, 'test', 'windows-detached-script.mjs')] },
       { id: 'missing', title: 'Missing fixture', cmd: ['p9-missing-command.exe'] },
       { id: 'argv', title: 'Argument fixture', cmd: ['node.exe', '-e', 'console.log(JSON.stringify(process.argv.slice(1)))', '--'], args: ['Value'] },
     ], apps: [], pages: [] }));
@@ -166,6 +177,25 @@ test('Windows Stop ends detached chat and script children through Job Objects wi
   began = Date.now();
   assert.equal((await json(call('/stop-all', 'POST', {}))).body.result, 'stopped');
   assert.ok(Date.now() - began < 5000 && !alive(scriptPid), 'detached registry-script child survived Stop All');
+
+  // W1: a "detach": true record's script ends on Stop All; what it started (a GUI app in the bug) keeps running.
+  const kept = await json(call('/scripts/keep/run', 'POST', {}));
+  assert.equal(kept.status, 202, kept.text);
+  let keptPid;
+  for (let i = 0; i < 100 && !keptPid; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    keptPid = Number((await json(call(`/runs/${kept.body.run}?from=0`))).body.output.match(/detach:(\d+)/)?.[1]);
+  }
+  t.after(() => { try { process.kill(keptPid); } catch {} });
+  assert.ok(keptPid && alive(keptPid), 'detach script child did not start');
+  assert.equal((await json(call('/stop-all', 'POST', {}))).body.result, 'stopped');
+  let keptRun;
+  for (let i = 0; i < 50 && !keptRun?.body.done; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    keptRun = await json(call(`/runs/${kept.body.run}?from=0`));
+  }
+  assert.ok(keptRun.body.done, 'detach script survived Stop All');
+  assert.ok(alive(keptPid), 'detach script child died with its script');
 
   const argvRun = await json(call('/scripts/argv/run', 'POST', { args: ['-Debug'] }));
   assert.equal(argvRun.status, 202, argvRun.text);

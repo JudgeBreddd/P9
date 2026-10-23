@@ -226,6 +226,50 @@ jobs:
           if (Test-Path $marked.FullName) { throw "P9's marked ns*.tmp was kept" }
           if (-not (Test-Path $other.FullName)) { throw "another app's ns*.tmp was removed" }
           Write-Output "temp cleanup: P9's marked folder removed, another app's kept"
+          # v0.1.5 W4 (issue #12 item 1): every daemon start above loaded the file guard's node:ffi; no warning line for it.
+          $daemonLog = Join-Path $env:LOCALAPPDATA 'P9\daemon.log'
+          Write-Output ('daemon.log: {0} lines, {1} host starts' -f @(Get-Content $daemonLog).Count, @(Select-String -LiteralPath $daemonLog -Pattern 'host started' -SimpleMatch).Count)
+          if (Select-String -LiteralPath $daemonLog -Pattern 'FFI is an experimental' -SimpleMatch -Quiet) { throw 'daemon.log has the FFI experimental warning' }
+          # v0.1.5 W3 (issue #11 bug 8): schtasks /end stops conhost only; the host must see it go and end node with its job.
+          function Get-DaemonHost { @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -like '*windows-host.ps1*-Mode Daemon*' }) }
+          Write-Output ('before /End: {0} daemon, {1} host' -f (Get-Daemon).Count, (Get-DaemonHost).Count)
+          schtasks.exe /End /TN 'P9 Foundation'
+          $end = (Get-Date).AddSeconds(15)
+          while (((Get-Daemon).Count -gt 0 -or (Get-DaemonHost).Count -gt 0) -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          Write-Output ('after /End: {0} daemon, {1} host' -f (Get-Daemon).Count, (Get-DaemonHost).Count)
+          if ((Get-Daemon).Count -gt 0 -or (Get-DaemonHost).Count -gt 0) { throw 'schtasks /End left the daemon or its host running' }
+          # v0.1.5 W1 and W2 (issue #11 bug 2): an app and a "detach": true script's child outlive a daemon restart, made by
+          # teh.mjs restartWindowsTask, the function the desktop's restart button calls.
+          $keep = Join-Path $env:RUNNER_TEMP 'p9-keep.js'
+          Set-Content -LiteralPath $keep -Value "const fs = require('fs'); const [file, role] = process.argv.slice(2); if (role === 'child') { fs.writeFileSync(file + '.t', String(process.pid)); fs.renameSync(file + '.t', file); } else require('child_process').spawn(process.execPath, [__filename, file, 'child'], { detached: true, stdio: 'ignore' }).unref(); setInterval(() => {}, 1e9);"
+          $node = (Get-Command node).Source
+          $appPid = Join-Path $env:RUNNER_TEMP 'p9-app.pid'; $childPid = Join-Path $env:RUNNER_TEMP 'p9-child.pid'
+          $ws = (Get-Item (Join-Path $env:USERPROFILE 'P9')).FullName
+          New-Item -ItemType Directory -Force (Join-Path $ws 'waiting') | Out-Null
+          @{ scripts = @(@{ id = 'keep'; title = 'Keep'; detach = $true; cmd = @($node, $keep, $childPid) }); apps = @(@{ id = 'keep'; title = 'Keep'; cmd = @($node, $keep, $appPid, 'child') }); pages = @() } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ws 'registry.json')
+          $settingsFile = Join-Path $env:APPDATA 'P9\settings.json'
+          @{ primary = 'primary.md'; registry = 'registry.json'; waiting = 'waiting' } | ConvertTo-Json | Set-Content -LiteralPath $settingsFile
+          $before = Get-Date
+          schtasks.exe /Run /TN 'P9 Foundation'
+          Wait-Daemon $before
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { daemonRequest } = await import(pathToFileURL(process.argv[2]).href); const app = await daemonRequest(process.argv[1], 'POST', '/apps/keep/launch', {}); const run = await daemonRequest(process.argv[1], 'POST', '/scripts/keep/run', {}); console.log('launch: ' + app.status + ' run: ' + run.status); process.exit(app.status === 200 && run.status === 202 ? 0 : 1)" $state $teh
+          if ($LASTEXITCODE -ne 0) { throw 'the app or the detach script did not start' }
+          $end = (Get-Date).AddSeconds(15)
+          while (-not ((Test-Path $appPid) -and (Test-Path $childPid)) -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          if (-not ((Test-Path $appPid) -and (Test-Path $childPid))) { throw 'the app or the detach script''s child wrote no pid in 15 s' }
+          $kept = @((Get-Content $appPid), (Get-Content $childPid)) | ForEach-Object { [int]$_ }
+          $old = (Get-Daemon).ProcessId
+          $before = Get-Date
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { restartWindowsTask } = await import(pathToFileURL(process.argv[2]).href); process.exit(await restartWindowsTask(process.argv[1]) ? 0 : 1)" $state $teh
+          if ($LASTEXITCODE -ne 0) { throw 'restartWindowsTask failed' }
+          Wait-Daemon $before
+          Write-Output ('after restart: daemons {0} (old {1}), hosts {2}' -f ((Get-Daemon).ProcessId -join ','), ($old -join ','), (Get-DaemonHost).Count)
+          if ((Get-Daemon).Count -ne 1 -or (Get-DaemonHost).Count -ne 1 -or ((Get-Daemon).ProcessId | Where-Object { $old -contains $_ })) { throw 'the restart did not leave exactly one new daemon and host' }
+          $alive = @($kept | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+          Write-Output ('kept across the restart: app {0}, detach script child {1}: {2} alive' -f $kept[0], $kept[1], $alive.Count)
+          $kept | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+          Remove-Item -LiteralPath $settingsFile
+          if ($alive.Count -ne 2) { throw 'a daemon restart ended the app or the detach script''s child' }
           # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
           # alone left the daemon running (run 39540753837), which an update over this version would hit too.
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName

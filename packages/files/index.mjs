@@ -5,7 +5,16 @@ import path from 'node:path';
 import { MAX_BYTES } from '../protocol/index.mjs';
 
 // Windows has no /proc/self/fd or O_NOFOLLOW; win32.mjs gives the same walk on NT handles. Linux never loads it.
-const win = process.platform === 'win32' ? await import('./win32.mjs') : null;
+// Loading node:ffi warns "FFI is an experimental feature" on every daemon start (W4); only that warning is dropped.
+const win = process.platform === 'win32' ? await quietFfi(() => import('./win32.mjs')) : null;
+
+export async function quietFfi(load) {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function (warning, ...rest) {
+    if (!/^FFI is an experimental feature/.test(warning?.message ?? warning)) return emitWarning.call(this, warning, ...rest);
+  };
+  try { return await load(); } finally { process.emitWarning = emitWarning; }
+}
 
 export const hash = (content) => createHash('sha256').update(content).digest('hex');
 

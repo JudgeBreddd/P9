@@ -45,21 +45,22 @@ export function windowsArgv(argv, environment = process.env, fileExists = exists
   return { argv: [cmd, '/d', '/s', '/v:off', '/c', '"' + parts.map((part) => `"${part}"`).join(' ') + '"'], verbatim: true };
 }
 
-// mode Job: the host waits on the child inside a kill-on-close Job Object. Console: it starts the child in a new console
-// window and exits at once (a registry terminal button on Windows, D1).
-export function windowsJobCommand(argv, environment = childEnv(), mode = 'Job') {
+// mode Job: the host waits on the child inside a kill-on-close Job Object (detach: what the child starts leaves it, W1).
+// Console: it starts the child in a new console window and exits at once (a registry terminal button on Windows, D1).
+// Launch: the same with no window, for an app or a page (W2). Both start the child outside the daemon's job.
+export function windowsJobCommand(argv, environment = childEnv(), mode = 'Job', detach = false) {
   const { argv: resolved, verbatim } = windowsArgv(argv, environment);
-  const payload = Buffer.from(JSON.stringify({ argv: resolved, env: environment, ...(verbatim ? { verbatim } : {}) })).toString('base64');
+  const payload = Buffer.from(JSON.stringify({ argv: resolved, env: environment, ...(verbatim ? { verbatim } : {}), ...(detach ? { detach } : {}) })).toString('base64');
   return ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', host, '-Mode', mode, '-Payload', payload];
 }
 
 // Windows owns the process tree through a Job Object. Linux chat uses a systemd scope; other launches use a process group.
-export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', scope = false, stdio = 'pipe' } = {}) {
+export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', scope = false, stdio = 'pipe', detach = false } = {}) {
   let full = argv, unit = null, job = false, detached = true;
   if (process.platform === 'win32') {
     const environment = childEnv();
-    full = windowsJobCommand(argv, environment);
+    full = windowsJobCommand(argv, environment, 'Job', detach);
     job = true;
     detached = false;
   } else if (scope && hasUserBus()) {
