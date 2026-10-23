@@ -603,6 +603,25 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   await page.screenshot({ path: path.join(evidence, 'phone-terminal-closed.png') });
 });
 
+test('Issue #11: with no terminal backend the phone says so with the reason, never Not connected', async (t) => {
+  const server = await remoteDaemon(t, { setup, args: ['--terminal-platform', 'darwin'] });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page } = await signedInPage(browser, server);
+  const state = () => page.locator('#termState').textContent();
+  const want = "Terminal isn't available on this computer yet: P9 has no terminal for macOS yet.";
+  await page.click('[data-nav="terminal"]');
+  await page.waitForFunction((text) => document.querySelector('#termState').textContent === text, want, { timeout: 10000 });
+  // ponytail: the dev space runs tests with no network, so Chromium says navigator.onLine is false and phone.ts keeps
+  // New terminal disabled (Phase 11 and 17 time out on that too); say online here rather than change the sandbox.
+  await page.evaluate(() => { Object.defineProperty(navigator, 'onLine', { get: () => true }); dispatchEvent(new Event('online')); });
+  await page.click('#newTerminal');
+  await page.waitForTimeout(500);
+  assert.equal(await state(), want);
+  await page.screenshot({ path: path.join(evidence, 'phone-terminal-unavailable.png') });
+  console.log('PASS phone, no backend: Terminal tab and New terminal both say ' + JSON.stringify(want));
+});
+
 test('Phase 11: malformed and stale usage are explicit and never stop the daemon', async (t) => {
   const server = await remoteDaemon(t, { setup });
   const authBrowser = await chromium.launch(); t.after(() => authBrowser.close());

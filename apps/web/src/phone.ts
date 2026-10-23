@@ -1,6 +1,6 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, md } from './helpers.mjs';
-import { createTerminal, TMUX_MISSING } from './terminal.mjs';
+import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
 type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
@@ -23,7 +23,7 @@ async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
   if (response.status === 401) location.replace('/login');
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String(body.error ?? response.status));
+  if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
   return body;
 }
 // One ID per action, kept until the daemon answers it: another action in between must not cost a lost one its ID,
@@ -208,13 +208,17 @@ async function loadTerminals() {
     select.innerHTML = running.map((item) => `<option value="${escape(item.id)}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
     if (running.some((item) => item.id === was)) select.value = was;
     attach();
-  } catch (error) { termState((error as Error).message === 'tmux-not-found' ? TMUX_MISSING : 'Terminals are unavailable'); }
+  } catch (error) {
+    const { message, body } = error as Error & { body?: Json };
+    termState(message === 'tmux-not-found' ? TMUX_MISSING : message === 'terminal-unavailable' ? unavailableText(body?.reason) : 'Terminals are unavailable');
+  }
 }
 one<HTMLSelectElement>('#terminal').onchange = attach;
 one<HTMLButtonElement>('#refreshTerminal').onclick = () => void loadTerminals();
 one<HTMLButtonElement>('#newTerminal').onclick = async () => {
   const result = await mutate('/terminals', {});
-  if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING : 'Not started: ' + String(result.body.error ?? result.status));
+  if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING
+    : result.body.error === 'terminal-unavailable' ? unavailableText(result.body.reason) : 'Not started: ' + String(result.body.error ?? result.status));
   one<HTMLSelectElement>('#terminal').value = ''; await loadTerminals();
   one<HTMLSelectElement>('#terminal').value = String(result.body.terminal); attach();
 };
@@ -227,7 +231,7 @@ one<HTMLButtonElement>('#stopTerminal').onclick = async () => {
 document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.onclick = () => { term.sendKeys(KEYS[button.dataset.key!]); term.focus(); }; });
 addEventListener('resize', term.fit);
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
-termState('Not connected');
+termState('No terminal open');
 one<HTMLButtonElement>('#refreshChat').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };
 
 // Mission: the same daemon routes the desktop uses. Native <details> rows open in place; scripts stream output from

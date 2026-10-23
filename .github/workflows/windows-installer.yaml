@@ -79,6 +79,10 @@ jobs:
       - name: Windows host and process-tree tests
         if: inputs.tag == ''
         run: node --test test/windows-process-tree.test.mjs
+      # GitHub issue #11: the dock's terminal on Windows (ConPTY), through the real routes and the daemon's pipe.
+      - name: Windows terminal test
+        if: inputs.tag == ''
+        run: node --test test/windows-terminal.test.mjs
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.

@@ -81,12 +81,12 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
-export function createListener({ workspace, savedWorkspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, remote, anymouse = createAnymouse() }) {
+export function createListener({ workspace, savedWorkspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle });
-  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket });
+  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
   setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
@@ -198,20 +198,21 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
-  if (terminals) {
-    api.get('/terminals', async (c) => {
-      try { return c.json({ terminals: await terminals.list() }); }
-      catch (error) { if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503); throw error; }
-    });
-    api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
-    api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
-  }
+  api.get('/terminals', async (c) => {
+    try { return c.json({ terminals: await terminals.list() }); } catch (error) {
+      if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503);
+      if (error.message === 'terminal-unavailable') return c.json({ error: 'terminal-unavailable', reason: error.reason }, 503);
+      throw error;
+    }
+  });
+  api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
+  api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
   api.post('/stop-all', async (c) => {
     // Checked after the lifecycle wait for running starts, so a device revoked meanwhile stops nothing.
     // ponytail: a desktop Stop All that joins this one in that window gets its 401 too; pressing it again works.
     const results = await lifecycle.stopAll(() => {
       stillAuthorized();
-      return Promise.all([chat.stopAll(), mission.stopAll(), terminals?.stopAll() ?? 'stopped']);
+      return Promise.all([chat.stopAll(), mission.stopAll(), terminals.stopAll()]);
     });
     const result = results.some((value) => String(value).startsWith('cleanup-failed')) ? 'cleanup-failed' : 'stopped';
     return c.json({ result, components: { chat: results[0], scripts: results[1], terminals: results[2] } }, result === 'stopped' ? 200 : 500);
@@ -263,8 +264,8 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
       settingsInvalid: Boolean(disk.error), settingsError: disk.error ?? null,
       writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: !(await readdir(workspace)).length,
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
-      // null off Linux: the dock's terminals are tmux sessions there only.
-      tmux: terminals ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
+      // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
+      tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
       claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
   });
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
@@ -318,7 +319,7 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   const attachTerminal = (request, socket, head, route) => {
     const match = TERMINAL_SOCKET.exec(route);
-    if (!terminals || !match) return refuse(socket, 404);
+    if (!match) return refuse(socket, 404);
     wss.handleUpgrade(request, socket, head, (ws) => {
       // Before anything else: ws reports a protocol error (an over-limit frame, bad UTF-8) as an 'error' event, and an
       // unheard one would end the daemon. The socket is cut; attach's close handler stops its tmux client.

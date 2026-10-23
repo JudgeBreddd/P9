@@ -1367,6 +1367,31 @@ test('Terminal dock: a real shell, one of P9\'s own tmux sessions, through the d
   console.log('PASS dock: shell started on open, keys run, width ' + floating + ' then ' + drawer + ' cols, reopen keeps it, bad ID refused, exit then Refresh starts another');
 });
 
+// Issue #11: Dev Focus's drawer is this same dock in drawer mode, so one test covers both.
+test('Terminal dock with no terminal backend: says so with the reason, badge unavailable, never Not connected or closed', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--terminal-platform', 'darwin'] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-dock-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  await page.click('#rTerm');
+  await page.locator('#dBadge', { hasText: /^unavailable$/ }).waitFor({ timeout: 15000 });
+  const seen = async () => page.evaluate(() => ({ state: document.querySelector('#dState').textContent,
+    badge: document.querySelector('#dBadge').textContent, body: document.querySelector('#termView').textContent }));
+  const want = { state: "Terminal isn't available on this computer yet.", badge: 'unavailable',
+    body: "Terminal isn't available on this computer yet: P9 has no terminal for macOS yet." };
+  assert.deepEqual(await seen(), want);
+  await page.click('#dFloat'); await page.waitForTimeout(300);
+  await page.click('#dRefresh'); await page.waitForTimeout(500);
+  assert.deepEqual(await seen(), want, 'drawer mode and Refresh say the same');
+  assert.deepEqual((await call(instance, '/terminals', 'POST', {})), { error: 'terminal-unavailable', reason: 'P9 has no terminal for macOS yet.' });
+  if (process.env.P9_EVIDENCE) await page.locator('#dock').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'dock-unavailable.png') });
+  console.log('PASS dock, no backend: ' + JSON.stringify(want));
+});
+
 test('Landing page: shows on open, only Space skips the intro, a focus pick leaves it, the mark reopens it, startLast and a reload skip it', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-land-')), profile = path.join(home, 'profile');

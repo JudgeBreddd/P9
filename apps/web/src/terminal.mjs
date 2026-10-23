@@ -23,6 +23,8 @@ for (const type of ['compositionend', 'keydown']) addEventListener(type, (event)
 // connect(id): a WebSocket to that terminal, or anything with the same readyState, send, close and on* handlers.
 // What the dock and the phone say when the daemon reports no tmux binary.
 export const TMUX_MISSING = 'tmux not found. Install it (Debian/Ubuntu: sudo apt install tmux · Fedora: sudo dnf install tmux · Arch: sudo pacman -S tmux), then press Refresh.';
+// What they say when this computer has no terminal backend, or the Windows one could not start (issue #11).
+export const unavailableText = (reason) => "Terminal isn't available on this computer yet" + (reason ? ': ' + reason : '.');
 export function createTerminal({ screen, state, connect }) {
   const term = { view: null, socket: null, leases: [] };
   function show(text, live = false) {

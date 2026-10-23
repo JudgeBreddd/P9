@@ -1111,31 +1111,38 @@ window.p9?.onTerminal?.((serial, m) => {
   else if ('close' in m) { socket.readyState = 3; socket.onclose?.({ code: m.close }); }
 });
 // Loaded in the window only: the page is prerendered in Node, where xterm has no named exports.
-let dockTerm = null, tmuxMissing = '', noteShown = false;
+let dockTerm = null, tmuxMissing = '', unavailableText = null, noteShown = false;
 // The install lines are too long for the toolbar's one-line state, so the dock body carries them; Refresh clears them.
 const noTmux = () => { dockTerm.show('tmux not found'); $('#termView').textContent = tmuxMissing; noteShown = true; };
+// No backend on this computer (issue #11): the badge says so instead of 'closed', which read as a daemon that was down.
+const noTerminal = (reason) => {
+  dockTerm.show(unavailableText()); $('#dBadge').textContent = 'unavailable';
+  $('#termView').textContent = unavailableText(reason); noteShown = true;
+};
 // Opening the dock attaches the newest running shell, or starts one.
 let docking = null;
 const openDock = () => docking ??= (async () => {
   if (noteShown) { $('#termView').textContent = ''; noteShown = false; }
   const list = await window.p9.terminal('list').catch(() => null);
   if (list?.body?.error === 'tmux-not-found') return noTmux();
+  if (list?.body?.error === 'terminal-unavailable') return noTerminal(list.body.reason);
   if (list?.status !== 200) return dockTerm.show('Terminals are unavailable');
   let id = list.body.terminals.filter(x => x.state === 'running').at(-1)?.id;
   if (!id) {
     const made = await window.p9.terminal('create').catch(() => null);
+    if (made?.body?.error === 'terminal-unavailable') return noTerminal(made.body.reason);
     if (made?.status !== 201) return made?.body?.error === 'tmux-not-found' ? noTmux() : dockTerm.show('Not started: ' + (made?.body?.error ?? 'daemon unavailable'));
     id = made.body.terminal;
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING }) => {
+if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING, unavailableText: text }) => {
   if (lifetime.signal.aborted) return;
-  tmuxMissing = TMUX_MISSING;
+  tmuxMissing = TMUX_MISSING; unavailableText = text;
   dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
-  dockTerm.show('Not connected');
+  dockTerm.show('No terminal open');
   $('#dRefresh').onclick = openDock;
   observe(() => dockTerm.fit()).observe($('#termView'));
   lifetime.signal.addEventListener('abort', () => dockTerm.close());
