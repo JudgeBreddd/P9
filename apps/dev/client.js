@@ -189,7 +189,8 @@ v.commands.registerCommand('p9.openInVSCode', async () => {
 });
 // File > Open Folder and the Explorer's button: the workbench's own dialog service is a stub here, so both go to main.
 const dialogs = await getService(IFileDialogService);
-dialogs.pickFolderAndOpen = dialogs.pickFileFolderAndOpen = () => openFolder();
+// Its methods are prototype getters with a no-op setter (missing-services.js), so a plain assignment is dropped: define them here.
+Object.defineProperties(dialogs, { pickFolderAndOpen: { value: () => openFolder() }, pickFileFolderAndOpen: { value: () => openFolder() } });
 const button = v.window.createStatusBarItem(v.StatusBarAlignment.Right, 100);
 Object.assign(button, { text: '$(link-external) Open in VS Code', tooltip: 'Open this file at this line in VS Code (logged)', command: 'p9.openInVSCode' });
 button.show();

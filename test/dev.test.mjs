@@ -213,7 +213,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   await shell.keyboard.press('Control+2');
   stage('const dev = await devWindow;'); const dev = await devWindow;
-  const errors = []; dev.on('pageerror', error => errors.push(error.message));
+  const errors = []; dev.on('pageerror', error => errors.push(error.stack ?? error.message)); // the stack names where it came from
   await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
   assert.equal(await dev.locator('#status').textContent(), '');
   stage('const config = await dev.evalu'); // The view sits exactly over the shell's Dev pane (Playwright screenshots one WebContents, so this is the overlay's proof).
