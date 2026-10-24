@@ -2,9 +2,9 @@
 
 ## To 0.1.5 (beta)
 
-Dev Focus has a working terminal on Windows. Apps and pages a Mission button opens on Windows keep running after the
-button's script ends and after a service restart, and stopping the `P9 Foundation` task now stops everything under
-it. Setup leaves an existing workspace's layout alone: it finds the AGENTS.md naming your main project and your
+Dev Focus has a working terminal on Windows. On Windows, apps and pages a Mission button opens keep running after a
+service restart, a script whose record says `"detach": true` leaves the apps it opens running when it ends, and
+stopping the `P9 Foundation` task now stops everything under it. Setup leaves an existing workspace's layout alone: it finds the AGENTS.md naming your main project and your
 "waiting on" folder, and creates only what is missing.
 
 Mission Control picks up `settings.json`, registry and space edits within one refresh, with no restart, and accepts

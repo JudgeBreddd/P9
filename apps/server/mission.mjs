@@ -126,7 +126,8 @@ const shown = (char) => (/[\x00-\x1f\x7f]/.test(char) ? 'U+' + char.charCodeAt(0
 export function argRefusal(item, arg, index) {
   const name = 'argument ' + (index + 1);
   if (typeof arg !== 'string') return name + ' is not text';
-  const target = item.cmd[0].split(/[\\/]/).pop().toLowerCase(), strict = target === 'ssh' || /\.(cmd|bat)$/.test(target);
+  // ssh.exe is ssh: Windows registries name it so (release review finding 3).
+  const target = item.cmd[0].split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, ''), strict = target === 'ssh' || /\.(cmd|bat)$/.test(target);
   const max = strict ? STRICT_MAX : ARG_MAX;
   if (arg.length > max) return name + ' is ' + arg.length + ' characters; the limit is ' + max;
   const control = arg.match(CONTROL)?.[0];

@@ -1648,9 +1648,9 @@ async function firstRun() {
 const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out; hub is optional.
-const PATH_KEYS = [['primary', 'Main AGENTS file', 'setup-file'], ['registry', 'Mission Control registry', 'setup-file'], ['waiting', 'Waiting-on-you folder', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder']];
+const PATH_KEYS = [['primary', 'Main AGENTS file', 'setup-file'], ['registry', 'Mission Control registry', 'setup-file'], ['waiting', 'Waiting-on-you folder', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder the registry commands run from (optional, full path)', '']];
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
-const wizChoosing = s => s && !s.settings && !s.settingsPresent;
+const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
 const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
 async function welcome(at) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
@@ -1730,11 +1730,12 @@ function wizRender() {
     const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
     const creates = d.mission ? [] : [...(s.creates || []), ...(s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
     body = `<p class="muted sm">Its buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
-      + (choosing ? PATH_KEYS.map(([k, name, kind]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('')
+      + (choosing ? PATH_KEYS.map(([k, name, kind]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('')
         + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
       + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
       + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
       + (creates.length ? `<p class="sm">Create adds: <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
+      + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then Use these. Your old settings file is kept as settings.json.bak.</p>` : '')
       + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', creates.length ? 'Create these' : 'Use these', 'default')}</div>`)
       + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
       + (note?.error ? fail(note.error, note.detail) : '')

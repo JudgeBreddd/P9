@@ -147,6 +147,22 @@ is refused. Saves use the same guarded save as workspace files: a note changed o
 overwritten without your say. Rename keeps the note in its folder and refuses a name that exists. The preview shows a
 note's HTML, links and images as text. A paired phone has the same access to the folder as the desktop.
 
+## Mission pages with other schemes
+
+A registry page opens a scheme other than http(s) only if you list it in `page_schemes` in settings.json, which P9
+never writes, and only after you confirm the full link (threat model row 35). `javascript:`, `file:`, `data:`,
+`vbscript:` and `blob:` links are refused even when listed. A handler you list, such as `ms-settings:` or `obsidian:`,
+is trusted as you chose.
+
+## P9 MCP server
+
+The agent in each of P9's chats gets a `p9` MCP server (threat model row 33). It reaches the daemon only through the
+desktop socket or pipe with a random token for that chat, which dies when the chat stops; the phone listener has no
+`/mcp` route. An agent in a P9 chat can change Mission buttons only while you let it edit files (not under the agent
+lock or File protection), never over an edit you made since its last read, and runs nothing without your yes in that
+chat: running a script and answering a needs-you item raise the chat's own approval prompt. An agent that can run
+shell commands can read its relay's token, as it can read the desktop's own connection file.
+
 ## File protection
 
 File protection is on by default. While it is on, P9's file routes and editor, on the desktop and on a paired phone,

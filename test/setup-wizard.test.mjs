@@ -45,7 +45,7 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   assert.equal((await call(instance, '/mission')).body.error, 'settings-missing');
 
   // {} or the wizard's four keys as JSON, nothing else; paths are checked as settings.json's are.
-  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: '/' }], [{ ...STARTER, waiting: '../out' }], [{ primary: 'A.md' }]])
+  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: 'relative' }], [{ ...STARTER, waiting: '../out' }], [{ primary: 'A.md' }]])
     assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
   // The fixed starter paths never land in a folder with things in it unshown: {} there needs the paths.
   assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', {})), [409, { error: 'paths-required' }]);
@@ -172,6 +172,84 @@ test('Setup wizard: an ICM-shaped workspace proposes its own primary AGENTS.md a
   assert.deepEqual((await readdir(instance.workspace)).sort(), before);
   assert.equal((await call(instance, '/mission')).status, 200);
   console.log('PASS starter: the Main project AGENTS.md and the waiting-on folder are proposed; only settings.json is written');
+});
+
+test('Setup wizard: starter settings left from another workspace never lay a starter beside this workspace\'s own layout', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    await mkdir(path.dirname(settingsPath(directory)), { recursive: true });
+    await writeFile(settingsPath(directory), JSON.stringify(STARTER));
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
+    return {};
+  });
+  const before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.settings, s.conflict, s.creates, s.found], [true, true, [],
+    { hub, registry: hub + '/registry.json', waiting: 'work/_owner' }]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', {})).status, 409);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'nothing created');
+  console.log('PASS starter: loaded starter settings on a folder with its own layout create nothing');
+});
+
+test('Setup wizard: confirming the found paths repoints loaded settings; the old file is kept, other keys carry over, nothing else is made (threat model row 38)', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    await mkdir(path.dirname(settingsPath(directory)), { recursive: true });
+    await writeFile(settingsPath(directory), JSON.stringify({ ...STARTER, page_schemes: ['obsidian'] }));
+    await writeFile(settingsPath(directory) + '.bak', 'older backup');
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'),
+      JSON.stringify({ scripts: [{ id: 'hubdoc', title: 'Hub doc', cmd: ['bash', path.basename(workspace) + '/doc.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
+    return {};
+  });
+  const file = settingsPath(instance.directory), old = await readFile(file, 'utf8'), before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  // The workspace sits inside a bigger folder the registry's commands are written from: proposed, editable.
+  const found = { hub, registry: hub + '/registry.json', waiting: 'work/_owner', scripts_root: path.dirname(instance.workspace) };
+  assert.deepEqual([s.conflict, s.found, s.proposed, s.creates], [true, found, { ...STARTER, page_schemes: ['obsidian'], ...found }, []]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', {})).status, 409, 'no paths: still refused');
+  assert.equal((await call(instance, '/setup/starter', 'POST', { ...STARTER, scripts_root: 'relative' })).status, 400, 'validated like first run');
+  assert.equal(await readFile(file, 'utf8'), old);
+  const chosen = { primary: 'AGENTS.md', registry: found.registry, waiting: found.waiting, hub, scripts_root: found.scripts_root };
+  const made = await call(instance, '/setup/starter', 'POST', chosen);
+  assert.deepEqual([made.status, made.body.created], [201, [file]]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { ...chosen, page_schemes: ['obsidian'] });
+  assert.equal(await readFile(file + '.bak', 'utf8'), old);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'no mission/ or needs-you/');
+  const mission = await call(instance, '/mission');
+  assert.deepEqual([mission.status, mission.body.scripts.map((x) => x.id)], [200, ['hubdoc']]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', chosen)).status, 409, 'settings now fit: no second overwrite');
+  console.log('PASS starter: confirmed paths replace the settings, keep a .bak and other keys, create nothing else, and Mission lists the hub');
+});
+
+test('Setup wizard: scripts_root is proposed only when the hub registry commands start with the workspace folder name', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  for (const [commands, expected] of [['ICMX', true], ['elsewhere', false]]) {
+    const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+      await mkdir(path.join(workspace, hub), { recursive: true });
+      const start = commands === 'ICMX' ? path.basename(workspace) : 'elsewhere';
+      await writeFile(path.join(workspace, hub, 'registry.json'),
+        JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', start + '/a.sh'] }], apps: [], pages: [] }));
+      await writeFile(path.join(workspace, 'AGENTS.md'), 'mine');
+      return {};
+    });
+    const s = (await call(instance, '/setup')).body;
+    assert.equal(s.found.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
+    assert.equal(s.proposed.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
+    if (expected) {
+      const made = await call(instance, '/setup/starter', 'POST', s.proposed);
+      assert.equal(made.status, 201);
+      assert.equal(JSON.parse(await readFile(settingsPath(instance.directory), 'utf8')).scripts_root, path.dirname(instance.workspace));
+    }
+  }
+  console.log('PASS starter: scripts_root is proposed for a registry written from the workspace parent, and not otherwise');
 });
 
 test('Setup wizard: a top-level waiting-on folder is found; with no Main project line the top AGENTS.md is primary', { timeout: 60000 }, async (t) => {

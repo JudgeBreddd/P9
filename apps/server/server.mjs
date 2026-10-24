@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readdir, readFile as readAsset, stat, access, mkdir, open } from 'node:fs/promises';
+import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -322,8 +322,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
       }
     };
     await walk('', 1);
-    if (found.hub) found.registry = found.hub + '/registry.json';
-    else if (await present(path.join(workspace, STARTER_SETTINGS.registry))) found.registry = STARTER_SETTINGS.registry;
+    if (found.hub) {
+      found.registry = found.hub + '/registry.json';
+      // Registry commands written relative to the folder above the workspace (the workspace is a folder inside a bigger one)
+      // only resolve with scripts_root set there.
+      const text = (await readAsset(path.join(workspace, found.registry), 'utf8').catch(() => '')).replace(/^﻿/, '');
+      const base = path.basename(workspace) + '/';
+      let records = [];
+      try { const reg = JSON.parse(text); records = [...(reg.scripts ?? []), ...(reg.apps ?? [])]; } catch {}
+      if (path.basename(workspace) && records.some((r) => [r?.cwd, ...(Array.isArray(r?.cmd) ? r.cmd : [])].some((v) => typeof v === 'string' && v.startsWith(base)))) {
+        found.scripts_root = path.dirname(workspace);
+      }
+    } else if (await present(path.join(workspace, STARTER_SETTINGS.registry))) found.registry = STARTER_SETTINGS.registry;
     // primary: an AGENTS.md with the line Mission parses (**Main project: ...** (`path`)), else the top one.
     const mainLine = async (file) => /\*\*Main project: [^*]+\*\* \(`[^`]+`/.test(await readAsset(path.join(workspace, file), 'utf8').catch(() => ''));
     for (const file of agents.sort((a, b) => a.split('/').length - b.split('/').length)) if (!found.primary && await mainLine(file)) found.primary = file;
@@ -339,7 +349,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
   };
   // Exactly what a starter run with these paths makes: each of the three that is missing (a missing waiting folder gets its
   // AGENTS.md; an existing one is left as it is), and _ideas/ only in an empty workspace.
-  const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'hub'];
+  const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'hub', 'scripts_root'];
   const planFor = async (paths, empty) => [
     ...(await present(path.join(workspace, paths.primary)) ? [] : [paths.primary]),
     ...(await present(path.join(workspace, paths.registry)) ? [] : [paths.registry]),
@@ -350,18 +360,28 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.keys(input).every((key) => WIZARD_KEYS.includes(key))) return null;
     try { return parseSettings(JSON.stringify(input)); } catch { return null; }
   };
+  // Settings are per machine, not per workspace: after "Change workspace" they can name starter paths this folder lacks while
+  // the folder has its own layout. What it has that the settings do not name; non-empty means Create must not lay a starter.
+  const differing = async (loaded, empty) => {
+    if (!loaded) return empty ? {} : existing();
+    if (empty || !(await planFor(loaded, false)).length) return {};
+    const own = await existing();
+    return Object.fromEntries(Object.entries(own).filter(([key, value]) => loaded[key] !== value));
+  };
   app.get('/setup', async (c) => {
     const disk = await settingsOnDisk(), empty = !(await readdir(workspace)).length;
     // A settings file (loaded or on disk) decides the paths. Without one: an empty folder gets the starter paths, any other
     // gets what it already has, filled in with the starter paths, which the wizard shows and lets the owner change.
-    const found = settings || disk.text !== undefined || empty ? {} : await existing();
+    const loaded = settings ?? disk.parsed;
+    const found = (settings || disk.text !== undefined || empty) && !loaded ? {} : await differing(loaded, empty);
     const query = c.req.query(), asked = Object.keys(query).length ? wizardPaths(query) : null;
-    const proposed = settings ?? disk.parsed ?? asked ?? { ...STARTER_SETTINGS, ...found };
+    const proposed = loaded && Object.keys(found).length ? asked ?? { ...loaded, ...found } : settings ?? disk.parsed ?? asked ?? { ...STARTER_SETTINGS, ...found };
     const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
     return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: disk.text !== undefined,
       settingsInvalid: Boolean(disk.error), settingsError: disk.error ?? null,
       writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: empty,
-      found, proposed, creates: disk.error ? [] : await planFor(proposed, empty), ...(Object.keys(query).length && !asked ? { pathsInvalid: true } : {}),
+      found, conflict: Boolean(loaded && Object.keys(found).length), proposed,
+      creates: disk.error ? [] : await planFor(proposed, empty), ...(Object.keys(query).length && !asked ? { pathsInvalid: true } : {}),
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
       // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
@@ -380,10 +400,16 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
     if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
     const disk = await settingsOnDisk();
     if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
-    if (chosen && (settings || disk.text !== undefined)) return c.json({ error: 'settings-exist' }, 409); // never replaced
-    const empty = !(await readdir(workspace)).length;
+    const old = disk.parsed ?? settings, empty = !(await readdir(workspace)).length;
+    // Settings are replaced only when the owner confirms other paths for a folder whose own layout they do not name.
+    const repoint = Boolean(chosen && old);
+    if (repoint && !Object.keys(await differing(old, empty)).length) return c.json({ error: 'settings-exist' }, 409);
     if (!chosen && !settings && disk.text === undefined && !empty) return c.json({ error: 'paths-required' }, 409);
-    const paths = settings ?? disk.parsed ?? chosen ?? STARTER_SETTINGS;
+    // The wizard's keys are the chosen ones; every other key of the old file (space, notes_roots, server_host ...) carries over.
+    const paths = repoint ? parseSettings(JSON.stringify({ ...Object.fromEntries(Object.entries(old).filter(([key]) => !WIZARD_KEYS.includes(key))), ...chosen }))
+      : settings ?? disk.parsed ?? chosen ?? STARTER_SETTINGS;
+    // The settings name starter paths this folder lacks, and it has its own: nothing is laid beside them unshown.
+    if (!repoint && (settings || disk.parsed) && Object.keys(await differing(paths, empty)).length) return c.json({ error: 'layout-differs' }, 409);
     const made = (promise) => promise.then(() => true, (error) => { if (error.code === 'EEXIST') return false; throw error; });
     const folders = async (relative) => { for (let i = 1; i < relative.length; i++) await made(createDirectory(workspace, relative.slice(0, i).join('/'))); };
     const created = [], plan = await planFor(paths, empty);
@@ -393,7 +419,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
       if (await made(createFile(workspace, relative, content))) created.push(relative);
     }
     if (plan.includes('_ideas/') && await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
-    if (disk.text === undefined) {
+    if (repoint) {
+      // The old file is kept as settings.json.bak (an older .bak is replaced); the new one lands by rename, never half written.
+      if (disk.text !== undefined) await writeFile(settingsFile + '.bak', disk.text, { mode: 0o600 });
+      const file = await open(settingsFile + '.tmp', 'w', 0o600);
+      try { await file.writeFile(JSON.stringify(paths, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+      await rename(settingsFile + '.tmp', settingsFile);
+      await reloadSettings();
+      created.push(settingsFile);
+    } else if (disk.text === undefined) {
       await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 });
       const file = await open(settingsFile, 'wx', 0o600).catch((error) => { if (error.code === 'EEXIST') return null; throw error; });
       if (!file) return c.json({ error: 'settings-changed' }, 409); // written by someone else meanwhile: Retry re-reads it

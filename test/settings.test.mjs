@@ -717,7 +717,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
-  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
+  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'conflict', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
     'settingsInvalid', 'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
   // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.
@@ -772,7 +772,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
   assert.equal(await page.locator('#welFile').textContent(), settingsFile);
   // No settings in a folder with things in it: the paths P9 will use, editable, and exactly what Create adds.
-  assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)), ['AGENTS.md', 'mission/registry.json', 'needs-you', '']);
+  assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)), ['AGENTS.md', 'mission/registry.json', 'needs-you', '', '']);
   assert.equal(await page.locator('#welBody [data-creates]').textContent(), 'AGENTS.md, mission/registry.json, needs-you/AGENTS.md, ' + settingsFile);
   await shot('wizard-3-mission.png');
   await page.click('[data-act="starter"]');
@@ -852,6 +852,46 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.click('[data-act="mission-off"]');
   await page.waitForFunction(() => document.querySelector('[data-focus-btn="mission"]').hidden && !document.querySelector('#welDlg').open);
   console.log('PASS setup wizard UI: card count, resume at the first step not done, sign-in code and open, ended shows Retry, starter files, name and petdex, tour, skip to the Notification Center across a restart, gone when done, Mission off');
+});
+
+test('Setup wizard UI: starter settings on a folder with its own layout show the found paths, editable, and Use these repoints (threat model row 38)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    const file = path.join(directory, '.config', 'p9', 'settings.json');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' }));
+    await mkdir(path.join(directory, '.claude'), { recursive: true });
+    await writeFile(path.join(directory, '.claude', '.credentials.json'), '{}'); // agent sign-in done: the card opens at Mission Control
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
+    return { args: ['--acp-override', fake] };
+  });
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-conflict-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const card = page.locator('#cards [data-key="welcome"]');
+  await card.waitFor({ timeout: 10000 });
+  await card.locator('.open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  await page.locator('#welBody [data-conflict]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)),
+    ['AGENTS.md', hub + '/registry.json', 'work/_owner', hub, '']);
+  await page.waitForTimeout(400);
+  const png = await page.screenshot({ type: 'png' });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT conflict-card ' + png.toString('base64'));
+  await page.click('[data-act="starter"]');
+  await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 });
+  const saved = JSON.parse(await readFile(path.join(instance.directory, '.config', 'p9', 'settings.json'), 'utf8'));
+  assert.deepEqual(saved, { primary: 'AGENTS.md', registry: hub + '/registry.json', waiting: 'work/_owner', hub });
+  assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', 'note.txt', 'work'], 'no mission/ or needs-you/');
+  console.log('PASS wizard UI: found paths shown in the conflict state; Use these repointed the settings and made nothing else');
 });
 
 test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-made one gets a card, Skip clears it, running chats are robot heads', { timeout: 120000 }, async (t) => {

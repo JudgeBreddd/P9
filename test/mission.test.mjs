@@ -452,6 +452,18 @@ test('M5: argRefusal names the character, only for batch files and ssh; choices 
   assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: [] }] }] })).invalid.length, 1);
 });
 
+// Release review finding 3: ssh.exe, any case or full path, is held to bare ssh's rules; a batch file in any case stays strict.
+test('M5: ssh.exe and a full Windows path to it refuse exactly what bare ssh refuses; .CMD and .Bat stay strict', () => {
+  const ssh = { cmd: ['ssh', 'server'] };
+  const variants = ['ssh.exe', 'SSH.EXE', 'C:\\Windows\\System32\\OpenSSH\\ssh.exe'].map((exe) => ({ cmd: [exe, 'server'] }));
+  for (const arg of [...';&|`$<>\\'].map((c) => 'x' + c + 'y').concat('x y', 'x"y', 'x; rm -rf ~')) {
+    assert.ok(argRefusal(ssh, arg, 0), arg);
+    for (const item of variants) assert.equal(argRefusal(item, arg, 0), argRefusal(ssh, arg, 0), item.cmd[0] + ' ' + arg);
+  }
+  for (const item of variants) assert.equal(argRefusal(item, 'user@host:22', 0), undefined);
+  for (const exe of ['C:\\x\\RUN.CMD', 'C:\\x\\go.Bat']) assert.match(argRefusal({ cmd: [exe] }, 'a&b', 0), /contains "&", which cmd.exe/);
+});
+
 test('M5: the daemon refuses with the reason and starts nothing; choices come back in the overview', { timeout: 30000 }, async (t) => {
   const instance = await start(t, BUILDER, [{ id: 'pick', title: 'Pick', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Mode', choices: ['fast', 'slow'] }] },
     { id: 'batch', title: 'Batch', cmd: ['C:\\x\\run.cmd'], args: ['Name'] }]);
