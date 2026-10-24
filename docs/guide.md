@@ -128,3 +128,28 @@ The Anymouse button sends P9's makers an idea, a bug report or a gripe. Without 
 ## Persistence and Stop All
 
 Closing the window keeps chats and terminals running. The red session button switches P9 to "dies with the app", or runs **Stop All**, which stops every chat, button run and P9 terminal. The README has a table of what stops what.
+
+## Settings
+
+The gear opens Settings. Each row has an **i**: hover it for what the row does, click it to open its part of this guide.
+
+- **P9 docs on GitHub**, **Anymouse** and **Setup**, at the top: this guide, [Anymouse](#anymouse) and the [first-start](#first-start) window again.
+- **Zoom** makes everything in the window bigger or smaller. Ctrl = and Ctrl - do the same; Ctrl 0 resets.
+- **Your name** is what the landing page greets you with.
+- **Start in my last focus mode** skips the landing page when P9 opens.
+- **Close the chat window on send** closes a chat opened from a card once your message is sent.
+- **Focus modes**, **Pets**, **Agent lock** and **File protection**: see [Focus modes](#focus-modes), [Pets](#pets), [Agent lock](#agent-lock) and [File protection](#file-protection).
+
+### Updates
+
+**Check for updates** opens the newest P9 release on GitHub. If its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.
+
+### Maintenance
+
+For when P9 misbehaves. Each button is also in the command palette (Ctrl K).
+
+- **Reload window** loads the window again. Chats keep running in the background service; text you have not sent is lost.
+- **Refresh Mission** reads Mission Control's settings, buttons and space again now, instead of at the next check.
+- **Restart daemon** restarts P9's background service and waits until the new one answers. Running chats, scripts and terminals stop.
+- **Repair daemon service** sets the background service up again and starts it. On Windows it runs the installer's own setup step: use it when P9 says its task is missing or out of date. On Linux it enables the `p9-foundation` unit again. Running chats, scripts and terminals stop.
+- **Rebuild + reload** shows only when P9 runs from a source checkout. It runs `pnpm build`, then reloads the window with the new build.

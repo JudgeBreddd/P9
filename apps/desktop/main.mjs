@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -16,6 +16,9 @@ export const APP_URL = 'p9://app/';
 export const DEV_URL = 'p9://dev/';
 export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme';
+// HI1: a Settings row's "i" opens its part of the guide (docs/guide.md headings); any other section is refused.
+export const GUIDE_URL = 'https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#';
+export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance']);
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
 export const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
 // Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
@@ -148,7 +151,7 @@ export async function createDesktop({ state, open } = {}) {
   // ponytail: a daemon that is running but hung stays hung (/Run on a running task does nothing); the page says not-answering.
   // changing: p9:workspace-change is between Stop All and the new task's start; a /Run then restarted the old task on the
   // old folder and the change rolled back (Fable review finding 3).
-  let reason = 'not-answering', woke = 0, repaired = false, changing = false;
+  let reason = 'not-answering', woke = 0, repaired = false, changing = false, rebuilding = false;
   const wake = async () => {
     if (changing || Date.now() - woke < 30000) return;
     woke = Date.now();
@@ -192,10 +195,13 @@ export async function createDesktop({ state, open } = {}) {
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
   // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
   const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
+  // MT1: Rebuild + reload is for source checkouts only; P9_PACKAGED=1 lets a test see what a packaged build shows.
+  const source = !app.isPackaged && process.env.P9_PACKAGED !== '1';
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : [])] } }); // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : []), // the test runs click the shell straight away
+        ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -711,27 +717,49 @@ export async function createDesktop({ state, open } = {}) {
     await run('install-service.mjs', old);
     return { error: 'workspace-not-started', detail: why, workspace: (await health(state).catch(() => null))?.workspace ?? null };
   });
-  // Mission's "Restart P9 to apply" (M2): restarts the background service on the folder it already has; asks first, since running
-  // chats, scripts and terminals stop. Windows runs the installed copy's install-windows.ps1 as the launch repair does; the stop of the
-  // old daemon is that script's (chunk 2's W3 hardens the stop itself, this calls it and does not write another).
-  ipcMain.handle('p9:restart-service', async (event, ...args) => {
+  // Mission's "Restart P9 to apply" (M2) and Settings → Maintenance: restarts the background service on the folder it already
+  // has; asks first, since running chats, scripts and terminals stop. RS1: done only once /health names a new boot (teh.mjs).
+  // Repair (MT1) runs the installer again: install-windows.ps1, as the launch repair does, or the Linux unit enabled again
+  // (installed when it is missing). It is the way back for a task the installer left stale (Windows) without a reinstall.
+  const service = repair => async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
     if (!state) return { error: 'daemon-unavailable' };
     const win = process.platform === 'win32';
-    if (!win && process.platform !== 'linux') return { error: 'restart-unsupported' };
-    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart P9?', message: 'Restart P9\'s background service?',
-      detail: 'Running chats, scripts and terminals stop.', buttons: ['Cancel', 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
+    if (!win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
+    if (repair && win && !await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing' };
+    const { response } = await dialog.showMessageBox(window, { type: 'warning', title: repair ? 'Repair P9?' : 'Restart P9?',
+      message: repair ? 'Repair P9\'s background service?' : 'Restart P9\'s background service?',
+      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + 'Running chats, scripts and terminals stop.',
+      buttons: ['Cancel', repair ? 'Repair' : 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
     if (response !== 1) return { cancelled: true };
     // A daemon that does not answer at all is restarted anyway (finding 6: otherwise a hung service had no way back); one that
     // answers but cannot stop something is left running, as before.
     const stopped = await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => 'no-answer');
     if (stopped !== 'no-answer' && stopped?.status !== 200) return { error: 'stop-all-failed' };
-    if (win) {
-      changing = true;
-      // W3's restart: ends the task (the daemon and its host go with it), waits for the pipe, runs the task again.
-      try { return (await restartWindowsTask(state)) ? { restarted: true } : { error: 'restart-failed' }; } finally { changing = false; }
-    }
-    return await new Promise(resolve => execFile('systemctl', ['--user', 'restart', 'p9-foundation'], { timeout: 60_000 }, error => resolve(error ? { error: 'restart-failed' } : { restarted: true })));
+    if (!win) return repair ? repairLinuxService(state) : restartLinuxService(state);
+    changing = true;
+    try {
+      if (!repair) return await restartWindowsTask(state);
+      const before = await health(state).then(h => h.boot, () => null);
+      return await repairWindowsTask(process.resourcesPath) ? await answered(state, before) : { error: 'repair-failed', detail: 'install-windows.ps1 failed (service-install.log)' };
+    } finally { changing = false; }
+  };
+  ipcMain.handle('p9:restart-service', service(false));
+  ipcMain.handle('p9:repair-service', service(true));
+  // MT1 Rebuild + reload, source checkouts only: pnpm build in this checkout, then the window loads the new build. Chats live
+  // in the daemon and keep running; daemon code still needs Restart. P9_BUILD names another command (the tests' stand-in).
+  ipcMain.handle('p9:rebuild', async (event, ...args) => {
+    if (!fromApp(event) || args.length || !source) throw new Error('ipc-sender-refused');
+    rebuilding = true;
+    try {
+      const [command, more] = process.env.P9_BUILD ? [process.env.P9_BUILD, []] : ['pnpm', ['build']];
+      const built = await new Promise(resolve => execFile(command, more, { cwd: fileURLToPath(new URL('../../', import.meta.url)), timeout: 600_000, maxBuffer: 16 * 1024 * 1024 },
+        (error, _stdout, stderr) => resolve(error ? { error: 'build-failed', detail: String(stderr).trim().split('\n').slice(-3).join('\n').slice(0, 300) } : null)));
+      if (built) return built;
+      sites.app = await appSite();
+    } finally { rebuilding = false; }
+    window.webContents.reload();
+    return { rebuilt: true };
   });
   ipcMain.handle('p9:pet-remove', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -743,9 +771,10 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9:open-docs', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length) throw new Error('ipc-sender-refused');
-    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [DOCS_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
-    else await shell.openExternal(DOCS_URL);
+        || args.length > 1 || (args.length && !GUIDE_SECTIONS.includes(args[0]))) throw new Error('ipc-sender-refused');
+    const url = args.length ? GUIDE_URL + args[0] : DOCS_URL;
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(url);
     return { opened: true };
   });
   ipcMain.handle('p9:open-updates', async (event, ...args) => {
@@ -879,6 +908,7 @@ export async function createDesktop({ state, open } = {}) {
     let timer;
     watch(webDist, { recursive: true }, () => {
       clearTimeout(timer);
+      if (rebuilding) return; // p9:rebuild reloads once the build is done
       timer = setTimeout(() => appSite().then(site => { sites.app = site; window.webContents.reload(); }, () => {}), 800);
     });
   }

@@ -275,8 +275,8 @@ jobs:
           $kept = @((Get-Content $appPid), (Get-Content $childPid)) | ForEach-Object { [int]$_ }
           $old = (Get-Daemon).ProcessId
           $before = Get-Date
-          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { restartWindowsTask } = await import(pathToFileURL(process.argv[2]).href); process.exit(await restartWindowsTask(process.argv[1]) ? 0 : 1)" $state $teh
-          if ($LASTEXITCODE -ne 0) { throw 'restartWindowsTask failed' }
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { restartWindowsTask } = await import(pathToFileURL(process.argv[2]).href); const r = await restartWindowsTask(process.argv[1]); console.log('restart: ' + JSON.stringify(r)); process.exit(r.restarted ? 0 : 1)" $state $teh
+          if ($LASTEXITCODE -ne 0) { throw 'restartWindowsTask failed (restart: line above)' }
           Wait-Daemon $before
           Write-Output ('after restart: daemons {0} (old {1}), hosts {2}' -f ((Get-Daemon).ProcessId -join ','), ($old -join ','), (Get-DaemonHost).Count)
           if ((Get-Daemon).Count -ne 1 -or (Get-DaemonHost).Count -ne 1 -or ((Get-Daemon).ProcessId | Where-Object { $old -contains $_ })) { throw 'the restart did not leave exactly one new daemon and host' }

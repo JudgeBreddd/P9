@@ -335,6 +335,10 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 .set-group{border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px 10px;margin:0;display:grid;gap:8px}
 .set-group legend{padding:0 4px;font-size:12px;color:var(--muted-foreground)}
 #zVal{min-width:44px;text-align:center}
+.set-group legend{display:flex;align-items:center;gap:6px}
+/* HI1: the hover "i" (T-tracer's .info, in P9's colours) */
+.info{flex:0 0 auto;width:22px;height:22px;border-radius:50%;padding:0;background:transparent;border:1px solid var(--border);color:var(--muted-foreground);font-size:11px;font-style:italic;font-weight:600;line-height:1;display:flex;align-items:center;justify-content:center;cursor:help}
+.info:hover,.info:focus-visible{color:var(--foreground);border-color:var(--primary)}
 [data-focus-btn][hidden]{display:none}
 /* agent-working indicator (phase 18) */
 .agent-ind{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground);white-space:nowrap}
@@ -355,7 +359,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 #welDlg{width:min(560px,calc(100vw - 32px))}
 #welDlg .settings{display:grid;gap:12px}#welBody p{margin:0}
 #welBody .ok{color:var(--ok)}#welBody .warn{color:var(--warn)}#welBody span:is(.ok,.warn){white-space:nowrap}#welBody .mono{word-break:break-all}
-#welPetdex{color:var(--primary);text-decoration:underline}
+#welPetdex,#petdexLink{color:var(--primary);text-decoration:underline}
 #welBody .wiz-fail{display:grid;gap:4px;justify-items:start;border:1px solid var(--warn);border-radius:var(--radius);padding:8px 12px}
 #welCode{flex:1}#welFoot{display:flex;align-items:center;gap:8px}
 /* running chats in the rail (renderBots) */

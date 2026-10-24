@@ -8,13 +8,15 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   agentLogin: (...args) => ipcRenderer.invoke('p9:agent-login', ...args),
   workspaceChange: () => ipcRenderer.invoke('p9:workspace-change'),
   restartService: () => ipcRenderer.invoke('p9:restart-service'),
+  repairService: () => ipcRenderer.invoke('p9:repair-service'),
+  rebuild: () => ipcRenderer.invoke('p9:rebuild'),
   chat: (action, payload) => ipcRenderer.invoke('p9:chat', action, payload),
   lifecycle: (action, payload) => ipcRenderer.invoke('p9:lifecycle', action, payload),
   devView: (bounds) => ipcRenderer.invoke('p9:dev-view', bounds),
   look: (look) => ipcRenderer.invoke('p9:look', look),
   getSettings: () => ipcRenderer.invoke('p9:settings'),
   setSettings: (settings) => ipcRenderer.invoke('p9:settings', settings),
-  openDocs: () => ipcRenderer.invoke('p9:open-docs'),
+  openDocs: (section) => ipcRenderer.invoke('p9:open-docs', ...(section === undefined ? [] : [section])),
   openUpdates: () => ipcRenderer.invoke('p9:open-updates'),
   openPetdex: () => ipcRenderer.invoke('p9:open-petdex'),
   fileProtection: (...on) => ipcRenderer.invoke('p9:file-protection', ...on),
@@ -33,5 +35,6 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   onTerminal: (callback) => { ipcRenderer.on('p9:terminal', (_event, serial, message) => callback(serial, message)); },
   landing: !process.argv.includes('--p9-landing=off'),
   version: (process.argv.find(arg => arg.startsWith('--p9-version=')) || '').slice('--p9-version='.length),
+  source: process.argv.includes('--p9-source'), // a source checkout: Settings shows Rebuild + reload
   sample: ipcRenderer.sendSync('p9:sample'), // null unless an unpackaged test run set P9_SAMPLE_DATA=1
 }));

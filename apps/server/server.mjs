@@ -24,6 +24,9 @@ import { planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 
+// RS1: a restart is done when /health names a different boot, not when the old process is gone.
+const boot = { pid: process.pid, started: Date.now() };
+
 function equal(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   const left = Buffer.from(a), right = Buffer.from(b);
@@ -123,7 +126,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.onError(onError);
   // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
   // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, ...(savedWorkspace ? { savedWorkspace } : {}) }),
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
   api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));

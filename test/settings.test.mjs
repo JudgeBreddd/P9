@@ -1648,3 +1648,113 @@ test('Speed (E2): a listed chat the bridge will not narrow to still goes live, b
   await page.locator('#tabs .tab[data-id="' + real + '"]').waitFor();
   console.log('PASS E2 fallback: a chat ID the bridge refuses for only= falls back to the full replay; the desktop went live');
 });
+
+// MT1, HI1, ST3, ST4: Settings → Maintenance, the "i" on every row and the row order, through the desktop app. Main's
+// confirm answers Cancel here, so Restart and Repair show they asked without stopping the test's daemon (the restart
+// itself: maintenance.test.mjs).
+test('Settings → Maintenance: each button and its Ctrl K entry does its job, every row\'s "i" opens its guide section, Rebuild only in a source checkout', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-maintenance-'));
+  const opened = path.join(home, 'opened.txt'), built = path.join(home, 'built.txt'), browser = path.join(home, 'browser'), build = path.join(home, 'build');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" >> ' + opened + '\n');
+  await writeFile(build, '#!/bin/sh\npwd >> ' + built + '\n');
+  await chmod(browser, 0o755); await chmod(build, 0o755);
+  const lines = async (file) => (await readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+  const until = async (check, what) => {
+    for (const end = Date.now() + 10000; !await check(); await new Promise((resolve) => setTimeout(resolve, 100))) if (Date.now() > end) throw new Error('timed out: ' + what);
+  };
+  const launch = async (extra = {}) => {
+    const env = { ...process.env, P9_OPEN_URL: browser, P9_BUILD: build, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
+    const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile' + Object.keys(extra).length)], env, chromiumSandbox: true, timeout: 20000 });
+    const proc = app.process();
+    t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+    const page = await app.firstWindow();
+    await page.locator('#rChat').waitFor();
+    return { app, page };
+  };
+  const settingsOpen = async (page) => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); };
+  const palette = async (page, label) => { await page.evaluate(() => document.querySelector('#palette').open && document.querySelector('#palette').close()); await page.keyboard.press('Control+k'); await page.fill('#palIn', label); return page.locator('#palList li[data-i]', { hasText: label }); };
+  const ipc = (app, channel, ...args) => app.evaluate(({ ipcMain, BrowserWindow }, [channel, args]) => {
+    const sender = BrowserWindow.getAllWindows()[0].webContents;
+    return ipcMain._invokeHandlers.get(channel)({ sender, senderFrame: sender.mainFrame }, ...args).then(() => 'accepted', (error) => error.message);
+  }, [channel, args]);
+  const LABELS = ['Reload window', 'Refresh Mission', 'Restart daemon', 'Repair daemon service', 'Rebuild + reload'];
+
+  const { app, page } = await launch();
+  assert.equal(await page.evaluate(() => window.p9.source), true, 'a source checkout');
+  await app.evaluate(({ dialog }) => { globalThis.asked = []; dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.title); return { response: 0 }; }; });
+  await settingsOpen(page);
+  // ST3: Docs, Anymouse and Setup come first.
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody').firstElementChild.querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
+  // HI1: every top-level row, every group's legend and every Maintenance row has an "i" with a tip, and each opens a guide
+  // section main allows and docs/guide.md has.
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > .set-row, #setBody legend, #setBody fieldset:last-child .set-row')]
+    .filter((row) => !row.querySelector(':scope > .info[title]:not([title=""])')).map((row) => row.textContent.slice(0, 40))), []);
+  const sections = await page.evaluate(() => [...new Set([...document.querySelectorAll('#setBody [data-docs]')].map((b) => b.dataset.docs))]);
+  const allowed = JSON.parse(/GUIDE_SECTIONS = Object\.freeze\((\[[^\]]*\])\)/.exec(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'))[1].replaceAll("'", '"'));
+  const slugs = (await readFile(path.join(root, 'docs/guide.md'), 'utf8')).match(/^#{2,3} .*$/gm).map((h) => h.replace(/^#+ /, '').toLowerCase().replace(/[^\w\- ]/g, '').replaceAll(' ', '-'));
+  assert.deepEqual(sections.filter((s) => !allowed.includes(s)), [], 'every "i" opens a section main allows');
+  assert.deepEqual(allowed.filter((s) => !slugs.includes(s)), [], 'every allowed section is a heading in docs/guide.md');
+  assert.deepEqual(['settings', 'maintenance', 'agent-lock', 'pets', 'focus-modes'].filter((s) => !sections.includes(s)), []);
+  // A click on an "i" opens its section, and the checkbox in the same row stays as it was.
+  const locked = await page.locator('#setLock').isChecked();
+  await page.locator('#setLock').locator('xpath=..').locator('.info').click();
+  await page.locator('#setBody fieldset:last-child legend .info').click();
+  await until(async () => (await lines(opened)).length === 2, 'two guide sections opened');
+  assert.deepEqual(await lines(opened), ['https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#agent-lock', 'https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#maintenance']);
+  assert.equal(await page.locator('#setLock').isChecked(), locked);
+  // ST4: petdex.dev looks like the link it is, as in the setup wizard.
+  assert.deepEqual(await page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement('span')), link = getComputedStyle(document.querySelector('#petdexLink'));
+    probe.style.color = 'var(--primary)'; const primary = getComputedStyle(probe).color; probe.remove();
+    return [link.textDecorationLine, link.color === primary];
+  }), ['underline', true]);
+  // MT1: the five buttons, and no Updates row: this build has no updater (window.p9.updates; maintenance.test.mjs has the row).
+  assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), LABELS);
+  assert.deepEqual([await page.locator('#mtUpdText').count(), await page.locator('#setUpd').count()], [0, 1], 'the old Check for updates row stays');
+  await page.locator('#setBody fieldset:last-child').scrollIntoViewIfNeeded();
+  const png = await page.locator('#setDlg').screenshot({ type: 'png' });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-maintenance ' + png.toString('base64'));
+  // The page's own refusals: a section not in the guide's list, a second argument, arguments where none are taken.
+  assert.deepEqual([await ipc(app, 'p9:open-docs', 'nope'), await ipc(app, 'p9:open-docs', 'https://evil.example/'), await ipc(app, 'p9:open-docs', 'maintenance', 'x'),
+    await ipc(app, 'p9:open-docs', ['maintenance']), await ipc(app, 'p9:rebuild', 1), await ipc(app, 'p9:repair-service', 'x'), await ipc(app, 'p9:restart-service', {})],
+  Array(7).fill('ipc-sender-refused'));
+  assert.equal((await lines(opened)).length, 2, 'nothing more opened');
+
+  // Restart and Repair ask first (Cancel here), from the button and from Ctrl K.
+  await page.click('#mtRestart'); await page.click('#mtRepair');
+  await until(() => app.evaluate(() => globalThis.asked.length === 2), 'two confirms');
+  await page.click('#setClose');
+  await (await palette(page, 'Restart daemon')).click(); await (await palette(page, 'Repair daemon service')).click();
+  await until(() => app.evaluate(() => globalThis.asked.length === 4), 'four confirms');
+  assert.deepEqual(await app.evaluate(() => globalThis.asked), ['Restart P9?', 'Repair P9?', 'Restart P9?', 'Repair P9?']);
+  // Refresh Mission reads Mission Control again and says what it found, from the button and from Ctrl K.
+  // Counted as they appear: a notice fades out on its own.
+  await page.evaluate(() => { window.refreshed = 0; new MutationObserver((changes) => changes.forEach((c) => c.addedNodes.forEach((n) => { if (n.querySelector?.('.sub')?.textContent === 'mission') window.refreshed++; }))).observe(document.querySelector('#toasts'), { childList: true }); });
+  const missionToasts = () => page.evaluate(() => window.refreshed);
+  await settingsOpen(page); await page.click('#mtMission');
+  await until(async () => await missionToasts() === 1, 'a Refresh Mission notice');
+  await page.click('#setClose');
+  await (await palette(page, 'Refresh Mission')).click();
+  await until(async () => await missionToasts() === 2, 'a second Refresh Mission notice');
+  // Reload window loads the page again, from the button and from Ctrl K.
+  const reloads = async (go) => { await page.evaluate(() => { window.before = true; }); await Promise.all([page.waitForEvent('load', { timeout: 20000 }), go()]); await page.locator('#rChat').waitFor(); assert.equal(await page.evaluate(() => window.before), undefined); };
+  await settingsOpen(page); await reloads(() => page.click('#mtReload'));
+  await reloads(async () => (await palette(page, 'Reload window')).click());
+  // Rebuild + reload runs the build in this checkout, then loads the window again.
+  await settingsOpen(page); await reloads(() => page.click('#mtRebuild'));
+  await reloads(async () => (await palette(page, 'Rebuild + reload')).click());
+  assert.deepEqual((await lines(built)).map((dir) => path.resolve(dir)), [path.resolve(root), path.resolve(root)]);
+
+  // A packaged build: no Rebuild button, no Ctrl K entry, and main refuses it.
+  const packaged = await launch({ P9_PACKAGED: '1' });
+  assert.equal(await packaged.page.evaluate(() => window.p9.source), false);
+  await settingsOpen(packaged.page);
+  assert.deepEqual(await packaged.page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), LABELS.slice(0, 4));
+  await packaged.page.click('#setClose');
+  assert.equal(await (await palette(packaged.page, 'Rebuild')).count(), 0);
+  assert.equal(await (await palette(packaged.page, 'Restart daemon')).count(), 1);
+  await packaged.page.keyboard.press('Escape');
+  assert.equal(await ipc(packaged.app, 'p9:rebuild'), 'ipc-sender-refused');
+  assert.equal((await lines(built)).length, 2, 'nothing built');
+});

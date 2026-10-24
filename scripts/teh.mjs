@@ -7,6 +7,8 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
+import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
+import { childEnv } from '../apps/server/child-env.mjs';
 
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -95,34 +97,75 @@ export function windowsTask() {
 // the old task's workspace or makes %USERPROFILE%\P9; no admin, so no UAC prompt. It also starts the daemon. Its output
 // is added to service-install.log beside the app's exe, where the installer writes. resources: the app's resources folder.
 // workspace: Setup's Change the folder (threat model row 32) passes the new folder, the one thing the new task differs in.
+// BL8: the script gets the allowlist every P9 child gets (child-env.mjs) and the few more Windows names it or its task
+// cmdlets read, never the app's whole environment.
+const REPAIR_EXTRA = ['PROCESSOR_ARCHITECTURE', 'SystemDrive', 'ProgramFiles', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH'];
+export const repairEnv = (source = process.env) => ({ ...childEnv(source, 'win32'),
+  ...Object.fromEntries(Object.entries(source).filter(([key]) => REPAIR_EXTRA.some((name) => name.toLowerCase() === key.toLowerCase()))) });
 export function repairWindowsTask(resources, workspace) {
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-InputFormat', 'None', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe'),
     ...(workspace ? ['-Workspace', workspace] : [])],
-  { encoding: 'utf8', timeout: 120000, windowsHide: true }, (error, stdout, stderr) =>
+  { encoding: 'utf8', timeout: 120000, windowsHide: true, env: repairEnv() }, (error, stdout, stderr) =>
     writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# ${workspace ? 'workspace change' : 'repair'} by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
       .catch(() => {}).then(() => resolve(!error))));
 }
 
+// RS1: a restart is done when /health answers with a boot other than the one before it (the old daemon's, or none when it
+// was not answering); a service that started but never answers is reported, not called restarted. Up to 90 s, the most a
+// first start has taken on CI (Wait-Daemon). Resolves { restarted: true } or { error }.
+export async function answered(state, before, ms = 90_000) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 500))) {
+    const boot = await health(state).then((h) => h.boot, () => null);
+    if (boot && (boot.pid !== before?.pid || boot.started !== before?.started)) return { restarted: true };
+  }
+  return { error: 'daemon-not-answering' };
+}
+
 // Restarts the 'P9 Foundation' task (W3): /End stops its conhost, the host sees its parent gone and closes the job, which
-// ends node.exe; the old socket is waited out (up to 15 s) so the next start does not hit daemon-already-running. Call it
-// from outside the daemon's job (the desktop app), never from the daemon. state: the runtime folder.
-export async function restartWindowsTask(state) {
+// ends node.exe. The daemon's lock pipe (main.mjs) is waited out, up to 15 s, so the next start does not hit
+// daemon-already-running: the API pipe can close before the lock does. Call it from outside the daemon's job (the desktop
+// app), never from the daemon. state: the runtime folder.
+export async function restartWindowsTask(state, ms) {
   const schtasks = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'schtasks.exe');
   const run = (args) => new Promise((resolve) => execFile(schtasks, args, { timeout: 30000, windowsHide: true }, (error) => resolve(!error)));
+  const before = await health(state).then((h) => h.boot, () => null);
   await run(['/End', '/TN', 'P9 Foundation']);
-  const socketPath = await readFile(path.join(state, 'desktop.json'), 'utf8').then((text) => JSON.parse(text).socketPath, () => null);
-  for (let tries = 0; socketPath && tries < 60; tries++) {
+  const lock = windowsLockEndpoint(windowsStateRoot());
+  for (let tries = 0; ; tries++) {
     const gone = await new Promise((resolve) => {
-      const socket = connect(socketPath);
+      const socket = connect(lock);
       socket.once('connect', () => { socket.destroy(); resolve(false); });
       socket.once('error', (error) => resolve(error.code === 'ENOENT'));
     });
     if (gone) break;
+    if (tries === 60) return { error: 'daemon-did-not-stop' };
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  return run(['/Run', '/TN', 'P9 Foundation']);
+  if (!await run(['/Run', '/TN', 'P9 Foundation'])) return { error: 'restart-failed' };
+  return answered(state, before, ms);
+}
+
+// The same on Linux: the p9-foundation user unit, restarted by systemd. No unit means there is nothing to restart
+// (install-service.mjs makes one). Resolves { restarted: true } or { error }.
+const systemctl = (...args) => new Promise((resolve) => execFile('systemctl', ['--user', ...args], { timeout: 60_000 }, (error) => resolve(!error)));
+export async function restartLinuxService(state, ms) {
+  if (!await systemctl('cat', 'p9-foundation.service')) return { error: 'service-missing' };
+  const before = await health(state).then((h) => h.boot, () => null);
+  if (!await systemctl('restart', 'p9-foundation.service')) return { error: 'restart-failed' };
+  return answered(state, before, ms);
+}
+
+// Repair on Linux (MT1): the unit enabled and started again from its own file (daemon-reload, and reset-failed after a crash
+// loop), so its drop-ins (phone flags, the GitHub token) stay. No unit: the installer's command, since a daemon this page talks
+// to without a unit was started by hand and holds the lock a new unit would need.
+export async function repairLinuxService(state, ms) {
+  if (!await systemctl('cat', 'p9-foundation.service')) return { error: 'service-missing', detail: 'run node scripts/install-service.mjs <workspace folder>' };
+  const before = await health(state).then((h) => h.boot, () => null);
+  for (const args of [['daemon-reload'], ['reset-failed', 'p9-foundation.service'], ['enable', 'p9-foundation.service']]) await systemctl(...args);
+  if (!await systemctl('restart', 'p9-foundation.service')) return { error: 'repair-failed' };
+  return answered(state, before, ms);
 }
 
 // Windows has no unit or journal: the task stands in for the unit (SubState conhost is this version's task, powershell
