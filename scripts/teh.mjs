@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { connect } from 'node:net';
-import { readFile, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile, execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
 import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
@@ -110,6 +111,62 @@ export function repairWindowsTask(resources, workspace) {
   { encoding: 'utf8', timeout: 120000, windowsHide: true, env: repairEnv() }, (error, stdout, stderr) =>
     writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# ${workspace ? 'workspace change' : 'repair'} by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
       .catch(() => {}).then(() => resolve(!error))));
+}
+
+// AU4 (Linux AppImage): the daemon cannot run from the AppImage's mount, which goes away when the app quits. Each version is
+// copied to <share>/daemon/<version> (.complete written last), daemon/current names the one launcher/p9-launch.sh starts,
+// and when current changes only it and the one it replaced are kept (a rollback goes back to that). source: the
+// resources/daemon folder. Returns { version, previous }.
+export async function stageDaemon(source, share) {
+  const version = JSON.parse(await readFile(path.join(source, 'package.json'), 'utf8')).version;
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('version-unreadable');
+  const daemons = path.join(share, 'daemon'), target = path.join(daemons, version), current = path.join(daemons, 'current');
+  await mkdir(daemons, { recursive: true, mode: 0o700 });
+  if (!await stat(path.join(target, '.complete')).catch(() => null)) {
+    for (const folder of [target + '.tmp', target]) await rm(folder, { recursive: true, force: true });
+    await cp(source, target + '.tmp', { recursive: true });
+    await writeFile(path.join(target + '.tmp', '.complete'), '');
+    await rename(target + '.tmp', target);
+  }
+  const launcher = path.join(share, 'launcher', 'p9-launch.sh');
+  await mkdir(path.dirname(launcher), { recursive: true, mode: 0o700 });
+  await copyFile(path.join(target, 'scripts', 'launcher', 'p9-launch.sh'), launcher + '.tmp');
+  await chmod(launcher + '.tmp', 0o755);
+  await rename(launcher + '.tmp', launcher);
+  const previous = (await readFile(current, 'utf8').catch(() => '')).trim();
+  await writeFile(current + '.tmp', version);
+  await rename(current + '.tmp', current);
+  // A second start of the same version keeps the one before it.
+  if (previous !== version) for (const name of await readdir(daemons)) {
+    if (![version, previous, 'current'].includes(name)) await rm(path.join(daemons, name), { recursive: true, force: true }).catch(() => {});
+  }
+  return { version, previous };
+}
+
+// The AppImage's start: copies its daemon (stageDaemon), then installs the p9-foundation unit with ~/P9 as the workspace
+// if there is none, or restarts a launcher unit onto a new version. A unit without the launcher is a source checkout's,
+// never touched. Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
+// ponytail: tmux missing means no unit (install-service.mjs refuses); the log says so, the page says daemon-unreachable.
+export async function appImageService(resources) {
+  const share = path.join(os.homedir(), '.local', 'share', 'p9'), log = path.join(share, 'service-install.log');
+  const say = (text) => appendFile(log, new Date().toISOString() + ' ' + text + '\n').catch(() => {});
+  try {
+    const { version, previous } = await stageDaemon(path.join(resources, 'daemon'), share);
+    const unit = await readFile(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service'), 'utf8').catch(() => null);
+    const dir = path.join(share, 'daemon', version);
+    // The AppImage's own folders on PATH are gone once it quits; the unit keeps the rest (install-service.mjs).
+    const env = { ...process.env, PATH: (process.env.PATH ?? '').split(':').filter((entry) => !process.env.APPDIR || !entry.startsWith(process.env.APPDIR)).join(':') };
+    const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
+      say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
+    await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    if (unit === null) {
+      const workspace = path.join(os.homedir(), 'P9');
+      await mkdir(workspace, { recursive: true });
+      return await run(path.join(dir, 'node'), [path.join(dir, 'scripts', 'install-service.mjs'), workspace]);
+    }
+    if (!unit.includes(path.join(share, 'launcher', 'p9-launch.sh'))) return await say("a source checkout's unit; left as it is");
+    if (previous !== version) return await run('systemctl', ['--user', 'restart', 'p9-foundation.service']);
+  } catch (error) { await say('failed: ' + error.message); }
 }
 
 // RS1: a restart is done when /health answers with a boot other than the one before it (the old daemon's, or none when it

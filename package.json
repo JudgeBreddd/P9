@@ -38,27 +38,23 @@
     "gate:16": "node scripts/with-tmp.mjs node scripts/gate.mjs --phase16",
     "gate:17": "node scripts/with-tmp.mjs node scripts/gate.mjs --phase17",
     "build:dev": "vite build --config apps/dev/vite.config.mjs",
+    "package:linux": "node scripts/package-linux.mjs",
     "package:win": "node scripts/package-windows.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.88.0",
     "@agentclientprotocol/codex-acp": "2.1.1",
     "@agentclientprotocol/sdk": "1.8.0",
-    "@astrojs/react": "7.1.0",
     "@codingame/monaco-vscode-explorer-service-override": "33.0.9",
     "@hono/node-server": "2.1.4",
     "@simplewebauthn/server": "14.0.3",
-    "@xterm/xterm": "6.1.0-beta.219",
-    "astro": "7.4.0",
-    "codemirror": "6.0.2",
+    "electron-updater": "6.8.9",
     "hono": "4.13.13",
-    "marked": "14.0.0",
-    "react": "19.3.1",
-    "react-dom": "19.3.1",
     "ws": "8.22.0"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
+    "@astrojs/react": "7.1.0",
     "@codingame/monaco-vscode-api": "33.0.9",
     "@codingame/monaco-vscode-authentication-service-override": "33.0.9",
     "@codingame/monaco-vscode-configuration-service-override": "33.0.9",
@@ -101,7 +97,13 @@
     "@playwright/test": "1.64.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "@xterm/xterm": "6.1.0-beta.219",
+    "astro": "7.4.0",
+    "codemirror": "6.0.2",
     "electron": "44.7.2",
+    "marked": "14.0.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "rolldown": "1.2.14",
     "typescript": "6.0.3",
     "vite": "8.3.4",
@@ -122,6 +124,7 @@
       "apps/web/dist/**",
       "apps/dev/dist/**",
       "apps/server/child-env.mjs",
+      "apps/server/anymouse.mjs",
       "packages/protocol/**",
       "scripts/teh.mjs",
       "apps/server/process-tree.mjs",
@@ -135,10 +138,6 @@
       {
         "from": ".build/licenses",
         "to": "licenses"
-      },
-      {
-        "from": ".build/node-win/node.exe",
-        "to": "daemon/node.exe"
       },
       {
         "from": "packages",
@@ -170,7 +169,32 @@
           ]
         }
       ],
-      "artifactName": "p9-event-horizon-${version}-windows-${arch}.${ext}"
+      "artifactName": "p9-event-horizon-${version}-windows-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": ".build/node-win/node.exe",
+          "to": "daemon/node.exe"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "executableName": "p9-event-horizon",
+      "category": "Development",
+      "artifactName": "p9-event-horizon-${version}-linux-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": ".build/node-linux/bin/node",
+          "to": "daemon/node"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

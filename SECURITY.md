@@ -482,7 +482,7 @@ alt text (threat model row 26).
 ## Outbound requests a reader of this file should know about
 
 Things P9 does that reach the network or a host outside your machine, each covered
-in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28):
+in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28, 39):
 
 - **Pets (petdex).** Settings > Pets fetches petdex.dev's manifest (https only, capped) and,
   for a pet found there, its `pet.json` and spritesheet from `https://assets.petdex.dev` only;
@@ -498,12 +498,42 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28)
   VS Code. Their scripts run, and their files come from the editor host; a request for them
   that would leave the machine is cancelled. All extension pages share that one origin.
 - **Check for updates.** Settings > Check for updates opens P9's newest GitHub release
-  (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser; GitHub's sign-in and the
-  download happen there. P9 itself sends nothing, downloads nothing and keeps no GitHub token
-  (threat model row 28).
+  (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser (threat model row 28).
+- **Auto-update.** The installed app (Windows installer, Linux AppImage) asks GitHub for P9's
+  newest release, downloads it and installs it when you quit; see Auto-update below (threat
+  model row 39). A source checkout never does.
 - **Landing page name.** The landing greeting's name comes from Settings (or your account's
   first name, once, if the file is new); it is shown as text on your own screen and never sent
   anywhere.
+
+## Auto-update
+
+The installed app updates itself from P9's public GitHub Releases (threat model row 39). It uses
+electron-updater, Stable releases only: a draft or a pre-release is never offered, and an older
+version never replaces a newer one.
+
+- **What is downloaded.** `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the newest
+  version, its file and that file's sha512; then the Windows installer `.exe` (with its `.blockmap`, so
+  only the changed parts download) or the `.AppImage`. Nothing else.
+- **From where.** `https://github.com` and GitHub's download host, over HTTPS, for the one repository
+  P9 is published from. No sign-in, no token, no account: the release is public. GitHub learns your IP
+  address, that P9 checked, and when.
+- **When.** Shortly after the app starts and every few hours while it is open. A found update downloads
+  in the background and installs when you quit the app, or at once from Settings > Maintenance >
+  Updates. Installing restarts the background service on the new version, which ends a chat turn in
+  progress; on Linux the restart happens the next time the AppImage starts.
+- **How it is checked.** The downloaded file's sha512 must equal the one in `latest*.yml`, or it is
+  thrown away. P9's builds are not code-signed, so there is no publisher signature to check: the
+  sha512 proves the file is the one the release names, not who made the release.
+- **When it is off.** Running from a source checkout (`!app.isPackaged`), a build without
+  `resources/app-update.yml`, and on Linux any run that is not the AppImage. Settings shows the
+  Updates row as off and says why.
+- **What a person who controls a release can do.** Anyone who can publish a release in P9's repository
+  (the owner's GitHub account, or the CI token that uploads the files) can ship any program, and every
+  installed P9 will download it and run it as you, with everything you can reach. HTTPS and the sha512
+  stop a change on the way; they do not stop a bad release. Protecting that account and that token is
+  what protects you. If you would rather check each version yourself, use a source checkout, which
+  never updates on its own.
 
 ## Phase 12 adversarial results
 

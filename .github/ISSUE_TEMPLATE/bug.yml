@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in P9 does not work the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what P9 did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Mission Control
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: P9 version
+      placeholder: 0.1.5
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How P9 is installed
+      options:
+        - Windows installer (x64)
+        - Windows installer (arm64)
+        - Linux AppImage
+        - Linux, from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version, if the bug involves one
+      placeholder: Claude Code 2.x, Codex 0.x, ...
+  - type: textarea
+    id: doctor
+    attributes:
+      label: teh doctor output
+      description: >-
+        On Linux, `pnpm teh doctor --state "$XDG_RUNTIME_DIR/p9-foundation"` (README, Install on Linux) prints a
+        redacted bundle: no file contents, keys or tokens. Read it before you paste it.
+      render: text

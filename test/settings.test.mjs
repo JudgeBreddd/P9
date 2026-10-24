@@ -9,12 +9,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
+import { REPO } from '../apps/server/anymouse.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
 const PETS = { chat: look(true), dev: look(false), mission: look(false) };
 const SKIPPER = { system: 'skipper' }, DEFAULT_PETS = { chat: look(true, SKIPPER), dev: look(false, SKIPPER), mission: look(false, SKIPPER) };
-const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme'; // main.mjs loads only inside Electron
-const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
+const DOCS_URL = 'https://github.com/' + REPO + '#readme'; // main.mjs loads only inside Electron
+const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 const PETDEX_URL = 'https://petdex.dev';
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -1701,7 +1702,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   await page.locator('#setLock').locator('xpath=..').locator('.info').click();
   await page.locator('#setBody fieldset:last-child legend .info').click();
   await until(async () => (await lines(opened)).length === 2, 'two guide sections opened');
-  assert.deepEqual(await lines(opened), ['https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#agent-lock', 'https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#maintenance']);
+  assert.deepEqual(await lines(opened), ['https://github.com/' + REPO + '/blob/main/docs/guide.md#agent-lock', 'https://github.com/' + REPO + '/blob/main/docs/guide.md#maintenance']);
   assert.equal(await page.locator('#setLock').isChecked(), locked);
   // ST4: petdex.dev looks like the link it is, as in the setup wizard.
   assert.deepEqual(await page.evaluate(() => {
@@ -1709,9 +1710,9 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
     probe.style.color = 'var(--primary)'; const primary = getComputedStyle(probe).color; probe.remove();
     return [link.textDecorationLine, link.color === primary];
   }), ['underline', true]);
-  // MT1: the five buttons, and no Updates row: this build has no updater (window.p9.updates; maintenance.test.mjs has the row).
-  assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), LABELS);
-  assert.deepEqual([await page.locator('#mtUpdText').count(), await page.locator('#setUpd').count()], [0, 1], 'the old Check for updates row stays');
+  // MT1: the Updates row's Check now, off in a source checkout, then the five buttons (maintenance.test.mjs has the row's states).
+  assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
+  assert.deepEqual([await page.locator('#mtUpdCheck').isDisabled(), await page.locator('#setUpd').count()], [true, 1], 'updates off; the old Check for updates row stays');
   await page.locator('#setBody fieldset:last-child').scrollIntoViewIfNeeded();
   const png = await page.locator('#setDlg').screenshot({ type: 'png' });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-maintenance ' + png.toString('base64'));
@@ -1750,7 +1751,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   const packaged = await launch({ P9_PACKAGED: '1' });
   assert.equal(await packaged.page.evaluate(() => window.p9.source), false);
   await settingsOpen(packaged.page);
-  assert.deepEqual(await packaged.page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), LABELS.slice(0, 4));
+  assert.deepEqual(await packaged.page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
   await packaged.page.click('#setClose');
   assert.equal(await (await palette(packaged.page, 'Rebuild')).count(), 0);
   assert.equal(await (await palette(packaged.page, 'Restart daemon')).count(), 1);

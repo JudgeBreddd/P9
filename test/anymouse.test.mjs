@@ -9,7 +9,7 @@ import { _electron } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
-import { createAnymouse, NEW_ISSUE } from '../apps/server/anymouse.mjs';
+import { createAnymouse, NEW_ISSUE, REPO } from '../apps/server/anymouse.mjs';
 
 const TOKEN = 'ghp_' + 'x'.repeat(36);
 async function fakeGitHub(t, status = 201) {
@@ -20,7 +20,7 @@ async function fakeGitHub(t, status = 201) {
     req.on('end', () => {
       seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, body: JSON.parse(text) });
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ number: 7, html_url: 'https://github.com/JudgeBreddd/p9/issues/7' }));
+      res.end(JSON.stringify({ number: 7, html_url: 'https://github.com/' + REPO + '/issues/7' }));
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -35,10 +35,10 @@ test('Anymouse through the daemon: token files an issue, no token returns the pr
   const gh = await fakeGitHub(t);
   const withToken = await daemon(t, undefined, false, () => ({ env: { P9_GITHUB_TOKEN: TOKEN, P9_GITHUB_API: gh.api } }));
   const filed = await call(withToken, { kind: 'bug', text: 'Save button @tyler\nsecond line', page: 'chat' });
-  assert.deepEqual(filed, { status: 200, body: { ok: true, number: 7, url: 'https://github.com/JudgeBreddd/p9/issues/7' } });
+  assert.deepEqual(filed, { status: 200, body: { ok: true, number: 7, url: 'https://github.com/' + REPO + '/issues/7' } });
   assert.equal(gh.seen.length, 1);
   const [req] = gh.seen;
-  assert.equal(req.url, '/repos/JudgeBreddd/p9/issues');
+  assert.equal(req.url, '/repos/' + REPO + '/issues');
   assert.equal(req.auth, 'Bearer ' + TOKEN);
   assert.deepEqual(req.body.labels, ['bug']);
   assert.equal(req.body.title, 'Bug: Save button @​tyler');

@@ -31,7 +31,7 @@ machine), need a sandbox for your agents (the workspace bounds P9's own file rou
 and buttons run as you), or need a signed, audited installer (v1 is an unsigned beta for testers).
 
 **You need:** Linux with a graphical session and systemd user services (or Windows, per-user install, no
-admin), the Claude and/or Codex CLI already signed in, and access to this private repo. Dev Focus also needs
+admin), and the Claude and/or Codex CLI already signed in. Dev Focus also needs
 VSCodium's remote server at one pinned release. Full list: [Requirements](#requirements).
 
 **Real cost:** P9 itself is free under PolyForm Shield (see [Licenses](#licenses)); you pay for your own
@@ -40,17 +40,27 @@ missing); install time was not measured.
 
 ## Install
 
-The repository is private: you need a GitHub account with access to `JudgeBreddd/p9`.
+The repository is public: downloading and updating need no GitHub account.
 
 **Windows**
 
-1. Signed in to GitHub, open [the releases page](https://github.com/JudgeBreddd/p9/releases) and download
+1. Open [the releases page](https://github.com/JudgeBreddd/p9/releases) and download
    `p9-event-horizon-<version>-windows-x64.exe` from the newest release, or `...-windows-arm64.exe` on an ARM
    laptop (Snapdragon; Settings > System > About says "ARM-based processor").
 2. Double-click it. The installer is unsigned, so SmartScreen says "Windows protected your PC": click
    **More info**, then **Run anyway**, and click through the installer. Checking the download first is
    recommended (next section).
-3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows).
+3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows). From then on it updates
+   itself: [Update, roll back, uninstall](#update-roll-back-uninstall).
+
+**Linux AppImage** (x64, from the release after v0.1.4)
+
+Install `tmux`, download `p9-event-horizon-<version>-linux-x64.AppImage` from the same page, then
+`chmod +x` it and run it. On its first start it copies its daemon to `~/.local/share/p9/daemon` and installs the
+`p9-foundation` user service with `~/P9` as the workspace; without tmux it installs nothing and says
+`tmux-required`. If it already finds a `p9-foundation` service from a source install, it leaves that alone. On
+Ubuntu 23.10 and newer, AppArmor can stop an AppImage's sandbox from starting: allow it with an AppArmor
+profile for the file, never with `--no-sandbox`. Like the Windows app, it updates itself.
 
 **Linux**
 
@@ -258,7 +268,9 @@ user only and registers a per-user Scheduled Task, `P9 Foundation`, for the daem
 On the first install its workspace is a new, empty `%USERPROFILE%\P9`, and an update keeps the folder the task
 already has. To use another folder, run `resources\daemon\scripts\install-windows.ps1 -Workspace
 <folder>` from the install folder in PowerShell (it replaces the task). Without `%APPDATA%\P9\settings.json` the daemon still starts and Mission Control says
-`settings-missing`. Uninstalling stops and removes the task; your state in `%LOCALAPPDATA%\P9` stays. Building the installer needs Windows:
+`settings-missing`. The task runs a small launcher from `%LOCALAPPDATA%\P9\launcher`, which starts the daemon
+copy in `%LOCALAPPDATA%\P9\daemon\<version>` (the newest two are kept). Uninstalling stops and removes the task,
+the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` stays. Building the installer needs Windows:
 `pnpm package:win` there writes the installer for that machine's architecture and its `SHA256SUMS-<arch>` to
 `dist/windows/`.
 
@@ -357,6 +369,15 @@ already has. To use another folder, run `resources\daemon\scripts\install-window
 
 ## Update, roll back, uninstall
 
+- **Installed app (Windows, AppImage):** it checks P9's GitHub releases shortly after it starts and every 4
+  hours, takes only releases that are not pre-releases, downloads a newer one in the background and installs it
+  when you quit, or at once from Settings > Maintenance > Updates. Installing restarts the daemon on the new
+  version, which ends a chat turn in progress (reopen it to resume). What it downloads and how that is checked:
+  `SECURITY.md` § Auto-update. Remove the AppImage's service with
+  `node ~/.local/share/p9/daemon/<version>/scripts/uninstall-service.mjs`, then delete the AppImage.
+
+A source checkout never updates itself:
+
 - **Update:** `git pull && pnpm install --frozen-lockfile && pnpm build`, then
   `systemctl --user restart p9-foundation`. Before a new build changes the state database, it copies
   the old one to `p9.db.v<N>.bak` beside it. A migration that dies halfway is undone on the next start.
@@ -414,8 +435,9 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
   daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
-  branch other than `main`; the Windows installer is built, installed, restarted and uninstalled on GitHub's
-  Windows runner when asked (Actions, Windows installer, Run workflow; a runner session, not a real desktop).
+  branch other than `main`; on the same pushes the Windows installers (x64 and arm64) are built, installed,
+  updated, restarted and uninstalled on GitHub's Windows runners, and the AppImage is built and checked on
+  Ubuntu (Actions, Installers; a runner session, not a real desktop).
 - **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
   that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`).
 - **Not supported:** macOS.

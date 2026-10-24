@@ -16,7 +16,8 @@ const skip = !['linux', 'win32'].includes(process.platform) || !existsSync(host)
 const uriPath = file => (win ? '/' + file.replaceAll('\\', '/') : file);
 const folderLink = (target, link) => symlink(target, link, win ? 'junction' : undefined);
 const sddl = file => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Acl -LiteralPath '${file}').Sddl`], { encoding: 'utf8' }).stdout.trim();
-const userSid = () => /"(S-1-[\d-]+)"/.exec(spawnSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).stdout)[1];
+// The token user as SDDL text writes it: the SID, or LA for the built-in Administrator (RID 500, the GitHub Windows runner).
+const userSid = () => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(New-Object Security.AccessControl.RawSecurityDescriptor('O:' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)).GetSddlForm('Owner').Substring(2)"], { encoding: 'utf8' }).stdout.trim();
 // A stand-in Windows host: the layout editor-host.mjs runs (node.exe, out\server-main.js), with a script that records its
 // pid and args and never prints the listening line.
 async function fakeWindowsHost(prefix) {

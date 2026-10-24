@@ -115,7 +115,9 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}([^]*?\} catch \{[^\n]*\})?\s*\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
   // Issue #6 B6 and B4: timestamped lines and the failing line in service-install.log; the task's daemon writes daemon.log.
   assert.match(ps1, /^trap \{ Say \('failed at line '/m);
-  assert.match(ps1, /'-Mode', 'Daemon', '-Log', \('"' \+ \$log \+ '"'\)/);
+  // AU4: the installed app's task runs the launcher, which passes -Mode Daemon itself; a source run's runs the host.
+  assert.match(ps1, /\$hostArguments = @\('-Mode', 'Daemon'\)[^]*\$hostScript = \$launcher\s+\$hostArguments = @\(\)/);
+  assert.match(ps1, /\$hostArguments \+ @\('-Log', \('"' \+ \$log \+ '"'\)/);
   // Issue #6 B10: the installer stops the old task and daemon before it replaces files, as the uninstaller does.
   const init = nsh.slice(nsh.indexOf('!macro customInit'));
   assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);

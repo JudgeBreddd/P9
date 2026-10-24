@@ -6,26 +6,28 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
+import { startUpdater, updateAction } from './updater.mjs';
+import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 
 export const APP_URL = 'p9://app/';
 export const DEV_URL = 'p9://dev/';
 export const WEBVIEW_URL = 'p9://webview/';
-export const DOCS_URL = 'https://github.com/JudgeBreddd/p9#readme';
+export const DOCS_URL = 'https://github.com/' + REPO + '#readme';
 // HI1: a Settings row's "i" opens its part of the guide (docs/guide.md headings); any other section is refused.
-export const GUIDE_URL = 'https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#';
+export const GUIDE_URL = 'https://github.com/' + REPO + '/blob/main/docs/guide.md#';
 export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance']);
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
-export const RELEASES_URL = 'https://github.com/JudgeBreddd/p9/releases/latest';
+export const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 // Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
 export const PETDEX_URL = 'https://petdex.dev';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
-export const FILE_PROTECTION_DOCS = 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection';
+export const FILE_PROTECTION_DOCS = 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection';
 export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here and on your paired phone, from opening or changing your secrets '
   + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons.\n\n'
   + 'With it off, one wrong save can break those files, and anyone holding your unlocked, paired phone can read or change them, keys included.\n\n'
@@ -164,6 +166,9 @@ export async function createDesktop({ state, open } = {}) {
     if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
   };
   if (process.platform === 'win32' && state) health(state).catch(wake);
+  // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
+  // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
+  if (process.platform === 'linux' && app.isPackaged && process.env.APPIMAGE) appImageService(process.resourcesPath);
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
@@ -257,8 +262,7 @@ export async function createDesktop({ state, open } = {}) {
     catch { return { status: 503, body: { state: 'unavailable' } }; }
   });
   // Anymouse: the daemon files the note, or answers with GitHub's prefilled new-issue page for P9's repo, which only
-  // this exact prefix may open (in the user's browser). ponytail: P9_OPEN_URL swaps the browser for a test logger.
-  const NEW_ISSUE = 'https://github.com/JudgeBreddd/p9/issues/new?';
+  // this exact prefix (anymouse.mjs NEW_ISSUE) may open (in the user's browser). ponytail: P9_OPEN_URL swaps the browser for a test logger.
   ipcMain.handle('p9:anymouse', async (event, ...args) => {
     const [payload] = args;
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -701,7 +705,12 @@ export async function createDesktop({ state, open } = {}) {
     // The unit as install-service.mjs quoted it: ExecStart's node and server, and Environment's PATH.
     const unit = await readFile(path.join(os.homedir(), '.config', 'systemd', 'user', 'p9-foundation.service'), 'utf8').catch(() => '');
     const unquote = s => s.replace(/\\(.)/g, '$1').replaceAll('%%', '%').replaceAll('$$', '$');
-    const [node, server] = [...(unit.match(/^ExecStart=(.*)$/m)?.[1] ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m => unquote(m[1]));
+    let [node, server] = [...(unit.match(/^ExecStart=(.*)$/m)?.[1] ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m => unquote(m[1]));
+    // The AppImage's unit (AU4) starts with the launcher, and the version it names may be gone since: daemon/current's.
+    if (node?.endsWith('/launcher/p9-launch.sh')) {
+      const share = path.dirname(path.dirname(node)), version = (await readFile(path.join(share, 'daemon', 'current'), 'utf8').catch(() => '')).trim();
+      [node, server] = version ? [path.join(share, 'daemon', version, 'node'), path.join(share, 'daemon', version, 'apps', 'server', 'main.mjs')] : [];
+    }
     const unitPath = unit.match(/^Environment="PATH=((?:[^"\\]|\\.)*)"$/m)?.[1];
     if (!server) return { error: 'service-missing', workspace: old };
     // Stop All first, so a daemon that cannot stop its chats leaves everything as it was.
@@ -783,6 +792,15 @@ export async function createDesktop({ state, open } = {}) {
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [RELEASES_URL], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(RELEASES_URL);
     return { opened: true };
+  });
+  // Auto-update (threat model row 39): off unless this is an installed build with a feed (updater.mjs); its lines go to
+  // p9-update.log in the profile folder. ponytail: never rotated, a few lines per check.
+  const updater = startUpdater({ app, version,
+    log: line => appendFile(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {}) });
+  ipcMain.handle('p9:updates', async (event, ...args) => {
+    const action = updateAction(args);
+    if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');
+    return (await updater)[action]();
   });
   ipcMain.handle('p9:open-petdex', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL

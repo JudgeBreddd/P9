@@ -30,11 +30,15 @@
   ${EndIf}
   ; Stop-ScheduledTask ends only conhost.exe, the task's process; the PowerShell host and the daemon outlive it (GitHub run
   ; 39540753837). So the daemon's own node.exe is ended too; its host then exits and its Job Object ends the daemon's children.
-  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -InputFormat None -Command "Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter 'Name = ''node.exe''' | Where-Object { $$_.ExecutablePath -eq '$INSTDIR\resources\daemon\node.exe' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  ; It runs from %LOCALAPPDATA%\P9\daemon\<version> (AU4, install-windows.ps1), or the install folder (v0.1.4 and before).
+  ; A real uninstall also removes those copies and the launcher; an update keeps them (install-windows.ps1 keeps two).
+  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -InputFormat None -Command "Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter 'Name = ''node.exe''' | Where-Object { $$_.ExecutablePath -eq '$INSTDIR\resources\daemon\node.exe' -or $$_.ExecutablePath -like ($$env:LOCALAPPDATA + '\P9\daemon\*\node.exe') } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
   Pop $0
   ${ifNot} ${isUpdated}
     nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -InputFormat None -Command "Unregister-ScheduledTask -TaskName 'P9 Foundation' -Confirm:$$false -ErrorAction SilentlyContinue"`
     Pop $0
+    RMDir /r "$LOCALAPPDATA\P9\daemon"
+    RMDir /r "$LOCALAPPDATA\P9\launcher"
   ${endIf}
   ${If} ${RunningX64}
     ${EnableX64FSRedirection}
@@ -53,7 +57,7 @@
   ${If} ${RunningX64}
     ${DisableX64FSRedirection}
   ${EndIf}
-  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -InputFormat None -Command "Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter 'Name = ''node.exe''' | Where-Object { $$_.ExecutablePath -eq '$INSTDIR\resources\daemon\node.exe' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -InputFormat None -Command "Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter 'Name = ''node.exe''' | Where-Object { $$_.ExecutablePath -eq '$INSTDIR\resources\daemon\node.exe' -or $$_.ExecutablePath -like ($$env:LOCALAPPDATA + '\P9\daemon\*\node.exe') } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
   Pop $0
   ${If} ${RunningX64}
     ${EnableX64FSRedirection}

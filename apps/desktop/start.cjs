@@ -4,7 +4,9 @@ const { app, protocol } = require('electron');
 protocol.registerSchemesAsPrivileged([{ scheme: 'p9', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, allowServiceWorkers: true } }]);
 const path = require('node:path');
 const index = process.argv.indexOf('--state');
-const state = index === -1 ? (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'P9', 'runtime') : undefined) : process.argv[index + 1];
+// The Linux AppImage's daemon is the p9-foundation unit (teh.mjs appImageService), whose state install-service.mjs puts here.
+const linuxApp = process.platform === 'linux' && app.isPackaged && process.env.XDG_RUNTIME_DIR ? path.join(process.env.XDG_RUNTIME_DIR, 'p9-foundation') : undefined;
+const state = index === -1 ? (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'P9', 'runtime') : linuxApp) : process.argv[index + 1];
 if (index !== -1 && (!state || !path.isAbsolute(state))) throw new Error('state-must-be-absolute');
 // p9 edit / p9 diff (scripts/p9.mjs, threat model row 14): the request rides Electron's single-instance lock to the running
 // app, which checks it again; with no app running, this one starts and opens it.
