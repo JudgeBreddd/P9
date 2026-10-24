@@ -717,8 +717,8 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
-  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'registryFile', 'settings', 'settingsError', 'settingsFile', 'settingsInvalid',
-    'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
+  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
+    'settingsInvalid', 'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
   // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.
   const total = s.tmux === null ? 6 : 7, base = s.tmux === false ? 1 : 2, settingsFile = s.settingsFile;
@@ -771,6 +771,9 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await next(); await at(4, 'Mission Control');
   assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
   assert.equal(await page.locator('#welFile').textContent(), settingsFile);
+  // No settings in a folder with things in it: the paths P9 will use, editable, and exactly what Create adds.
+  assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)), ['AGENTS.md', 'mission/registry.json', 'needs-you', '']);
+  assert.equal(await page.locator('#welBody [data-creates]').textContent(), 'AGENTS.md, mission/registry.json, needs-you/AGENTS.md, ' + settingsFile);
   await shot('wizard-3-mission.png');
   await page.click('[data-act="starter"]');
   await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 });

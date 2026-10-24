@@ -228,10 +228,14 @@ changes show in Mission within one refresh, with no restart. Optional `page_sche
 and `javascript:`, `file:` and `data:` are never allowed. Button arguments may be any text except control
 characters; for batch (.cmd/.bat) and ssh targets only, shell characters are refused and the message names
 the character. An argument entry with `choices: [...]` shows a dropdown and the server accepts only those
-values. A button run is bounded: at most
+values; `choices: "plans"` fills the dropdown with every `plan.md` under the scripts root (re-read at most once a
+minute). A button run is bounded: at most
 4 at once, 1 MiB of output kept, 15 minutes, and it is tracked in memory only (a daemon restart or update stops
 it; after a crash the next start does). Without the file, Mission Control says
-`settings-missing` and the other focus modes work normally. P9 never writes the registry.
+`settings-missing` and the other focus modes work normally. The setup wizard's Mission step can write it: in a
+folder that already has files it pre-fills the paths it finds (a workspace-hub with its registry, a root
+`AGENTS.md`, a `needs-you` or `waiting` folder), lets you change them, lists exactly what it will create, and
+creates only the settings file plus whatever is missing; only an empty folder gets the whole starter set. P9 never writes the registry.
 
 Optional keys, each off when left out:
 
@@ -241,7 +245,8 @@ Optional keys, each off when left out:
 - `hub`: the workspace-relative folder of a workspace-hub checkout. Turns on the hub sections (notifications,
   Wiki inbox, weekly audit, logs, incidents, work in flight, last solo run); they expect the ICM workspace
   layout the hub was built for. The Wiki inbox also needs `MC_VAULT` set to your vault in the service's
-  environment.
+  environment. Left out, those sections say how to turn them on; on Windows, or with no heartbeats folder, the
+  scheduled-job notices say the jobs are not checked instead of reporting them missing.
 - `server_host`: an ssh host name whose logs and incidents the hub sections also list, over
   `ssh -o BatchMode=yes` (a key login must already work). No default, so nothing is ever ssh'd unasked.
 

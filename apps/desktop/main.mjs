@@ -324,6 +324,7 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  const wizardPaths = body => Object.entries(body).every(([key, value]) => ['primary', 'registry', 'waiting', 'hub'].includes(key) && typeof value === 'string' && value.length <= 400);
   const chatRoutes = {
     list: () => ['GET', '/chat'],
     // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
@@ -336,8 +337,10 @@ export async function createDesktop({ state, open } = {}) {
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
     stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
     lock: () => ['GET', '/agent-lock'],
-    setup: () => ['GET', '/setup'],
-    starter: body => !Object.keys(body).length && ['POST', '/setup/starter', body], // the wizard's "Create my starter files"
+    // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
+    // "Create my starter files" with them; {} is the settings file's paths, or the starter set in an empty folder.
+    setup: body => wizardPaths(body) && ['GET', '/setup' + (Object.keys(body).length ? '?' + new URLSearchParams(body) : '')],
+    starter: body => wizardPaths(body) && ['POST', '/setup/starter', body],
     setLock: body => ['POST', '/agent-lock', body],
     stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
   };
@@ -579,12 +582,15 @@ export async function createDesktop({ state, open } = {}) {
   });
   // New chat's Choose folder... (threat model row 24): the system folder dialog, then only a folder inside the workspace's real path goes
   // back, workspace-relative ('' is the workspace itself). The daemon checks it again when the chat is made.
+  // Setup's Pick buttons name a file ('setup-file') or folder ('setup-folder') the same way; the daemon checks the path again.
+  const PICKS = { 'setup-file': ['Choose the file', 'Use this file', 'openFile'], 'setup-folder': ['Choose the folder', 'Use this folder', 'openDirectory'] };
   ipcMain.handle('p9:pick-folder', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length) throw new Error('ipc-sender-refused');
+        || args.length > 1 || (args.length && !Object.hasOwn(PICKS, args[0]))) throw new Error('ipc-sender-refused');
     if (!state) return null;
     const root = await realpath((await health(state)).workspace);
-    const pick = await dialog.showOpenDialog(window, { title: 'Start the chat in', buttonLabel: 'Start here', properties: ['openDirectory'], defaultPath: root });
+    const [title, buttonLabel, kind] = args.length ? PICKS[args[0]] : ['Start the chat in', 'Start here', 'openDirectory'];
+    const pick = await dialog.showOpenDialog(window, { title, buttonLabel, properties: [kind], defaultPath: root });
     if (pick.canceled || !pick.filePaths[0]) return undefined;
     const real = await realpath(pick.filePaths[0]).catch(() => null);
     if (real === root) return '';
@@ -663,7 +669,10 @@ export async function createDesktop({ state, open } = {}) {
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Restart P9?', message: 'Restart P9\'s background service?',
       detail: 'Running chats, scripts and terminals stop.', buttons: ['Cancel', 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
     if (response !== 1) return { cancelled: true };
-    if ((await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => null))?.status !== 200) return { error: 'stop-all-failed' };
+    // A daemon that does not answer at all is restarted anyway (finding 6: otherwise a hung service had no way back); one that
+    // answers but cannot stop something is left running, as before.
+    const stopped = await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => 'no-answer');
+    if (stopped !== 'no-answer' && stopped?.status !== 200) return { error: 'stop-all-failed' };
     if (win) {
       changing = true;
       // W3's restart: ends the task (the daemon and its host go with it), waits for the pipe, runs the task again.

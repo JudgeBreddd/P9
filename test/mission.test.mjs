@@ -465,6 +465,21 @@ test('M5: the daemon refuses with the reason and starts nothing; choices come ba
   assert.match(JSON.parse(amp.text).reason, /"&"/);
 });
 
+// workspace-hub's "Gate check a plan" button: choices "plans" is every plan.md under the scripts root, still strict.
+test('choices "plans": every plan.md outside skipped folders, and nothing else is accepted', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, TEAMMATE, [{ id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }]);
+  for (const dir of ['a', 'b/c', 'node_modules/x', '_archive', '.git', 'agent_skills/s', '_private']) {
+    await mkdir(path.join(instance.workspace, dir), { recursive: true });
+    await writeFile(path.join(instance.workspace, dir, 'plan.md'), '# plan');
+  }
+  const overview = JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual(overview.scripts[0].args, [{ label: 'Plan', choices: ['a/plan.md', 'b/c/plan.md'] }]);
+  const bad = await call(instance, '/scripts/gate/run', 'POST', { args: ['_archive/plan.md'] });
+  assert.equal(bad.status, 400);
+  assert.match(JSON.parse(bad.text).reason, /listed choices/);
+  assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: 'other' }] }] })).invalid.length, 1);
+});
+
 test('M6: page_schemes pages need confirm; javascript, file and data are refused even when listed', { timeout: 30000 }, async (t) => {
   const instance = await start(t, { ...BUILDER, page_schemes: ['obsidian', 'javascript', 'file', 'data'] });
   const file = path.join(instance.workspace, BUILDER.registry);

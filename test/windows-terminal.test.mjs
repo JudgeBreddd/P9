@@ -38,7 +38,8 @@ test('Windows terminal: open, run a command, read its output, stop; the shell is
     return match;
   };
   // Type only once the prompt is drawn, the way a person does.
-  await until(/PS [^\r\n]*> /);
+  // Windows 11's ConPTY draws the space after the prompt as a cursor move (ESC[1C); the Server 2025 runner sends a space.
+  await until(/PS [^\r\n]*>(?: |\u001b\[\d*C)/);
   // Bare expressions, no cmdlet: PowerShell 5.1's first cmdlet can wait on module discovery (CI 40002351743 x64).
   const sent = Date.now();
   await keys.keys("('P9-' + 'CONPTY-OK'); ('SHELL' + 'PID=' + $PID)\r");

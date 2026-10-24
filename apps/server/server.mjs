@@ -99,6 +99,9 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   const statuses = { ENOENT: 404, EACCES: 403, EPERM: 403, EROFS: 403, EBUSY: 503, ENOSPC: 507, EDQUOT: 507, EIO: 500 };
   const onError = (error) => {
     if (error.message === 'session-ended') return new Response(JSON.stringify({ error: 'login-required' }), { status: 401, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    // A Mission file a settings key names is not there (mission.mjs): which key, and its workspace-relative path from
+    // settings.json, never the system's error text.
+    if (error.message === 'file-not-found') return new Response(JSON.stringify({ error: 'file-not-found', setting: error.setting, file: error.file }), { status: 404, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     const invalid = error instanceof SyntaxError || ['unsafe-path', 'locked-path', 'unsafe-file', 'path-changed',
       'binary-or-oversize', 'invalid-save', 'json-required'].includes(error.message) || ['ELOOP', 'ENOTDIR'].includes(error.code);
     const code = Object.hasOwn(statuses, error.code) ? error.code : invalid ? 'REQUEST_REFUSED' : 'INTERNAL_FAILURE';
@@ -278,11 +281,54 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
     try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
     try { return { text, parsed: parseSettings(text) }; } catch (error) { return { text, error: String(error.message).slice(0, 200) }; }
   };
+  const isFolder = (relative) => stat(path.join(workspace, relative)).then((s) => s.isDirectory(), () => false);
+  // "Use what's here" (needs-done p9-wizard-respects-existing-workspace): with no settings in a folder that already has things
+  // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
+  // AGENTS.md at the top, a needs-you or waiting folder. Links are never followed; at most three folders deep.
+  const SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
+  const existing = async () => {
+    const found = {};
+    const walk = async (relative, depth) => {
+      const entries = await readdir(path.join(workspace, relative), { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name) || found.hub) continue;
+        const child = relative ? relative + '/' + entry.name : entry.name;
+        if (entry.name === 'workspace-hub' && await present(path.join(workspace, child, 'registry.json'))) found.hub = child;
+        else if (depth < 3) await walk(child, depth + 1);
+      }
+    };
+    await walk('', 1);
+    if (found.hub) found.registry = found.hub + '/registry.json';
+    else if (await present(path.join(workspace, STARTER_SETTINGS.registry))) found.registry = STARTER_SETTINGS.registry;
+    if (await present(path.join(workspace, 'AGENTS.md'))) found.primary = 'AGENTS.md';
+    for (const folder of ['needs-you', 'waiting']) if (!found.waiting && await isFolder(folder)) found.waiting = folder;
+    return found;
+  };
+  // Exactly what a starter run with these paths makes: each of the three that is missing (a missing waiting folder gets its
+  // AGENTS.md; an existing one is left as it is), and _ideas/ only in an empty workspace.
+  const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'hub'];
+  const planFor = async (paths, empty) => [
+    ...(await present(path.join(workspace, paths.primary)) ? [] : [paths.primary]),
+    ...(await present(path.join(workspace, paths.registry)) ? [] : [paths.registry]),
+    ...(await isFolder(paths.waiting) ? [] : [paths.waiting + '/AGENTS.md']),
+    ...(empty && !(await isFolder('_ideas')) ? ['_ideas/'] : [])];
+  // The wizard's own paths, checked as settings.json would be: only the four keys, each workspace-relative.
+  const wizardPaths = (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.keys(input).every((key) => WIZARD_KEYS.includes(key))) return null;
+    try { return parseSettings(JSON.stringify(input)); } catch { return null; }
+  };
   app.get('/setup', async (c) => {
-    const disk = await settingsOnDisk(), paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
+    const disk = await settingsOnDisk(), empty = !(await readdir(workspace)).length;
+    // A settings file (loaded or on disk) decides the paths. Without one: an empty folder gets the starter paths, any other
+    // gets what it already has, filled in with the starter paths, which the wizard shows and lets the owner change.
+    const found = settings || disk.text !== undefined || empty ? {} : await existing();
+    const query = c.req.query(), asked = Object.keys(query).length ? wizardPaths(query) : null;
+    const proposed = settings ?? disk.parsed ?? asked ?? { ...STARTER_SETTINGS, ...found };
+    const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
     return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: disk.text !== undefined,
       settingsInvalid: Boolean(disk.error), settingsError: disk.error ?? null,
-      writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: !(await readdir(workspace)).length,
+      writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: empty,
+      found, proposed, creates: disk.error ? [] : await planFor(proposed, empty), ...(Object.keys(query).length && !asked ? { pathsInvalid: true } : {}),
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
       // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
@@ -291,30 +337,38 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.
   // The new settings load live: with no settings every Mission route answered 503, so no run exists to lose here.
+  // The body is {} (the settings file's paths, or the starter paths in an empty folder) or the wizard's chosen paths, which
+  // a folder with things in it always needs: the fixed starter paths never land there unshown.
   app.post('/setup/starter', async (c) => {
     const body = await json(c);
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'request-refused' }, 400);
+    const chosen = Object.keys(body).length ? wizardPaths(body) : null;
+    if (Object.keys(body).length && !chosen) return c.json({ error: 'request-refused' }, 400);
     if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
     const disk = await settingsOnDisk();
     if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
-    const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
+    if (chosen && (settings || disk.text !== undefined)) return c.json({ error: 'settings-exist' }, 409); // never replaced
+    const empty = !(await readdir(workspace)).length;
+    if (!chosen && !settings && disk.text === undefined && !empty) return c.json({ error: 'paths-required' }, 409);
+    const paths = settings ?? disk.parsed ?? chosen ?? STARTER_SETTINGS;
     const made = (promise) => promise.then(() => true, (error) => { if (error.code === 'EEXIST') return false; throw error; });
     const folders = async (relative) => { for (let i = 1; i < relative.length; i++) await made(createDirectory(workspace, relative.slice(0, i).join('/'))); };
-    const created = [];
+    const created = [], plan = await planFor(paths, empty);
     for (const [relative, content] of [[paths.primary, STARTER_AGENTS], [paths.registry, '{"scripts":[],"apps":[],"pages":[]}\n'], [paths.waiting + '/AGENTS.md', STARTER_WAITING]]) {
+      if (!plan.includes(relative)) continue;
       await folders(relative.split('/'));
       if (await made(createFile(workspace, relative, content))) created.push(relative);
     }
-    if (await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
+    if (plan.includes('_ideas/') && await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
     if (disk.text === undefined) {
       await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 });
       const file = await open(settingsFile, 'wx', 0o600).catch((error) => { if (error.code === 'EEXIST') return null; throw error; });
       if (!file) return c.json({ error: 'settings-changed' }, 409); // written by someone else meanwhile: Retry re-reads it
-      try { await file.writeFile(JSON.stringify(STARTER_SETTINGS, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+      try { await file.writeFile(JSON.stringify(paths, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
       created.push(settingsFile);
     }
     if (!settings) {
-      settings = disk.parsed ?? parseSettings(JSON.stringify(STARTER_SETTINGS));
+      settings = disk.parsed ?? paths;
       settingsInvalid = false;
       server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle });
       hub = createHub({ workspace, settings });

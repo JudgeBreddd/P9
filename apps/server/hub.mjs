@@ -227,9 +227,12 @@ export function createHub({ workspace, settings }) {
   }
 
   // Lines that need Builder: silent scheduled jobs (here and on the server) and doctor.sh FAIL lines.
+  // Why the job and setup checks did not run, or null when they did: the overview says so, so the page never reads an empty
+  // list as "every job reported in" (needs-done p9-wizard-respects-existing-workspace, finding 8).
+  // Windows has no ICM shell scripts to run: bash there is missing or WSL's, which would boot the WSL VM every 10 min (D2).
+  const unchecked = async () => (process.platform === 'win32' ? 'windows' : await isFile(path.join(scripts, 'heartbeats.sh')) ? null : 'no-heartbeats');
   async function notices() {
-    // Windows has no ICM shell scripts to run: bash there is missing or WSL's, which would boot the WSL VM every 10 min (D2).
-    if (process.platform === 'win32') return [];
+    if (await unchecked()) return [];
     const [overdue, server, doctor] = await Promise.all([
       output('bash', [path.join(scripts, 'heartbeats.sh'), 'overdue'], { cwd: workspace, timeout: 20000 }),
       output('bash', [path.join(scripts, 'heartbeats.sh'), 'remote'], { cwd: workspace, timeout: 20000 }),
@@ -267,7 +270,7 @@ export function createHub({ workspace, settings }) {
     // The first call, or the first after five idle minutes, waits for fresh quick sections; never for doctor.
     if (f.pending && (!f.value || Date.now() - f.at > 5 * FAST_TTL)) await f.pending;
     if (!f.value) return { status: 502, error: 'hub-failed' };
-    return { status: 200, ...f.value, notices: n.value, checkedAt: n.at || null };
+    return { status: 200, ...f.value, notices: n.value, checkedAt: n.at || null, unchecked: await unchecked() };
   }
   async function text({ kind, host: machine, name } = {}) {
     if (!folder) return { status: 404, error: 'hub-not-set' };

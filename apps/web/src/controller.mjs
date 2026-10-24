@@ -752,6 +752,16 @@ async function loadUsage() {
 }
 // The chat meters read usage.limits: fetched again each minute, which also moves the cache timer on.
 const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+// Restart P9's background service (finding 6): the one way back for a service that hangs or lost a file, from the Mission
+// notes and Settings. Main asks first, and restarts a service that does not answer at all.
+const restartBtn = () => (window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-restart-btn>Restart P9</button>' : '');
+async function restartP9(button) {
+  button.disabled = true;
+  const r = await window.p9.restartService().catch(() => ({ error: 'restart-failed' }));
+  if (r.cancelled) { button.disabled = false; return; }
+  toast({ kind: r.restarted ? 'restarted' : 'not restarted', txt: r.restarted ? 'P9 restarted.' : 'Could not restart P9 (' + r.error + ')', level: r.restarted ? 'ok' : 'bad' }, true);
+  if (r.restarted) setTimeout(loadMission, 3000); else button.disabled = false;
+}
 async function loadMission() {
   if (!window.p9?.mission) return;
   const r = await window.p9.mission('overview');
@@ -759,7 +769,12 @@ async function loadMission() {
     const why = r.body?.error || r.status;
     if (sampleView) live.note = 'Sample data: the P9 daemon did not answer (' + why + ')';
     else if (why === 'settings-missing' || why === 'settings-invalid') live.note = 'Mission Control is not set up yet (' + why + '): see Set up P9.';
-    else { live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.'; if (!lifetime.signal.aborted) setTimeout(loadMission, 5000); }
+    // A file the settings name is missing: which one, so the fix is one path in settings.json (finding 5). Retried, as the
+    // settings and the files load live.
+    else if (why === 'file-not-found') live.note = 'Mission Control cannot find its ' + r.body.setting + ' file, ' + r.body.file + '. Fix that path in P9\'s settings file or create the file; trying again every 5 seconds.';
+    else live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.';
+    live.noteRestart = !sampleView && why !== 'settings-missing' && why !== 'settings-invalid';
+    if (live.noteRestart && !lifetime.signal.aborted) setTimeout(loadMission, 5000);
     return renderMission();
   }
   applyOverview(r.body);
@@ -767,7 +782,7 @@ async function loadMission() {
 }
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
-  live.on = true; live.note = ''; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
+  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
   M.scripts = {}; M.tools = [];
   for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id]);
@@ -809,13 +824,25 @@ function applyQueue(o) {
 function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'project' ? 'project' : 'updated';
   S.reviews.sort(by === 'project' ? (a, b) => (a.name || a.proj).localeCompare(b.name || b.proj) : (a, b) => (b.updated || 0) - (a.updated || 0)); return by; }
 // The old workspace-hub sections, live: notifications, Wiki inbox, logs and incidents, work in flight, audit, last solo run.
-const H = { on: false, notices: [], handoffs: [], timer: 0 };
+const H = { on: false, notices: [], handoffs: [], timer: 0, hint: '', unchecked: null };
+// Why no job was checked: an empty list then never reads as "every job reported in" (finding 8).
+const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings' };
+const noticeLine = () => (H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function loadHub() {
   clearTimeout(H.timer);
   const r = await window.p9.mission('hub').catch(() => ({ status: 503 }));
-  if (r.status !== 200) return;
-  const o = r.body; H.on = true;
+  if (lifetime.signal.aborted) return;
+  // No hub in the settings: the sections stay off and the page says why. Asked again, as the settings load live; any other
+  // failure is asked again sooner.
+  if (r.status !== 200) {
+    const off = r.body?.error === 'hub-not-set', hint = off ? 'Logs, incidents and work in flight are off: set hub in the Mission settings file.' : '';
+    if (off) H.unchecked = 'hub-not-set';
+    if (hint !== H.hint) { H.hint = hint; renderMission(); }
+    H.timer = setTimeout(loadHub, off ? 60000 : 15000);
+    return;
+  }
+  const o = r.body; H.on = true; H.hint = ''; H.unchecked = o.unchecked;
   H.handoffs = o.handoffs.sort((a, b) => a.age_days - b.age_days);
   // null while the first doctor sweep runs (it can take two minutes): ask again soon
   H.notices = o.notices && o.notices.map(n => ({ kind: n.kind === 'job' ? 'silent job' : 'setup', txt: n.text, level: 'bad', hub: true }));
@@ -868,7 +895,7 @@ const usageBody = () => (usage.limits ? `<ul class="plist" data-limits>${[limitL
 const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
-  mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || (H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.'), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
+  mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
   minbox: { show: () => sampleView || H.on, title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
   mlogs: { show: () => sampleView || H.on, title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
     body: () => `<ul class="plist">${M.logs.incidents.map((i, n) => `<li><button data-inc="${n}"${i.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(i.level)}"></span><span class="txt">${esc(i.txt)}</span></button></li>`).join('')}${M.logs.rows.map((r, n) => `<li class="mono sm"${tint(r[0])}><button data-log="${n}"><b>${esc(r[0])}</b><span class="muted">${esc(r[1])}</span><span class="truncate">${esc(r[2])}</span></button></li>`).join('')}</ul>` },
@@ -895,21 +922,16 @@ const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class
 function renderMission() {
   const groups = Object.entries(M.scripts);
   setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : ''}</div>`
-    + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}</p>` : '')
+    + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
+    + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
-    + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-restart-btn>Restart P9</button>' : ''}</p>` : '')
+    + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
     + '<div class="mrow"><section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>'
     + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
-  $('#fMission [data-restart-btn]')?.addEventListener('click', async e => {
-    e.currentTarget.disabled = true;
-    const r = await window.p9.restartService().catch(() => ({ error: 'restart-failed' }));
-    if (r.cancelled) { e.currentTarget.disabled = false; return; }
-    toast({ kind: r.restarted ? 'restarted' : 'not restarted', txt: r.restarted ? 'P9 restarted.' : 'Could not restart P9 (' + r.error + ')', level: r.restarted ? 'ok' : 'bad' }, true);
-    if (r.restarted) setTimeout(loadMission, 3000); else e.currentTarget.disabled = false;
-  });
+  $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
@@ -950,7 +972,7 @@ function missionLive() {
   (needs ? setHTML(needs, S.reviews.length ? `<ul class="plist">${S.reviews.map((r, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted"> · ${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>') : { querySelectorAll: () => [] })
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'review', i: +b.dataset.i }, 'reviews'));
   const notes = allNotes();
-  set('mnotes', notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button data-i="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.'}</p>`)
+  set('mnotes', notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button data-i="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`)
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'alert', a: notes[+b.dataset.i], back: S.modal }));
   set('minbox', M.inbox.length ? `<ul class="plist">${M.inbox.map((x, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(x.status)}>${esc(x.status)}</span><span class="muted sm">${esc(x.pages)} page${x.pages > 1 ? 's' : ''}</span><span class="txt mono sm">${esc(x.batch)}</span></button></li>`).join('')}</ul>` : '<p class="empty">No Wiki batches waiting for review.</p>')
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'inbox', x: M.inbox[+b.dataset.i], back: S.modal }));
@@ -1333,7 +1355,7 @@ function renderSettings() {
     + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null) : '')
     + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null) : '')
     + (window.p9?.openUpdates ? `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="setVer">You have P9 ${esc(window.p9.version || '?')}. Opens GitHub's newest release in your browser; if its number is higher, ${/Windows/.test(navigator.userAgent) ? 'download its .exe there and run it. Your workspace and settings stay.' : 'update as the README\'s Update section says (git pull, build, restart).'}</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setUpd">Check for updates</button></div>` : '')
-    + `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}</div>`;
+    + `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' + restartBtn().replace('data-restart-btn', 'id="setRestart"') : ''}</div>`;
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
   $('#setName').value = settings.name || '';
@@ -1349,6 +1371,7 @@ function renderSettings() {
   $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
   $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };
   if ($('#setWel')) $('#setWel').onclick = () => { $('#setDlg').close(); welcome(); };
+  if ($('#setRestart')) $('#setRestart').onclick = () => restartP9($('#setRestart'));
 }
 $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
@@ -1505,9 +1528,9 @@ async function landPets() {
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
-async function loadSetup() {
+async function loadSetup(paths) {
   if (!window.p9?.chat) return null;
-  const r = await liveChat.call('setup').catch(() => null);
+  const r = await liveChat.call('setup', paths || {}).catch(() => null);
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
@@ -1527,11 +1550,16 @@ async function firstRun() {
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
   W.then = tour; welcome(0);
 }
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null };
+// The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
+// starter paths). Empty fields are left out; hub is optional.
+const PATH_KEYS = [['primary', 'Main AGENTS file', 'setup-file'], ['registry', 'Mission Control registry', 'setup-file'], ['waiting', 'Waiting-on-you folder', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder']];
+const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
+const wizChoosing = s => s && !s.settings && !s.settingsPresent;
 const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
 async function welcome(at) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '' });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null });
   W.s = await loadSetup();
   const d = W.s && setupDone(W.s);
   W.i = at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
@@ -1540,7 +1568,7 @@ async function welcome(at) {
   clearInterval(W.timer); W.timer = setInterval(wizRefresh, 2000);
 }
 async function wizRefresh() {
-  const [s, l] = await Promise.all([loadSetup(), window.p9.agentLogin('state').catch(() => null)]);
+  const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
   W.s = s; W.login = l?.status === 200 ? l.body : {};
   if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
   wizRender();
@@ -1563,6 +1591,10 @@ const WIZ_ERR = {
   'settings-file-unknown': ['P9 does not know where its settings file goes.', 'Restart P9, then Retry.'],
   'settings-changed': ['Something else wrote the settings file just now.', 'Retry reads it again.'],
   'settings-invalid': ['Your settings file has an error.', 'Fix it in a text editor, or delete it, then Retry. P9 never changes a file it cannot read.'],
+  'paths-required': ['This folder already has things in it, so P9 needs the paths to use.', 'Check the paths above, then Create again.'],
+  'paths-invalid': ['A path is not one P9 can use.', 'Each is inside the workspace, written with / and without .. (for example docs/AGENTS.md).'],
+  'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
+  'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
 };
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
@@ -1598,10 +1630,17 @@ function wizRender() {
     if (!d.agents) next = `<span class="muted sm">Sign in to one to go on, or Skip.</span>` + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
     title = 'Mission Control';
-    body = `<p class="muted sm">Its buttons, apps and pages come from files in your workspace. Create my starter files adds the ones missing and never replaces a file: AGENTS.md, the Mission Control registry, a waiting folder for things that need you, _ideas/, and P9's settings file.</p>`
+    // A folder with things in it keeps them (needs-done p9-wizard-respects-existing-workspace): the paths are what P9 found
+    // there, shown and editable, and the list says exactly what Create adds. Nothing that is there is replaced.
+    const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
+    const creates = d.mission ? [] : [...(s.creates || []), ...(s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
+    body = `<p class="muted sm">Its buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
+      + (choosing ? PATH_KEYS.map(([k, name, kind]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('')
+        + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
       + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
       + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
-      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission ? '' : `<div class="set-row">${btn('starter', 'Create my starter files', 'default')}</div>`)
+      + (creates.length ? `<p class="sm">Create adds: <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
+      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', creates.length ? 'Create these' : 'Use these', 'default')}</div>`)
       + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
       + (note?.error ? fail(note.error, note.detail) : '')
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
@@ -1624,12 +1663,14 @@ function wizRender() {
   morph($('#welBody'), body);
   morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (key === 'done' ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
 }
-$('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value; });
+$('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value;
+  if (e.target.dataset.path) W.paths = { ...wizPaths(), [e.target.dataset.path]: e.target.value.trim() }; });
+$('#welDlg').addEventListener('change', e => { if (e.target.dataset.path) wizRefresh(); });
 $('#welDlg').addEventListener('change', e => { if (e.target.id === 'welName') saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) }); });
 $('#welDlg').addEventListener('click', async e => {
   if (e.target.id === 'welPetdex' && window.p9?.openPetdex) { e.preventDefault(); return window.p9.openPetdex(); }
   const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
-  const [act, agent] = b.dataset.act.split(':');
+  const [act, agent, kind] = b.dataset.act.split(':');
   const run = async (fn) => { W.busy = act; wizRender(); try { return await fn(); } finally { W.busy = ''; } };
   if (act === 'next' || act === 'back') { W.i += act === 'next' ? 1 : -1; return wizRender(); }
   if (act === 'skip' || act === 'mission-off') {
@@ -1645,8 +1686,14 @@ $('#welDlg').addEventListener('click', async e => {
     W.note.workspace = r.error ? r : null;
     if (!r.error) { files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder
   }
+  if (act === 'pick') {
+    const picked = await window.p9.pickFolder(kind).catch(() => undefined);
+    if (picked === null || picked === '') W.note.mission = { error: 'pick-outside' };
+    else if (picked !== undefined) { W.paths = { ...wizPaths(), [agent]: picked }; W.note.mission = null; }
+  }
   if (act === 'starter') {
-    const r = await run(() => liveChat.call('starter').catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    const body = wizChoosing(W.s) ? wizPaths() : {};
+    const r = await run(() => liveChat.call('starter', body).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
   }

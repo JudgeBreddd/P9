@@ -40,8 +40,8 @@ async function startDaemon(t, entry, fixturePaths, extra) {
     '--state', fixturePaths.state, '--recovery', fixturePaths.recovery, ...(extra.args ?? [])];
   const windows = process.platform === 'win32';
   if (windows) {
-    await mkdir(path.join(fixturePaths.directory, 'local-app-data'));
-    await mkdir(path.join(fixturePaths.directory, 'roaming-app-data'));
+    await mkdir(path.join(fixturePaths.directory, 'local-app-data'), { recursive: true });
+    await mkdir(path.join(fixturePaths.directory, 'roaming-app-data'), { recursive: true }); // a setup may have made it
   }
   const command = windows ? 'powershell.exe' : daemonArgs.shift();
   const inherited = windows ? Object.fromEntries(['SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'USERPROFILE', 'USERNAME',

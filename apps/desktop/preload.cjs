@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   importPets: () => ipcRenderer.invoke('p9:pet-import'),
   installPets: text => ipcRenderer.invoke('p9:pet-install', String(text)),
   removePet: (name) => ipcRenderer.invoke('p9:pet-remove', name),
-  pickFolder: () => ipcRenderer.invoke('p9:pick-folder'),
+  pickFolder: (kind) => ipcRenderer.invoke('p9:pick-folder', ...(kind === undefined ? [] : [kind])),
   onFocus: (callback) => { ipcRenderer.on('p9:focus', (_event, focus) => callback(focus)); },
   terminal: (action, payload) => ipcRenderer.invoke('p9:terminal', action, payload),
   terminalOpen: (id) => ipcRenderer.invoke('p9:terminal-open', id),

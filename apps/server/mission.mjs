@@ -6,6 +6,7 @@ import { stillAuthorized, captureAuthority } from './authority.mjs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { readdir as fsReaddir } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 
@@ -64,9 +65,13 @@ const web = (value) => typeof value === 'string' && /^https?:\/\/[^\s]+$/.test(v
 const pageUrl = (value, schemes = []) => web(value) || (typeof value === 'string' && value.length <= 2000 && !/[\s\x00-\x1f\x7f]/.test(value)
   && schemeOf(value) !== undefined && !NEVER_SCHEMES.has(schemeOf(value)) && schemes.includes(schemeOf(value)) && value.length > schemeOf(value).length + 1);
 // A button argument may be a plain label or {label, choices: [...]}: the server then accepts only those values (M5).
+// choices may also name a list P9 fills itself: "plans" is every plan.md under the scripts root (workspace-hub's list).
+const NAMED_CHOICES = new Set(['plans']);
 const argSpec = (arg) => typeof arg === 'string' || (arg && typeof arg === 'object' && typeof arg.label === 'string'
-  && optional(arg, 'choices', (choices) => Array.isArray(choices) && choices.length >= 1 && choices.length <= 50
-    && choices.every((choice) => typeof choice === 'string' && choice && choice.length <= 200)));
+  && optional(arg, 'choices', (choices) => NAMED_CHOICES.has(choices) || (Array.isArray(choices) && choices.length >= 1 && choices.length <= 50
+    && choices.every((choice) => typeof choice === 'string' && choice && choice.length <= 200))));
+// Folders the plans list never walks into: dependencies, archives, private and template trees (workspace-hub skipped the same).
+const PLAN_SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
 
 function validRecord(record, kind, schemes) {
   if (!record || typeof record !== 'object' || Array.isArray(record) || typeof record.id !== 'string' || !ID.test(record.id)
@@ -163,29 +168,56 @@ export function argRefusal(item, arg, index) {
 
 export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle }) {
   // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
-  const setSettings = (next) => { settings = next; };
+  const setSettings = (next) => { settings = next; plansCache.at = 0; };
   const runs = new Map();
   const recovered = stopScopes('p9-run', instance);
   // Registry commands run where the registry's relative paths resolve: the hub's ~/workspace, which can sit above P9's workspace.
   const root = () => settings?.scripts_root ?? workspace;
+  // A settings key's file that is not there names itself (server.mjs answers file-not-found), not "storage unavailable".
+  const settingFile = (key, read) => read(settings[key]).catch((error) => {
+    throw error.code === 'ENOENT' ? Object.assign(new Error('file-not-found'), { setting: key, file: settings[key] }) : error;
+  });
+  // The "plans" list: every plan.md under the scripts root, as the root-relative paths the button's command takes. Read only
+  // when a button names it; links are never followed.
+  // ponytail: kept a minute and at most 8 folders deep; a watcher if a large workspace shows it in a profile.
+  const plansCache = { at: 0, list: [] };
+  async function plans() {
+    if (Date.now() - plansCache.at < 60000) return plansCache.list;
+    const list = [];
+    const walk = async (relative, depth) => {
+      for (const entry of await fsReaddir(path.join(root(), relative), { withFileTypes: true }).catch(() => [])) {
+        const child = relative ? relative + '/' + entry.name : entry.name;
+        if (entry.isFile() && entry.name === 'plan.md') list.push(child);
+        else if (entry.isDirectory() && depth < 8 && !entry.name.startsWith('.') && !PLAN_SKIP.has(entry.name)) await walk(child, depth + 1);
+      }
+    };
+    await walk('', 0);
+    Object.assign(plansCache, { at: Date.now(), list: list.sort().slice(0, 500) });
+    return plansCache.list;
+  }
+  const named = async (records) => {
+    if (!records.some((record) => record.args?.some((arg) => arg?.choices === 'plans'))) return records;
+    const list = await plans();
+    return records.map((record) => (record.args ? { ...record, args: record.args.map((arg) => (arg?.choices === 'plans' ? { ...arg, choices: list } : arg)) } : record));
+  };
   // The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
   async function registry() {
     if (!settings) throw new Error('settings-missing');
-    const reg = parseRegistry((await readFile(workspace, settings.registry)).content, settings.page_schemes);
+    const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file))).content, settings.page_schemes);
     let space = { sections: [], invalid: [] };
     if (settings.space) {
       try { space = parseSpace((await readFile(workspace, settings.space)).content); }
       catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
     }
     const invalid = [...reg.invalid, ...space.invalid];
-    const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
+    const scripts = await named(unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid));
     const logs = new Set(unique(space.sections.flatMap((section) => section.logs), 'space', invalid));
     const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)) }));
-    return { ...reg, scripts, invalid, space: sections };
+    return { ...reg, apps: await named(reg.apps), scripts, invalid, space: sections };
   }
   async function queue() {
     const items = [];
-    for (const entry of await listDirectory(workspace, settings.waiting)) {
+    for (const entry of await settingFile('waiting', (folder) => listDirectory(workspace, folder))) {
       if (entry.dir || !entry.name.endsWith('.md') || ['AGENTS.md', 'CLAUDE.md'].includes(entry.name)) continue;
       let file;
       try { file = await readFile(workspace, `${settings.waiting}/${entry.name}`); } catch { continue; }
@@ -197,7 +229,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return items;
   }
   async function primary() {
-    const text = (await readFile(workspace, settings.primary)).content;
+    const text = (await settingFile('primary', (file) => readFile(workspace, file))).content;
     const match = text.match(/\*\*Main project: ([^*]+)\*\* \(`([^`]+)`/);
     if (!match) return null;
     const directory = path.posix.join(path.posix.dirname(settings.primary), match[2].replace(/\/$/, ''));

@@ -3,7 +3,7 @@
 // the new settings without a daemon restart.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,18 +40,23 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   assert.deepEqual([s.settings, s.settingsPresent, s.settingsInvalid, s.settingsError, s.writable, s.workspaceEmpty, s.agentsFile, s.registryFile],
     [false, false, false, null, true, false, true, false]);
   assert.equal(s.tmux === null, process.platform !== 'linux');
+  // A folder with things in it: what is there is found, and the plan lists only what is missing (no _ideas/).
+  assert.deepEqual([s.found, s.proposed, s.creates], [{ primary: 'AGENTS.md' }, STARTER, ['mission/registry.json', 'needs-you/AGENTS.md']]);
   assert.equal((await call(instance, '/mission')).body.error, 'settings-missing');
 
-  // Exactly {} as JSON, nothing else.
-  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain']]) assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
+  // {} or the wizard's four keys as JSON, nothing else; paths are checked as settings.json's are.
+  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: '/' }], [{ ...STARTER, waiting: '../out' }], [{ primary: 'A.md' }]])
+    assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
+  // The fixed starter paths never land in a folder with things in it unshown: {} there needs the paths.
+  assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', {})), [409, { error: 'paths-required' }]);
   await assert.rejects(stat(file));
 
-  const made = await call(instance, '/setup/starter', 'POST', {});
+  const made = await call(instance, '/setup/starter', 'POST', s.proposed);
   assert.equal(made.status, 201, JSON.stringify(made.body));
-  assert.deepEqual(made.body.created, ['mission/registry.json', 'needs-you/AGENTS.md', '_ideas/', file]);
+  assert.deepEqual(made.body.created, ['mission/registry.json', 'needs-you/AGENTS.md', file]);
   assert.equal(await readFile(path.join(instance.workspace, 'AGENTS.md'), 'utf8'), 'mine');
   assert.deepEqual(JSON.parse(await readFile(path.join(instance.workspace, 'mission/registry.json'), 'utf8')), { scripts: [], apps: [], pages: [] });
-  assert.deepEqual(await readdir(path.join(instance.workspace, '_ideas')), []);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', 'mission', 'needs-you', 'note.txt']);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), STARTER);
   if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
 
@@ -68,6 +73,9 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   const again = await call(instance, '/setup/starter', 'POST', {});
   assert.deepEqual([again.status, again.body.created], [201, []]);
   assert.equal(await readFile(path.join(instance.workspace, 'needs-you/AGENTS.md'), 'utf8'), 'edited');
+  // Paths while settings exist are refused: the settings file is never replaced from here.
+  assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', { ...STARTER, registry: 'other.json' })), [409, { error: 'settings-exist' }]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), STARTER);
   console.log('PASS starter: create-only, settings 0600, Mission live without a restart, registry read-only, second run makes nothing');
 });
 
@@ -91,9 +99,56 @@ test('Setup wizard: an invalid settings file is shown, never overwritten; a vali
   // Fixed by hand (or by an agent): the starter follows its paths and loads it, no restart.
   await writeFile(file, JSON.stringify({ primary: 'docs/ME.md', registry: 'r.json', waiting: 'inbox' }));
   const made = await call(instance, '/setup/starter', 'POST', {});
-  assert.deepEqual([made.status, made.body.created], [201, ['docs/ME.md', 'r.json', 'inbox/AGENTS.md', '_ideas/']]);
+  assert.deepEqual([made.status, made.body.created], [201, ['docs/ME.md', 'r.json', 'inbox/AGENTS.md']]);
   assert.equal((await call(instance, '/mission')).status, 200);
   console.log('PASS starter: invalid settings refused with the parse error and left byte-identical; a fixed file loads live');
+});
+
+test('Setup wizard: an empty workspace gets the whole starter set, _ideas/ included', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => { await rm(path.join(workspace, 'note.txt')); return {}; });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.workspaceEmpty, s.found, s.proposed, s.creates], [true, {}, STARTER, ['AGENTS.md', 'mission/registry.json', 'needs-you/AGENTS.md', '_ideas/']]);
+  const made = await call(instance, '/setup/starter', 'POST', {});
+  assert.deepEqual([made.status, made.body.created], [201, ['AGENTS.md', 'mission/registry.json', 'needs-you/AGENTS.md', '_ideas/', settingsPath(instance.directory)]]);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', '_ideas', 'mission', 'needs-you']);
+  console.log('PASS starter: an empty folder gets AGENTS.md, the registry, needs-you/, _ideas/ and the settings file');
+});
+
+test('Setup wizard: an existing workspace-hub is used as it is; only the settings file is written', { timeout: 60000 }, async (t) => {
+  const hub = 'work/projects/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), 'mine');
+    await mkdir(path.join(workspace, 'waiting'));
+    // Not walked into: a dot folder, node_modules, and links.
+    await mkdir(path.join(workspace, 'node_modules/workspace-hub'), { recursive: true });
+    await writeFile(path.join(workspace, 'node_modules/workspace-hub/registry.json'), '{}');
+    return {};
+  });
+  const before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  const found = { hub, registry: hub + '/registry.json', primary: 'AGENTS.md', waiting: 'waiting' };
+  assert.deepEqual([s.found, s.proposed, s.creates], [found, found, []]);
+  // Edited paths are planned again; a path settings.json would refuse is flagged, not planned.
+  const edited = (await call(instance, '/setup?primary=docs/ME.md&registry=' + encodeURIComponent(hub + '/registry.json') + '&waiting=inbox')).body;
+  assert.deepEqual([edited.proposed.primary, edited.creates, edited.pathsInvalid], ['docs/ME.md', ['docs/ME.md', 'inbox/AGENTS.md'], undefined]);
+  assert.equal((await call(instance, '/setup?primary=../x.md&registry=r.json&waiting=w')).body.pathsInvalid, true);
+
+  const made = await call(instance, '/setup/starter', 'POST', s.proposed);
+  assert.deepEqual([made.status, made.body.created], [201, [settingsPath(instance.directory)]]);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath(instance.directory), 'utf8')), found);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'no new file or folder in the workspace');
+  assert.equal((await call(instance, '/mission')).status, 200);
+  // Valid settings: nothing more to make.
+  assert.deepEqual((await call(instance, '/setup')).body.creates, []);
+  assert.deepEqual((await call(instance, '/setup/starter', 'POST', {})).body.created, []);
+
+  // A file the settings name goes missing: Mission names the setting and its path, nothing more.
+  await writeFile(settingsPath(instance.directory), JSON.stringify({ ...found, registry: 'gone/registry.json' }));
+  const missing = await call(instance, '/mission');
+  assert.deepEqual([missing.status, missing.body], [404, { error: 'file-not-found', setting: 'registry', file: 'gone/registry.json' }]);
+  console.log('PASS starter: a found workspace-hub, AGENTS.md and waiting/ are used; only settings.json is written; a missing file is named');
 });
 
 test('Setup wizard: the starter never follows a link out of the workspace (threat model row 17)', { skip: process.platform === 'win32' && 'Linux links; files-windows.test.mjs covers reparse points', timeout: 60000 }, async (t) => {
