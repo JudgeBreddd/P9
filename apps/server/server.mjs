@@ -16,6 +16,7 @@ import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
 import { createChat } from './chat.mjs';
+import { createMcp } from './mcp.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { createAuth } from './auth.mjs';
@@ -81,11 +82,11 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
-export function createListener({ workspace, savedWorkspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
-  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle });
+  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
@@ -135,6 +136,7 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
     || (settings?.space && name === settings.space.toLowerCase())
     // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
     || (settings?.hub && name === (settings.hub + '/mission_control.py').toLowerCase()));
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection });
   api.put('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
     const input = parseSave(await c.req.json());
@@ -243,6 +245,20 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
 
   const app = new Hono();
   app.onError(onError);
+  // The P9 MCP server (mcp.mjs): a chat's relay over the desktop socket, with that chat's token instead of the desktop
+  // cookie, so it comes before the desktop check. A stopped chat's token stops working.
+  app.post('/mcp', hardening, limit, async (c) => {
+    const conversation = ['unix', 'pipe'].includes(transport) ? chat.mcpConversation(c.req.header('x-p9-mcp')) : null;
+    if (!conversation) return c.json({ error: 'login-required' }, 401);
+    let message;
+    try { message = await c.req.json(); } catch { return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+    // The relay exits when its agent is done with it, which closes this request and cancels an approval still waiting.
+    const ended = new AbortController();
+    c.env.outgoing.once('close', () => ended.abort());
+    await reloadSettings(); // as on every Mission request (M2), so an agent's settings.json edit counts at once
+    const answer = await mcp.handle(conversation, message, ended.signal);
+    return answer ? c.json(answer) : c.body(null, 204);
+  });
   app.use('*', async (c, next) => {
     const status = authorize(Object.fromEntries(c.req.raw.headers), c.req.method, transport, credentials);
     if (status) return c.json({ error: status === 401 ? 'login-required' : 'request-refused' }, status);

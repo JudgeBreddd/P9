@@ -2,7 +2,7 @@
 // behaviour: "permission" asks for approval, "ask" sends a form question, "ask-strict" one with required, integer,
 // multi-select, pattern and format fields (some limits null) and optional choices, "ask-object" one with a nested
 // object P9 cannot render, "slow" waits for cancel, "crash" exits, "auth-required" fails the turn signed out, "detach" starts a setsid sleeper and replies with its
-// pid, "env" replies with its environment's names (never values), "config" with its model and settings, "probe <port> <host> <script>" runs the phase 10 credential probe, anything else is echoed. A file named slow-init in
+// pid, "env" replies with its environment's names (never values), "mcp" with the MCP servers P9 handed it, "config" with its model and settings, "probe <port> <host> <script>" runs the phase 10 credential probe, anything else is echoed. A file named slow-init in
 // the working directory stalls initialize for 10 s, hang-init never answers it; slow-close stalls session/close for 2 s.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
@@ -40,7 +40,7 @@ const png = (w, h) => {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 };
-let mode = 'unset', model = 'default', cwd = '';
+let mode = 'unset', model = 'default', cwd = '', mcpServers = null;
 const picked = { effort: 'medium', fast: 'off', sandbox: 'on' };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
@@ -62,10 +62,11 @@ const connection = new acp.AgentSideConnection(() => ({
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: !existsSync('no-images') }, sessionCapabilities: { resume: {}, close: {} } } };
   },
   async authenticate() { return {}; },
-  async newSession(params) { cwd = 'new:' + params.cwd; const sessionId = `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
+  async newSession(params) { cwd = 'new:' + params.cwd; mcpServers = params.mcpServers; const sessionId = `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
   async resumeSession(params) {
     if (!params.sessionId.startsWith('fake-')) throw new Error('unknown session');
     cwd = 'resume:' + params.cwd;
+    mcpServers = params.mcpServers;
     commands(params.sessionId);
     return { configOptions: configOptions() };
   },
@@ -125,6 +126,7 @@ const connection = new acp.AgentSideConnection(() => ({
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }
     if (text === 'cwd') { await say('cwd:' + cwd); return { stopReason: 'end_turn' }; }
+    if (text === 'mcp') { await say('mcp:' + JSON.stringify(mcpServers)); return { stopReason: 'end_turn' }; }
     if (text.startsWith('probe ')) {
       // Phase 10: try whatever credentials this agent can see against the remote port (test/credential-probe.mjs).
       const [, port, host, probe, ...rest] = text.split(' ');

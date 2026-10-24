@@ -9,11 +9,11 @@ import path from 'node:path';
 import { readdir as fsReaddir } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
+import { ID, web, problem, RECORD, PAGE, SECTION, LOG, SETTINGS } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
 
-const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ITEM = /^[\w.-]{1,120}\.md$/;
 // The answer line: empty "A.", or "A:" holding only an _italic placeholder_ (some live _tyler items use that form).
 const EMPTY_ANSWER = /^A[.:][ \t]*(?:_[^_\n]*_[ \t]*)?$/m;
@@ -33,57 +33,22 @@ const PRINT_URL_MS = 30000;
 const OUTPUT_LIMIT = 1024 * 1024;
 const MAX_RUNNING = 4;
 
-function relativePath(value) {
-  return typeof value === 'string' && value && !path.isAbsolute(value) && !value.split('/').some((part) => !part || part === '.' || part === '..');
-}
-
 // Windows editors save UTF-8 with a leading U+FEFF, which JSON.parse refuses; one is dropped (M1). Settings, registry and space all read through here.
 const stripBom = (text) => (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
 
-// A page may open with a scheme the user listed in settings.page_schemes. These never open, even when listed (they run code or read files).
-const NEVER_SCHEMES = new Set(['javascript', 'file', 'data', 'vbscript', 'blob']);
-// Two letters at least, so a Windows drive path (c:\...) is never a scheme.
-const SCHEME = /^[a-z][a-z0-9+.-]{1,31}$/;
-const schemeOf = (url) => url.match(/^([a-z][a-z0-9+.-]*):/i)?.[1].toLowerCase();
-
 export function parseSettings(text) {
   const settings = JSON.parse(stripBom(text));
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)
-      || !['primary', 'registry', 'waiting'].every((key) => relativePath(settings[key]))
-      || !Object.keys(settings).every((key) => ['primary', 'registry', 'waiting', 'scripts_root', 'hub', 'space', 'server_host', 'page_schemes'].includes(key))
-      || !optional(settings, 'hub', relativePath) || !optional(settings, 'space', relativePath)
-      || !optional(settings, 'page_schemes', (value) => Array.isArray(value) && value.length >= 1 && value.length <= 16 && value.every((scheme) => typeof scheme === 'string' && SCHEME.test(scheme)))
-      || !optional(settings, 'server_host', (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value))
-      || !optional(settings, 'scripts_root', (value) => typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0'))) throw new Error('invalid-settings');
+  // detail: what is wrong, for the P9 MCP server's validate; the error message stays the code callers match.
+  const detail = problem(settings, SETTINGS, true);
+  if (detail) throw Object.assign(new Error('invalid-settings'), { detail });
   return Object.freeze(settings);
 }
 
-const strings = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string' && item && !item.includes('\0'));
-const optional = (record, key, check) => !(key in record) || check(record[key]);
-const web = (value) => typeof value === 'string' && /^https?:\/\/[^\s]+$/.test(value);
-// A page link: http(s), or a scheme from settings.page_schemes that is not on the never list (M6).
-const pageUrl = (value, schemes = []) => web(value) || (typeof value === 'string' && value.length <= 2000 && !/[\s\x00-\x1f\x7f]/.test(value)
-  && schemeOf(value) !== undefined && !NEVER_SCHEMES.has(schemeOf(value)) && schemes.includes(schemeOf(value)) && value.length > schemeOf(value).length + 1);
-// A button argument may be a plain label or {label, choices: [...]}: the server then accepts only those values (M5).
-// choices may also name a list P9 fills itself: "plans" is every plan.md under the scripts root (workspace-hub's list).
-const NAMED_CHOICES = new Set(['plans']);
-const argSpec = (arg) => typeof arg === 'string' || (arg && typeof arg === 'object' && typeof arg.label === 'string'
-  && optional(arg, 'choices', (choices) => NAMED_CHOICES.has(choices) || (Array.isArray(choices) && choices.length >= 1 && choices.length <= 50
-    && choices.every((choice) => typeof choice === 'string' && choice && choice.length <= 200))));
+// The field tables (mission-fields.mjs) are the rules; an invalid entry's detail says which one failed.
+const recordProblem = (record, kind, schemes) => problem(record, kind === 'pages' ? PAGE : RECORD, false, schemes);
+
 // Folders the plans list never walks into: dependencies, archives, private and template trees (workspace-hub skipped the same).
 const PLAN_SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
-
-function validRecord(record, kind, schemes) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) || typeof record.id !== 'string' || !ID.test(record.id)
-      || typeof record.title !== 'string') return false;
-  if (kind === 'pages') return pageUrl(record.url, schemes);
-  return strings(record.cmd) && record.cmd.length > 0
-    && optional(record, 'args', (args) => Array.isArray(args) && args.length <= 4 && args.every(argSpec))
-    && optional(record, 'tail', strings) && optional(record, 'cwd', relativePath) && optional(record, 'url', web)
-    && ['terminal', 'confirm', 'print_url', 'detach'].every((key) => optional(record, key, (value) => typeof value === 'boolean'))
-    && optional(record, 'url_delay', (value) => Number.isSafeInteger(value) && value >= 0 && value <= 30000)
-    && ['desc', 'group', 'where'].every((key) => optional(record, key, (value) => typeof value === 'string'));
-}
 
 // Malformed records and every record sharing a duplicated ID are dropped and reported, never run.
 export function parseRegistry(text, schemes = []) {
@@ -96,7 +61,8 @@ export function parseRegistry(text, schemes = []) {
     for (const record of records) if (typeof record?.id === 'string') counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
     result[kind] = [];
     records.forEach((record, index) => {
-      if (!validRecord(record, kind, schemes)) result.invalid.push({ kind, index, reason: 'malformed-record' });
+      const detail = recordProblem(record, kind, schemes);
+      if (detail) result.invalid.push({ kind, index, reason: 'malformed-record', detail });
       else if (counts.get(record.id) > 1) result.invalid.push({ kind, index, id: record.id, reason: 'duplicate-id' });
       else result[kind].push(record);
     });
@@ -111,19 +77,26 @@ export function parseSpace(text) {
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
   const result = { sections: [], invalid: [] };
   space.sections.forEach((section, index) => {
-    if (!section || typeof section !== 'object' || typeof section.title !== 'string' || !section.title.trim()
-        || !['buttons', 'logs'].every((key) => optional(section, key, Array.isArray)) || !optional(section, 'text', (value) => typeof value === 'string')) {
-      return result.invalid.push({ kind: 'space', index, reason: 'malformed-section' });
-    }
+    const wrong = problem(section, SECTION);
+    if (wrong) return result.invalid.push({ kind: 'space', index, reason: 'malformed-section', detail: wrong });
     const title = section.title.trim(), buttons = [], logs = [];
-    (section.buttons ?? []).forEach((record, button) => (validRecord(record, 'scripts') ? buttons.push({ ...record, group: title })
-      : result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record' })));
-    (section.logs ?? []).forEach((record, log) => (record && typeof record.id === 'string' && ID.test(record.id) && typeof record.title === 'string'
-      && relativePath(record.path) ? logs.push({ id: record.id, title: record.title, path: record.path })
-      : result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record' })));
+    (section.buttons ?? []).forEach((record, button) => { const detail = recordProblem(record, 'scripts');
+      if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
+    (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
+      if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
     result.sections.push({ title, text: section.text ?? '', buttons, logs });
   });
   return result;
+}
+
+// The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
+// Exported so the P9 MCP server's validate tools merge exactly as Mission Control does.
+export function combine(reg, space) {
+  const invalid = [...reg.invalid, ...space.invalid];
+  const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
+  const logs = new Set(unique(space.sections.flatMap((section) => section.logs), 'space', invalid));
+  const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)) }));
+  return { ...reg, scripts, invalid, space: sections };
 }
 
 // Every record sharing an ID with another is dropped and reported, as parseRegistry does within one kind.
@@ -209,11 +182,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       try { space = parseSpace((await readFile(workspace, settings.space)).content); }
       catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
     }
-    const invalid = [...reg.invalid, ...space.invalid];
-    const scripts = await named(unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid));
-    const logs = new Set(unique(space.sections.flatMap((section) => section.logs), 'space', invalid));
-    const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)) }));
-    return { ...reg, apps: await named(reg.apps), scripts, invalid, space: sections };
+    const combined = combine(reg, space);
+    return { ...combined, scripts: await named(combined.scripts), apps: await named(combined.apps) };
   }
   async function queue() {
     const items = [];
@@ -431,5 +401,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return results.at(-1) === 'cleanup-failed' ? 'cleanup-failed-reconcile' : 'cleanup-failed-runs';
   }
 
-  return { overview, run, output, launch, answer, stopAll, spaceLog, setSettings };
+  return { overview, run, output, launch, answer, stopAll, spaceLog, setSettings, named };
 }

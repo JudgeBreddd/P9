@@ -118,7 +118,7 @@ test('M4: 50,000 characters go through; one more is refused with its count; a to
 });
 
 // ---- v0.1.5 chunk 3: the screenshots the owner opens. The run's volume is thrown away, so each PNG is also printed to the log as
-// "P9_SHOT <name> <base64>". Also asserts what the pictures show.
+// "P9_SHOT <name> <base64>" (not on GitHub). Also asserts what the pictures show.
 test('v0.1.5 c3 screenshots: counter, dropdown, refused character, restart notice', { timeout: 60000 }, async (t) => {
   const { mkdir } = await import('node:fs/promises');
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c3shots-'));
@@ -143,7 +143,8 @@ test('v0.1.5 c3 screenshots: counter, dropdown, refused character, restart notic
   const page = await app.firstWindow();
   const shot = async (name, locator) => {
     const png = await locator.screenshot({ type: 'png' });
-    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    // Not on GitHub: gh run view --log drops every line after a 300 KB one, which hid a real failure for three runs.
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
     if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
   };
   const closeModal = async () => { await page.click('#mdlX'); await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 }); };

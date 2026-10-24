@@ -65,7 +65,9 @@ async function startDaemon(t, entry, fixturePaths, extra) {
     child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`daemon-exit-${code}` + said())); });
     child.stdout.on('data', () => { if (output.includes('P9_READY')) { clearTimeout(timer); resolve(); } });
   });
-  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); } });
+  // A daemon that ignores SIGTERM would hold this test's result line back forever (probe run 2026-10-23-134527): SIGKILL after 10 s.
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM');
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10000); await once(child, 'exit'); clearTimeout(timer); } });
   await ready;
   const credentials = JSON.parse(await readFile(path.join(fixturePaths.state, 'desktop.json'), 'utf8'));
   return { ...fixturePaths, child, credentials, extra };

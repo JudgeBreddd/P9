@@ -20,6 +20,7 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   assert.ok(files.length < 100, files.length + ' files in the bundled daemon');
 
   await daemon(t, path.join(out, 'apps', 'server', 'main.mjs'));
+  assert.ok(files.some((entry) => entry.name === 'mcp-relay.mjs'), 'the MCP relay is beside main.mjs');
   for (const name of ['hono', 'ws', '@simplewebauthn/server', '@agentclientprotocol/sdk', 'zod']) assert.match(notices, new RegExp('\n## ' + name + '@'), name + ' notice');
   for (const section of notices.split('\n## ').slice(1)) assert.match(section, /\n### /, section.split('\n')[0] + ' has no licence text');
 

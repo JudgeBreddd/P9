@@ -30,6 +30,8 @@ async function bundle(input, file) {
 export async function bundleDaemon(root, out, platform) {
   for (const folder of ['apps', 'node_modules']) await rm(path.join(out, folder), { recursive: true }).catch((error) => { if (error.code !== 'ENOENT') throw error; });
   const modules = await bundle(path.join(root, 'apps', 'server', 'main.mjs'), path.join(out, 'apps', 'server', 'main.mjs'));
+  // The P9 MCP relay runs as its own process beside main.mjs (chat.mjs); it imports only Node's standard library.
+  await cp(path.join(root, 'apps', 'server', 'mcp-relay.mjs'), path.join(out, 'apps', 'server', 'mcp-relay.mjs'));
   const modulesDir = path.join(out, 'node_modules');
   const claudeAcp = await packageDir(root, '@agentclientprotocol/claude-agent-acp');
   modules.push(...await bundle(path.join(claudeAcp, 'dist', 'index.js'), path.join(modulesDir, '@agentclientprotocol', 'claude-agent-acp', 'dist', 'index.js')));

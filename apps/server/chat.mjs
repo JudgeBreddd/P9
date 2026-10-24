@@ -5,7 +5,7 @@
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -29,6 +29,10 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // contracts.md rule 1: without elicitation.form both adapters silently skip questions. fs and terminal stay off:
 // agents read, write and run under their own permission checks.
 const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
+// The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.
+const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
+// The approval a P9 MCP tool asks for (run_script, answer_needs_you): the chat's own prompt, two buttons.
+const MCP_OPTIONS = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
 const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@agentclientprotocol/${provider === 'claude' ? 'claude-agent-acp' : 'codex-acp'}/dist/index.js`, import.meta.url));
 const refused = (status, error) => ({ status, error });
 // ACP's authRequired (code -32000) means the agent's own CLI on this computer is not signed in (GitHub issue #4: the
@@ -186,7 +190,8 @@ function trim(update) {
   return { ...rest, truncated: text.length };
 }
 
-export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle }) {
+// socketPath: the desktop socket the P9 MCP relay calls; without it (tests that never start the daemon) chats get no MCP server.
+export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath }) {
   const db = ledger.db;
   const live = new Map(); // conversation -> { proc, agent, sessionId, exited, turn, pending: Map }
   const listeners = new Set();
@@ -331,7 +336,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const proc = launchTree(command(conversation.provider), workspace, { instance, scope: true });
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
-    const session = { proc, pending: new Map(), turn: null };
+    // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.
+    const session = { proc, pending: new Map(), turn: null, mcpToken: randomBytes(32).toString('hex') };
+    const mcpServers = socketPath ? [{ name: 'p9', command: process.execPath, args: [mcpRelay],
+      env: [{ name: 'P9_MCP_SOCKET', value: socketPath }, { name: 'P9_MCP_TOKEN', value: session.mcpToken }] }] : [];
     session.exited = new Promise((resolve) => {
       proc.child.once('exit', (code, signal) => {
         resolve();
@@ -347,17 +355,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       });
       proc.child.once('error', () => { if (!proc.child.pid) resolve(); });
     });
-    const ask = (kind) => (request) => new Promise((resolve) => {
+    // signal (P9 MCP approvals only): the tool call was cancelled or its relay went away, so the prompt is withdrawn.
+    const ask = (kind) => (request, signal) => new Promise((resolve) => {
       if (kind === 'approval' && locked) { emit(conversation.id, 'lock-rejected', { toolCall: trim(request.toolCall) }); return resolve(reject(request)); }
       const id = randomUUID(), form = kind === 'question' ? formSpec(request.requestedSchema) : undefined;
+      const withdraw = () => { if (!session.pending.has(id)) return; session.pending.get(id).resolve(null); emit(conversation.id, 'answered', { request: id, answer: { outcome: { outcome: 'cancelled' } } }); };
       session.pending.set(id, { kind, request, form, resolve: (answer) => {
         session.pending.delete(id);
+        signal?.removeEventListener('abort', withdraw);
         resolve(answer ?? (kind === 'approval' ? { outcome: { outcome: 'cancelled' } } : { action: 'cancel' }));
       } });
       emit(conversation.id, kind, kind === 'approval'
         ? { request: id, toolCall: trim(request.toolCall), options: request.options }
         : { request: id, message: request.message, schema: request.requestedSchema, form });
+      if (signal?.aborted) withdraw(); else signal?.addEventListener('abort', withdraw, { once: true });
     });
+    session.approve = ask('approval');
     const stream = acp.ndJsonStream(Writable.toWeb(proc.child.stdin), Readable.toWeb(proc.child.stdout));
     session.agent = new acp.ClientSideConnection(() => ({
       sessionUpdate: async ({ update }) => {
@@ -369,7 +382,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         emit(conversation.id, 'update', trim(agentImages(update)));
       },
-      requestPermission: ask('approval'),
+      // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
+      requestPermission: (request) => session.approve(request),
       createElicitation: ask('question'),
     }), stream);
     live.set(conversation.id, session);
@@ -387,14 +401,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.capabilities = init.agentCapabilities ?? {};
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
       if (conversation.session) {
-        const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers: [] }));
+        const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers }));
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
         if (conversation.provider === 'codex' || locked) await bounded(setMode(session, conversation.provider));
         emit(conversation.id, 'resumed', { session: conversation.session });
         models(session, conversation.id, resumed?.configOptions);
       } else {
-        const created = await bounded(session.agent.newSession({ cwd, mcpServers: [] }));
+        const created = await bounded(session.agent.newSession({ cwd, mcpServers }));
         session.sessionId = created.sessionId;
         db.prepare('UPDATE conversations SET session = ? WHERE id = ?').run(session.sessionId, conversation.id);
         // contracts.md rule 2: Codex starts in workspace-write, not the adapter's auto-approving default.
@@ -460,6 +474,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   return {
     login: loginRoutes,
     lock: () => ({ status: 200, on: locked }),
+    // The P9 MCP server (mcp.mjs): which live chat a relay's token belongs to, or null.
+    mcpConversation(token) {
+      if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null;
+      let found = null;
+      for (const [id, session] of live) if (!session.stopping && timingSafeEqual(Buffer.from(session.mcpToken), Buffer.from(token))) found = id;
+      return found;
+    },
+    // True only when the user picked Allow in that chat's own approval prompt; a stop, the lock or signal end it as false.
+    async approve(id, toolCall, signal) {
+      const session = live.get(id);
+      if (!session?.approve || session.stopping) return false;
+      const answer = await session.approve({ toolCall, options: MCP_OPTIONS }, signal);
+      return answer?.outcome?.outcome === 'selected' && answer.outcome.optionId === 'allow';
+    },
+    // request_restart: shown in the chat; the user restarts P9 (or not) themselves.
+    restartRequest: (id, reason) => emit(id, 'restart-request', { reason }),
     // Desktop only (server.mjs). Live sessions switch now; one whose mode change fails is stopped rather than left writable.
     async setLock(body) {
       if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return refused(400, 'request-refused');
