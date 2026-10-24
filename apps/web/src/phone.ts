@@ -126,6 +126,7 @@ function render() {
     else if (kind === 'question') add('Question', data.message, true);
     else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('Turn ended', data.stopReason, true); }
     else if (kind === 'error') add('Error', data.message, true);
+    else if (kind === 'steer-lost') add('This message may not have reached the agent', data.text, true);
     else if (kind === 'interrupted') { settle(); add('Stopped', 'The P9 daemon restarted mid-turn. Send again to resume.', true); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('Stopped', 'Send again to resume.', true); }
   }

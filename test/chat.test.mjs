@@ -82,10 +82,12 @@ test('approvals and questions are answered only with options and fields the agen
   assert.equal((await call(instance, `/chat/${id}/answer`, 'POST', { request: question.data.request, answer: { action: 'accept', content: { colour: 'red' } } })).status, 200);
   const answered = await until(instance, (event) => event.type === 'turn-end', asked);
   assert.ok(answered.seen.some(said(id, 'ask:{"action":"accept","content":{"colour":"red"}}')));
-  // One turn at a time; cancel ends it with the adapter's own stop reason.
+  // One turn at a time: a prompt mid-turn goes into it (steered, like Claude Code); cancel ends it with the adapter's own stop reason.
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'slow' });
   await until(instance, said(id, 'working'), answered.cursor);
-  assert.equal((await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'second' }))).body.error, 'turn-running');
+  const steered = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'second' }));
+  assert.deepEqual([steered.status, steered.body.steered], [202, true]);
+  await until(instance, said(id, 'got:second'), answered.cursor);
   assert.equal((await call(instance, `/chat/${id}/cancel`, 'POST')).status, 200);
   const cancelled = await until(instance, (event) => event.type === 'turn-end', answered.cursor);
   assert.equal(cancelled.hit.data.stopReason, 'cancelled');

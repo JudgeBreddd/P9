@@ -1332,6 +1332,8 @@ test('Interrupt and send: a queued message sent with the bolt, or Ctrl+Enter, re
   // Builder, 2026-10-21: "I sent a message. it went to the waiting queue. i hit the button to interupt and send the message now,
   // and it didnt send my message, and it cancelled your turn."
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // An adapter without steering, so a message sent mid-turn waits queued (with steering it goes into the turn).
+  await writeFile(path.join(instance.workspace, 'no-steering'), '');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-interrupt-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });

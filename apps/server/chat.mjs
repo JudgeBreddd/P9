@@ -28,12 +28,12 @@ const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // contracts.md rule 1: without elicitation.form both adapters silently skip questions. fs and terminal stay off:
 // agents read, write and run under their own permission checks.
-const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
+export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
 // The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.
 const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
 // The approval a P9 MCP tool asks for (run_script, answer_needs_you): the chat's own prompt, two buttons.
 const MCP_OPTIONS = [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }];
-const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@agentclientprotocol/${provider === 'claude' ? 'claude-agent-acp' : 'codex-acp'}/dist/index.js`, import.meta.url));
+export const adapterEntry = (provider) => fileURLToPath(new URL(`../../node_modules/@agentclientprotocol/${provider === 'claude' ? 'claude-agent-acp' : 'codex-acp'}/dist/index.js`, import.meta.url));
 const refused = (status, error) => ({ status, error });
 // ACP's authRequired (code -32000) means the agent's own CLI on this computer is not signed in (GitHub issue #4: the
 // window showed only "Authentication required"). Say how to sign in; any other error passes through, cut to 500 chars.
@@ -399,6 +399,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       await bounded(listDirectory(workspace, conversation.folder ?? ''));
       const cwd = conversation.folder ? path.join(workspace, conversation.folder) : workspace;
       session.capabilities = init.agentCapabilities ?? {};
+      session.steering = init._meta?.steering?.supported === true;
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
       if (conversation.session) {
         const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers }));
@@ -471,6 +472,46 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return results.includes('cleanup-failed') ? 'cleanup-failed' : 'stopped';
   }
 
+  const blocks = (text, images) => [...(text.trim() ? [{ type: 'text', text }] : []), ...images.map(({ mimeType, data }) => ({ type: 'image', mimeType, data }))];
+  // 2026-10-24 (a user's messages waited 8 h behind an open question and a turn that never ended): a message sent while
+  // the agent asks declines the question or approval, as Claude Code's "tell Claude what to do differently" does.
+  const decline = (id, session) => {
+    for (const [request, pending] of session.pending) {
+      const answer = pending.kind === 'approval' ? { outcome: { outcome: 'cancelled' } } : { action: 'cancel' };
+      pending.resolve(answer);
+      emit(id, 'answered', { request, answer });
+    }
+  };
+  // A message during a turn goes into it at the agent's next step (ACP _session/steering, which both adapters
+  // advertise), the way Claude Code's own queue does. Refused (no steering, or the turn just ended): 409 as before, and
+  // the desktop keeps the message queued for the turn's end.
+  async function steer(id, body, images) {
+    const session = live.get(id);
+    if (!session?.turn || !session.steering || session.stopping) return refused(409, 'turn-running');
+    if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
+    stillAuthorized();
+    decline(id, session);
+    // ponytail: Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is
+    // delivered, but that turn's end is not reported (it is not this prompt's), so the chat shows working until the next.
+    const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
+    const user = { ...(images.length ? { text: body.text, images: images.length } : { text: body.text }), steered: true };
+    const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: blocks(body.text, images),
+      _meta: { steering: { idleBehavior: 'promptRequired' } } });
+    let result;
+    try { result = await Promise.race([request, wait(5000).then(() => 'slow')]); } catch { return refused(409, 'turn-running'); }
+    if (result === 'slow') {
+      // No answer in 5 s: the request may still land, so a 409 (queued, sent again at the turn's end) could deliver it
+      // twice. Shown as sent but unconfirmed; a later refusal says so with the text, so it never vanishes silently.
+      const lost = () => emit(id, 'steer-lost', { text: body.text });
+      request.then((late) => { if (!delivered(late)) lost(); }, lost);
+      emit(id, 'user', { ...user, unconfirmed: true });
+      return { status: 202, steered: true, unconfirmed: true };
+    }
+    if (!delivered(result)) return refused(409, 'turn-running');
+    emit(id, 'user', user);
+    return { status: 202, steered: true };
+  }
+
   return {
     login: loginRoutes,
     lock: () => ({ status: 200, on: locked }),
@@ -530,7 +571,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
-      if (conversation.state === 'turn') { release(); return refused(409, 'turn-running'); }
+      if (conversation.state === 'turn') { try { return await steer(id, body, images); } finally { release(); } }
       // A prompt during Stop, or after a cleanup P9 could not confirm, would launch a second adapter beside old work.
       if (!['idle', 'running', 'stopped'].includes(conversation.state)) { release(); return refused(409, conversation.state); }
       if (closing) { release(); return refused(503, 'shutting-down'); }
@@ -574,8 +615,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }
       // Again after the mode, model and effort awaits (up to 5 s each): a device revoked meanwhile sends nothing.
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
+      decline(id, session);
       const turn = session.turn = randomUUID();
-      const prompt = [...(body.text.trim() ? [{ type: 'text', text: body.text }] : []), ...images.map(({ mimeType, data }) => ({ type: 'image', mimeType, data }))];
+      const prompt = blocks(body.text, images);
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },

@@ -1,5 +1,7 @@
 // Test-only ACP agent, ported from agent-first-workspace's _engine/fake-acp-agent.ts. The prompt text picks the
-// behaviour: "permission" asks for approval, "ask" sends a form question, "ask-strict" one with required, integer,
+// behaviour: "permission" asks for approval, "ask" sends a form question ("ask-later" after 2 s of work), "stream <n>" streams 3n updates, "background" ends
+// its turn and works on unprompted without end, asking once ("background quiet" never); messages steered (_session/steering, off with a no-steering file) or prompted
+// into it come back as "got:<text>" at its next step, "ask-strict" one with required, integer,
 // multi-select, pattern and format fields (some limits null) and optional choices, "ask-object" one with a nested
 // object P9 cannot render, "slow" waits for cancel, "crash" exits, "auth-required" fails the turn signed out, "detach" starts a setsid sleeper and replies with its
 // pid, "env" replies with its environment's names (never values), "mcp" with the MCP servers P9 handed it, "config" with its model and settings, "probe <port> <host> <script>" runs the phase 10 credential probe, anything else is echoed. A file named slow-init in
@@ -31,6 +33,11 @@ if (process.argv.includes('--cli') || process.argv[3] === 'cli') {
 }
 
 const cancelled = new Set();
+// Messages that reach a running turn (a steer) or the unprompted work ("background"): answered at its next step.
+const turns = new Set(), background = new Set(), inbox = new Map();
+const deliver = (sessionId, text) => new Promise((done) => { if (!inbox.has(sessionId)) inbox.set(sessionId, []); inbox.get(sessionId).push({ text, done }); });
+const take = async (sessionId, say) => { for (const m of inbox.get(sessionId)?.splice(0) ?? []) { await say('got:' + m.text); m.done(); } };
+const textOf = (prompt) => prompt.map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
 // A real w x h RGB PNG as base64 (a red-green gradient), like the image an agent makes.
 const png = (w, h) => {
   const chunk = (type, data) => { const head = Buffer.alloc(4), tail = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
@@ -59,7 +66,17 @@ const connection = new acp.AgentSideConnection(() => ({
   async initialize() {
     if (existsSync('hang-init')) await new Promise(() => {});
     if (existsSync('slow-init')) await new Promise((resolve) => setTimeout(resolve, 10000));
-    return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: !existsSync('no-images') }, sessionCapabilities: { resume: {}, close: {} } } };
+    return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: !existsSync('no-images') }, sessionCapabilities: { resume: {}, close: {} } },
+      ...(!existsSync('no-steering') && { _meta: { steering: { supported: true } } }) };
+  },
+  // Like claude-agent-acp 0.88's _session/steering with idleBehavior promptRequired.
+  async extMethod(method, params) {
+    if (method !== '_session/steering' || existsSync('no-steering')) throw acp.RequestError.methodNotFound(method);
+    if (!turns.has(params.sessionId)) return { outcome: 'promptRequired', reason: 'noRunningTurn' };
+    if (existsSync('slow-steering')) await new Promise((resolve) => setTimeout(resolve, 6000)); // past chat.mjs's 5 s wait
+    if (existsSync('steering-refuses')) throw new Error('steering refused');
+    deliver(params.sessionId, textOf(params.prompt));
+    return { outcome: 'injected' };
   },
   async authenticate() { return {}; },
   async newSession(params) { cwd = 'new:' + params.cwd; mcpServers = params.mcpServers; const sessionId = `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
@@ -78,8 +95,15 @@ const connection = new acp.AgentSideConnection(() => ({
   },
   async cancel(params) { cancelled.add(params.sessionId); },
   async prompt(params) {
+    const { sessionId } = params, say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
+    // Like Claude Code's prompt queue: a prompt during the unprompted work is taken in at its next step.
+    if (background.has(sessionId)) { await deliver(sessionId, textOf(params.prompt)); return { stopReason: 'end_turn' }; }
+    turns.add(sessionId);
+    try { return await this.turn(params); } finally { await take(sessionId, say); turns.delete(sessionId); }
+  },
+  async turn(params) {
     const { sessionId } = params;
-    const text = params.prompt.map((block) => (block.type === 'text' ? block.text : block.type === 'image' ? '[image ' + block.mimeType + ' ' + Buffer.from(block.data, 'base64').length + ']' : '')).join('');
+    const text = textOf(params.prompt);
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     if (text === 'crash') process.exit(3);
     if (text === 'auth-required') throw acp.RequestError.authRequired();
@@ -164,8 +188,23 @@ const connection = new acp.AgentSideConnection(() => ({
     if (text === 'slow') {
       cancelled.delete(sessionId);
       await say('working');
-      while (!cancelled.has(sessionId)) await new Promise((resolve) => setTimeout(resolve, 20));
+      while (!cancelled.has(sessionId)) { await take(sessionId, say); await new Promise((resolve) => setTimeout(resolve, 20)); }
       return { stopReason: 'cancelled' };
+    }
+    // A coordinator's background tasks (2026-10-24): each report wakes the agent with no prompt, so after this turn ends
+    // it works on with no end and no closing usage_update, and asks once on its tenth step ("background quiet" never asks).
+    if (text === 'background' || text === 'background quiet') {
+      background.add(sessionId);
+      setTimeout(async () => {
+        for (let i = 1; ; i++) {
+          await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'bg-' + i, title: 'Background task ' + i, kind: 'execute', status: 'completed' } });
+          await take(sessionId, say);
+          if (i === 10 && text === 'background') await say('bg-ask:' + JSON.stringify(await connection.createElicitation({ sessionId, mode: 'form', message: 'Keep going?',
+            requestedSchema: { type: 'object', properties: { go: { type: 'boolean' } } } })));
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+      }, 1000);
+      return { stopReason: 'end_turn' };
     }
     if (text === 'effect-slow') {
       cancelled.delete(sessionId);
@@ -185,6 +224,26 @@ const connection = new acp.AgentSideConnection(() => ({
       const result = await connection.createElicitation({ sessionId, mode: 'form', message: 'Pick a colour',
         requestedSchema: { type: 'object', properties: { colour: { type: 'string', enum: ['red', 'blue'] } } } });
       await say('ask:' + JSON.stringify(result));
+      return { stopReason: 'end_turn' };
+    }
+    // Works for 2 s, then asks: messages sent meanwhile queue, and the question keeps the turn from ending.
+    if (text === 'ask-later') {
+      await say('working');
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const result = await connection.createElicitation({ sessionId, mode: 'form', message: 'Pick a colour',
+        requestedSchema: { type: 'object', properties: { colour: { type: 'string', enum: ['red', 'blue'] } } } });
+      await say('ask:' + JSON.stringify(result));
+      return { stopReason: 'end_turn' };
+    }
+    // A long streamed turn: n tool calls, each updated once, with a reply chunk after each (3n events, 21 per 10 ms).
+    if (text.startsWith('stream ')) {
+      const n = Number(text.slice(7));
+      for (let i = 1; i <= n; i++) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'run-' + i, title: 'Read file ' + i, kind: 'read', status: 'in_progress' } });
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'run-' + i, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'line '.repeat(40) + i } }] } });
+        await say('step ' + i + ' done. ');
+        if (i % 7 === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       return { stopReason: 'end_turn' };
     }
     if (text === 'ask-strict') {
