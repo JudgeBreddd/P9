@@ -14,17 +14,17 @@ const hash = (text) => createHash('sha256').update(text).digest('hex');
 const node = process.execPath;
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
 
-async function start(t) {
+async function start(t, bom = '') {
   return daemon(t, undefined, false, async ({ directory, workspace }) => {
     for (const folder of ['projects', 'hub', '_waiting']) await mkdir(path.join(workspace, folder));
     await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
-    await writeFile(path.join(workspace, SETTINGS.registry), JSON.stringify({ scripts: [
+    await writeFile(path.join(workspace, SETTINGS.registry), bom + JSON.stringify({ scripts: [
       { id: 'hello', title: 'Hello', cmd: [node, '-e', 'console.log("hi", process.argv[1])'], args: ['Name'] },
       { id: 'mark', title: 'Mark', cmd: [node, '-e', 'require("fs").writeFileSync("marker", "ran")'] },
-      { id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }], apps: [], pages: [] }, null, 2) + '\n');
+      { id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }], apps: [{ id: 'editor', title: 'Editor', cmd: ['true'] }], pages: [{ id: 'dash', title: 'Dashboard', url: 'http://127.0.0.1:5000/' }] }, null, 2) + '\n');
     await mkdir(path.join(workspace, 'p1'));
     await writeFile(path.join(workspace, 'p1/plan.md'), '# plan\n');
-    await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify({ sections: [{ title: 'Ops', buttons: [{ id: 'ops-up', title: 'Up', cmd: ['true'] }] }] }, null, 2) + '\n');
+    await writeFile(path.join(workspace, SETTINGS.space), bom + JSON.stringify({ sections: [{ title: 'Ops', buttons: [{ id: 'ops-up', title: 'Up', cmd: ['true'] }] }] }, null, 2) + '\n');
     await writeFile(path.join(workspace, '_waiting/pick.md'), '# Which one?\n\n**Your answer:** 1 or 2.\nA.\n');
     await writeFile(path.join(directory, 'settings.json'), JSON.stringify(SETTINGS));
     return { args: ['--acp-override', fake, '--settings', path.join(directory, 'settings.json')] };
@@ -43,8 +43,8 @@ async function until(instance, match, after = 0) {
   throw new Error('event-timeout');
 }
 // A chat, the MCP entry its agent was handed, and the SDK client started from exactly that entry.
-async function agent(t, instance) {
-  const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude' });
+async function agent(t, instance, provider = 'claude') {
+  const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider });
   await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp' });
   const { hit, cursor } = await until(instance, (event) => event.conversation === conversation && event.data?.content?.text?.startsWith('mcp:'));
   const [entry] = JSON.parse(hit.data.content.text.slice(4));
@@ -67,7 +67,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 15);
+  assert.equal((await client.listTools()).tools.length, 19);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -84,7 +84,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.equal((await mcp(entry.env[1].value, [1])).body.error.code, -32600);
   await call(instance, `/chat/${conversation}/stop`, 'POST', {});
   assert.equal((await mcp(entry.env[1].value)).status, 401);
-  console.log('PASS MCP: SDK client initialized and listed 15 tools; wrong, missing, cookie-only and stopped-chat tokens all 401');
+  console.log('PASS MCP: SDK client initialized and listed 19 tools; wrong, missing, cookie-only and stopped-chat tokens all 401');
 });
 
 test('MCP writes: File protection and the agent lock refuse them; the parser, a stale hash and a clashing ID keep the file', async (t) => {
@@ -192,4 +192,85 @@ test('MCP: the phone listener has no MCP server, even for an enrolled phone hold
   assert.equal((await server.remote('/mcp', { method: 'POST', body: ping, headers })).status, 401);
   assert.equal((await call(server, '/mcp', 'POST', ping, headers)).status, 200);
   console.log('PASS MCP remote: an enrolled phone with a live token gets 404 on the phone listener; the desktop socket answers');
+});
+
+// ME4: update_* edit a title or icon through the same guarded edit(); the tools reach Claude's and Codex's chats alike.
+for (const provider of ['claude', 'codex']) {
+  test(`MCP update tools (${provider} chat): title and icon change through the guarded edit; bad icons, stale hashes and protection keep the file`, async (t) => {
+    const instance = await start(t);
+    const { tool } = await agent(t, instance, provider);
+    const before = await file(instance, SETTINGS.registry);
+    assert.equal((await tool('update_button', { id: 'hello', icon: '👋' })).error, 'registry-read-only');
+    await call(instance, '/file-protection', 'POST', { on: false });
+    const done = await tool('update_button', { id: 'hello', title: 'Say hello', icon: '👋', hash: hash(before) });
+    assert.deepEqual([done.isError, done.action, done.record.icon, done.record.title], [false, 'updated', '👋', 'Say hello']);
+    const text = await file(instance, SETTINGS.registry);
+    assert.equal(done.hash, hash(text));
+    assert.deepEqual(JSON.parse(text).scripts[0], { ...JSON.parse(before).scripts[0], title: 'Say hello', icon: '👋' });
+    assert.equal((await call(instance, '/mission')).body.scripts.find((script) => script.id === 'hello').icon, '👋');
+    // A stale hash, a link or a path as an icon, an unknown ID and a call that changes nothing are all refused; the file stays.
+    assert.equal((await tool('update_button', { id: 'hello', icon: '🙂', hash: hash(before) })).error, 'hash-conflict');
+    for (const icon of ['http://example.com/a.png', 'a/b.png', 'c:\\x', 'two words', 'x'.repeat(17)]) assert.equal((await tool('update_button', { id: 'hello', icon })).error, 'invalid-record', icon);
+    assert.equal((await tool('update_button', { id: 'nope', icon: 'x' })).error, 'unknown-id');
+    assert.equal((await tool('update_button', { id: 'hello' })).error, 'nothing-to-change');
+    assert.equal(await file(instance, SETTINGS.registry), text);
+    // An empty icon removes it.
+    await tool('update_button', { id: 'hello', icon: '' });
+    assert.equal('icon' in JSON.parse(await file(instance, SETTINGS.registry)).scripts[0], false);
+    // App, link and section; a space button by its section; a renamed section keeps its buttons.
+    assert.equal((await tool('update_app', { id: 'editor', icon: '✏️' })).record.icon, '✏️');
+    assert.equal((await tool('update_page', { id: 'dash', title: 'Board', icon: 'D' })).record.title, 'Board');
+    assert.equal((await tool('update_button', { id: 'ops-up', section: 'Ops', icon: '⬆' })).file, SETTINGS.space);
+    assert.equal((await tool('update_section', { title: 'Ops', new_title: 'Operations', icon: '🛠' })).record.title, 'Operations');
+    const space = JSON.parse(await file(instance, SETTINGS.space)).sections[0];
+    assert.deepEqual([space.title, space.icon, space.buttons[0].icon], ['Operations', '🛠', '⬆']);
+    const overview = (await call(instance, '/mission')).body;
+    assert.deepEqual([overview.apps[0].icon, overview.pages[0].icon, overview.space[0].icon], ['✏️', 'D', '🛠']);
+    assert.equal((await tool('update_section', { title: 'Operations', new_title: ' ' })).error, 'invalid-record');
+    assert.equal((await tool('update_section', { title: 'Nope', icon: 'x' })).error, 'unknown-section');
+    await call(instance, '/agent-lock', 'POST', { on: true });
+    assert.equal((await tool('update_app', { id: 'editor', icon: 'E' })).error, 'agent-lock-on');
+    console.log(`PASS MCP update tools (${provider}): button, app, link, section changed; stale hash, link/path icons, unknown ID, lock and protection refused`);
+  });
+}
+
+test('The edit form route: File protection asks first, a stale hash is refused, the agent lock does not stop the user', async (t) => {
+  const instance = await start(t);
+  const registry = await file(instance, SETTINGS.registry);
+  const state = (await call(instance, '/mission/edit')).body;
+  assert.deepEqual(state, { registry: hash(registry), space: hash(await file(instance, SETTINGS.space)), protection: true });
+  const edit = (body) => call(instance, '/mission/edit', 'POST', { hash: state.registry, ...body });
+  const asked = await edit({ kind: 'apps', key: 'editor', icon: 'E' });
+  assert.deepEqual([asked.status, asked.body.error], [403, 'registry-read-only']);
+  assert.equal(await file(instance, SETTINGS.registry), registry);
+  const saved = await edit({ kind: 'apps', key: 'editor', title: 'Code', icon: 'E', confirm: true });
+  assert.deepEqual([saved.status, saved.body.record.title], [200, 'Code']);
+  assert.equal(JSON.parse(await file(instance, SETTINGS.registry)).apps[0].icon, 'E');
+  // The hash the form opened with is now stale: refused with the disk hash, nothing written.
+  const written = await file(instance, SETTINGS.registry);
+  const stale = await edit({ kind: 'pages', key: 'dash', icon: 'D', confirm: true });
+  assert.deepEqual([stale.status, stale.body.error, stale.body.diskHash], [409, 'hash-conflict', hash(written)]);
+  assert.equal(await file(instance, SETTINGS.registry), written);
+  // The hash from the last save works, and the agent lock (about agents) does not block the user's own form.
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  const again = await edit({ kind: 'pages', key: 'dash', icon: 'D', confirm: true, hash: saved.body.hash });
+  assert.equal(again.status, 200);
+  assert.equal((await edit({ kind: 'scripts', key: 'hello', icon: 'x' })).status, 400);
+  assert.equal((await edit({ kind: 'apps', key: 'editor', icon: 'x', cmd: ['rm'] })).status, 400);
+  assert.equal((await edit({ kind: 'apps', key: 'editor', icon: 'http://x.example/i.png', confirm: true, hash: again.body.hash })).body.error, 'invalid-record');
+  assert.equal((await edit({ kind: 'sections', key: 'Ops', icon: '🛠', confirm: true, hash: state.space })).status, 200);
+  console.log('PASS edit route: protection asked first (403 then 200), stale hash 409 with nothing written, lock does not stop the form, other fields 400');
+});
+
+test('BL2: a registry and a space saved with a BOM load and take an edit', async (t) => {
+  const instance = await start(t, '\uFEFF');
+  assert.equal((await call(instance, '/mission')).body.scripts.length, 4);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const { tool } = await agent(t, instance);
+  const added = await tool('add_button', { record: { id: 'build', title: 'Build', cmd: ['make'] } });
+  assert.equal(added.isError, false, JSON.stringify(added));
+  assert.equal((await tool('update_section', { title: 'Ops', icon: '🛠' })).isError, false);
+  assert.equal((await tool('remove_button', { id: 'build' })).isError, false);
+  assert.equal(JSON.parse(await file(instance, SETTINGS.space)).sections[0].icon, '🛠');
+  console.log('PASS BL2: BOM registry and space load, add, update and remove');
 });

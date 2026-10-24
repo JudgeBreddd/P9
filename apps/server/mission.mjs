@@ -34,7 +34,7 @@ const OUTPUT_LIMIT = 1024 * 1024;
 const MAX_RUNNING = 4;
 
 // Windows editors save UTF-8 with a leading U+FEFF, which JSON.parse refuses; one is dropped (M1). Settings, registry and space all read through here.
-const stripBom = (text) => (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
+export const stripBom = (text) => (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
 
 export function parseSettings(text) {
   const settings = JSON.parse(stripBom(text));
@@ -85,7 +85,7 @@ export function parseSpace(text) {
       if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
-    result.sections.push({ title, text: section.text ?? '', buttons, logs, ...(section.notes ? { notes: section.notes } : {}) });
+    result.sections.push({ title, text: section.text ?? '', buttons, logs, ...(section.icon ? { icon: section.icon } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
@@ -212,10 +212,10 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
   async function overview() {
     const reg = await registry();
-    const strip = ({ id, title, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
-      ({ id, title, desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
+    const strip = ({ id, title, icon, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
+      ({ id, title, ...(icon ? { icon } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid,
-      space: reg.space.map(({ title, text, logs, notes }) => ({ title, text, logs: logs.map(({ id, title: name }) => ({ id, title: name })), ...(notes ? { notes } : {}) })),
+      space: reg.space.map(({ title, text, logs, notes, icon }) => ({ title, text, ...(icon ? { icon } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), ...(notes ? { notes } : {}) })),
       queue: await queue(), primary: await primary() };
   }
   // ponytail: a log view reads the whole file (packages/files refuses one over MAX_BYTES) and shows the last 200 lines.

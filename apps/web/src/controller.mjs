@@ -4,6 +4,7 @@ const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
 import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
+import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
 
 export function mountShell() {
@@ -787,8 +788,8 @@ function applyOverview(o) {
   live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
   M.scripts = {}; M.tools = [];
   for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
-  M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id]);
-  M.pages = o.pages.map(x => [x.title, x.url, x.id]);
+  M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
+  M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
   M.space = o.space || [];
   for (const s of M.space) M.scripts[s.title] ||= [];
@@ -906,14 +907,14 @@ const wins = {
   mlaunch: { title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
-    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3])).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true)).join('')}</div>` },
+    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4])).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3])).join('')}</div>` },
   musage: { title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's 5 h and week bars, the same bars as the chat's meters
     inline: () => { const now = Date.now(), rows = Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now);
       return `<div class="uagent"><b>${names[a]}</b>${meterBar('5 h', lim.fiveHour, line, now)}${meterBar('Week', lim.sevenDay, line, now)}</div>`; }).join('');
       return (rows || '<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
 };
-const launchTile = (name, title, data, id, page) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : `<span class="mono-ico"${tint(name)}>${esc(name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
+const launchTile = (name, title, data, id, page, icon) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : `<span class="mono-ico"${tint(name)}${icon ? ' data-icon' : ''}>${esc(icon || name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
 const winTop = {};
 const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
   return `<button class="win${lvl === 'bad' ? ' bad fx-halo' : ''}" data-win="${id}"><h4><span class="lvl" data-l="${lvl}"></span>${esc(w.title())}</h4><b class="big${id === 'mprimary' ? ' fx-title' : ''}">${esc(big)}</b><span class="line">${esc(line)}</span></button>`; };
@@ -923,7 +924,7 @@ const PANELS = ['mlogs', 'musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 function renderMission() {
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : ''}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${(M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
@@ -937,6 +938,7 @@ function renderMission() {
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
+  $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
 }
@@ -1136,6 +1138,10 @@ function missionModal(m, body, row) {
       toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: r.status === 201 ? r.body.path : 'New idea: ' + (r.body?.error || r.status), level: r.status === 201 ? 'ok' : 'bad' }, true);
       if (r.status === 201) { closeModal(); loadHub(); }
     };
+  } else if (m.kind === 'medit') {
+    $('#mdlT').textContent = 'Edit names and icons';
+    editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, esc, toast, again: () => S.modal === m && renderModal(),
+      reload: async keep => { await refreshMission(); if (keep) S.modal === m && renderModal(); else openModal({ kind: 'medit', items: editItems(M) }); } });
   } else if (m.kind === 'handoffs') {
     $('#mdlT').textContent = `Work in flight · ${H.handoffs.length} HANDOFF.md`;
     body.innerHTML = `<ul class="mlist">${H.handoffs.map((x, i) => row(i, '', esc(x.project), 'updated ' + esc(x.age_days) + ' d ago')).join('')}</ul>`;

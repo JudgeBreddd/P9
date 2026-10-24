@@ -29,12 +29,16 @@ const text = (value) => typeof value === 'string';
 const flag = (value) => typeof value === 'boolean';
 const id = { type: 'string', required: true, check: (value) => typeof value === 'string' && ID.test(value),
   doc: 'Lowercase letters, digits and dashes, starting with a letter or digit, at most 64 characters. Unique: a duplicated ID drops every record that has it.' };
+// A tile icon: an emoji or a few letters, never a link or a file path (no / \\ :), so nothing is fetched or opened for it.
+const icon = { type: 'string', check: (value) => typeof value === 'string' && /^[^\s\x00-\x1f\x7f/\\:]{1,16}$/u.test(value),
+  doc: 'The tile icon: an emoji, or up to 16 characters of text with no spaces. Never a link or a file path (no / \\ or :). Omit it for the lettered default.' };
 const relative = (doc) => ({ type: 'string', check: relativePath, doc: doc + ' A relative path with / separators and no empty, . or .. parts.' });
 
 // A registry script or app, and a space section's button (which runs like a registry script).
 export const RECORD = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The button label.' },
+  icon,
   cmd: { type: 'array', items: 'string', required: true, check: (value) => strings(value) && value.length > 0,
     doc: 'The program and its fixed arguments, run without a shell. At least one non-empty string. ~ and ~/workspace expand (to the home folder and settings.scripts_root).' },
   args: { type: 'array', check: (value) => Array.isArray(value) && value.length <= 4 && value.every(argSpec),
@@ -54,6 +58,7 @@ export const RECORD = {
 export const PAGE = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The link label.' },
+  icon,
   url: { type: 'string', required: true, check: pageUrl,
     doc: 'An http(s) link, or a link whose scheme is listed in settings.page_schemes (never javascript, file, data, vbscript or blob). A non-http(s) link asks the user before it opens.' },
 };
@@ -64,6 +69,7 @@ export const LOG = {
 };
 export const SECTION = {
   title: { type: 'string', required: true, check: (value) => typeof value === 'string' && Boolean(value.trim()), doc: 'The section heading. Not blank.' },
+  icon,
   text: { type: 'string', check: text, doc: 'A paragraph shown under the heading.' },
   buttons: { type: 'array', check: Array.isArray, doc: 'Buttons, each a script record. They share the registry scripts\' IDs: an ID used in both drops both.' },
   logs: { type: 'array', check: Array.isArray, doc: 'Log views.' },

@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile, guardedSave } from '../../packages/files/index.mjs';
-import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal } from './mission.mjs';
+import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom } from './mission.mjs';
 import { problem, jsonSchema, SCHEMAS, RECORD, PAGE, SECTION } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -33,6 +33,7 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Read p9://schema/regist
 
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
 const sectionField = { type: 'string', description: 'A space section title. Without it the button goes to (or comes from) the registry\'s scripts.' };
+const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty string removes it.' };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const TOOLS = [
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
@@ -44,6 +45,12 @@ const TOOLS = [
   ['add_app', 'Add an app to the registry.', input({ record: jsonSchema(RECORD, {}, true), hash: hashField }, ['record'])],
   ['add_page', 'Add a link to the registry.', input({ record: jsonSchema(PAGE, {}, true), hash: hashField }, ['record'])],
   ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, hash: hashField }, ['title'])],
+  ['update_button', 'Change a script button\'s title or icon in the registry, or in a space section. icon "" removes the icon.',
+    input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
+  ['update_app', 'Change an app\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
+  ['update_page', 'Change a link\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
+  ['update_section', 'Rename a space section (new_title) or change its icon. icon "" removes the icon.',
+    input({ title: { type: 'string', description: 'The section\'s current title.' }, new_title: { type: 'string' }, icon: iconField, hash: hashField }, ['title'])],
   ['remove_button', 'Remove a script button by ID from the registry, or from a space section.', input({ id: { type: 'string' }, section: sectionField, hash: hashField }, ['id'])],
   ['remove_app', 'Remove an app by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
   ['remove_page', 'Remove a link by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
@@ -116,17 +123,19 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
 
   // One edit of the registry or the space: change(data) edits the parsed file and says what it did; the new file must
   // still parse, and accepted(all) says whether Mission Control keeps what was added. Then the guarded save.
-  async function edit(which, hash, change) {
-    if (chat.lock().on) return { error: 'agent-lock-on', detail: 'The agent lock is on: the user turns it off on the desktop.' };
+  // by.user: the desktop's edit form. The agent lock is about agents, so it does not stop the user; File protection still
+  // does, unless the form got the user's confirmation first (by.confirm).
+  async function edit(which, hash, change, by = {}) {
+    if (chat.lock().on && !by.user) return { error: 'agent-lock-on', detail: 'The agent lock is on: the user turns it off on the desktop.' };
     if (hash !== undefined && !(typeof hash === 'string' && HASH.test(hash))) return { error: 'request-refused', detail: 'hash: 64 hex characters' };
     const settings = need(), file = which === 'registry' ? settings.registry : settings.space;
     if (!file) return { error: 'no-space-file', detail: 'settings.json names no space file.' };
-    if (readOnly(file)) return { error: 'registry-read-only', detail: 'File protection is on: P9 never writes ' + file + ' then. The user turns it off on the desktop.' };
+    if (readOnly(file) && !(by.user && by.confirm)) return { error: 'registry-read-only', detail: 'File protection is on: P9 never writes ' + file + ' then. The user turns it off on the desktop.' };
     const both = await files(settings), disk = which === 'registry' ? both.registry : both.space;
     if (!disk) return { error: 'file-missing', file };
     if (hash !== undefined && hash !== disk.hash) return { error: 'hash-conflict', file, diskHash: disk.hash };
     let data;
-    try { data = JSON.parse(disk.content); } catch (error) { return { file, ...unparsable(error) }; }
+    try { data = JSON.parse(stripBom(disk.content)); } catch (error) { return { file, ...unparsable(error) }; }
     if (!object(data)) return { error: 'invalid-' + which, file };
     const done = change(data);
     if (done.error) return done;
@@ -174,6 +183,34 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       target.splice(0, target.length, ...target.filter((entry) => entry?.id !== id));
       return { changed: { action: 'removed', kind, ...(sectionTitle !== undefined ? { section: sectionTitle } : {}), records: removed } };
     });
+  }
+
+  // Title and icon of one record (kind scripts|apps|pages) or one space section (kind sections, key = its title). icon '' removes it.
+  const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
+  function update(kind, { key, section: sectionTitle, title, icon, hash }, by) {
+    if (!string(key, 200) || ![sectionTitle, title, icon].every((value) => value === undefined || string(value, 200))) return { error: 'request-refused' };
+    if (title === undefined && icon === undefined) return { error: 'nothing-to-change', detail: 'Give a title, an icon, or both.' };
+    if (kind !== 'scripts' && sectionTitle !== undefined) return { error: 'request-refused' };
+    return edit(kind === 'sections' || sectionTitle !== undefined ? 'space' : 'registry', hash, (data) => {
+      let entry, rest;
+      if (kind === 'sections') { const found = section(data, key); if (found.error) return found; entry = found.entry; rest = found.sections.filter((other) => other !== entry); }
+      else {
+        let target;
+        if (sectionTitle === undefined) target = list(data, kind);
+        else { const found = section(data, sectionTitle); if (found.error) return found; target = list(found.entry, 'buttons'); }
+        const hits = target?.filter((item) => item?.id === key) ?? [];
+        if (hits.length !== 1) return { error: hits.length ? 'duplicate-id' : 'unknown-id', id: key };
+        entry = hits[0];
+      }
+      const before = { ...entry };
+      if (title !== undefined) entry.title = title;
+      if (icon === '') delete entry.icon; else if (icon !== undefined) entry.icon = icon;
+      const wrong = problem(entry, FIELDS[kind], false, current()?.page_schemes);
+      if (wrong) return { error: 'invalid-record', detail: wrong };
+      if (kind === 'sections' && rest.some((other) => typeof other?.title === 'string' && other.title.trim() === entry.title.trim())) return { error: 'duplicate-section', section: entry.title };
+      return { changed: { action: 'updated', kind, [kind === 'sections' ? 'section' : 'id']: key, record: entry, was: before },
+        accepted: (all) => (kind === 'sections' ? all.space.some((item) => item.title === entry.title.trim()) : all[kind].some((item) => item.id === key)) };
+    }, by);
   }
 
   // A named choices list ("plans") is filled by Mission itself, so argRefusal checks the same values a run does.
@@ -236,6 +273,10 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         return { changed: { action: 'added', kind: 'section', record }, accepted: (all) => all.space.some((entry) => entry.title === title.trim()) };
       });
     },
+    update_button: ({ id, section, ...rest }) => update('scripts', { key: id, section, ...rest }),
+    update_app: ({ id, ...rest }) => update('apps', { key: id, ...rest }),
+    update_page: ({ id, ...rest }) => update('pages', { key: id, ...rest }),
+    update_section: ({ title, new_title: newTitle, ...rest }) => update('sections', { key: title, title: newTitle, ...rest }),
     remove_button: (args) => remove('scripts', args.id, args.section, args.hash),
     remove_app: (args) => remove('apps', args.id, undefined, args.hash),
     remove_page: (args) => remove('pages', args.id, undefined, args.hash),
@@ -333,5 +374,10 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     finally { if (inflight.get(key) === controller) inflight.delete(key); }
   }
 
-  return { handle };
+  // The desktop's edit form (/mission/edit): the file hashes it edits against, and the same update() the tools use.
+  async function editState() {
+    const { registry, space } = await files(need());
+    return { registry: registry.hash, space: space?.hash ?? null, protection: protection() };
+  }
+  return { handle, update, editState };
 }

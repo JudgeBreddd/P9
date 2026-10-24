@@ -249,3 +249,64 @@ test('v0.1.5 c4 notes: list, preview, edit, conflict, rename', { timeout: 60000 
   await assert.rejects(readFile(file, 'utf8'));
   console.log('PASS notes desktop: list newest first without .obsidian; preview keeps note HTML as text; a change on disk is a banner, Save mine over it writes; rename');
 });
+
+// ---- v0.1.5 chunk D: the Mission edit form for names and icons, with the screenshots for the report (P9_SHOT, as above).
+test('v0.1.5 cD mission editor: File protection asks first, an icon shows on the tile, a stale file is refused', { timeout: 90000 }, async (t) => {
+  const { mkdir } = await import('node:fs/promises');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-cdedit-'));
+  let registry;
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    const ws = paths.workspace, settings = path.join(paths.directory, 'settings.json');
+    registry = path.join(ws, 'hub/registry.json');
+    for (const dir of ['_waiting', 'hub', 'projects']) await mkdir(path.join(ws, dir), { recursive: true });
+    await writeFile(registry, JSON.stringify({ scripts: [], apps: [{ id: 'editor', title: 'Editor', cmd: ['true'] }, { id: 'board', title: 'Board', cmd: ['true'] }], pages: [{ id: 'docs', title: 'Docs', url: 'http://127.0.0.1:9/' }] }, null, 2) + '\n');
+    await writeFile(path.join(ws, 'projects/AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(ws, 'space.json'), JSON.stringify({ sections: [{ title: 'Journal', text: 'The notes.' }] }));
+    await writeFile(settings, JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'projects/AGENTS.md', space: 'space.json' }));
+    return { args: ['--settings', settings] };
+  });
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const shot = async (name, locator) => {
+    const png = await locator.screenshot({ type: 'png' });
+    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
+  };
+  await page.click('#rMission');
+  await page.locator('#fMission [data-medit]').click({ timeout: 15000 });
+  const row = (i) => page.locator(`#mdlBody [data-row="${i}"]`);
+  await row(0).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdlBody [data-row]').count(), 4, 'two apps, one link, one section');
+  const before = await readFile(registry, 'utf8');
+  // File protection is on: the first Save only arms the button, the file is untouched.
+  await row(0).locator('[data-ic]').fill('🧪');
+  await row(0).locator('[data-t]').fill('Code editor');
+  await row(0).locator('[data-save]').click();
+  assert.match(await row(0).locator('[data-save]').innerText(), /Confirm save/);
+  assert.equal(await readFile(registry, 'utf8'), before, 'asked first, wrote nothing');
+  await shot('editor-confirm', page.locator('#mdl'));
+  await row(0).locator('[data-save]').click();
+  await page.locator('#mdlBody [data-row="0"] [data-msg]', { hasText: 'Saved.' }).waitFor({ timeout: 10000 });
+  const saved = JSON.parse(await readFile(registry, 'utf8')).apps[0];
+  assert.deepEqual([saved.title, saved.icon], ['Code editor', '🧪']);
+  // The file changes underneath the open form: the next Save is refused with the banner, nothing is overwritten.
+  const outside = JSON.stringify({ scripts: [], apps: [{ id: 'editor', title: 'Code editor', icon: '🧪', cmd: ['true'] }, { id: 'board', title: 'Board', cmd: ['true'] }, { id: 'extra', title: 'Extra', cmd: ['true'] }], pages: [{ id: 'docs', title: 'Docs', url: 'http://127.0.0.1:9/' }] }, null, 2) + '\n';
+  await writeFile(registry, outside);
+  await row(1).locator('[data-ic]').fill('B');
+  await row(1).locator('[data-save]').click();
+  await row(1).locator('[data-save]', { hasText: 'Confirm save' }).click();
+  await page.locator('#mdlBody [data-medit-stale]').waitFor({ timeout: 10000 });
+  assert.equal(await readFile(registry, 'utf8'), outside, 'a stale form never overwrites');
+  await shot('editor-stale', page.locator('#mdl'));
+  await page.click('#mdlBody [data-medit-reload]');
+  await page.locator('#mdlBody [data-row="2"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdlBody [data-row]').count(), 5, 'the reload shows the file as it is now');
+  // Close the form: the icon is on the tile.
+  await page.keyboard.press('Escape');
+  await page.locator('#fMission [data-panel="mlaunch"] .ltile', { hasText: '🧪' }).waitFor({ timeout: 10000 });
+  await shot('tile-with-icon', page.locator('#fMission [data-panel="mlaunch"]'));
+  console.log('PASS mission editor: Save asked first under File protection, the icon shows on the tile, a stale file is refused and reloads');
+});

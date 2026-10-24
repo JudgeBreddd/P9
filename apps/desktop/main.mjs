@@ -317,6 +317,9 @@ export async function createDesktop({ state, open } = {}) {
     noteSave: body => ['POST', '/mission/notes/save', body],
     noteCreate: body => ['POST', '/mission/notes/create', body],
     noteRename: body => ['POST', '/mission/notes/rename', body],
+    // The Mission edit form (names and icons): the daemon checks the kind, fields, hash and File protection.
+    editState: () => ['GET', '/mission/edit'],
+    edit: body => ['POST', '/mission/edit', body],
   };
   ipcMain.handle('p9:mission', async (event, ...args) => {
     const [action, payload = {}] = args;

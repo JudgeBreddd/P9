@@ -455,6 +455,17 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
     setProtection(body.on);
     return c.json({ on: protection() });
   });
+  // The Mission edit form (mission-editor.mjs), desktop only: names and icons of apps, links and sections, through the
+  // MCP tools' own update() with its guards. File protection asks first: the form sends confirm once the user agreed.
+  const editing = async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); };
+  app.get('/mission/edit', editing, async (c) => c.json(await mcp.editState()));
+  app.post('/mission/edit', editing, async (c) => {
+    const { kind, confirm, ...rest } = (await json(c)) ?? {};
+    if (!['apps', 'pages', 'sections'].includes(kind) || (confirm !== undefined && typeof confirm !== 'boolean')
+      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'hash'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+    const { error, ...result } = await mcp.update(kind, rest, { user: true, confirm });
+    return c.json(error ? { error, ...result } : result, !error ? 200 : error === 'hash-conflict' ? 409 : error === 'registry-read-only' ? 403 : 400);
+  });
   app.route('/', api);
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
