@@ -1505,8 +1505,7 @@ function renderSettings() {
   // HI1: an "i" shows its tip on hover and opens its part of the guide on click (main allows only the guide's sections).
   $('#setBody').querySelectorAll('[data-docs]').forEach(b => { b.onclick = e => {
     e.preventDefault(); e.stopPropagation();
-    if (window.p9?.openDocs) window.p9.openDocs(b.dataset.docs).catch(() => {});
-    else open('https://github.com/JudgeBreddd/p9/blob/main/docs/guide.md#' + b.dataset.docs, '_blank', 'noopener'); // a browser preview
+    window.p9?.openDocs?.(b.dataset.docs).catch(() => {}); // a browser preview: the tip only
   }; });
 }
 $('#setBtn').onclick = async () => {
