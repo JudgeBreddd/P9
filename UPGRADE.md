@@ -1,5 +1,22 @@
 # Upgrading P9
 
+## To 0.1.5 (beta)
+
+Dev Focus has a working terminal on Windows. Apps and pages a Mission button opens on Windows keep running after the
+button's script ends and after a service restart, and stopping the `P9 Foundation` task now stops everything under
+it. Setup leaves an existing workspace's layout alone: it finds the AGENTS.md naming your main project and your
+"waiting on" folder, and creates only what is missing.
+
+Mission Control picks up `settings.json`, registry and space edits within one refresh, with no restart, and accepts
+files saved with a UTF-8 BOM. A space section can show a notes folder (`notes_roots` in settings), even one outside the
+workspace. Registry pages may use the extra schemes you list in `page_schemes`, after a confirm showing the full link.
+Anymouse takes up to 50,000 characters. The agents in P9's chats get a `p9` MCP server to read and change Mission
+Control; running a script or answering a needs-you item through it asks you first.
+
+- **Linux:** update as `README.md` § Update says, then reopen the window (the desktop main process changed).
+- **Windows:** run the 0.1.5 installer over the old one: `windows-arm64` on an ARM laptop, `windows-x64` otherwise.
+  Your workspace and the `P9 Foundation` task are kept.
+
 ## To 0.1.4 (beta)
 
 The Windows installer unpacks far fewer files: the background service now ships as two bundled files plus the agents'
