@@ -111,12 +111,18 @@ jobs:
         run: node --test test/mission-notes.test.mjs
       # BL9: the file guard's and the editor host's owner-only checks compare SDDL text. The runner's account is the
       # built-in Administrator (RID 500), which SDDL writes as LA, so the tests now ask Windows for that form.
+      # Their powershell.exe (5.1) would inherit this pwsh 7 step's module folders and fail to load Get-Acl's module
+      # (run 40139947301): keep only its own folders, as install-windows.ps1 does.
       - name: Windows file guard test
         if: env.TAG == ''
-        run: node --test test/files-windows.test.mjs
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          node --test test/files-windows.test.mjs
       - name: Windows editor host test
         if: env.TAG == ''
-        run: node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs
       # v0.1.5 DV2: Dev Focus's folder outside the workspace, on Windows paths: %LOCALAPPDATA%\P9 and the drive root refused,
       # saves there through the guarded save, a junction out refused.
       - name: Windows Dev folder test
@@ -610,7 +616,7 @@ jobs:
       - name: Check the AppImage
         run: |
           cat dist/linux/SHA256SUMS-linux-x64
-          image=$(ls dist/linux/*.AppImage)
+          image=$(realpath dist/linux/*.AppImage)
           ls -l "$image"
           ls -l dist/linux/*-unpacked/resources/app.asar
           chmod +x "$image"
