@@ -7,6 +7,15 @@ service restart, a script whose record says `"detach": true` leaves the apps it 
 stopping the `P9 Foundation` task now stops everything under it. Setup leaves an existing workspace's layout alone: it finds the AGENTS.md naming your main project and your
 "waiting on" folder, and creates only what is missing.
 
+After Change workspace, settings left from another workspace no longer make setup add a starter registry and waiting
+folder beside the folder's own. It shows the paths it found, you can change them, and Use these rewrites `settings.json`
+(the old file is kept as `settings.json.bak`). If the folder's registry runs commands from the folder above the
+workspace, setup offers that folder as `scripts_root`, used only after you confirm.
+
+A message you send while the agent works now reaches it at its next step instead of waiting for the turn to end, and
+sending while a question or approval is open declines it. A message that has to wait shows as queued and is kept
+across a window restart.
+
 Mission Control picks up `settings.json`, registry and space edits within one refresh, with no restart, and accepts
 files saved with a UTF-8 BOM. A space section can show a notes folder (`notes_roots` in settings), even one outside the
 workspace. Registry pages may use the extra schemes you list in `page_schemes`, after a confirm showing the full link.
