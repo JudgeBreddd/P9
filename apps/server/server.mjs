@@ -208,6 +208,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
     return reply(c, { status: 201, path: relative });
   });
   api.post('/mission/hub/decide', async (c) => reply(c, await hub.decide(await json(c))));
+  // Notes (threat model row 34): both listeners, the same gates; mission.mjs checks the root, path and kind.
+  api.get('/mission/notes', async (c) => reply(c, await mission.notesList(c.req.query('root'))));
+  api.get('/mission/notes/file', async (c) => reply(c, await mission.notesRead(c.req.query('root'), c.req.query('path'))));
+  api.post('/mission/notes/save', async (c) => reply(c, await mission.notesSave(await json(c))));
+  api.post('/mission/notes/create', async (c) => reply(c, await mission.notesCreate(await json(c))));
+  api.post('/mission/notes/rename', async (c) => reply(c, await mission.notesRename(await json(c))));
   api.post('/scripts/:id/run', async (c) => reply(c, await mission.run(c.req.param('id'), await json(c))));
   api.get('/runs/:id', (c) => reply(c, mission.output(c.req.param('id'), Number(c.req.query('from') ?? 0))));
   api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));

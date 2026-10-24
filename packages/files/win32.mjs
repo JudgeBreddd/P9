@@ -436,6 +436,29 @@ export async function renameAt(parent, from, to) {
   } finally { if (!(ok && parent.keep && source.release)) await done(parent, from, source, ok); }
 }
 
+// Linux: renameFile's link then unlink. Without REPLACE_IF_EXISTS a name already there fails with
+// STATUS_OBJECT_NAME_COLLISION (EEXIST), so a rename never replaces a file; RootDirectory keeps it in the same folder.
+export async function renameNamed(root, parts, to) {
+  const handles = [];
+  try {
+    let parent = openRoot(root);
+    handles.push(parent);
+    for (const part of parts.slice(0, -1)) { parent = openDirectory(parent, part); handles.push(parent); }
+    const source = openRelative(parent, parts.at(-1), { access: DELETE, options: FILE_NON_DIRECTORY_FILE });
+    handles.push(source);
+    const stat = information(source.handle);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('unsafe-file');
+    if (finalPath(source.handle) !== path.join(root, ...parts)) throw new Error('path-changed');
+    const name = Buffer.from(to, 'utf16le'), info = Buffer.alloc(24 + name.length);
+    info.writeUInt32LE(0x2 /* POSIX_SEMANTICS */, 0);
+    info.writeBigUInt64LE(BigInt(parent.handle), 8);
+    info.writeUInt32LE(name.length, 16);
+    name.copy(info, 20);
+    setInformation(source, FileRenameInformationEx, info, `rename(${parts.at(-1)})`);
+    await parent.sync();
+  } finally { await Promise.all(handles.map((handle) => handle.close())); }
+}
+
 // Linux: unlink(`/proc/self/fd/N/name`).
 export async function unlinkAt(parent, name) {
   const target = openSource(parent, name);

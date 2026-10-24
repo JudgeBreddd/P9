@@ -8,7 +8,7 @@ type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | nul
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
-const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string }, conversations: [] as Json[] };
+const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[] };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping,
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
@@ -283,9 +283,11 @@ async function loadMission() {
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[] }[]) {
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
+      // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
+      const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
       ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
@@ -341,6 +343,16 @@ one('#mission').addEventListener('click', (event) => {
 // Close button or Escape; a dialog removed by a reload is outside #mission by then, so it never clears this.
 one('#mission').addEventListener('close', () => { openWindow = ''; expanded = new Set(); }, true);
 one('#mission').addEventListener('toggle', async (event) => {
+  const list = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-notes]');
+  if (list && !list.dataset.loaded) {
+    list.dataset.loaded = '1';
+    const root = list.dataset.notes!;
+    try {
+      const { files, total, partial } = await request('/mission/notes?' + new URLSearchParams({ root })) as { files: { path: string; modified: number }[]; total: number; partial: boolean };
+      list.innerHTML = `<p class="muted">${files.length < total ? `Showing the newest ${files.length} of ${total} notes` : `${total} notes`}${partial ? ' · a very big folder: some subfolders were not read' : ''}</p>`
+        + `<ul class="list">${files.map((f) => `<li><button type="button" class="quiet" data-note-root="${escape(root)}" data-note="${escape(f.path)}">${escape(f.path)} <small class="muted">${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small></button></li>`).join('')}</ul>`;
+    } catch (error) { list.innerHTML = `<p class="muted">Could not list the notes (${escape((error as Error).message)})</p>`; }
+  }
   const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > pre[data-text]');
   if (!pre || pre.dataset.loaded) return;
   pre.dataset.loaded = '1';
@@ -429,25 +441,57 @@ one('#fileList').addEventListener('click', (event) => {
   void (button.dataset.dir ? loadFolder(path) : openFile(path));
 });
 one<HTMLButtonElement>('#up').onclick = () => void loadFolder(folder.split('/').slice(0, -1).join('/'));
-one<HTMLButtonElement>('#closeFile').onclick = () => { state.file = null; one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); void loadFolder(); };
-async function openFile(path: string) {
+one('#mission').addEventListener('click', (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('button[data-note]');
+  if (!button) return;
+  // opened first, so show() finds state.file set and does not load the workspace list over it; a note that cannot be
+  // read says why on its own row
+  void openFile(button.dataset.note!, button.dataset.noteRoot).then((opened) => {
+    if (opened) { button.closest('dialog')?.close(); show('files'); } else button.lastElementChild!.textContent = one('#fileState').textContent;
+  });
+});
+one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
+// A .md file can be read rendered: md shows raw HTML as text and links and images as plain text (threat model row 18).
+const preview = (on: boolean) => {
+  one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on; one('#preview').textContent = on ? 'Edit' : 'Preview';
+  if (on) one('#rendered').innerHTML = md.parse(editor.state.doc.toString()) as string;
+};
+one<HTMLButtonElement>('#preview').onclick = () => preview(one<HTMLElement>('#rendered').hidden);
+async function openFile(path: string, root?: string) {
   try {
-    const file = await request('/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content };
+    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
     one('#openPath').textContent = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
+    one<HTMLElement>('#preview').hidden = !/\.md$/i.test(path); preview(!!root);
     one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     one<HTMLButtonElement>('#discard').disabled = false; online();
+    return true;
   } catch (error) {
     // Binary, oversize, symlinked or locked files are refused by the daemon (request-refused); say so instead of "Unavailable".
     one('#fileState').textContent = (error as Error).message === 'request-refused' ? 'Cannot open this file here' : 'File unavailable';
+    return false;
   }
 }
 one<HTMLButtonElement>('#discard').onclick = () => { if (state.file) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: state.file.content } }); };
-one<HTMLButtonElement>('#save').onclick = async () => {
+async function saveFile(hash: string) {
   if (!state.file) return;
-  const result = await mutate('/files', { path: state.file.path, hash: state.file.hash, content: editor.state.doc.toString() });
-  if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content: editor.state.doc.toString() }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; }
-  else if (result.status === 409) { one('#fileState').textContent = 'Conflict'; one<HTMLElement>('#conflict').hidden = false; }
+  const { path, root } = state.file, content = editor.state.doc.toString();
+  const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content });
+  if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; }
+  else if (result.status === 409) {
+    // the disk version, when the file is still there, so the draft can be kept or the disk loaded (as on the desktop)
+    state.file.disk = typeof result.body.diskHash === 'string' ? { content: String(result.body.diskContent), hash: result.body.diskHash } : undefined;
+    one<HTMLElement>('#loadDisk').hidden = one<HTMLElement>('#saveMine').hidden = !state.file.disk;
+    one('#fileState').textContent = 'Conflict'; one<HTMLElement>('#conflict').hidden = false;
+  }
+}
+one<HTMLButtonElement>('#save').onclick = () => void saveFile(state.file?.hash ?? '');
+one<HTMLButtonElement>('#saveMine').onclick = () => { if (state.file?.disk) void saveFile(state.file.disk.hash); };
+one<HTMLButtonElement>('#loadDisk').onclick = () => {
+  const disk = state.file?.disk; if (!state.file || !disk) return;
+  state.file = { ...state.file, hash: disk.hash, content: disk.content, disk: undefined };
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: disk.content } });
+  one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true; if (!one<HTMLElement>('#rendered').hidden) preview(true);
 };
 
 addEventListener('offline', online);

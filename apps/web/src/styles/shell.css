@@ -104,6 +104,11 @@ html,body{height:100%;overflow:hidden}
 .stage:has(.card) #fDev .ed textarea{padding-right:calc(var(--card-w) + var(--card-gap))}
 .mdl-body[data-kind="file"]{overflow:hidden;align-content:stretch;grid-template-rows:minmax(0,1fr)}
 .mdl-body[data-kind="file"] .ed{height:100%}
+/* Notes (threat model row 34): the list's New note box, the 409 banner, the preview and the editor filling the rest */
+.notes-new,.notes-row{display:flex;gap:8px;align-items:center}.notes-new{padding:10px 14px 4px}.notes-new input{flex:1;min-width:0}
+.mdl-body[data-kind="note"]{align-content:stretch;grid-template-rows:minmax(0,1fr)}.mdl-body[data-kind="note"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}.mdl-body[data-kind="note"] .ed{min-height:320px}
+.notes-conflict{gap:8px;margin:10px 14px 0;padding:10px 14px;border:1px solid color-mix(in oklch,var(--destructive,#f38ba8) 45%,var(--border));border-radius:11px}
+.notes-md{padding:12px 16px;overflow-wrap:anywhere}
 .tab .mod{width:7px;height:7px;border-radius:50%;background:var(--warn)}
 .tab .close{display:grid;padding:2px;border-radius:4px;opacity:.6}.tab .close:hover{opacity:1;background:var(--accent)}
 .tab .close svg{width:12px;height:12px}

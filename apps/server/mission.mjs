@@ -6,8 +6,8 @@ import { stillAuthorized, captureAuthority } from './authority.mjs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { readdir as fsReaddir } from 'node:fs/promises';
-import { readFile, listDirectory, guardedSave } from '../../packages/files/index.mjs';
+import { realpath, readdir as fsReaddir } from 'node:fs/promises';
+import { readFile, listDirectory, guardedSave, createFile, renameFile } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 import { ID, web, problem, RECORD, PAGE, SECTION, LOG, SETTINGS } from './mission-fields.mjs';
 
@@ -70,8 +70,9 @@ export function parseRegistry(text, schemes = []) {
   return result;
 }
 
-// The free-form space (settings.space, one JSON file): sections, each with optional text, buttons and log views.
-// A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file.
+// The free-form space (settings.space, one JSON file): sections, each with optional text, buttons, log views and notes.
+// A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file;
+// notes names a folder from settings.notes_roots by its key, never by path.
 export function parseSpace(text) {
   const space = JSON.parse(stripBom(text));
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
@@ -84,7 +85,7 @@ export function parseSpace(text) {
       if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
-    result.sections.push({ title, text: section.text ?? '', buttons, logs });
+    result.sections.push({ title, text: section.text ?? '', buttons, logs, ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
@@ -213,7 +214,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const strip = ({ id, title, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
       ({ id, title, desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid,
-      space: reg.space.map(({ title, text, logs }) => ({ title, text, logs: logs.map(({ id, title: name }) => ({ id, title: name })) })),
+      space: reg.space.map(({ title, text, logs, notes }) => ({ title, text, logs: logs.map(({ id, title: name }) => ({ id, title: name })), ...(notes ? { notes } : {}) })),
       queue: await queue(), primary: await primary() };
   }
   // ponytail: a log view reads the whole file (packages/files refuses one over MAX_BYTES) and shows the last 200 lines.
@@ -223,6 +224,84 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!log) return { status: 404, error: 'unknown-id' };
     try { return { status: 200, text: (await readFile(workspace, log.path)).content.split('\n').slice(-200).join('\n') }; }
     catch { return { status: 404, error: 'not-found' }; }
+  }
+
+  // Notes (threat model row 34): a folder named in settings.notes_roots and shown by a space section. Every path is
+  // relative to the folder's realpath and goes through packages/files, so links out of it and locked names are refused.
+  const refused = { status: 400, error: 'request-refused' };
+  const fields = (body, keys) => body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).sort().join(',') === keys;
+  // .md only; a name starting with a dot (.obsidian, .trash, .git, .env) is neither listed nor opened.
+  const note = (value) => typeof value === 'string' && value.length <= 1024 && /\.md$/i.test(value) && !value.split('/').some((part) => part.startsWith('.'));
+  const inside = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
+  async function notesRoot(name) {
+    if (typeof name !== 'string' || !ID.test(name)) return refused;
+    const folder = settings.notes_roots && Object.hasOwn(settings.notes_roots, name) ? settings.notes_roots[name] : undefined;
+    if (!folder || !(await registry()).space.some((section) => section.notes === name)) return { status: 404, error: 'unknown-root' };
+    let root;
+    try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
+    // A folder that holds the workspace, the recovery folder or the home folder (a drive root holds them all) would reach
+    // P9's own files, and guardedSave keeps its drafts only outside the folder it saves in.
+    const home = await realpath(os.homedir()).catch(() => os.homedir());
+    if ([workspace, recovery, home].some((guarded) => inside(root, guarded)) || inside(recovery, root)) return { status: 403, error: 'root-refused' };
+    return { root };
+  }
+  // ponytail: a breadth-first walk of at most 2,000 folders, 8 deep; the newest 500 notes are sent, with the total found.
+  const NOTES_SHOWN = 500, NOTES_FOLDERS = 2000, NOTES_DEPTH = 8;
+  async function notesList(name) {
+    const target = await notesRoot(name);
+    if (target.error) return target;
+    const files = [], folders = [''];
+    for (let walked = 0; folders.length && walked < NOTES_FOLDERS; walked++) {
+      const folder = folders.shift();
+      let entries;
+      try { entries = await listDirectory(target.root, folder); } catch (error) { if (!folder) throw error; continue; }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const relative = folder ? `${folder}/${entry.name}` : entry.name;
+        if (entry.dir) { if (relative.split('/').length < NOTES_DEPTH) folders.push(relative); }
+        else if (note(entry.name)) files.push({ path: relative, modified: entry.mtimeMs });
+      }
+    }
+    files.sort((a, b) => b.modified - a.modified);
+    return { status: 200, files: files.slice(0, NOTES_SHOWN), total: files.length, shown: NOTES_SHOWN, partial: folders.length > 0 };
+  }
+  async function notesRead(name, relative) {
+    if (!note(relative)) return refused;
+    const target = await notesRoot(name);
+    if (target.error) return target;
+    const file = await readFile(target.root, relative);
+    return { status: 200, path: relative, content: file.content, hash: file.hash };
+  }
+  // The same guarded save and conflict reply as answer(): a note changed on disk since it was read is never overwritten.
+  async function notesSave(body) {
+    if (!fields(body, 'content,hash,path,root') || !note(body.path) || typeof body.content !== 'string' || typeof body.hash !== 'string') return refused;
+    const target = await notesRoot(body.root);
+    if (target.error) return target;
+    stillAuthorized();
+    const result = await guardedSave(target.root, body.path, body.hash, body.content, recovery);
+    return { status: result.kind === 'saved' ? 200 : result.kind === 'conflict' ? 409 : 500, ...result };
+  }
+  async function notesCreate(body) {
+    if (!fields(body, 'content,path,root') || !note(body.path) || typeof body.content !== 'string') return refused;
+    const target = await notesRoot(body.root);
+    if (target.error) return target;
+    stillAuthorized();
+    try { return { status: 201, path: body.path, hash: (await createFile(target.root, body.path, body.content)).hash }; }
+    catch (error) {
+      if (error.code === 'EEXIST') return { status: 409, error: 'exists' };
+      if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return { status: 404, error: 'no-such-folder' };
+      throw error;
+    }
+  }
+  // A new name in the same folder; a name that exists is refused, never replaced.
+  async function notesRename(body) {
+    if (!fields(body, 'name,path,root') || !note(body.path) || !note(body.name) || body.name.includes('/')) return refused;
+    const target = await notesRoot(body.root);
+    if (target.error) return target;
+    stillAuthorized();
+    try { await renameFile(target.root, body.path, body.name); }
+    catch (error) { if (error.code === 'EEXIST') return { status: 409, error: 'exists' }; throw error; }
+    return { status: 200, path: [...body.path.split('/').slice(0, -1), body.name].join('/') };
   }
 
   // Resolves false when the program did not start (no konsole or xdg-open, a command not found), so the button says
@@ -401,5 +480,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return results.at(-1) === 'cleanup-failed' ? 'cleanup-failed-reconcile' : 'cleanup-failed-runs';
   }
 
-  return { overview, run, output, launch, answer, stopAll, spaceLog, setSettings, named };
+  return { overview, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename };
 }

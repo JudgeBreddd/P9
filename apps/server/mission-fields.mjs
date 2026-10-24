@@ -67,6 +67,8 @@ export const SECTION = {
   text: { type: 'string', check: text, doc: 'A paragraph shown under the heading.' },
   buttons: { type: 'array', check: Array.isArray, doc: 'Buttons, each a script record. They share the registry scripts\' IDs: an ID used in both drops both.' },
   logs: { type: 'array', check: Array.isArray, doc: 'Log views.' },
+  notes: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.' },
 };
 export const SETTINGS = {
   primary: { ...relative('The workspace file naming the main project ("**Main project: Name** (`folder/`").'), required: true },
@@ -79,6 +81,9 @@ export const SETTINGS = {
   page_schemes: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length >= 1 && value.length <= 16 && value.every((scheme) => typeof scheme === 'string' && SCHEME.test(scheme)),
     doc: 'Extra link schemes pages may use (e.g. obsidian), 1 to 16 lowercase schemes of 2 to 32 characters. javascript, file, data, vbscript and blob never open.' },
   server_host: { type: 'string', check: (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value), doc: 'The server\'s host name, letters, digits, _ . and -, at most 64.' },
+  notes_roots: { type: 'object', check: (value) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length >= 1
+    && Object.keys(value).length <= 16 && Object.entries(value).every(([name, folder]) => ID.test(name) && typeof folder === 'string' && path.isAbsolute(folder) && !folder.includes('\0')),
+    doc: 'Notes folders a space section may show, by name (threat model row 34): 1 to 16 entries, each an ID mapped to an absolute folder, e.g. {"vault": "/srv/notes/Vault"}. A folder holding the workspace, the home folder or P9\'s recovery folder is refused.' },
 };
 
 // The first thing wrong with a record, in words, or undefined when the table accepts it. closed: unknown keys are wrong too.

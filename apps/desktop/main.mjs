@@ -311,6 +311,12 @@ export async function createDesktop({ state, open } = {}) {
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
+    // Notes (threat model row 34): the daemon checks the root name against settings, the path, .md and File protection.
+    notes: ({ root }) => id(root) && ['GET', '/mission/notes?' + new URLSearchParams({ root })],
+    noteRead: ({ root, path: file }) => id(root) && typeof file === 'string' && ['GET', '/mission/notes/file?' + new URLSearchParams({ root, path: file })],
+    noteSave: body => ['POST', '/mission/notes/save', body],
+    noteCreate: body => ['POST', '/mission/notes/create', body],
+    noteRename: body => ['POST', '/mission/notes/rename', body],
   };
   ipcMain.handle('p9:mission', async (event, ...args) => {
     const [action, payload = {}] = args;

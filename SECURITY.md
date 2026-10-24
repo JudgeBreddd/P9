@@ -136,6 +136,17 @@ save over that file. Approve/Reject on a Wiki batch is written by the hub's code
 through P9's guarded save. A doctor sweep started for notifications is not stopped by Stop All; it only reads and ends
 within three minutes. Anyone logged in to P9 sees these sections, including full paths on your machine.
 
+## Mission notes
+
+A Mission space section can show a notes folder outside the workspace, such as an Obsidian vault (threat model row 34).
+The folder must be listed by name in `notes_roots` in settings.json, which P9 never writes, and named by a section;
+the page and the phone send only that name and a path inside the folder. P9 opens only `.md` files, refuses `..`,
+absolute paths, names starting with a dot (`.obsidian`, `.git`) and links that lead out of the folder, and applies
+File protection there as in the workspace. A folder that holds the workspace, the home folder or P9's recovery folder
+is refused. Saves use the same guarded save as workspace files: a note changed on disk since you opened it is never
+overwritten without your say. Rename keeps the note in its folder and refuses a name that exists. The preview shows a
+note's HTML, links and images as text. A paired phone has the same access to the folder as the desktop.
+
 ## File protection
 
 File protection is on by default. While it is on, P9's file routes and editor, on the desktop and on a paired phone,
@@ -186,7 +197,7 @@ table with slug- or UUID-shaped IDs (chat may add an operation ID), and map each
 daemon route; the daemon validates every body again. The socket cookie and
 bootstrap file never reach the renderer. No process argv or arbitrary URL crosses the bridge, and the only filesystem paths are workspace-relative ones the daemon
 checks again (since 2026-10-19: the Chat Focus file browser's read-only list and read, threat model row 23, and a new
-chat's folder, row 24): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
+chat's folder, row 24; since v0.1.5, paths inside a Mission notes folder named in settings.json, row 34): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
 browser cannot write. A chat's folder is where its agent starts, not a sandbox (Codex's own sandbox keeps its writes there;
 Claude can still reach the rest of the workspace under its permission rules). The app ships no sample data (GitHub issue #4):
 it lives in `test/sample-data.mjs`, which the packaged build leaves out. The one test-only path is `window.p9.sample`: the desktop

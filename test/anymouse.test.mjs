@@ -182,3 +182,70 @@ test('v0.1.5 c3 screenshots: counter, dropdown, refused character, restart notic
   assert.equal((await page.locator('#amText').inputValue()).length, 50001, 'the text is kept');
   await shot('anymouse-counter', page.locator('#amDlg'));
 });
+
+// ---- v0.1.5 chunk 4: Mission notes on the desktop (threat model row 34), with the screenshots for the report (P9_SHOT, as above).
+test('v0.1.5 c4 notes: list, preview, edit, conflict, rename', { timeout: 60000 }, async (t) => {
+  const { mkdir } = await import('node:fs/promises');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c4notes-'));
+  let vault;
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    const ws = paths.workspace, settings = path.join(paths.directory, 'settings.json');
+    vault = path.join(paths.directory, 'Vault');
+    for (const dir of ['_waiting', 'hub', 'projects']) await mkdir(path.join(ws, dir), { recursive: true });
+    await writeFile(path.join(ws, 'hub/registry.json'), JSON.stringify({ scripts: [] }));
+    await writeFile(path.join(ws, 'projects/AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(ws, 'space.json'), JSON.stringify({ sections: [{ title: 'Journal', text: 'The notes vault.', notes: 'vault' }] }));
+    await writeFile(settings, JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'projects/AGENTS.md', space: 'space.json', notes_roots: { vault } }));
+    for (const dir of ['Daily', 'Projects', '.obsidian']) await mkdir(path.join(vault, dir), { recursive: true });
+    const notes = [['Projects/Garden.md', '# Garden\n\n- [ ] order seeds\n- [x] fix the fence\n'],
+      ['Daily/2026-10-22.md', '# Thursday\n\nQuiet day.\n'],
+      ['Welcome.md', '# Welcome\n\nThis vault lives **outside** the workspace.\n\n## Today\n\n1. Read\n2. Write `notes`\n\n<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>\n\n[a link](https://example.com)\n']];
+    for (const [name, text] of notes) { await writeFile(path.join(vault, name), text); await new Promise((r) => setTimeout(r, 20)); }
+    await writeFile(path.join(vault, '.obsidian', 'app.md'), 'hidden');
+    return { args: ['--settings', settings] };
+  });
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const shot = async (name, locator) => {
+    const png = await locator.screenshot({ type: 'png' });
+    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
+  };
+  await page.click('#rMission');
+  await page.locator('#fMission [data-group="Journal"]').click({ timeout: 15000 });
+  await page.click('#mdlBody [data-notes="vault"]');
+  await page.locator('#mdlBody [data-i]').first().waitFor({ timeout: 10000 });
+  assert.deepEqual(await page.locator('#mdlBody [data-i] > .truncate:not(.sub)').allInnerTexts(), ['Welcome.md', 'Daily/2026-10-22.md', 'Projects/Garden.md']);
+  assert.match(await page.locator('#mdlFoot [data-notes-count]').innerText(), /^3 notes$/);
+  await shot('notes-list', page.locator('#mdl'));
+  await page.locator('#mdlBody [data-i]', { hasText: 'Welcome.md' }).click();
+  const preview = page.locator('#mdlBody [data-preview]');
+  await preview.locator('h1', { hasText: 'Welcome' }).waitFor({ timeout: 10000 });
+  assert.equal(await preview.locator('script, img, a, [onerror]').count(), 0, 'note HTML stays text');
+  assert.match(await preview.innerText(), /<script>alert\(1\)<\/script>/);
+  await shot('notes-preview', page.locator('#mdl'));
+  // Edit, then the note changes on disk before Ctrl+S: the banner, not an overwrite
+  const file = path.join(vault, 'Welcome.md'), outside = '# Welcome\n\nEdited in the notes app.\n';
+  await page.click('#mdlFoot [data-mode]');
+  await page.locator('#mdlEd').fill('# Welcome\n\nEdited in P9.\n');
+  await writeFile(file, outside);
+  await page.locator('#mdlEd').press('Control+s');
+  await page.locator('#mdlBody [data-conflict]').waitFor({ timeout: 10000 });
+  assert.equal(await readFile(file, 'utf8'), outside);
+  assert.equal(await page.locator('#mdlEd').inputValue(), '# Welcome\n\nEdited in P9.\n', 'the draft is kept');
+  await shot('notes-conflict', page.locator('#mdl'));
+  await page.click('#mdlBody [data-mine]');
+  await page.locator('#mdlBody [data-conflict]').waitFor({ state: 'detached', timeout: 10000 });
+  assert.equal(await readFile(file, 'utf8'), '# Welcome\n\nEdited in P9.\n');
+  // Rename to a free name: the title follows, the old name is gone
+  await page.click('#mdlFoot [data-rename-open]');
+  await page.locator('#mdlFoot [data-rename]').fill('Start');
+  await page.click('#mdlFoot [data-rename-go]');
+  await page.locator('#mdlT', { hasText: 'Start.md' }).waitFor({ timeout: 10000 });
+  assert.equal(await readFile(path.join(vault, 'Start.md'), 'utf8'), '# Welcome\n\nEdited in P9.\n');
+  await assert.rejects(readFile(file, 'utf8'));
+  console.log('PASS notes desktop: list newest first without .obsidian; preview keeps note HTML as text; a change on disk is a banner, Save mine over it writes; rename');
+});

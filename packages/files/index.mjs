@@ -220,6 +220,25 @@ export async function createDirectory(root, relative) {
   } finally { await Promise.all(handles.map((handle) => handle.close())); }
 }
 
+// A new name for a file in the same folder (Mission notes, threat model row 34), never over a name that exists: Linux
+// link()s the new name (EEXIST if taken) then unlinks the old one; Windows renames without REPLACE_IF_EXISTS.
+export async function renameFile(root, relative, name) {
+  const parts = partsFor(relative);
+  if (partsFor(name).length !== 1) throw new Error('unsafe-path');
+  if (win) return win.renameNamed(root, parts, name);
+  const safe = await resolveSafe(root, relative);
+  try {
+    const target = `/proc/self/fd/${safe.parent.fd}/${name}`;
+    // ponytail: a same-user process can swap the old name between these checks and the link or unlink, as it can race
+    // guardedSave's final check; no rename-by-handle syscall exists. Each step checks the inode it opened.
+    if ((await lstat(safe.anchored)).ino !== safe.stat.ino) throw new Error('path-changed');
+    await link(safe.anchored, target);
+    if ((await lstat(target)).ino !== safe.stat.ino) throw new Error('path-changed');
+    await unlink(safe.anchored);
+    await safe.parent.sync();
+  } finally { await safe.close(); }
+}
+
 const pending = new Map();
 export async function drainSaves() {
   await Promise.all(pending.values());

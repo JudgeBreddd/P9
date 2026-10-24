@@ -714,14 +714,14 @@ function editorHtml(name, id) {
   return `<div class="ed"><pre class="gut" aria-hidden="true">${lines(d.text)}</pre><textarea id="${id}" spellcheck="false" aria-label="${esc(name)}">${esc(d.text)}</textarea></div>`;
 }
 // Keeps the doc, the gutter and the caret in step with the textarea; after() repaints dirty marks.
-function wireEditor(root, name, after) {
+function wireEditor(root, name, after, save = () => saveDoc(name)) {
   const d = doc(name), ta = root.querySelector('.ed textarea'), gut = root.querySelector('.ed .gut');
   ta.setSelectionRange(...d.sel); ta.scrollTop = d.top; gut.scrollTop = d.top;
   ta.oninput = () => { const was = dirty(name); d.text = ta.value; fitGut(ta, gut); d.sel = [ta.selectionStart, ta.selectionEnd]; if (was !== dirty(name)) after(); };
   ta.onscroll = () => { d.top = gut.scrollTop = ta.scrollTop; };
   observe(() => fitGut(ta, gut)).observe(ta);
   ta.onselect = ta.onkeyup = ta.onclick = () => { d.sel = [ta.selectionStart, ta.selectionEnd]; };
-  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveDoc(name); after(); } };
+  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); after(); } };
 }
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
@@ -977,6 +977,98 @@ function missionLive() {
   set('minbox', M.inbox.length ? `<ul class="plist">${M.inbox.map((x, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(x.status)}>${esc(x.status)}</span><span class="muted sm">${esc(x.pages)} page${x.pages > 1 ? 's' : ''}</span><span class="txt mono sm">${esc(x.batch)}</span></button></li>`).join('')}</ul>` : '<p class="empty">No Wiki batches waiting for review.</p>')
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'inbox', x: M.inbox[+b.dataset.i], back: S.modal }));
 }
+// Notes (threat model row 34): a folder outside the workspace, named in settings.notes_roots; the daemon checks every path.
+// The preview goes through md, which shows raw HTML as text and links and images as plain text (row 18).
+const noteKey = (root, path) => 'notes:' + root + '/' + path;
+const noteError = { exists: 'A note with that name already exists; nothing was changed.', 'no-such-folder': 'That folder does not exist; make it in your notes app first.',
+  'request-refused': 'Use a .md name with no part starting with a dot.' };
+function notesModal(m, body, row) {
+  $('#mdlT').textContent = m.title + ' · notes';
+  if (m.list === undefined) { m.list = null; window.p9.mission('notes', { root: m.root }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
+  const l = m.list, now = Date.now();
+  body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error ? `<p class="sm muted">Could not list the notes (${esc(l.error)})</p>`
+    : `<div class="notes-new"><input data-slot="input" data-new value="${esc(m.draftName || '')}" placeholder="folder/new-note.md" aria-label="New note"><button data-slot="button" data-size="sm" data-create>New note</button></div>`
+      + (l.files.length ? `<ul class="mlist">${l.files.map((f, i) => row(i, '<span class="kind">md</span>', esc(f.path), esc(ago(Math.max(0, Math.round((now - f.modified) / 60000)))) + ' ago')).join('')}</ul>` : '<p class="empty">No .md notes in this folder yet.</p>');
+  $('#mdlFoot').innerHTML = l && !l.error ? `<span class="muted sm" data-notes-count>${l.total > l.files.length ? `Showing the newest ${l.files.length} of ${l.total} notes` : `${l.total} note${l.total === 1 ? '' : 's'}`}${l.partial ? ' · a very big folder: some subfolders were not read' : ''}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-reload>Reload</button>` : '';
+  $('#mdlFoot [data-reload]')?.addEventListener('click', () => { m.list = undefined; renderModal(); });
+  body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'note', root: m.root, path: l.files[+b.dataset.i].path, back: m }));
+  const input = body.querySelector('[data-new]'); if (!input) return;
+  input.oninput = () => { m.draftName = input.value; };
+  const create = async () => {
+    let p = (m.draftName || '').trim().replace(/^\/+/, '');
+    if (!p) return toast({ kind: 'not saved', txt: 'Type a name for the new note first.', level: 'warn' }, true);
+    if (!/\.md$/i.test(p)) p += '.md';
+    const r = await window.p9.mission('noteCreate', { root: m.root, path: p, content: '# ' + p.split('/').pop().replace(/\.md$/i, '') + '\n\n' });
+    if (r.status === 201) { m.draftName = ''; m.list = undefined; openModal({ kind: 'note', root: m.root, path: r.body.path, edit: true, back: m }); }
+    else toast({ kind: 'not saved', txt: p + ': ' + (noteError[r.body?.error] || 'could not create it (' + (r.body?.error || r.status) + ')'), level: 'warn' }, true);
+  };
+  body.querySelector('[data-create]').onclick = create;
+  input.onkeydown = e => { if (e.key === 'Enter') create(); };
+}
+// One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
+function noteModal(m, body) {
+  const key = noteKey(m.root, m.path);
+  $('#mdlT').textContent = m.path;
+  // a draft kept from an earlier open keeps the hash it was read with; otherwise read the disk again
+  if (!m.asked && !dirty(key)) {
+    m.asked = true;
+    window.p9.mission('noteRead', { root: m.root, path: m.path }).then(r => {
+      if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
+      else if (r.status !== 200) m.error = r.body?.error || String(r.status);
+      if (S.modal === m) renderModal();
+    });
+  }
+  const d = S.docs[key];
+  if (!d) { body.innerHTML = `<p class="sm muted">${m.error ? 'Not readable: ' + esc(m.error) : 'Loading…'}</p>`; return; }
+  const c = m.conflict;
+  body.innerHTML = (c ? `<div class="review notes-conflict" data-conflict>${c.diskHash !== undefined
+    ? `<p>Changed on disk since you opened it. Your text is still here.</p><div class="notes-row"><button data-slot="button" data-variant="outline" data-size="sm" data-disk>Load disk version</button><button data-slot="button" data-size="sm" data-mine>Save mine over it</button></div>`
+    : `<p>This note is no longer on disk (moved, renamed or deleted elsewhere). Your text is still here: copy it before you close.</p><div class="notes-row"><button data-slot="button" data-size="sm" data-copytext>Copy my text</button></div>`}</div>` : '')
+    + (m.edit ? editorHtml(key, 'mdlEd') : `<div class="msg agent notes-md" data-preview>${md.parse(d.text)}</div>`);
+  if (m.edit) wireEditor(body, key, () => noteFoot(m), () => saveNote(m));
+  body.querySelector('[data-disk]')?.addEventListener('click', () => { Object.assign(d, { text: c.diskContent, saved: c.diskContent, hash: c.diskHash }); m.conflict = null; renderModal(); });
+  body.querySelector('[data-mine]')?.addEventListener('click', () => saveNote(m, c.diskHash));
+  body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
+  noteFoot(m);
+}
+function noteFoot(m) {
+  const key = noteKey(m.root, m.path), base = m.path.split('/').pop();
+  $('#mdlFoot').innerHTML = m.renaming
+    ? `<input data-slot="input" data-rename value="${esc(m.newName ?? base)}" aria-label="New name"><button data-slot="button" data-size="sm" data-rename-go>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-rename-x>Cancel</button>`
+    : `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-rename-open>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-mode>${m.edit ? 'Preview' : 'Edit'}</button>${dirty(key) ? `<span data-slot="badge">draft</span><button data-slot="button" data-size="sm" data-savenote>Save</button>` : '<span class="muted sm">saved</span>'}`;
+  const on = (sel, fn) => { const b = $('#mdlFoot ' + sel); if (b) b.onclick = fn; };
+  on('[data-mode]', () => { m.edit = !m.edit; renderModal(); });
+  on('[data-savenote]', () => saveNote(m));
+  on('[data-rename-open]', () => { m.renaming = true; m.newName = base; noteFoot(m); $('#mdlFoot [data-rename]').focus(); });
+  on('[data-rename-x]', () => { m.renaming = false; noteFoot(m); });
+  const input = $('#mdlFoot [data-rename]'); if (!input) return;
+  input.oninput = () => { m.newName = input.value; };
+  const go = async () => {
+    let name = (m.newName || '').trim();
+    if (name.includes('/')) return toast({ kind: 'not renamed', txt: 'Type a new name only; moving a note to another folder is not supported.', level: 'warn' }, true);
+    if (!/\.md$/i.test(name)) name += '.md';
+    if (name === base) { m.renaming = false; return noteFoot(m); }
+    const r = await window.p9.mission('noteRename', { root: m.root, path: m.path, name });
+    if (r.status !== 200) return toast({ kind: 'not renamed', txt: name + ': ' + (noteError[r.body?.error] || 'could not rename it (' + (r.body?.error || r.status) + ')'), level: 'warn' }, true);
+    S.docs[noteKey(m.root, r.body.path)] = S.docs[key]; delete S.docs[key];
+    m.path = r.body.path; m.renaming = false; if (m.back) m.back.list = undefined;
+    toast({ kind: 'renamed', txt: base + ' → ' + name, level: 'ok' }, true);
+    if (S.modal === m) renderModal();
+  };
+  on('[data-rename-go]', go);
+  input.onkeydown = e => { if (e.key === 'Enter') go(); else if (e.key === 'Escape') { e.preventDefault(); m.renaming = false; noteFoot(m); } };
+}
+// The same reply as answerLive: on 409 the draft stays and the banner offers the disk version or a save over it.
+async function saveNote(m, hash) {
+  const d = S.docs[noteKey(m.root, m.path)]; if (!d || m.saving) return;
+  m.saving = true; const text = d.text;
+  const r = await window.p9.mission('noteSave', { root: m.root, path: m.path, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
+  m.saving = false;
+  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
+  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  if (S.modal === m) renderModal();
+}
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
 function missionModal(m, body, row) {
   if (m.kind === 'win') {
@@ -989,11 +1081,14 @@ function missionModal(m, body, row) {
     if (!M.scripts[m.g]) return closeModal();
     const l = M.scripts[m.g], tools = m.g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === m.g);
     $('#mdlT').textContent = `${m.g} · ${l.length} script${l.length === 1 ? '' : 's'}`;
-    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
+    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
     body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
-  } else if (m.kind === 'link') {
+    body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: m.g, back: m }));
+  } else if (m.kind === 'notes') notesModal(m, body, row);
+  else if (m.kind === 'note') noteModal(m, body);
+  else if (m.kind === 'link') {
     $('#mdlT').textContent = 'Open ' + m.page[0] + '?';
     body.innerHTML = `<div class="review"><p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(m.page[1])}</pre><p class="muted sm">It is on your allowed-schemes list in settings.json. Only open it if you recognise it.</p></div>`;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open link</button>`;
