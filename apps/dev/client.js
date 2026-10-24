@@ -1,7 +1,7 @@
 // Dev Focus: Monaco + VS Code services (the phase-2 editor, docs/spike-decision.md) against the desktop's loopback editor host.
 // Every write P9's editor makes inside the workspace goes through window.p9dev.save, which the desktop sends to the daemon's
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
-import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService } from '@codingame/monaco-vscode-api';
+import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
 import getModel from '@codingame/monaco-vscode-model-service-override';
 import getAuthentication from '@codingame/monaco-vscode-authentication-service-override';
@@ -47,7 +47,10 @@ const win = /^[A-Za-z]:\\/.test(config.workspace);
 const uriPath = file => (win ? '/' + file.replaceAll('\\', '/') : file);
 const same = file => (win ? file.replace(/^\/([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase() + ':') : file);
 const hostFile = file => (win ? file.slice(1).replaceAll('/', '\\') : file);
-const root = URI.from({ scheme: 'vscode-remote', authority, path: uriPath(config.workspace) });
+// The folder shown: Open Folder's choice, or the workspace. Saves are relative to config.workspace (the workspace, or the
+// folder outside it that main set as the daemon's Dev root).
+const root = URI.from({ scheme: 'vscode-remote', authority, path: uriPath(config.folder ?? config.workspace) });
+const guardRoot = URI.from({ scheme: 'vscode-remote', authority, path: uriPath(config.workspace) });
 await createIndexedDBProviders();
 const heavy = Object.fromEntries(['node_modules', '.venv', 'venv', '__pycache__', '.cache', 'dist', 'build', '.astro', '.git/objects', '.git/subtree-cache']
   .map(folder => ['**/' + folder + '/**', true]));
@@ -130,6 +133,13 @@ for (const op of ['rename', 'delete', 'mkdir']) guarded[op] = async function (ur
   return base[op].call(this, uri, ...rest);
 };
 
+// Open Folder: main's picker (and its confirm for a folder outside the workspace); main loads this page again on the folder it took.
+const openFolder = async () => {
+  const result = await window.p9dev.openFolder();
+  if (result.error) v.window.showErrorMessage(result.error === 'root-refused'
+    ? 'P9 does not open that folder: it holds the workspace, your home folder or P9\'s own files.' : 'P9 could not open that folder: ' + result.error);
+  return Boolean(result.ok);
+};
 await initialize({ ...getAuthentication(), ...getTesting(), ...getTask(), ...getGallery({ webOnly: false }), ...getConfiguration(), ...getModel(),
   ...getExtensions(), ...getRemote({ scanRemoteExtensions: true }), ...getSearch(), ...getTerminal(), ...getScm(), ...getDebug(), ...getStorage(),
   ...getWorkingCopy(), ...getKeybindings(), ...getTextmate(), ...getLanguages(), ...getTheme(), ...getNotifications(), ...getOutput(), ...getTrust(),
@@ -140,7 +150,8 @@ await initialize({ ...getAuthentication(), ...getTesting(), ...getTask(), ...get
   productConfiguration: { commit: config.commit, quality: 'stable', nameShort: 'P9', nameLong: 'P9 Event Horizon',
     extensionsGallery: { serviceUrl: 'https://open-vsx.org/vscode/gallery', itemUrl: 'https://open-vsx.org/vscode/item',
       resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}' } },
-  workspaceProvider: { workspace: { folderUri: root }, trusted: true, open: async () => false }, enableWorkspaceTrust: false,
+  // Open Folder (threat model row 41): main's native picker; main loads the page again on the folder it took.
+  workspaceProvider: { workspace: { folderUri: root }, trusted: true, open: async () => openFolder() }, enableWorkspaceTrust: false,
 });
 // The workbench stays inert (no keys, no clicks, so no Ctrl+S) until the save basis below is tracked.
 const extension = registerExtension({ name: 'dev-focus', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
@@ -176,6 +187,9 @@ v.commands.registerCommand('p9.openInVSCode', async () => {
   const result = await window.p9dev.openInCode(name, editor.selection.active.line + 1, reason.trim());
   if (!result.ok) v.window.showErrorMessage('Could not open VS Code: ' + result.error);
 });
+// File > Open Folder and the Explorer's button: the workbench's own dialog service is a stub here, so both go to main.
+const dialogs = await getService(IFileDialogService);
+dialogs.pickFolderAndOpen = dialogs.pickFileFolderAndOpen = () => openFolder();
 const button = v.window.createStatusBarItem(v.StatusBarAlignment.Right, 100);
 Object.assign(button, { text: '$(link-external) Open in VS Code', tooltip: 'Open this file at this line in VS Code (logged)', command: 'p9.openInVSCode' });
 button.show();
@@ -204,9 +218,9 @@ await followLook(config.look);
 window.p9dev.onLook(look => followLook(look).catch(error => console.error('p9: editor look failed:', error.message)));
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
 // Hooks for the Electron tests (test/dev.test.mjs); the page's own code already holds this API.
-window.devFocus = { v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(root.toString()), name)), { preview: false }) };
+window.devFocus = { v, root, open: async name => v.window.showTextDocument(await v.workspace.openTextDocument(v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name)), { preview: false }) };
 // p9 edit / p9 diff (threat model row 14): main sends only checked workspace-relative names, once this page can open them.
-const fileUri = name => v.Uri.joinPath(v.Uri.parse(root.toString()), name);
+const fileUri = name => v.Uri.joinPath(v.Uri.parse(guardRoot.toString()), name);
 window.p9dev.onOpen(async request => {
   try {
     if (request.open === 'diff') await v.commands.executeCommand('vscode.diff', fileUri(request.a), fileUri(request.b), request.a + ' ↔ ' + request.b, { preview: false });

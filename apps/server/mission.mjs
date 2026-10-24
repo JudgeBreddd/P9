@@ -141,6 +141,15 @@ export function argRefusal(item, arg, index) {
   if (target === 'ssh' && !SSH_WORD.test(arg)) return name + ' may use only letters, digits and . @ % + = : , / -';
 }
 
+export const inside = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
+// A folder P9 reaches outside the workspace (notes, threat model row 34; the Dev Focus root, row 41). One that holds the
+// workspace, the recovery folder, the home folder or one of `also` (a drive root holds them all), or sits inside recovery or
+// `also`, would reach P9's own files, and guardedSave keeps its drafts only outside the folder it saves in.
+export async function rootRefused(root, { workspace, recovery, also = [] }) {
+  const home = await realpath(os.homedir()).catch(() => os.homedir());
+  return [workspace, recovery, home, ...also].some((guarded) => inside(root, guarded)) || [recovery, ...also].some((folder) => inside(folder, root));
+}
+
 export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle }) {
   // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
   const setSettings = (next) => { settings = next; plansCache.at = 0; };
@@ -233,17 +242,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   const fields = (body, keys) => body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).sort().join(',') === keys;
   // .md only; a name starting with a dot (.obsidian, .trash, .git, .env) is neither listed nor opened.
   const note = (value) => typeof value === 'string' && value.length <= 1024 && /\.md$/i.test(value) && !value.split('/').some((part) => part.startsWith('.'));
-  const inside = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
   async function notesRoot(name) {
     if (typeof name !== 'string' || !ID.test(name)) return refused;
     const folder = settings.notes_roots && Object.hasOwn(settings.notes_roots, name) ? settings.notes_roots[name] : undefined;
     if (!folder || !(await registry()).space.some((section) => section.notes === name)) return { status: 404, error: 'unknown-root' };
     let root;
     try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
-    // A folder that holds the workspace, the recovery folder or the home folder (a drive root holds them all) would reach
-    // P9's own files, and guardedSave keeps its drafts only outside the folder it saves in.
-    const home = await realpath(os.homedir()).catch(() => os.homedir());
-    if ([workspace, recovery, home].some((guarded) => inside(root, guarded)) || inside(recovery, root)) return { status: 403, error: 'root-refused' };
+    if (await rootRefused(root, { workspace, recovery })) return { status: 403, error: 'root-refused' };
     return { root };
   }
   // ponytail: a breadth-first walk of at most 2,000 folders, 8 deep; the newest 500 notes are sent, with the total found.

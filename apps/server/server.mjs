@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open } from 'node:fs/promises';
+import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection } from '../../packages/files/index.mjs';
-import { createMission, parseSettings } from './mission.mjs';
+import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
 import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
@@ -82,7 +82,7 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
-export function createListener({ workspace, savedWorkspace, recovery, state, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
@@ -137,12 +137,36 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
     // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
     || (settings?.hub && name === (settings.hub + '/mission_control.py').toLowerCase()));
   const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection });
+  // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
+  // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
+  // the page of a folder Dev Focus has since left is refused, never written into the new one.
+  let devRoot = null;
+  const devCheck = async (folder) => {
+    let root;
+    try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
+    const also = [state, ownership && await realpath(ownership).catch(() => ownership)].filter(Boolean);
+    if (!(await stat(root)).isDirectory() || await rootRefused(root, { workspace, recovery, also })) return { status: 403, error: 'root-refused' };
+    // A folder inside the workspace is opened as the workspace, with its own guards (File protection's read-only files).
+    if (inside(await realpath(workspace), root)) return { status: 409, error: 'inside-workspace' };
+    return { root };
+  };
+  const devTarget = (body) => {
+    if (!body || typeof body !== 'object' || !Object.hasOwn(body, 'root')) return { root: workspace };
+    if (!devRoot) return { status: 409, error: 'dev-root-unset' };
+    return body.root === devRoot ? devCheck(devRoot) : { status: 409, error: 'dev-root-changed' };
+  };
+  const withoutRoot = (body) => (body && typeof body === 'object' && Object.hasOwn(body, 'root') ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'root')) : body);
   api.put('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
-    const input = parseSave(await c.req.json());
+    const body = await c.req.json(), dev = Boolean(body) && typeof body === 'object' && Object.hasOwn(body, 'root');
+    if (dev && c.get('device')) return c.json({ error: 'request-refused' }, 403); // the phone never writes in the second root
+    const target = await devTarget(body);
+    if (target.error) return reply(c, target);
+    const input = parseSave(withoutRoot(body));
     await reloadSettings();
-    if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
-    const result = await guardedSave(workspace, input.path, input.hash, input.content, recovery);
+    // Read-only names are workspace paths; the second root has none.
+    if (!dev && readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
+    const result = await guardedSave(target.root, input.path, input.hash, input.content, recovery);
     if (result.draftRetained) console.error(JSON.stringify({ event: 'P9_DRAFT_RETAINED' }));
     if (result.kind === 'failed') console.error(JSON.stringify({ event: 'P9_REQUEST_FAILED', code: result.code }));
     return c.json(result, result.kind === 'saved' ? 200 : result.kind === 'conflict' ? 409 : statuses[result.code] ?? 500);
@@ -286,11 +310,24 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
   // New files from Dev Focus (threat model row 4): create-only through packages/files, so it never replaces a file.
   app.post('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
-    const input = await c.req.json();
+    const body = await c.req.json(), target = await devTarget(body), input = withoutRoot(body);
     if (!input || typeof input !== 'object' || Object.keys(input).sort().join() !== 'content,path' || typeof input.path !== 'string' || typeof input.content !== 'string') return c.json({ error: 'request-refused' }, 400);
-    if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
-    try { return c.json(await createFile(workspace, input.path, input.content), 201); }
+    if (target.error) return reply(c, target);
+    if (target.root === workspace && readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
+    try { return c.json(await createFile(target.root, input.path, input.content), 201); }
     catch (error) { if (error.code === 'EEXIST') return c.json({ error: 'file-exists' }, 409); throw error; }
+  });
+  // Dev Focus's Open Folder outside the workspace (threat model row 41): main sends it after the native picker and confirm;
+  // null goes back to the workspace. A refused folder leaves the root unset.
+  app.post('/dev/root', async (c) => {
+    const input = await json(c);
+    if (!input || typeof input !== 'object' || Object.keys(input).join() !== 'path' || (input.path !== null && (typeof input.path !== 'string' || !path.isAbsolute(input.path)))) return c.json({ error: 'request-refused' }, 400);
+    devRoot = null;
+    if (input.path === null) return c.json({ root: null });
+    const target = await devCheck(input.path);
+    if (target.error) return reply(c, target);
+    devRoot = target.root;
+    return c.json({ root: devRoot });
   });
   // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
   // Desktop only (F2): it names the workspace and settings file, which the phone never shows.

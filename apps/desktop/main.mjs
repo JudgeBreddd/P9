@@ -413,7 +413,9 @@ export async function createDesktop({ state, open } = {}) {
   window.webContents.on('did-start-loading', endDock);
   // Dev Focus: the editor page in its own view, session and origin, laid over the shell's Dev pane. Started on first open.
   // A failed start or a crashed page is rebuilt on the next open; the editor host, once up, is kept.
-  let dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [];
+  // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
+  // devServing: the folder the loaded page was given (its saves go there).
+  let dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   const startHost = () => editorHost ??= (async () => {
     // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
@@ -473,7 +475,10 @@ export async function createDesktop({ state, open } = {}) {
         // and README text come through the editor host, so connect-src stays local.
         + `img-src 'self' data: blob: ${origin} https:; font-src 'self' data: blob: ${origin}; media-src 'self' blob:; connect-src 'self' ws://127.0.0.1:${host.port} ${origin}; `
         + "frame-src 'self' p9://webview; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'" };
-      config = { port: host.port, token: host.token, commit: host.commit, workspace: status.workspace, data: host.data };
+      // workspace is the guard root (the folder saves are relative to); folder is the one the editor shows.
+      if (devFolder?.outside && (await daemonRequest(state, 'POST', '/dev/root', { path: devFolder.path }).catch(() => null))?.status !== 200) devFolder = null;
+      devServing = devFolder;
+      config = { port: host.port, token: host.token, commit: host.commit, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
     } catch (error) {
       sites.dev = { files: new Map([['/index.html', Buffer.from('<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px">Dev Focus is unavailable: the editor host or daemon did not start.</body>')]]),
         csp: "default-src 'none'; style-src 'unsafe-inline'" };
@@ -483,6 +488,45 @@ export async function createDesktop({ state, open } = {}) {
     if (config.error) dev = null;
     return config;
   })().catch(error => { dev = null; throw error; });
+  // A new folder (Open Folder, a workspace change) loads a new editor page in the same place; its open-ready delivers what is queued.
+  const reopenDev = () => {
+    if (!devView) return;
+    const bounds = devView.getBounds(), shown = devView.getVisible();
+    dev = null;
+    openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
+    devView.setBounds(bounds);
+    devView.setVisible(shown);
+    if (shown) devView.webContents.focus();
+  };
+  // A workspace change shows the new workspace, whatever folder was open.
+  const devToWorkspace = () => { devFolder = null; reopenDev(); };
+  // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
+  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it.
+  ipcMain.handle('p9dev:open-folder', async (event, ...args) => {
+    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!state) return { error: 'daemon-unavailable' };
+    const workspace = await realpath((await health(state)).workspace);
+    const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
+    if (pick.canceled || !pick.filePaths[0]) return { ok: false };
+    const real = await realpath(pick.filePaths[0]).catch(() => null);
+    if (!real) return { error: 'root-not-found' };
+    const key = p => process.platform === 'win32' ? p.toLowerCase() : p; // Windows paths compare without case.
+    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + path.sep);
+    let set; // the daemon's answer: the root as it stores it, which saves must name exactly
+    if (outside) {
+      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + ' in Dev Focus?',
+        detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
+        buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
+      if (response !== 1) return { ok: false };
+      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(() => null);
+      if (set?.status !== 200) return { error: set?.body?.error ?? 'daemon-unavailable' };
+    } else if (devFolder?.outside) await daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null);
+    // Inside: kept as the part after the workspace, so the page gets the daemon's own spelling of it (Windows case, a linked workspace).
+    devFolder = key(real) === key(workspace) ? null : { path: outside ? set.body.root : real, outside, tail: real.slice(workspace.length) };
+    // After the reply, so it is not sent to the page being replaced.
+    setTimeout(reopenDev);
+    return { ok: true };
+  });
   ipcMain.handle('p9:dev-view', async (event, ...args) => {
     const [b] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -641,7 +685,7 @@ export async function createDesktop({ state, open } = {}) {
       changing = true;
       try {
         const ran = await repairWindowsTask(process.resourcesPath, folder);
-        if (ran && await on(folder)) return { workspace: folder };
+        if (ran && await on(folder)) { devToWorkspace(); return { workspace: folder }; }
         await repairWindowsTask(process.resourcesPath, old);
         await on(old);
         return { error: 'workspace-not-started', detail: ran ? 'daemon-not-answering' : 'install-windows.ps1 failed (service-install.log)',
@@ -661,7 +705,7 @@ export async function createDesktop({ state, open } = {}) {
     const run = (script, ...more) => new Promise(resolve => execFile(node, [path.join(scripts, script), ...more], { env, timeout: 60_000 },
       (error, _stdout, stderr) => { if (error) detail = String(stderr).trim().split('\n').filter(l => /^\w*Error/.test(l)).pop()?.slice(0, 300) ?? 'exit ' + error.code; resolve(!error); }));
     if (!await run('uninstall-service.mjs')) await run('uninstall-service.mjs', '--force');
-    if (await run('install-service.mjs', folder)) return { workspace: folder };
+    if (await run('install-service.mjs', folder)) { devToWorkspace(); return { workspace: folder }; }
     // install-service.mjs removed its own unit when the daemon did not answer; the old folder again.
     const why = detail;
     await run('install-service.mjs', old);
@@ -751,12 +795,21 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
     return { ...(await openDev()), look };
   });
+  // A folder outside the workspace: the write names the root this page was opened on, so the daemon refuses it once Dev Focus has
+  // moved on. A restarted daemon has forgotten the root: set it again once, while it is still the open folder.
+  const devWrite = async (method, body) => {
+    const served = devServing, write = () => daemonRequest(state, method, '/files', served?.outside ? { ...body, root: served.path } : body);
+    const result = await write();
+    if (result.body?.error !== 'dev-root-unset' || served !== devFolder) return result;
+    if ((await daemonRequest(state, 'POST', '/dev/root', { path: served.path })).status !== 200) return result;
+    return write();
+  };
   // Every editor save is the daemon's guarded save: the expected hash is what the editor loaded, so a disk change is a conflict.
   ipcMain.handle('p9dev:save', async (event, ...args) => {
     const [input] = args;
     if (!fromDev(event) || args.length !== 1 || !input || typeof input.path !== 'string' || !/^[0-9a-f]{64}$/.test(input.hash ?? '') || typeof input.content !== 'string') throw new Error('ipc-sender-refused');
     if (!state) return { kind: 'failed', error: 'daemon-unavailable' };
-    try { return (await daemonRequest(state, 'PUT', '/files', { path: input.path, hash: input.hash, content: input.content })).body; }
+    try { return (await devWrite('PUT', { path: input.path, hash: input.hash, content: input.content })).body; }
     catch { return { kind: 'failed', error: 'daemon-unavailable' }; }
   });
   ipcMain.handle('p9dev:create', async (event, ...args) => {
@@ -764,7 +817,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromDev(event) || args.length !== 1 || !input || typeof input.path !== 'string' || typeof input.content !== 'string') throw new Error('ipc-sender-refused');
     if (!state) return { kind: 'failed', error: 'daemon-unavailable' };
     try {
-      const result = await daemonRequest(state, 'POST', '/files', { path: input.path, content: input.content });
+      const result = await devWrite('POST', { path: input.path, content: input.content });
       return result.status === 201 ? result.body : { kind: 'failed', error: result.body?.error ?? String(result.status) };
     } catch { return { kind: 'failed', error: 'daemon-unavailable' }; }
   });
@@ -804,6 +857,8 @@ export async function createDesktop({ state, open } = {}) {
     const checked = await checkOpen(data).catch(() => null);
     if (!checked) return console.error('p9: open request refused');
     queued.push(checked);
+    // Names are workspace-relative: a folder outside it goes back to the workspace first (the new page's open-ready delivers).
+    if (devFolder?.outside) { daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null); devToWorkspace(); }
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();

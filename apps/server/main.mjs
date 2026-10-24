@@ -140,7 +140,7 @@ delete process.env.P9_GITHUB_TOKEN;
 // ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
-const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
+const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
 try {
   await new Promise((resolve, reject) => {
     server.once('error', reject);

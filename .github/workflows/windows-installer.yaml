@@ -88,6 +88,11 @@ jobs:
       - name: Windows notes test
         if: inputs.tag == ''
         run: node --test test/mission-notes.test.mjs
+      # v0.1.5 DV2: Dev Focus's folder outside the workspace, on Windows paths: %LOCALAPPDATA%\P9 and the drive root refused,
+      # saves there through the guarded save, a junction out refused.
+      - name: Windows Dev folder test
+        if: inputs.tag == ''
+        run: node --test test/dev-root.test.mjs
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.
