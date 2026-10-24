@@ -638,7 +638,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   await app.evaluate(({ app }, file) => app.emit('second-instance', {}, [], '', { open: 'edit', path: file, line: 1 }), path.join(instance.workspace, 'note.txt'));
   dev = await ready(await page);
   config = await dev.evaluate(() => window.p9dev.config());
-  assert.deepEqual([config.workspace, config.folder], [instance.workspace, undefined]);
+  assert.deepEqual([config.workspace, config.folder], [instance.workspace, null]);
   await dev.waitForFunction(() => window.devFocus.v.window.activeTextEditor?.document.uri.path.endsWith('/note.txt'), null, { timeout: 30000 });
   console.log('PASS Open Folder: inside at once, outside after one question, saves there guarded, a folder holding the workspace refused, p9 edit back to the workspace');
 });
