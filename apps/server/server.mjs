@@ -304,21 +304,32 @@ export function createListener({ workspace, savedWorkspace, recovery, state, cre
   const SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
   const existing = async () => {
     const found = {};
+    const agents = [];
     const walk = async (relative, depth) => {
       const entries = await readdir(path.join(workspace, relative), { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name) || found.hub) continue;
+        if (entry.isFile() && entry.name === 'AGENTS.md') agents.push(relative ? relative + '/AGENTS.md' : 'AGENTS.md');
+        if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
         const child = relative ? relative + '/' + entry.name : entry.name;
-        if (entry.name === 'workspace-hub' && await present(path.join(workspace, child, 'registry.json'))) found.hub = child;
+        if (entry.name === 'workspace-hub' && !found.hub && await present(path.join(workspace, child, 'registry.json'))) found.hub = child;
         else if (depth < 3) await walk(child, depth + 1);
       }
     };
     await walk('', 1);
     if (found.hub) found.registry = found.hub + '/registry.json';
     else if (await present(path.join(workspace, STARTER_SETTINGS.registry))) found.registry = STARTER_SETTINGS.registry;
-    if (await present(path.join(workspace, 'AGENTS.md'))) found.primary = 'AGENTS.md';
+    // primary: an AGENTS.md with the line Mission parses (**Main project: ...** (`path`)), else the top one.
+    const mainLine = async (file) => /\*\*Main project: [^*]+\*\* \(`[^`]+`/.test(await readAsset(path.join(workspace, file), 'utf8').catch(() => ''));
+    for (const file of agents.sort((a, b) => a.split('/').length - b.split('/').length)) if (!found.primary && await mainLine(file)) found.primary = file;
+    if (!found.primary && agents.includes('AGENTS.md')) found.primary = 'AGENTS.md';
     for (const folder of ['needs-you', 'waiting']) if (!found.waiting && await isFolder(folder)) found.waiting = folder;
-    return found;
+    // waiting: no such folder, so one whose own AGENTS.md first heading says it holds what is waiting on the owner.
+    for (const file of agents.filter((name) => name !== 'AGENTS.md')) {
+      if (found.waiting) break;
+      const text = await readAsset(path.join(workspace, file), 'utf8').catch(() => '');
+      if (/waiting on/i.test(text.split('\n').find((line) => /^#+\s/.test(line)) ?? '')) found.waiting = path.posix.dirname(file);
+    }
+    return Object.fromEntries(Object.entries(found).filter(([, value]) => value));
   };
   // Exactly what a starter run with these paths makes: each of the three that is missing (a missing waiting folder gets its
   // AGENTS.md; an existing one is left as it is), and _ideas/ only in an empty workspace.

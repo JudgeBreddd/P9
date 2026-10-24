@@ -151,6 +151,42 @@ test('Setup wizard: an existing workspace-hub is used as it is; only the setting
   console.log('PASS starter: a found workspace-hub, AGENTS.md and waiting/ are used; only settings.json is written; a missing file is named');
 });
 
+test('Setup wizard: an ICM-shaped workspace proposes its own primary AGENTS.md and its waiting-on folder; Create writes only the settings file', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/apps'), { recursive: true });
+    await writeFile(path.join(workspace, 'work/AGENTS.md'), '# Work\n**Main project: Apps** (`apps/`)\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Items Waiting On Me\n');
+    return {};
+  });
+  const before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  const found = { hub, registry: hub + '/registry.json', primary: 'work/AGENTS.md', waiting: 'work/_owner' };
+  assert.deepEqual([s.found, s.proposed, s.creates], [found, found, []]);
+  const made = await call(instance, '/setup/starter', 'POST', s.proposed);
+  assert.deepEqual([made.status, made.body.created], [201, [settingsPath(instance.directory)]]);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before);
+  assert.equal((await call(instance, '/mission')).status, 200);
+  console.log('PASS starter: the Main project AGENTS.md and the waiting-on folder are proposed; only settings.json is written');
+});
+
+test('Setup wizard: a top-level waiting-on folder is found; with no Main project line the top AGENTS.md is primary', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'sub'));
+    await writeFile(path.join(workspace, 'sub/AGENTS.md'), '# Sub\n');
+    await mkdir(path.join(workspace, '_owner'));
+    await writeFile(path.join(workspace, '_owner/AGENTS.md'), '# What is waiting on the owner\n');
+    return {};
+  });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.found.primary, s.found.waiting], ['AGENTS.md', '_owner']);
+});
+
 test('Setup wizard: the starter never follows a link out of the workspace (threat model row 17)', { skip: process.platform === 'win32' && 'Linux links; files-windows.test.mjs covers reparse points', timeout: 60000 }, async (t) => {
   const outside = await mkdtemp(path.join(os.tmpdir(), 'p9-outside-'));
   // The settings (loaded at start) put the waiting folder under a link: making it walks through link/ with no-follow, so nothing lands outside.
