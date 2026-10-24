@@ -14,6 +14,11 @@ on:
         description: Test files to run, space separated (empty runs them all)
         required: false
         default: ''
+      evidence:
+        description: Install the editor host and keep the tests' screenshots as an artifact
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -55,9 +60,28 @@ jobs:
       # The Electron tests load apps/web/dist and apps/dev/dist; the passkey and surface-2 tests use Playwright's own Chromium.
       - run: pnpm build
       - run: pnpm exec playwright install --only-shell chromium
+      # Dev Focus tests skip without the editor host; this installs it as the README does, pinned by SHA-256.
+      - name: Editor host (evidence runs)
+        if: inputs.evidence
+        run: |
+          curl -fsSLo /tmp/reh.tgz https://github.com/VSCodium/vscodium/releases/download/1.121.03429/vscodium-reh-linux-x64-1.121.03429.tar.gz
+          echo "9b27e6957f7cca9b52686eb9866db131e75d37d180ea5ba0f6cdf44b799f75d9  /tmp/reh.tgz" | sha256sum -c -
+          mkdir -p ~/.local/share/p9/codium-server
+          tar -xzf /tmp/reh.tgz -C ~/.local/share/p9/codium-server
+          test -x ~/.local/share/p9/codium-server/bin/codium-server
+          mkdir -p "$RUNNER_TEMP/evidence"
+          echo "P9_EVIDENCE=$RUNNER_TEMP/evidence" >> "$GITHUB_ENV"
       - name: Tests
         env:
           FILES: ${{ inputs.files }}
         run: |
           systemctl --user is-system-running || true
           if [ -n "$FILES" ]; then xvfb-run -a node scripts/with-tmp.mjs node --test $FILES; else xvfb-run -a pnpm test; fi
+      - name: Screenshots (evidence runs)
+        if: always() && inputs.evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+          if-no-files-found: warn

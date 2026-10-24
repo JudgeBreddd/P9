@@ -608,6 +608,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   assert.equal(await dev.evaluate(() => window.devFocus.root.path), uriPath(path.join(instance.workspace, 'src')));
   assert.equal(await save('src/b.txt', 'inside after\n'), true);
   assert.equal(await readFile(path.join(instance.workspace, 'src', 'b.txt'), 'utf8'), 'inside after\n');
+  if (evidence) { await mkdir(evidence, { recursive: true }); await dev.screenshot({ path: path.join(evidence, 'dev-open-folder-inside.png') }); }
 
   // Outside: one question naming the folder, then the editor shows it and saves land there, not in the workspace.
   await pick(outside);
