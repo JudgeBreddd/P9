@@ -102,6 +102,7 @@
     "codemirror": "6.0.2",
     "electron": "44.7.2",
     "marked": "14.0.0",
+    "qrcode-generator": "2.0.4",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "rolldown": "1.2.14",

@@ -394,7 +394,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
 
   await context.setOffline(true); await page.waitForSelector('#stale:not([hidden])');
   assert.equal(await page.locator('#save').isDisabled(), true);
-  assert.equal(await page.locator('#composer button').isDisabled(), true);
+  // Offline the Send button queues the message instead (PH2, phone-continue.test.mjs).
+  assert.equal(await page.locator('#composer button').textContent(), 'Queue message');
   await context.setOffline(false); await page.waitForFunction(() => document.getElementById('stale').hidden);
 
   await edit('retry once');

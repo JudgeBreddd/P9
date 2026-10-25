@@ -1,5 +1,6 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, md } from './helpers.mjs';
+import { pinned, applyCard } from './pinned.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
 type Json = Record<string, unknown>;
@@ -8,7 +9,7 @@ type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | nul
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
-const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[] };
+const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping,
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
@@ -16,7 +17,8 @@ function online() {
   const value = navigator.onLine;
   one<HTMLElement>('#stale').hidden = value;
   one('#syncState').textContent = value ? 'Live' : 'Stale';
-  document.querySelectorAll<HTMLButtonElement>('#composer button, #save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !state.file); });
+  document.querySelectorAll<HTMLButtonElement>('#save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !state.file); });
+  label();
   return value;
 }
 async function request(path: string) {
@@ -72,32 +74,93 @@ document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => {
 async function loadChat() {
   try {
     const list = await request('/chat'); state.conversations = list.conversations ?? [];
+    await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     // Newest first, labelled with when it started and its state, so two "Claude" chats are told apart.
     one<HTMLSelectElement>('#conversation').innerHTML = [...state.conversations].reverse().map((item) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`).join('') || '<option value="">No conversations yet</option>';
-    await fetchEvents(); render();
+    if (!linked && applyLink()) linked = true;
+    render();
   } catch { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
 }
+// PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
+// link changes on an open page).
+let linked = false;
+function applyLink() {
+  const id = new URLSearchParams(location.hash.slice(1)).get('chat'), select = one<HTMLSelectElement>('#conversation');
+  if (!id || ![...select.options].some((option) => option.value === id)) return false;
+  select.value = id;
+  return true;
+}
+addEventListener('hashchange', () => { if (applyLink()) { show('chat'); render(); } });
 // Reads every event after state.cursor into state.events (the daemon pages 500 at a time); wait > 0 long-polls for the
-// first. The page holds the whole history, so a reload or a second visit shows each chat in full.
-async function fetchEvents(wait = 0) {
+// first. `extra` narrows it to some chats (the first read, PH3). The page holds what it has read, so a reload or a second
+// visit shows each chat in full.
+async function pull(extra: string, wait = 0) {
   let batch: Json[];
   do {
-    const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait); wait = 0;
+    const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
     batch = result.events as Json[] ?? [];
     // The live loop and a refresh can overlap; an event already held is skipped.
     for (const event of batch) if (Number(event.cursor) > state.cursor) { state.events.push(event); state.cursor = Number(event.cursor); }
+    // A narrowed read reports how far it scanned, matching or not.
+    if (extra && batch.length < 500) state.cursor = Math.max(state.cursor, Number(result.cursor));
   } while (batch.length === 500);
-  // A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
-  const next = state.events.find((event) => Number(event.cursor) > state.seen);
-  if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false;
+}
+// A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
+const gapAfter = (next?: Json) => { if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false; };
+// PH3: the first read replays only the chats that are not stopped, as the desktop does (E2); a stopped chat's history
+// loads when it is shown. Before this the phone read the whole ledger, stopped chats included, on every launch.
+// ponytail: over 100 such chats it replays everything, as the desktop does (their IDs go in the URL).
+async function replay() {
+  const ids = state.conversations.filter((item) => item.state !== 'stopped').map((item) => String(item.id));
+  let scoped = ids.length <= 100;
+  for (;;) {
+    try { await pull(scoped ? '&only=' + ids.map(encodeURIComponent).join(',') : ''); break; }
+    // A listed ID the daemon will not take (only a seeded test ledger has one) replays everything, as before.
+    catch (error) { if (!scoped || (error as Error).message !== 'request-refused') throw error; scoped = false; }
+  }
+  if (!scoped) return gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
+  // The narrowed events skip the other chats', so a gap is looked for in the whole feed: its first event after the saved cursor.
+  if (state.seen > 0) gapAfter(((await request('/chat/events?after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
+  // Listed again after the read: a chat made meanwhile has events below base this read did not take, so it is a stub too.
+  state.base = state.cursor;
+  state.conversations = (await request('/chat')).conversations ?? [];
+  state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
+}
+async function fetchEvents(wait = 0) {
+  if (!state.replayed) { await replay(); state.replayed = true; }
+  else { await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen)); }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
+}
+// A stub chat's events, up to where the first read stopped; live events for it come after, so none repeat.
+const loading = new Map<string, Promise<void>>();
+function history(id: string) {
+  if (!state.stubs.has(id)) return Promise.resolve();
+  if (!loading.has(id)) loading.set(id, (async () => {
+    try {
+      for (let after = 0; ;) {
+        const result = await request('/chat/events?after=' + after + '&only=' + encodeURIComponent(id) + '&until=' + state.base);
+        state.events.push(...result.events as Json[]); after = Number(result.cursor);
+        if ((result.events as Json[]).length < 500) break;
+      }
+    } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
+    state.stubs.delete(id);
+    state.events.sort((a, b) => Number(a.cursor) - Number(b.cursor));
+  })().finally(() => loading.delete(id)));
+  return loading.get(id)!;
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out.
 type Block = { label: string; text: string; tool?: boolean; id?: unknown; title?: string; request?: string; options?: Json[] };
 function render() {
   const picked = one<HTMLSelectElement>('#conversation').value;
+  if (state.stubs.has(picked)) {
+    one('#events').innerHTML = '<div class="empty">Loading…</div>';
+    history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
+    return;
+  }
   const blocks: Block[] = [];
+  // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
+  const strip: { events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> } = { events: [] };
   const add = (label: string, text: unknown, tool = false) => { blocks.push({ label, text: String(text ?? ''), tool }); };
   // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
   const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.tool = true; block.text += ' · not answered'; } });
@@ -110,12 +173,14 @@ function render() {
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
         const label = update === 'agent_message_chunk' ? 'Agent' : 'Thinking';
         if (last?.label === label) last.text += String(text); else add(label, text);
-      } else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId });
+      } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
+      else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId });
       else if (update === 'tool_call_update') {
         const tool = blocks.find((block) => block.label === 'Tool' && block.id === data.toolCallId);
         if (tool && typeof data.status === 'string') tool.text = String(data.title || tool.title) + ' · ' + data.status;
       }
     }
+    else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
     else if (kind === 'approval') blocks.push({ label: 'Approval needed', text: String((data.toolCall as Json | undefined)?.title || 'Tool call'), request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [] });
     else if (kind === 'answered') {
       const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
@@ -133,7 +198,8 @@ function render() {
   one('#events').innerHTML = blocks.length ? blocks.slice(-30).map((block) =>
     `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${md.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
       `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`).join('') : '<div class="empty">No messages yet.</div>';
-  renderPicks(picked);
+  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
+  renderPicks(picked); renderQueue(); label(); void drain();
 }
 // Mode and Model for the picked chat (Builder, 2026-10-18: the phone could change neither; threat model row 15). Mode
 // starts at "as set" and sends nothing until picked: the daemon does not report the mode, and a default would undo a
@@ -163,16 +229,82 @@ async function listen() {
     catch { await pause(3000); }
   }
 }
+// PH2: the phone keeps its queue. A message typed offline, or while the agent waits on a question or approval (sent then it
+// would decline it), is kept here, on this phone, and goes once it can, with `when: 'queue'` so it waits for the turn's
+// end. Each goes once: it keeps one operation ID until the daemon answers (mutate), so a lost reply or a reload re-sends
+// the same message under the same ID and the daemon replays it. ponytail: this phone's storage only, as the desktop's queue.
+type Queued = { qid: string; text: string; mode?: string; model?: string };
+const queueKey = (id: string) => 'p9-queue:' + id;
+function queued(id: string): Queued[] {
+  try { const all = JSON.parse(localStorage.getItem(queueKey(id)) ?? '[]'); return Array.isArray(all) ? all.filter((item) => typeof item?.text === 'string' && typeof item.qid === 'string') : []; } catch { return []; }
+}
+function keepQueue(id: string, items: Queued[]) { if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
+// A question or approval still waiting for an answer in this chat.
+function asking(id: string) {
+  const open = new Set<string>();
+  for (const event of state.events) {
+    if (event.conversation !== id) continue;
+    const kind = String(event.type), request = String((event.data as Json | undefined)?.request);
+    if (kind === 'approval' || kind === 'question') open.add(request);
+    else if (kind === 'answered') open.delete(request);
+    else if (['turn-end', 'interrupted', 'exited', 'stopped'].includes(kind)) open.clear();
+  }
+  return open.size > 0;
+}
+function label() {
+  const id = one<HTMLSelectElement>('#conversation').value;
+  one('#composer button').textContent = !navigator.onLine || asking(id) || queued(id).length ? 'Queue message' : 'Send message';
+}
+function renderQueue() {
+  const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), box = one<HTMLElement>('#queued');
+  box.hidden = !items.length;
+  box.innerHTML = items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
+}
+let draining = false;
+async function drain() {
+  if (draining || !navigator.onLine) return;
+  draining = true;
+  let sent = false;
+  try {
+    for (const chat of state.conversations) {
+      const id = String(chat.id);
+      for (let next = queued(id)[0]; next && !asking(id); next = queued(id)[0]) {
+        const { qid, ...body } = next;
+        const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' });
+        // Any answer is final for this message: it went, or the daemon refused it and says why (the text goes back in the box).
+        keepQueue(id, queued(id).filter((item) => item.qid !== qid));
+        if (result.status === 202) sent = true;
+        else {
+          const input = one<HTMLTextAreaElement>('#prompt');
+          if (id === one<HTMLSelectElement>('#conversation').value) input.value = next.text + (input.value ? '\n' + input.value : '');
+          one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not sent: ${escape(result.body.error ?? result.status)}</div>`);
+        }
+      }
+    }
+  } catch { /* a lost request keeps its message and its ID; the next drain sends it again */ }
+  finally { draining = false; }
+  if (sent) { await fetchEvents(); render(); } else renderQueue();
+}
+one<HTMLElement>('#queued').onclick = (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
+  const id = one<HTMLSelectElement>('#conversation').value, item = queued(id).find((entry) => entry.qid === button.dataset.unqueue); if (!item) return;
+  keepQueue(id, queued(id).filter((entry) => entry.qid !== item.qid));
+  const input = one<HTMLTextAreaElement>('#prompt'); input.value = item.text + (input.value ? '\n' + input.value : '');
+  renderQueue(); label();
+};
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
   if (!id || !input.value.trim()) return;
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }) });
+  const body = { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }) };
+  // Behind a queued message it queues too, so they go in the order typed.
+  if (!navigator.onLine || asking(id) || queued(id).length) { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return; }
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', body);
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { input.value = ''; await fetchEvents(); render(); }
   else one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not sent: ${escape(result.body.error ?? result.status)}</div>`);
 };
-one<HTMLSelectElement>('#conversation').onchange = render;
+one<HTMLSelectElement>('#conversation').onchange = render; // a stub's history loads from render
 // Phase 17 row 2: an approval answered from the phone, the same POST /chat/:id/answer the desktop uses.
 one<HTMLElement>('#events').onclick = async (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-request]'); if (!button) return;
@@ -496,6 +628,6 @@ one<HTMLButtonElement>('#loadDisk').onclick = () => {
 };
 
 addEventListener('offline', online);
-addEventListener('online', () => { online(); void loadChat(); });
+addEventListener('online', () => { online(); void loadChat().then(drain); });
 online(); void loadChat().then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');

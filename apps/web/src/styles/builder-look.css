@@ -61,7 +61,6 @@ details.tool summary{background-color:#000;border-width:0}
 details.tool{border:0}
 details.tool pre,details.tool .diff{border-top:0}
 
-/* Meters: Context track muted, its fill hidden; 5 h and 7 d tracks popover */
+/* Meters: Context track muted; 5 h and 7 d tracks popover */
 .meters .meter:nth-child(1) .fx-meter{background-color:color-mix(in oklab,var(--muted) 70%,transparent)}
-.meters .meter:nth-child(1) .fx-meter>span{background:transparent;color:var(--background)}
 .meters .meter:nth-child(n+2) .fx-meter{background-color:color-mix(in oklab,var(--popover) 70%,transparent)}

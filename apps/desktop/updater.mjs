@@ -29,9 +29,10 @@ export function updateAction(args) {
 
 // Returns { read, check, install }, each giving { state, current, available, reason }. state: off, idle, checking,
 // downloading, ready or error. log(line) gets electron-updater's own lines and each change of state.
-// load: the test's stand-in for electron-updater.
+// load: the test's stand-in for electron-updater. skip: the version a rollback came back from (AU5, rollback.mjs), which
+// is never downloaded again; get() reads it, clear() forgets it once a different release is offered.
 export async function startUpdater({ app, version, log, resources = process.resourcesPath, platform = process.platform,
-  env = process.env, load = () => import('electron-updater').then(module => module.default.autoUpdater) }) {
+  env = process.env, load = () => import('electron-updater').then(module => module.default.autoUpdater), skip = { get: () => null, clear() {} } }) {
   const status = { state: 'off', current: version, available: null,
     reason: offReason({ packaged: app.isPackaged, resources, platform, env }) };
   const read = () => ({ ...status });
@@ -39,7 +40,8 @@ export async function startUpdater({ app, version, log, resources = process.reso
   let updater;
   try { updater = await load(); }
   catch (error) { Object.assign(status, { state: 'error', reason: 'the updater did not load' }); log('load failed: ' + error.message); return { read, check: read, install: read }; }
-  updater.autoDownload = true;
+  // The download starts on update-available below, as autoDownload would start it, unless that version is skipped.
+  updater.autoDownload = false;
   updater.autoInstallOnAppQuit = true;
   updater.allowPrerelease = false;
   updater.allowDowngrade = false;
@@ -47,7 +49,13 @@ export async function startUpdater({ app, version, log, resources = process.reso
   const set = (state, fields = {}) => { Object.assign(status, { state, reason: null }, fields); log(`state ${state}${status.available ? ' ' + status.available : ''}`); };
   updater.on('checking-for-update', () => set('checking'));
   updater.on('update-not-available', () => set('idle', { available: null }));
-  updater.on('update-available', info => set('downloading', { available: info.version }));
+  updater.on('update-available', info => {
+    const skipped = skip.get();
+    if (info.version === skipped) { log('skipped ' + skipped + ': P9 went back from it'); return set('idle', { available: null }); }
+    if (skipped) skip.clear();
+    set('downloading', { available: info.version });
+    updater.downloadUpdate().catch(() => {}); // a failure also arrives as 'error'
+  });
   updater.on('update-downloaded', info => set('ready', { available: info.version }));
   // The first line only: electron-updater's messages can run to a whole HTTP response.
   updater.on('error', error => set('error', { reason: String(error?.message ?? error).split('\n')[0].slice(0, 200) }));

@@ -8,6 +8,7 @@ import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
+import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 
 export function mountShell() {
@@ -434,17 +435,23 @@ const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
-const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= 80 ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
-function meters(s) {
-  const ctx = s.context ? Math.round(s.context.used / s.context.size * 100) : null;
+// Amber from 75% on every bar (MR1).
+const HOT = 75;
+const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
+// The cache clock: text and state, so the 15 s tick can move it without rebuilding the pane.
+const cacheOf = s => {
   const cacheMin = !s.live ? s.cacheMin : s.agent === 'claude' && s.lastEnd ? Math.floor((Date.now() - s.lastEnd) / 60000) : null;
   const left = cacheMin == null ? null : 60 - cacheMin;
+  return left == null ? ['—', ''] : left <= 0 ? ['cold', 'cold'] : [left + ' min', left < 20 ? 'cooling' : 'warm'];
+};
+function meters(s) {
+  const ctx = s.context ? Math.round(s.context.used / s.context.size * 100) : null;
   const lim = s.live ? usage.limits?.[s.agent] : { fiveHour: { usedPercent: s.limits.h5 * 100 }, sevenDay: { usedPercent: s.limits.d7 * 100 }, asOf: Date.now() };
   const line = limitLine(names[s.agent], lim), now = Date.now();
   const bar = (label, w) => meterBar(label, w, line, now);
-  const cache = left == null ? ['—', ''] : left <= 0 ? ['cold', 'cold'] : [left + ' min', left < 20 ? 'cooling' : 'warm'];
+  const cache = cacheOf(s);
   return `<div class="meters">
-    <div class="meter" title="${esc(ctx == null ? 'No usage_update from this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= 80 ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
+    <div class="meter" title="${esc(ctx == null ? 'No usage_update from this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
     ${bar('5 h', lim?.fiveHour)}
     ${bar('7 d', lim?.sevenDay)}
     <div class="cache" data-s="${cache[1]}" title="1-hour prompt cache, timed from the last turn end">${svg.clock}${cache[0]}</div>
@@ -494,6 +501,7 @@ function pane(s, i, bare) {
       <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
       ${pickerSelects(s)}
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Tool calls and thinking">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
+      ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
@@ -603,6 +611,7 @@ function paint(root, ss, only) {
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); renderTabs(); renderChats(); };
     p.querySelector('[data-steps]').onclick = () => { hideSteps = !hideSteps; localStorage.setItem('p9-hide-steps', hideSteps ? '1' : '0'); renderChats(); };
     const cl = p.querySelector('[data-close]'); if (cl) cl.onclick = () => closeTab(s.id);
+    const ph = p.querySelector('[data-phone]'); if (ph) ph.onclick = () => continueOnPhone(s);
   });
 }
 function answered(s) {
@@ -789,8 +798,13 @@ async function loadUsage() {
   Object.assign(usage, result.status === 200 ? result.body : { state: 'unavailable' });
   renderMission();
 }
-// The chat meters read usage.limits: fetched again each minute, which also moves the cache timer on.
+// The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
+// ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
 const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+let usageSoon = 0;
+// Panes are redrawn only when the figures moved, so a turn end in one chat does not rebuild the others (E2).
+const usageNow = () => { clearTimeout(usageSoon); usageSoon = setTimeout(() => { const was = JSON.stringify(usage.limits); loadUsage().then(() => { if (JSON.stringify(usage.limits) !== was) renderChats(); }); }, 300); };
+setInterval(() => { if (document.hidden) return; for (const s of S.sessions) for (const el of document.querySelectorAll('.pane[data-id="' + s.id + '"] .cache')) { const [text, state] = cacheOf(s); el.dataset.s = state; el.lastChild.textContent = text; } }, 15000);
 // Restart P9's background service (finding 6): the one way back for a service that hangs or lost a file, from the Mission
 // notes and Settings. Main asks first, and restarts a service that does not answer at all. RS1: main answers once the new
 // service answers, or says why not. repair (MT1): set the service up again first. button: none from Ctrl K.
@@ -2008,6 +2022,12 @@ const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
 const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
+// PH1: the phone link for this chat. server_host is the daemon's settings.json value, read the way Settings reads it.
+async function continueOnPhone(s) {
+  const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
+  $('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.settings?.server_host : '', s.id);
+  $('#phoneDlg').showModal();
+}
 // A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
 const picDlg = $('#picDlg');
 addEventListener('click', e => {
@@ -2070,7 +2090,7 @@ function applyChat(ev) {
       else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-      else if (d.sessionUpdate === 'usage_update' && d.size > 0) s.context = { used: Number(d.used) || 0, size: Number(d.size) };
+      else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) usageNow(); }
       else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
       break;
     case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]) }); s.pending = 'approval'; break;
@@ -2088,7 +2108,7 @@ function applyChat(ev) {
     case 'lock-rejected': notice('Agent lock: rejected ' + (d.toolCall?.title || 'a tool call')); break;
     case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
-    case 'turn-end': settle(); s.lastEnd = ev.at; queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
+    case 'turn-end': settle(); s.lastEnd = ev.at; usageNow(); queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
     case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
     case 'exited': settle(); s.state = 'stopped'; notice('The agent process exited' + (d.code != null ? ' (code ' + d.code + ')' : '') + '. Send again to resume.'); break;
     case 'stopped': settle(); s.state = 'stopped'; notice(d.result === 'stopped' ? 'Stopped. Everything this session started has ended.' : 'Stop could not confirm that everything ended.'); break;

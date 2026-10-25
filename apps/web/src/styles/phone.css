@@ -16,3 +16,8 @@ dialog.window{width:100vw;max-width:none;height:100svh;max-height:none;margin:0;
 #termState{align-self:center;color:var(--muted);font-size:13px}
 .keys{margin-top:10px;flex-wrap:wrap}.keys button{min-width:52px}
 .xterm .xterm-helper-textarea{font-size:16px}
+/* PH2: messages kept on this phone until they can go; the grid above would show it empty */
+#queued{margin:-6px 0 14px}#queued[hidden]{display:none}
+
+/* PH4: the plan and pinned cards above the chat, the same markup as the desktop strip */
+.pinned{display:flex;flex-direction:column;gap:8px;max-height:35vh;overflow:auto;margin-bottom:12px}.pinned .plan,.card-pin{flex:none;border:1px solid var(--line);border-radius:14px;padding:10px 14px;background:var(--panel)}.pinned .eyebrow{margin-bottom:4px;color:var(--cyan);font:700 12px ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase}.pinned .plan li{display:flex;gap:8px;margin:2px 0;list-style:none}.pinned .plan li[data-s=completed]{color:var(--muted)}.card-pin li:has(>input[type=checkbox]){list-style:none;margin-left:-1.2em}.card-pin .msg{font-size:14px;line-height:1.5;overflow-wrap:anywhere}

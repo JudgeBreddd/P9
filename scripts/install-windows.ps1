@@ -2,7 +2,8 @@ param(
   [string]$Workspace,
   [string]$Settings = (Join-Path $env:APPDATA 'P9\settings.json'),
   [string]$Node,
-  [string]$Server
+  [string]$Server,
+  [string]$Installer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -115,10 +116,31 @@ if ($Node -eq $bundled) {
   }
   $launcher = Join-Path $root 'launcher\p9-launch.ps1'
   New-Item -ItemType Directory -Force -Path (Split-Path $launcher) | Out-Null
-  Copy-Item -LiteralPath (Join-Path $target 'scripts\launcher\p9-launch.ps1') -Destination $launcher -Force
+  # AU5: only the first install writes the launcher itself. After that this version's goes to p9-launch.ps1.next, which
+  # the app renames over it after a healthy start (apps/desktop/rollback.mjs), so a broken update cannot break it.
+  $launcherCopy = if (Test-Path -LiteralPath $launcher -PathType Leaf) { $launcher + '.next' } else { $launcher }
+  Copy-Item -LiteralPath (Join-Path $target 'scripts\launcher\p9-launch.ps1') -Destination $launcherCopy -Force
   $current = Join-Path $daemons 'current'
   $previous = if (Test-Path -LiteralPath $current -PathType Leaf) { [IO.File]::ReadAllText($current).Trim() } else { '' }
   [IO.File]::WriteAllText($current, $version)
+  # AU5: the installer that installed this version (installer.nsh passes $EXEPATH) is kept as installers\<version>.exe,
+  # with the one before it, for a rollback (p9-launch.ps1 -Rollback). Not kept costs the rollback a download, nothing more.
+  if ($Installer) {
+    try {
+      $installers = Join-Path $root 'installers'
+      $keep = Join-Path $installers ($version + '.exe')
+      New-Item -ItemType Directory -Force -Path $installers | Out-Null
+      if ((Full $Installer 'installer') -ne $keep) {
+        Copy-Item -LiteralPath $Installer -Destination ($keep + '.tmp') -Force
+        Move-Item -LiteralPath ($keep + '.tmp') -Destination $keep -Force
+        Say ('kept the installer as ' + $keep)
+      }
+      if ($previous -ne $version) {
+        Get-ChildItem -LiteralPath $installers -File | Where-Object { $_.Name -ne ($version + '.exe') -and $_.Name -ne ($previous + '.exe') } | ForEach-Object {
+          Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; Say ('removed ' + $_.FullName) }
+      }
+    } catch { Say ('the installer was not kept: ' + $_) }
+  }
   # Only when current changes: a second install of the same version keeps the one before it.
   if ($previous -ne $version) {
     Get-ChildItem -LiteralPath $daemons -Directory | Where-Object { $_.Name -ne $version -and $_.Name -ne $previous } | ForEach-Object {

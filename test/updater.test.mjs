@@ -45,10 +45,11 @@ test('states follow electron-updater; install runs only once a download is ready
   const fake = new EventEmitter(), calls = [];
   fake.checkForUpdates = async () => { calls.push('check'); };
   fake.quitAndInstall = (...args) => calls.push('install ' + args.join());
+  fake.downloadUpdate = async () => { calls.push('download'); };
   const lines = [];
   const updates = await startUpdater({ app: { isPackaged: true }, version: '1.0.0', log: line => lines.push(line),
     resources: await feed(), platform: 'win32', env: {}, load: async () => fake });
-  assert.deepEqual([fake.autoDownload, fake.autoInstallOnAppQuit, fake.allowPrerelease, fake.allowDowngrade], [true, true, false, false]);
+  assert.deepEqual([fake.autoDownload, fake.autoInstallOnAppQuit, fake.allowPrerelease, fake.allowDowngrade], [false, true, false, false]);
   assert.equal(updates.read().state, 'idle');
   updates.install();
   await new Promise(setImmediate);
@@ -59,13 +60,29 @@ test('states follow electron-updater; install runs only once a download is ready
   updates.check();
   fake.emit('update-downloaded', { version: '1.0.1' });
   updates.check();
-  assert.deepEqual(calls, ['check'], 'a check while downloading or ready');
+  assert.deepEqual(calls, ['check', 'download'], 'a check while downloading or ready');
   assert.equal(updates.install().state, 'ready');
   await new Promise(setImmediate);
-  assert.deepEqual(calls, ['check', 'install true,true']);
+  assert.deepEqual(calls, ['check', 'download', 'install true,true']);
   fake.emit('error', new Error('net::ERR_INTERNET_DISCONNECTED\n<html>...'));
   assert.deepEqual(updates.read(), { state: 'error', current: '1.0.0', available: '1.0.1', reason: 'net::ERR_INTERNET_DISCONNECTED' });
   assert.ok(lines.includes('state ready 1.0.1'));
+});
+
+// AU5: the version a rollback came back from is never downloaded again; the next different release is, and clears it.
+test('a skipped version is not downloaded; a newer one is, and clears the skip', async () => {
+  const fake = new EventEmitter(), calls = [];
+  fake.checkForUpdates = async () => {};
+  fake.downloadUpdate = async () => { calls.push('download'); };
+  let skipped = '1.0.1';
+  const updates = await startUpdater({ app: { isPackaged: true }, version: '1.0.0', log() {}, resources: await feed(), platform: 'win32',
+    env: {}, load: async () => fake, skip: { get: () => skipped, clear: () => { skipped = null; } } });
+  updates.check();
+  fake.emit('update-available', { version: '1.0.1' });
+  assert.deepEqual([updates.read().state, updates.read().available, calls, skipped], ['idle', null, [], '1.0.1']);
+  updates.check();
+  fake.emit('update-available', { version: '1.0.2' });
+  assert.deepEqual([updates.read().state, updates.read().available, calls, skipped], ['downloading', '1.0.2', ['download'], null]);
 });
 
 // AU3: CI merges the two Windows runners' latest.yml into the release's one. Written and read back with the js-yaml

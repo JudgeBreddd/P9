@@ -519,7 +519,7 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
 
 The installed app updates itself from P9's public GitHub Releases (threat model row 39). It uses
 electron-updater, Stable releases only: a draft or a pre-release is never offered, and an older
-version never replaces a newer one.
+version never replaces a newer one, except by the rollback below.
 
 - **What is downloaded.** `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the newest
   version, its file and that file's sha512; then the Windows installer `.exe` (with its `.blockmap`, so
@@ -537,6 +537,14 @@ version never replaces a newer one.
 - **When it is off.** Running from a source checkout (`!app.isPackaged`), a build without
   `resources/app-update.yml`, and on Linux any run that is not the AppImage. Settings shows the
   Updates row as off and says why.
+- **Rollback (threat model row 40).** An update that fails its first 2 starts (window not ready, or the
+  service not answering as that version, within 180 s; quitting P9 or closing its window first does not
+  count, a crash does) goes back to the last version that started: the
+  installer or AppImage of that version kept in P9's folder, or on Windows, when it was not kept, that
+  release's installer downloaded from GitHub and run only when its sha512 matches that release's
+  `latest.yml`. The failed version is not offered again; the restored app says what happened once and
+  offers a prefilled GitHub bug report with the logs, home folder, user and machine names, tokens and IP
+  addresses removed, which you read and submit yourself.
 - **What a person who controls a release can do.** Anyone who can publish a release in P9's repository
   (the owner's GitHub account, or the CI token that uploads the files) can ship any program, and every
   installed P9 will download it and run it as you, with everything you can reach. HTTPS and the sha512

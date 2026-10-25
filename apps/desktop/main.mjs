@@ -11,7 +11,9 @@ import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
-import { startUpdater, updateAction } from './updater.mjs';
+import { offReason, startUpdater, updateAction } from './updater.mjs';
+import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
+  rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -200,6 +202,37 @@ export async function createDesktop({ state, open } = {}) {
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
   // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
   const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
+  // Auto-update's lines (threat model row 39) and the rollback's (row 40) go to p9-update.log in the profile folder.
+  // ponytail: never rotated, a few lines per check.
+  const updateLog = line => appendFile(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {});
+  // AU5 (threat model row 40, rollback.mjs): wherever updates are on, each start is watched. A version never seen healthy
+  // that has failed 2 starts goes back to the newest healthy one, through the launcher outside the install, and quits.
+  const watched = offReason({ packaged: app.isPackaged, resources: process.resourcesPath, platform: process.platform, env: process.env }) === null;
+  const startFile = path.join(app.getPath('userData'), 'update-state.json'), share = shareRoot();
+  const goBack = (start, to) => {
+    rolledBack(start, version);
+    try { writeState(startFile, start); } catch (error) { updateLog('update-state.json not written: ' + error.message); }
+    updateLog(`rollback: ${version} failed 2 starts, going back to ${to}`);
+    const { file, args, env } = launcherCommand({ to, from: version });
+    spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: true, env }).on('error', () => {}).unref();
+    app.exit(0);
+  };
+  // A deliberate quit (the user quits or closes the last window) before the start is healthy clears it; a crash emits no
+  // event, so it still counts at the next start. Sync: Electron does not wait for promises on quit. session-end is a Windows
+  // logoff or shutdown, which skips before-quit. app.exit (goBack) emits neither.
+  const quitting = () => {
+    const now = readState(startFile);
+    if (!quit(now, version)) return;
+    try { writeState(startFile, now); } catch (error) { updateLog('update-state.json not written: ' + error.message); }
+    updateLog(`quit before a healthy start of ${version}: not counted`);
+  };
+  if (watched) {
+    const start = readState(startFile), to = begin(start, version);
+    // A profile folder that cannot be written loses the watch, not the app.
+    try { writeState(startFile, start); } catch (error) { updateLog('update-state.json not written: ' + error.message); }
+    if (to) { goBack(start, to); return null; }
+    app.on('before-quit', quitting);
+  }
   // MT1: Rebuild + reload is for source checkouts only; P9_PACKAGED=1 lets a test see what a packaged build shows.
   const source = !app.isPackaged && process.env.P9_PACKAGED !== '1';
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
@@ -208,6 +241,42 @@ export async function createDesktop({ state, open } = {}) {
       additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
+  if (watched) {
+    window.on('session-end', quitting);
+    const ready = new Promise(resolve => window.once('ready-to-show', resolve));
+    startHealthy({ version, ready, health: () => health(state) }).then(ok => {
+      const start = readState(startFile);
+      if (ok) {
+        healthy(start, version);
+        writeState(startFile, start);
+        updateLog('healthy start ' + version);
+        return promoteLauncher(share).then(promoted => promoted && updateLog('launcher promoted'));
+      }
+      if (start.pending !== version) return; // quit first: not counted (timedOut checks the same)
+      const to = timedOut(start, version);
+      if (to) return goBack(start, to);
+      writeState(startFile, start);
+      updateLog(`start of ${version} not healthy in ${START_MS / 1000} s (${start.failed[version] ?? 0} of 2${start.healthy.length ? '' : ', no healthy version to go back to'})`);
+    }).catch(error => updateLog('start check failed: ' + error.message));
+    // The restored version, once: what happened, loudly, and the bug report the user files under their own login.
+    ready.then(async () => {
+      const record = await readRollback(share);
+      if (!record || record.shown || record.to !== version) return;
+      markShown(share, record);
+      const log = sanitize(await rollbackLog({ share, profile: app.getPath('userData') }));
+      updateLog('rollback notice shown');
+      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'P9 went back to ' + record.to,
+        message: `P9 ${record.from} did not start, so P9 went back to ${record.to}.`,
+        detail: 'Your workspace and chats are as you left them, and P9 works as before. P9 will not install ' + record.from
+          + ' again; a newer version will come as usual.\n\nReport on GitHub opens a prefilled bug report in your browser with the log below '
+          + '(home folder, user and host names, tokens and IP addresses removed). Read it, then submit it under your own login.\n\n' + log,
+        buttons: ['Report on GitHub', 'Close'], defaultId: 0, cancelId: 1, noLink: true });
+      if (response !== 0) return;
+      const link = reportLink({ from: record.from, to: record.to, log });
+      if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [link], { shell: false, stdio: 'ignore' }).on('error', () => {});
+      else await shell.openExternal(link);
+    }).catch(error => updateLog('rollback notice failed: ' + error.message));
+  }
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('context-menu', (_event, params) => {
@@ -847,9 +916,10 @@ export async function createDesktop({ state, open } = {}) {
     return { opened: true };
   });
   // Auto-update (threat model row 39): off unless this is an installed build with a feed (updater.mjs); its lines go to
-  // p9-update.log in the profile folder. ponytail: never rotated, a few lines per check.
-  const updater = startUpdater({ app, version,
-    log: line => appendFile(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {}) });
+  // p9-update.log. skip: the version a rollback came back from (row 40).
+  const updater = startUpdater({ app, version, log: updateLog, skip: {
+    get: () => readState(startFile).skip,
+    clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } } });
   ipcMain.handle('p9:updates', async (event, ...args) => {
     const action = updateAction(args);
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');

@@ -21,7 +21,9 @@ import '../styles/phone.css';
         <div class="heading"><div><p class="eyebrow">Agent workspace</p><h1 id="chatTitle">Chat</h1></div><button id="refreshChat" class="quiet">Refresh</button></div>
         <label>Conversation<select id="conversation"></select></label>
         <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button></div>
+        <div id="pinned" aria-live="polite"></div>
         <div id="events" class="feed" aria-live="polite"></div>
+        <div id="queued" class="stack" aria-live="polite" hidden></div>
         <form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select></div><label for="prompt">Message</label><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><button type="submit">Send message</button></form>
       </section>
       <section data-view="terminal" aria-labelledby="terminalTitle" hidden>

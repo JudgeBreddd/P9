@@ -230,6 +230,8 @@ html,body{height:100%;overflow:hidden}
 .msg.agent{font-size:15px;line-height:1.6}
 .user-imgs img[src],.agent-imgs img{cursor:zoom-in}
 dialog.pic{width:fit-content;height:fit-content;max-width:none;max-height:none;border:0;background:none;box-shadow:none;overflow:visible;cursor:zoom-out}dialog.pic::backdrop{background:rgb(0 0 0/.8)}dialog.pic img{display:block;max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px}
+/* PH1: the phone link dialog */
+#phoneDlg .qr{background:#fff;padding:8px;border-radius:8px;width:min(240px,70vw);margin:0 auto}#phoneDlg .qr svg{display:block;width:100%;height:auto}#phoneDlg input{width:100%}
 .agent-imgs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}.agent-imgs img{max-width:100%;max-height:480px;border-radius:8px;border:1px solid var(--border)}
 /* CP3: the photos sent with a message, above its bubble */
 .user-imgs{display:flex;flex-wrap:wrap;justify-content:flex-end;align-self:flex-end;gap:6px;max-width:85%;margin-bottom:6px}.user-imgs img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:var(--muted)}

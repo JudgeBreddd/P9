@@ -21,13 +21,15 @@ import { createMcp } from './mcp.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { createAuth } from './auth.mjs';
-import { planLimits } from './limits.mjs';
+import { agentDirs, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
 const boot = { pid: process.pid, started: Date.now() };
+// The daemon's version: package.json's (an installed build's daemon folder holds a copy of it).
+const VERSION = JSON.parse(await readAsset(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
 function equal(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -128,7 +130,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.onError(onError);
   // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
   // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, ...(savedWorkspace ? { savedWorkspace } : {}) }),
+  // version: the daemon's own; the installed app counts a start healthy only when it matches its own (AU5, rollback.mjs).
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
   api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));
@@ -346,7 +349,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
   // Desktop only (F2): it names the workspace and settings file, which the phone never shows.
-  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
+  // The credential files are looked for where the agents keep them: CLAUDE_CONFIG_DIR and CODEX_HOME when set (BL10).
   // Every call re-reads the disk (the wizard stores no progress): the settings file as it is now, not as it was at start.
   const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
   const settingsOnDisk = async () => {
@@ -445,7 +448,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
       // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
-      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
+      claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')) });
   });
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.

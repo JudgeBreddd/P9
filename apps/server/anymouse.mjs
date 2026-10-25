@@ -14,6 +14,19 @@ const LINK_MAX = 7000;
 // A note saying @someone pings no one (DUWOP's allowed_mentions, in Markdown).
 const quiet = (text) => text.replaceAll('@', '@​');
 
+// GitHub's prefilled new-issue page for params (title, body, labels, or an issue form's template and field ids), with
+// params[field] cut to fit the link; cut says whether it was. Anymouse and the rollback report (desktop) both use it.
+export function issueLink(params, field, more = '[cut to fit a link; the full note is in P9]') {
+  const full = params[field];
+  let cut = full, link = NEW_ISSUE + new URLSearchParams(params);
+  // ponytail: shrinks by a tenth until the link fits; at most a few dozen passes for a 50,000-character note.
+  while (link.length > LINK_MAX && cut.length > 200) {
+    cut = full.slice(0, Math.floor(cut.length * 0.9));
+    link = NEW_ISSUE + new URLSearchParams({ ...params, [field]: cut + '\n\n' + more });
+  }
+  return { link, cut: cut !== full };
+}
+
 export function createAnymouse({ token, api = 'https://api.github.com', limit = 10 } = {}) {
   const recent = [];
   return async (input) => {
@@ -27,13 +40,8 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
     const title = quiet(KINDS[kind] + ': ' + (first.length > 80 ? first.slice(0, 79) + '…' : first));
     const body = quiet(text) + '\n\n---\nSent with Anymouse from P9' + (page ? ' (' + quiet(page) + ')' : '') + '.';
     if (!token) {
-      let cut = body, link = NEW_ISSUE + new URLSearchParams({ title, body: cut, labels: kind });
-      // ponytail: shrinks by a tenth until the link fits; at most a few dozen passes for a 50,000-character note.
-      while (link.length > LINK_MAX && cut.length > 200) {
-        cut = body.slice(0, Math.floor(cut.length * 0.9));
-        link = NEW_ISSUE + new URLSearchParams({ title, body: cut + '\n\n[cut to fit a link; the full note is in P9]', labels: kind });
-      }
-      return { status: 200, open: link, ...(cut === body ? {} : { cut: true }) };
+      const { link, cut } = issueLink({ title, body, labels: kind }, 'body');
+      return { status: 200, open: link, ...(cut ? { cut: true } : {}) };
     }
 
     const now = Date.now();

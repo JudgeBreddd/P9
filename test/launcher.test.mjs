@@ -3,11 +3,12 @@
 // (install-windows.ps1, p9-launch.ps1) runs in windows-installer.yaml.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { stageDaemon } from '../scripts/teh.mjs';
 
 const launcherSource = fileURLToPath(new URL('../scripts/launcher/p9-launch.sh', import.meta.url));
@@ -57,4 +58,39 @@ test('the launcher starts the version current names, not the one the unit was in
     await writeFile(path.join(share, 'daemon', 'current'), bad);
     assert.throws(() => execFileSync(launcher, ['n', 's'], { stdio: 'pipe' }), undefined, JSON.stringify(bad));
   }
+});
+
+test('an update\'s launcher waits as .next; a rollback puts the kept AppImage back, sets current and starts it', { skip: process.platform === 'win32', timeout: 30_000 }, async () => {
+  const share = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-share-')));
+  await stageDaemon(await daemon('3.0.0'), share);
+  const launcher = path.join(share, 'launcher', 'p9-launch.sh');
+  await writeFile(launcher, '#!/bin/sh\necho old\n', { mode: 0o755 });
+  await stageDaemon(await daemon('3.1.0'), share);
+  assert.equal(await readFile(launcher, 'utf8'), '#!/bin/sh\necho old\n', 'the launcher in use is not replaced');
+  assert.equal(await readFile(launcher + '.next', 'utf8'), await readFile(launcherSource, 'utf8'));
+  await copyFile(launcherSource, launcher);
+  // The AppImage in use is 3.1.0's; the kept 3.0.0 one writes which it is when started.
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-home-')), started = path.join(home, 'started');
+  const image = path.join(home, 'P9 Event Horizon.AppImage');
+  await writeFile(image, '#!/bin/sh\necho 3.1.0\n', { mode: 0o755 });
+  await mkdir(path.join(share, 'appimage'));
+  await writeFile(path.join(share, 'appimage', '3.0.0.AppImage'), `#!/bin/sh\necho "3.0.0 \${APPIMAGE:-none}" >'${started}'\n`);
+  const env = { PATH: process.env.PATH, HOME: home, APPIMAGE: image, APPDIR: '/tmp/.mount_x' };
+  const run = (args) => execFileSync('/bin/sh', [launcher, '--rollback', ...args], { env, stdio: 'pipe' });
+  for (const bad of [['3.0.0;x', '3.1.0', image, '1'], ['3.0.0', '3.0.0', image, '1'], ['3.0.0', '3.1.0', 'rel.AppImage', '1'],
+    ['3.0.0', '3.1.0', image, '0'], ['3.0.0', '3.1.0', image], ['9.9.9', '3.1.0', image, '1']]) assert.throws(() => run(bad), undefined, JSON.stringify(bad));
+  assert.equal(await readFile(image, 'utf8'), '#!/bin/sh\necho 3.1.0\n', 'nothing refused touched the AppImage');
+  // Not execFileSync: a blocked event loop never reaps the app below, and kill -0 sees it until the launcher gives up.
+  const app = spawn('sleep', ['1']);
+  const begun = Date.now();
+  await promisify(execFile)('/bin/sh', [launcher, '--rollback', '3.0.0', '3.1.0', image, String(app.pid)], { env });
+  assert.ok(Date.now() - begun >= 500, 'it waited for the app to quit');
+  assert.match(await readFile(image, 'utf8'), /3\.0\.0/);
+  assert.equal((await stat(image)).mode & 0o777, 0o755);
+  assert.equal(await readFile(path.join(share, 'daemon', 'current'), 'utf8'), '3.0.0');
+  const record = JSON.parse(await readFile(path.join(share, 'rollback.json'), 'utf8'));
+  assert.deepEqual([record.from, record.to, record.installer], ['3.1.0', '3.0.0', 'kept']);
+  assert.match(await readFile(path.join(share, 'rollback.log'), 'utf8'), /going back to 3\.0\.0[\s\S]*starting it/);
+  for (let i = 0; i < 50 && !await stat(started).catch(() => null); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await readFile(started, 'utf8'), '3.0.0 none\n', 'started again without the old mount\'s variables');
 });

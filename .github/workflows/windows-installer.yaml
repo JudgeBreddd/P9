@@ -600,6 +600,106 @@ jobs:
           if (@(Get-Daemon).Count -ne 1 -or @(Get-Daemon | Where-Object { $_.ExecutablePath -like "$p9\daemon\$next\node.exe" }).Count -ne 1) { throw "the daemon is not one daemon\$next\node.exe" }
           if (-not (Test-Path (Join-Path $p9 "daemon\$version\.complete"))) { throw "the update did not keep daemon\$version" }
           Write-Output "installed $version updated itself to $next from the feed; daemon runs from daemon\$next, daemon\$version kept"
+      # AU5 (threat model row 40): the installed version (the step above's) starts healthy and updates itself to a build
+      # whose window is never ready to show. That one fails 2 starts, goes back on its own (its kept installer, run by the
+      # launcher), and the restored version shows the notice. Its screenshot goes to the rollback-evidence artifact.
+      - name: Roll back an update that does not start
+        if: env.TAG == '' && matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 60
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
+          $p9 = Join-Path $env:LOCALAPPDATA 'P9'
+          $exe = Join-Path $app 'P9 Event Horizon.exe'
+          $installed = Join-Path $app 'resources\daemon\package.json'
+          $good = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $v = [version]($good -replace '-.*$')
+          $bad = '{0}.{1}.{2}' -f $v.Major, $v.Minor, ($v.Build + 1)
+          $evidence = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'rollback-evidence')).FullName
+          $main = 'apps/desktop/main.mjs'
+          $source = Get-Content $main -Raw
+          if ([regex]::Matches($source, 'ready-to-show').Count -ne 1) { throw "$main names ready-to-show other than once: the broken build would not be the one meant" }
+          Set-Content $main ($source -replace 'ready-to-show', 'p9-never-ready') -NoNewline
+          npm pkg set "version=$bad"
+          if ($LASTEXITCODE -ne 0) { throw 'npm pkg set failed' }
+          pnpm package:win
+          if ($LASTEXITCODE -ne 0) { throw "the $bad build failed" }
+          $feed = Join-Path $env:RUNNER_TEMP 'p9-feed'
+          Get-ChildItem $feed | Remove-Item -Force
+          Copy-Item "dist/windows/p9-event-horizon-$bad-windows-x64.exe", "dist/windows/p9-event-horizon-$bad-windows-x64.exe.blockmap", 'dist/windows/latest.yml' $feed
+          # The update to the step above's version rewrote app-update.yml.
+          $yml = Join-Path $app 'resources\app-update.yml'
+          @(Get-Content $yml | Where-Object { $_ -notmatch '^(provider|owner|repo|url):' }) + 'provider: generic' + 'url: http://127.0.0.1:8123/' | Set-Content $yml
+          function Wait-For([string]$What, [int]$Minutes, [scriptblock]$Done) {
+            $end = (Get-Date).AddMinutes($Minutes)
+            while ((Get-Date) -lt $end) { try { if (& $Done) { return } } catch {}; Start-Sleep 5 }
+            throw "$What, not in $Minutes min"
+          }
+          # The app's profile folder, the one with p9-update.log in it.
+          function UserData { Get-ChildItem $env:APPDATA -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'p9-update.log') } | Select-Object -First 1 -ExpandProperty FullName }
+          function Log-Has([string]$Text) { $dir = UserData; $dir -and (Select-String -LiteralPath (Join-Path $dir 'p9-update.log') $Text -SimpleMatch -Quiet) }
+          function State { Get-Content (Join-Path (UserData) 'update-state.json') -Raw | ConvertFrom-Json }
+          function Show-Logs {
+            $dir = UserData
+            if ($dir) { Get-Content (Join-Path $dir 'p9-update.log') | Select-Object -Last 30 | ForEach-Object { 'p9-update.log: ' + $_ }
+              Get-Content (Join-Path $dir 'update-state.json') -ErrorAction SilentlyContinue | ForEach-Object { 'update-state.json: ' + $_ } }
+            Get-Content (Join-Path $p9 'rollback.log') -ErrorAction SilentlyContinue | ForEach-Object { 'rollback.log: ' + $_ }
+            Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object { 'hook: ' + $_ }
+          }
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8123', '--bind', '127.0.0.1', '--directory', $feed -PassThru
+          try {
+            Start-Process $exe
+            Wait-For "$good did not start healthy" 5 { Log-Has "healthy start $good" }
+            Wait-For "$good did not download $bad" 10 { Log-Has "state ready $bad" }
+            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
+            Wait-For "$bad was not installed on quit" 15 { (Get-Content $installed -Raw | ConvertFrom-Json).version -eq $bad -and "$(Get-Content (Join-Path $p9 'daemon\current') -Raw)".Trim() -eq $bad }
+            Wait-For "the $bad installer did not finish" 5 { -not (Get-Process | Where-Object { $_.Path -like '*p9-event-horizon*' }) }
+          } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
+          try {
+            # Closing the window before the start is healthy is the user's choice, not a failed start.
+            Start-Process $exe
+            Wait-For "$bad's window did not open" 2 { Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 }
+            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
+            Wait-For "closing $bad's window was counted" 2 { Log-Has "quit before a healthy start of ${bad}: not counted" }
+            Wait-For "$bad did not quit" 2 { -not (Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue) }
+            if ((State).failed.$bad) { throw "update-state.json counts the closed window as a failed start of $bad" }
+            # A failed start (180 s with no window ready), and a second one: the second goes back by itself.
+            Start-Process $exe
+            Wait-For "$bad's first failed start was not counted" 6 { Log-Has "start of $bad not healthy in 180 s (1 of 2)" }
+            Stop-Process -Name 'P9 Event Horizon' -Force -ErrorAction SilentlyContinue
+            Start-Sleep 5
+            Start-Process $exe
+            Wait-For "$bad did not go back to $good" 6 { Log-Has "rollback: $bad failed 2 starts, going back to $good" }
+            Wait-For "the launcher did not put $good back" 15 { Test-Path (Join-Path $p9 'rollback.json') }
+            Wait-For "$good did not show the notice" 5 { Log-Has 'rollback notice shown' }
+          } catch { Show-Logs; throw }
+          Start-Sleep 5
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $shot.Save((Join-Path $evidence 'rollback-notice.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+          } catch { Write-Output "no screenshot: $_" }
+          Show-Logs
+          Copy-Item (Join-Path $p9 'rollback.json'), (Join-Path $p9 'rollback.log') $evidence
+          Copy-Item (Join-Path (UserData) 'p9-update.log'), (Join-Path (UserData) 'update-state.json') $evidence
+          $record = Get-Content (Join-Path $p9 'rollback.json') -Raw | ConvertFrom-Json
+          if ($record.from -ne $bad -or $record.to -ne $good -or $record.installer -ne 'kept') { throw "rollback.json is not $bad to $good with the kept installer" }
+          if (-not $record.shown) { throw 'rollback.json does not say the notice was shown' }
+          if ((Get-Content $installed -Raw | ConvertFrom-Json).version -ne $good) { throw "the installed version is not $good again" }
+          if ((Get-Content (Join-Path $p9 'daemon\current') -Raw).Trim() -ne $good) { throw "daemon\current is not $good again" }
+          if ((State).skip -ne $bad) { throw "update-state.json does not skip $bad" }
+          if (-not (Test-Path (Join-Path $p9 "installers\$good.exe"))) { throw "the $good installer is not kept" }
+          Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Output "$good updated itself to $bad, which failed 2 starts and went back to $good on its own; the notice showed"
+      - uses: actions/upload-artifact@v4
+        if: always() && env.TAG == '' && matrix.arch == 'x64'
+        with:
+          name: rollback-evidence
+          path: ${{ runner.temp }}/rollback-evidence
+          if-no-files-found: ignore
+          retention-days: 14
 
   # AU2: the Linux AppImage, x64 only (no arm64 Linux build yet). Its daemon cannot run from the AppImage's mount, which
   # goes away when the app quits: AU4 copies it to ~/.local/share/p9/daemon first.
@@ -647,7 +747,7 @@ jobs:
           root="$RUNNER_TEMP/squashfs-root/resources"
           cat "$root/app-update.yml"
           grep -q 'provider: github' "$root/app-update.yml"
-          file "$root/daemon/node" | tee /dev/stderr | grep -q 'x86-64'
+          file "$root/daemon/node" | tee /dev/stderr | grep -q 'x86-64, .*, stripped'
           test "$("$root/daemon/node" --version)" = v26.10.0
           test -f "$root/daemon/apps/server/main.mjs"
           test ! -e "$root/daemon/node.exe"

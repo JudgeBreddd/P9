@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import path from 'node:path';
 import net from 'node:net';
 import { createListener } from '../apps/server/server.mjs';
-import { planLimits } from '../apps/server/limits.mjs';
+import { agentDirs, planLimits } from '../apps/server/limits.mjs';
 import { openLedger } from '../apps/server/ledger.mjs';
 import { limitLine } from '../apps/web/src/helpers.mjs';
 import { ROUTES } from '../packages/protocol/index.mjs';
@@ -116,6 +116,47 @@ test('plan limits: missing sources give null, the newer Claude source wins, noth
   await mkdir(path.join(home, '.codex', 'sessions', '2026', '10', '17'), { recursive: true });
   await writeFile(path.join(home, '.codex', 'sessions', '2026', '10', '17', 'rollout-a.jsonl'), '{"type":"session_meta"}\n');
   assert.equal((await planLimits({ home, statusLine })).codex, null, 'a session with no rate_limits event is not a figure');
+});
+
+// MR2: the Codex figure is the newest-modified rollout of the last 3 day folders, not the first of the newest-named folder.
+test('plan limits: a newer rollout in an older-named day folder wins', async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-limits-'));
+  const rollout = async (day, used, ageMs) => {
+    const dir = path.join(home, '.codex', 'sessions', '2026', '10', day), file = path.join(dir, 'rollout-' + used + '.jsonl');
+    await mkdir(dir, { recursive: true });
+    await writeFile(file, JSON.stringify({ timestamp: new Date().toISOString(), payload: { rate_limits: { primary: { used_percent: used, window_minutes: 300, resets_at: Date.now() / 1000 + 3600 } } } }) + '\n');
+    await utimes(file, new Date(Date.now() - ageMs), new Date(Date.now() - ageMs));
+  };
+  await rollout('18', 10, 3600000); // the newest-named folder, but its file was last written an hour ago
+  await rollout('17', 61, 1000); // a session resumed just now: still in its first day's folder
+  assert.equal((await planLimits({ home })).codex.fiveHour.usedPercent, 61);
+  await rollout('16', 20, 7200000);
+  await rollout('14', 99, 0); // a fourth folder back is not looked at
+  assert.equal((await planLimits({ home })).codex.fiveHour.usedPercent, 61);
+});
+
+// BL10: CODEX_HOME and CLAUDE_CONFIG_DIR move where the agents' files are read.
+test('plan limits and the welcome check read CODEX_HOME and CLAUDE_CONFIG_DIR when set', async (t) => {
+  const dirs = {};
+  const instance = await daemon(t, undefined, false, async ({ directory }) => {
+    dirs.codex = path.join(directory, 'elsewhere', 'codex'); dirs.claude = path.join(directory, 'elsewhere', 'claude');
+    await mkdir(path.join(dirs.codex, 'sessions', '2026', '10', '24'), { recursive: true });
+    await mkdir(dirs.claude, { recursive: true });
+    await writeFile(path.join(dirs.codex, 'auth.json'), '{}');
+    await writeFile(path.join(dirs.claude, '.credentials.json'), '{}');
+    await writeFile(path.join(dirs.codex, 'sessions', '2026', '10', '24', 'rollout-a.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), payload: { rate_limits: {
+      primary: { used_percent: 44, window_minutes: 300, resets_at: Date.now() / 1000 + 3600 } } } }) + '\n');
+    await writeFile(path.join(dirs.claude, '.claude.json'), JSON.stringify({ cachedUsageUtilization: { fetchedAtMs: Date.now(), utilization: { five_hour: { utilization: 55, resets_at: new Date(Date.now() + 3600000).toISOString() } } } }));
+    return { env: { CODEX_HOME: dirs.codex, CLAUDE_CONFIG_DIR: dirs.claude } };
+  });
+  const get = async (route) => JSON.parse((await http({ socketPath: instance.credentials.socketPath, route, headers: authenticated(instance.credentials) })).text);
+  const limits = (await get('/usage')).limits;
+  assert.deepEqual([limits.codex.fiveHour.usedPercent, limits.claude.fiveHour.usedPercent], [44, 55]);
+  const setup = await get('/setup');
+  assert.deepEqual([setup.claude, setup.codex], [true, true], 'the credential files in the moved folders count');
+  // Unset (or empty), the defaults under home.
+  assert.deepEqual(agentDirs('/h', {}), { claudeDir: '/h/.claude', claudeJson: '/h/.claude.json', codexHome: '/h/.codex' });
+  assert.deepEqual(agentDirs('/h', { CLAUDE_CONFIG_DIR: '', CODEX_HOME: '' }), agentDirs('/h', {}));
 });
 
 // E5: /usage parsed every update and turn-end in the ledger on each call, image chunks included. It now reads only the

@@ -19,7 +19,7 @@ function claudeWindows(limits) {
   return fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
 }
 
-async function claude(home, statusLine, live) {
+async function claude(claudeJson, statusLine, live) {
   const found = [];
   // A P9 Claude chat's own reading (utilization is a fraction there); usage.py's sources are only as fresh as /usage or a status line.
   const scaled = (w) => w && typeof w === 'object' && typeof w.utilization === 'number' ? { ...w, utilization: Math.round(w.utilization * 1000) / 10 } : null;
@@ -30,7 +30,7 @@ async function claude(home, statusLine, live) {
     if (windows) found.push({ ...windows, asOf: (await stat(statusLine)).mtimeMs });
   } catch {}
   try {
-    const cached = JSON.parse(await readFile(path.join(home, '.claude.json'), 'utf8')).cachedUsageUtilization;
+    const cached = JSON.parse(await readFile(claudeJson, 'utf8')).cachedUsageUtilization;
     const windows = claudeWindows(cached?.utilization);
     if (windows && Number.isFinite(cached.fetchedAtMs)) found.push({ ...windows, asOf: cached.fetchedAtMs });
   } catch {}
@@ -68,20 +68,29 @@ async function lastLimits(file) {
 async function codex(codexHome) {
   const names = async (dir) => (await readdir(dir).catch(() => [])).sort().reverse();
   const root = path.join(codexHome, 'sessions');
-  let checked = 0;
-  for (const year of await names(root)) for (const month of await names(path.join(root, year))) for (const day of await names(path.join(root, year, month))) {
-    const dir = path.join(root, year, month, day);
-    const files = await Promise.all((await names(dir)).filter((name) => name.endsWith('.jsonl')).map(async (name) => ({ file: path.join(dir, name), at: (await stat(path.join(dir, name)).catch(() => ({ mtimeMs: 0 }))).mtimeMs })));
-    for (const { file } of files.sort((a, b) => b.at - a.at)) {
-      const found = await lastLimits(file).catch(() => null);
-      if (found) return found;
-      if (++checked >= 20) return null; // ponytail: gives up after 20 rollouts with no rate_limits event
-    }
+  // The last 3 day folders by name, then every rollout in them newest-modified first: a session resumed today keeps its
+  // old day's folder, so folder names alone would read a stale file.
+  const dirs = [];
+  walk: for (const year of await names(root)) for (const month of await names(path.join(root, year))) for (const day of await names(path.join(root, year, month))) {
+    dirs.push(path.join(root, year, month, day));
+    if (dirs.length === 3) break walk;
+  }
+  const files = [];
+  for (const dir of dirs) for (const name of await names(dir)) if (name.endsWith('.jsonl')) files.push({ file: path.join(dir, name), at: (await stat(path.join(dir, name)).catch(() => ({ mtimeMs: 0 }))).mtimeMs });
+  for (const { file } of files.sort((a, b) => b.at - a.at).slice(0, 20)) { // ponytail: gives up after 20 rollouts with no rate_limits event
+    const found = await lastLimits(file).catch(() => null);
+    if (found) return found;
   }
   return null;
 }
 
-export async function planLimits({ home, codexHome = path.join(home, '.codex'), statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null }) {
-  const [claudeLimits, codexLimits] = await Promise.all([claude(home, statusLine, claudeLive), codex(codexHome)]);
+// Where each agent keeps its files: CLAUDE_CONFIG_DIR and CODEX_HOME when set, else the defaults under home. Claude
+// Code keeps .claude.json inside CLAUDE_CONFIG_DIR when that is set, and beside the folder (in home) when it is not.
+export const agentDirs = (home, env = process.env) => ({
+  claudeDir: env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), claudeJson: path.join(env.CLAUDE_CONFIG_DIR || home, '.claude.json'),
+  codexHome: env.CODEX_HOME || path.join(home, '.codex') });
+
+export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null }) {
+  const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive), codex(codexHome)]);
   return { claude: claudeLimits, codex: codexLimits };
 }

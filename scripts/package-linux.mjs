@@ -36,6 +36,9 @@ if (!(await exists(path.join(runtime, 'bin', 'node'))) || !(await exists(path.jo
   }
   run('tar', ['-xzf', archive, '-C', runtime, '--strip-components=1', `${nodeName}/bin/node`, `${nodeName}/LICENSE`]);
 }
+// nodejs.org's binary carries its debug info: strip takes it from 149.7 MB to 116.4 MB (about 7.5 MB less compressed).
+// The dynamic symbols native addons link against stay. Outside the block so an older unstripped copy in .build is stripped too.
+run('strip', [path.join(runtime, 'bin', 'node')]);
 if (!process.env.npm_execpath) throw new Error('run-with-pnpm-package-linux');
 run(process.execPath, [process.env.npm_execpath, 'build']);
 // The same notices as the Windows installer, in resources/licenses.

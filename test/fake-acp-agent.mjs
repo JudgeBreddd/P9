@@ -8,7 +8,7 @@
 // the working directory stalls initialize for 10 s, hang-init never answers it; slow-close stalls session/close for 2 s.
 // "tools <n>" runs n tool calls of 3 s each (10 s with a slow-tools file; a cancel ends them), "tool-open" one that never completes before the turn ends, "tool-last" one
 // that completes as the turn ends. Each steer is appended to steers.log; as Codex, one past the turn starts a turn of its
-// own (startedNewTurn) that answers "got:<text>" and reports no end.
+// own (startedNewTurn) that answers "got:<text>" and reports no end. "limits <n>" ends the turn, then reports context and plan use at n% a second later.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -197,6 +197,17 @@ const connection = new acp.AgentSideConnection(() => ({
         await new Promise((resolve) => setTimeout(resolve, 2000));
         await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: 0.01, currency: 'USD' } } });
       }, 1500);
+      return { stopReason: 'end_turn' };
+    }
+    // "limits <n>": the turn ends at once; a second later, with no prompt open, the agent reports its context and plan
+    // use at n%. As Claude it carries the adapter's _claude/rateLimit window figures (a fraction); Codex has none (its
+    // limits are in its session log).
+    if (text.startsWith('limits ')) {
+      const n = Number(text.slice(7));
+      setTimeout(() => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: n * 10, size: 1000,
+        ...(process.argv[2] === 'codex' ? {} : { _meta: { '_claude/rateLimit': { status: 'allowed', unifiedWindows: {
+          five_hour: { utilization: n / 100, resetsAt: new Date(Date.now() + 3 * 3600000).toISOString() },
+          seven_day: { utilization: n / 100, resetsAt: new Date(Date.now() + 72 * 3600000).toISOString() } } } } }) } }), 1000);
       return { stopReason: 'end_turn' };
     }
     // A reply that lands well after the prompt was accepted, so a client must keep listening to see it.

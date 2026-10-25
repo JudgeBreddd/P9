@@ -116,7 +116,8 @@ export function repairWindowsTask(resources, workspace) {
 // AU4 (Linux AppImage): the daemon cannot run from the AppImage's mount, which goes away when the app quits. Each version is
 // copied to <share>/daemon/<version> (.complete written last), daemon/current names the one launcher/p9-launch.sh starts,
 // and when current changes only it and the one it replaced are kept (a rollback goes back to that). source: the
-// resources/daemon folder. Returns { version, previous }.
+// resources/daemon folder. Returns { version, previous }. The launcher is copied as is the first time; after that as
+// p9-launch.sh.next, which the app promotes after a healthy start (AU5, apps/desktop/rollback.mjs promoteLauncher).
 export async function stageDaemon(source, share) {
   const version = JSON.parse(await readFile(path.join(source, 'package.json'), 'utf8')).version;
   if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('version-unreadable');
@@ -128,8 +129,9 @@ export async function stageDaemon(source, share) {
     await writeFile(path.join(target + '.tmp', '.complete'), '');
     await rename(target + '.tmp', target);
   }
-  const launcher = path.join(share, 'launcher', 'p9-launch.sh');
-  await mkdir(path.dirname(launcher), { recursive: true, mode: 0o700 });
+  const first = path.join(share, 'launcher', 'p9-launch.sh');
+  const launcher = await stat(first).then(() => first + '.next', () => first);
+  await mkdir(path.dirname(first), { recursive: true, mode: 0o700 });
   await copyFile(path.join(target, 'scripts', 'launcher', 'p9-launch.sh'), launcher + '.tmp');
   await chmod(launcher + '.tmp', 0o755);
   await rename(launcher + '.tmp', launcher);
@@ -147,7 +149,8 @@ export async function stageDaemon(source, share) {
 // if there is none, or restarts a launcher unit onto a new version. A unit without the launcher is a source checkout's,
 // never touched. Output goes to ~/.local/share/p9/service-install.log, as Windows writes service-install.log.
 // ponytail: tmux missing means no unit (install-service.mjs refuses); the log says so, the page says daemon-unreachable.
-export async function appImageService(resources) {
+// AU5: the AppImage itself is kept as appimage/<version>.AppImage, with the one before it, for a rollback (p9-launch.sh).
+export async function appImageService(resources, image = process.env.APPIMAGE) {
   const share = path.join(os.homedir(), '.local', 'share', 'p9'), log = path.join(share, 'service-install.log');
   const say = (text) => appendFile(log, new Date().toISOString() + ' ' + text + '\n').catch(() => {});
   try {
@@ -159,6 +162,20 @@ export async function appImageService(resources) {
     const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
       say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
     await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    // A copy that fails (a full disk) costs the rollback only; the service below goes on.
+    try {
+      const kept = path.join(share, 'appimage'), copy = path.join(kept, version + '.AppImage');
+      await mkdir(kept, { recursive: true, mode: 0o700 });
+      if (!await stat(copy).catch(() => null)) {
+        await copyFile(image, copy + '.tmp');
+        await chmod(copy + '.tmp', 0o755);
+        await rename(copy + '.tmp', copy);
+        await say('kept ' + copy);
+      }
+      if (previous !== version) for (const name of await readdir(kept)) {
+        if (![version, previous].map((each) => each + '.AppImage').includes(name)) await rm(path.join(kept, name), { force: true }).catch(() => {});
+      }
+    } catch (error) { await say('the AppImage was not kept: ' + error.message); }
     if (unit === null) {
       const workspace = path.join(os.homedir(), 'P9');
       await mkdir(workspace, { recursive: true });
