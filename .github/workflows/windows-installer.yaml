@@ -679,7 +679,13 @@ jobs:
           # main's logged command with -AppPid 0, which the launcher refuses after its first checks with one rollback.log
           # line, so a probe never rolls back. A: node, attached, output piped, powershell.exe without conhost (the control:
           # run 40170347685 ran it). B: node, detached, output to a file, exiting at once as main does. C: B in the installed
-          # app's own binary as node (ELECTRON_RUN_AS_NODE). B and C run the command as logged (conhost --headless).
+          # app's own binary as node (ELECTRON_RUN_AS_NODE). B and C run the command as logged (conhost --headless); in run
+          # 40172084661 its powershell.exe exited 0xC000013A in 40 ms. held: B with stdin a pipe node keeps open 15 s (does
+          # headless conhost close at stdin's EOF?). The candidates, each from the installed app's binary, which exits once
+          # its child does: a hop powershell.exe, not detached (so in libuv's job, which allows silent breakaway, and with
+          # no fd in its stdio, so CREATE_NO_WINDOW), starts the launcher and exits. hop-nowindow: Process.Start with
+          # CreateNoWindow. hop-hidden: Start-Process -WindowStyle Hidden. hop-conhost: Start-Process conhost --headless (no
+          # std handles, as Task Scheduler starts it). task: a one-shot task like P9 Foundation's, conhost --headless.
           function Probe {
             $line = Get-Content (Join-Path (UserData) 'p9-update.log') | Where-Object { $_ -like '* rollback launcher command: *' } | Select-Object -Last 1
             if (-not $line) { 'probe: no launcher command in p9-update.log'; return }
@@ -692,24 +698,55 @@ jobs:
           const { spawn, spawnSync } = require('node:child_process');
           const fs = require('node:fs');
           const [file, ...args] = JSON.parse(process.env.P9_PROBE);
+          // The command without conhost --headless: powershell.exe and its arguments.
+          const plain = /conhost\.exe$/i.test(file) ? args.slice(1) : [file, ...args];
           if (process.argv[2] === 'attached') {
-            const plain = /conhost\.exe$/i.test(file) ? args.slice(1) : [file, ...args];
             const run = spawnSync(plain[0], plain.slice(1), { encoding: 'utf8', timeout: 120000, windowsHide: true });
             console.log('exit ' + run.status + ', signal ' + run.signal + (run.error ? ', error ' + run.error.message : ''));
             console.log(run.stdout + run.stderr);
-          } else {
+          } else if (process.argv[2] === 'B' || process.argv[2] === 'C' || process.argv[2] === 'held') {
             const out = fs.openSync(process.argv[3], 'a');
-            const child = spawn(file, args, { detached: true, stdio: ['ignore', out, out], windowsHide: true });
-            child.on('spawn', () => { console.log('detached pid ' + child.pid); child.unref(); process.exit(0); });
+            const held = process.argv[2] === 'held';
+            const child = spawn(file, args, { detached: true, stdio: [held ? 'pipe' : 'ignore', out, out], windowsHide: true });
+            child.on('spawn', () => { console.log('detached pid ' + child.pid); child.unref(); setTimeout(() => process.exit(0), held ? 15000 : 0); });
             child.on('error', (error) => { console.log('error ' + error.message); process.exit(1); });
+          } else {
+            const q = (arg) => /[\s"]/.test(arg) ? '"' + arg.replace(/"/g, '\\"') + '"' : arg;
+            const conhost = /conhost\.exe$/i.test(file) ? file : require('node:path').join(process.env.SystemRoot, 'System32', 'conhost.exe');
+            const hops = {
+              'hop-nowindow': "$p = New-Object Diagnostics.ProcessStartInfo $env:P9_FILE, $env:P9_ARGS; $p.UseShellExecute = $false; $p.CreateNoWindow = $true; 'launcher pid ' + [Diagnostics.Process]::Start($p).Id",
+              'hop-hidden': "'launcher pid ' + (Start-Process -FilePath $env:P9_FILE -ArgumentList $env:P9_ARGS -WindowStyle Hidden -PassThru).Id",
+              'hop-conhost': "'conhost pid ' + (Start-Process -FilePath $env:P9_CONHOST -ArgumentList ('--headless ' + $env:P9_LINE) -PassThru).Id",
+              task: "$action = New-ScheduledTaskAction -Execute $env:P9_CONHOST -Argument ('--headless ' + $env:P9_LINE); " +
+                "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited; " +
+                "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; " +
+                "Register-ScheduledTask -TaskName 'P9 Rollback probe' -Action $action -Principal $principal -Settings $settings -Force | Out-Null; " +
+                "Start-ScheduledTask -TaskName 'P9 Rollback probe'; 'task started'",
+            };
+            const { ELECTRON_RUN_AS_NODE, ...env } = process.env;
+            Object.assign(env, { P9_FILE: plain[0], P9_ARGS: plain.slice(1).map(q).join(' '), P9_LINE: plain.map(q).join(' '), P9_CONHOST: conhost });
+            const hop = spawn(plain[0], ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+              Buffer.from(hops[process.argv[2]], 'utf16le').toString('base64')], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+            hop.stdout.on('data', (data) => fs.appendFileSync(process.argv[3], data));
+            hop.stderr.on('data', (data) => fs.appendFileSync(process.argv[3], data));
+            hop.on('exit', (code) => { console.log('hop exit ' + code); process.exit(0); });
+            hop.on('error', (error) => { console.log('error ' + error.message); process.exit(1); });
+            setTimeout(() => { console.log('hop still running at 60 s'); process.exit(1); }, 60000);
           }
           '@
             $log = Join-Path $p9 'rollback.log'
-            foreach ($probe in 'A', 'B', 'C') {
+            foreach ($probe in 'A', 'B', 'C', 'held', 'hop-nowindow', 'hop-hidden', 'hop-conhost', 'task') {
               $out = Join-Path $evidence "probe-$probe.out"
               if ($probe -eq 'A') { node $script attached 2>&1 | ForEach-Object { "probe A: $_" } }
-              elseif ($probe -eq 'B') { node $script detached $out 2>&1 | ForEach-Object { "probe B: $_" }; Start-Sleep 30 }
-              else { $env:ELECTRON_RUN_AS_NODE = '1'; & $exe $script detached $out 2>&1 | ForEach-Object { "probe C: $_" }; Remove-Item Env:ELECTRON_RUN_AS_NODE; Start-Sleep 30 }
+              else {
+                if ($probe -in 'B', 'held') { node $script $probe $out 2>&1 | ForEach-Object { "probe ${probe}: $_" } }
+                else { $env:ELECTRON_RUN_AS_NODE = '1'; & $exe $script $probe $out 2>&1 | ForEach-Object { "probe ${probe}: $_" }; Remove-Item Env:ELECTRON_RUN_AS_NODE }
+                Start-Sleep 20
+              }
+              if ($probe -eq 'task') {
+                Get-ScheduledTaskInfo -TaskName 'P9 Rollback probe' -ErrorAction SilentlyContinue | ForEach-Object { 'probe task: last result ' + $_.LastTaskResult }
+                Unregister-ScheduledTask -TaskName 'P9 Rollback probe' -Confirm:$false -ErrorAction SilentlyContinue
+              }
               Get-Content $out -ErrorAction SilentlyContinue | ForEach-Object { "probe $probe output: $_" }
               if (Test-Path $log) { Get-Content $log | ForEach-Object { "probe $probe rollback.log: $_" }; Move-Item $log (Join-Path $evidence "probe-$probe-rollback.log") -Force }
               else { "probe ${probe}: no rollback.log" }
