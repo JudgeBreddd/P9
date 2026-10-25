@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import zlib from 'node:zlib';
 import { _electron } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -310,4 +311,100 @@ test('v0.1.5 cD mission editor: File protection asks first, an icon shows on the
   await page.locator('#fMission [data-panel="mlaunch"] .ltile', { hasText: '🧪' }).waitFor({ timeout: 10000 });
   await shot('tile-with-icon', page.locator('#fMission [data-panel="mlaunch"]'));
   console.log('PASS mission editor: Save asked first under File protection, the icon shows on the tile, a stale file is refused and reloads');
+});
+
+// ---- v0.1.5 chunk D part 2: real icons on Mission tiles (a site's own icon, a program's icon, the user's picture) and their order.
+const solid = (r, g, b) => {
+  const crc = (buf) => { let c = ~0; for (const byte of buf) { c ^= byte; for (let k = 0; k < 8; k += 1) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
+  const chunk = (type, data) => { const out = Buffer.alloc(12 + data.length); out.writeUInt32BE(data.length, 0); out.write(type, 4, 'latin1'); data.copy(out, 8);
+    out.writeUInt32BE(crc(out.subarray(4, 8 + data.length)), 8 + data.length); return out; };
+  const head = Buffer.alloc(13); head.writeUInt32BE(32, 0); head.writeUInt32BE(32, 4); head[8] = 8; head[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: 32 }, () => [r, g, b]).flat())]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(Buffer.concat(Array(32).fill(row)))), chunk('IEND', Buffer.alloc(0))]);
+};
+test('v0.1.5 cD2 tile icons: picture, then emoji, then the site or program icon, then the letters', { timeout: 120000 }, async (t) => {
+  const { mkdir } = await import('node:fs/promises');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-cdicons-'));
+  const requests = [];
+  const site = createServer((req, res) => {
+    requests.push(req.url);
+    if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head><link rel="icon" href="/site.png" sizes="32x32"></head></html>'); }
+    else if (req.url === '/site.png') { res.writeHead(200, { 'content-type': 'image/png' }); res.end(solid(200, 30, 60)); }
+    else { res.writeHead(404); res.end(); }
+  });
+  await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
+  t.after(() => site.close());
+  const url = 'http://127.0.0.1:' + site.address().port + '/';
+  const xdg = path.join(home, 'xdg');
+  await mkdir(path.join(xdg, 'applications'), { recursive: true });
+  await mkdir(path.join(xdg, 'icons/hicolor/64x64/apps'), { recursive: true });
+  await writeFile(path.join(xdg, 'applications/zedit.desktop'), '[Desktop Entry]\nName=Zedit\nExec=zedit %F\nIcon=zedit\n');
+  await writeFile(path.join(xdg, 'icons/hicolor/64x64/apps/zedit.png'), solid(20, 140, 90));
+  const mine = path.join(home, 'mine.png');
+  await writeFile(mine, solid(40, 60, 220));
+  let registry;
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    const ws = paths.workspace, settings = path.join(paths.directory, 'settings.json');
+    registry = path.join(ws, 'hub/registry.json');
+    for (const dir of ['_waiting', 'hub', 'projects']) await mkdir(path.join(ws, dir), { recursive: true });
+    await writeFile(registry, JSON.stringify({ scripts: [], apps: [{ id: 'prog', title: 'Zedit', cmd: ['/opt/zedit/zedit'] }, { id: 'pic', title: 'Notes', icon: '🧪', cmd: ['true'] }, { id: 'plain', title: 'Plain', cmd: ['nothing-here'] }],
+      pages: [{ id: 'school', title: 'School', url }, { id: 'emoji', title: 'Emoji link', icon: '🎓', url }] }, null, 2) + '\n');
+    await writeFile(path.join(ws, 'projects/AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(ws, 'space.json'), JSON.stringify({ sections: [] }));
+    await writeFile(settings, JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'projects/AGENTS.md', space: 'space.json' }));
+    return { args: ['--settings', settings], env: { XDG_DATA_HOME: xdg, XDG_DATA_DIRS: xdg } };
+  });
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const shot = async (name, locator) => {
+    const png = await locator.screenshot({ type: 'png' });
+    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
+  };
+  await page.click('#rMission');
+  const tile = (name) => page.locator(`#fMission [data-panel="mlaunch"] .ltile[data-launch="${name}"]`);
+  const src = (name) => tile(name).locator('img').getAttribute('src', { timeout: 15000 });
+  const png = (r, g, b) => 'data:image/png;base64,' + solid(r, g, b).toString('base64');
+  assert.equal(await src('School'), png(200, 30, 60), 'a link tile shows the site\'s own icon');
+  assert.equal(await src('Zedit'), png(20, 140, 90), 'an app tile shows the program\'s own icon');
+  assert.equal(await tile('Emoji link').locator('img').count(), 0, 'a text icon beats the automatic one');
+  assert.match(await tile('Emoji link').innerText(), /🎓/);
+  assert.equal(await tile('Plain').locator('img').count(), 0);
+  assert.equal(await tile('Plain').locator('.mono-ico').innerText(), 'P', 'nothing found: today\'s letters');
+  assert.equal(await tile('Notes').locator('img').count(), 0);
+  assert.ok(requests.length > 0 && requests.every((r) => ['/', '/site.png'].includes(r)), 'only the site\'s own page and icon were asked for: ' + requests);
+  // A picture from the Picture button (the native picker answered by the test) beats the emoji.
+  await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, mine);
+  await page.locator('#fMission [data-medit]').click({ timeout: 15000 });
+  const row = page.locator('#mdlBody [data-row="1"]');
+  await row.waitFor({ timeout: 10000 });
+  const before = await readFile(registry, 'utf8');
+  await row.locator('[data-pic]').click();
+  await row.locator('[data-pic-img]').waitFor({ timeout: 10000 });
+  await row.locator('[data-save]').click();
+  assert.equal(await readFile(registry, 'utf8'), before, 'File protection asked first: no picture stored yet');
+  await row.locator('[data-save]', { hasText: 'Confirm save' }).click();
+  await page.locator('#mdlBody [data-row="1"] [data-msg]', { hasText: 'Saved.' }).waitFor({ timeout: 10000 });
+  await shot('picture-form', page.locator('#mdl'));
+  const stored = JSON.parse(await readFile(registry, 'utf8')).apps[1];
+  assert.match(stored.picture, /^[0-9a-f]{16}\.png$/);
+  assert.equal(stored.icon, '🧪', 'the icon field is untouched and still holds no path');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction((want) => document.querySelector('#fMission .ltile[data-launch="Notes"] img')?.src === want, png(40, 60, 220), { timeout: 15000 });
+  assert.equal(await tile('Notes').locator('.mono-ico').count(), 0, 'the picture replaced the emoji');
+  await shot('mission-tiles', page.locator('#fMission [data-panel="mlaunch"]'));
+  // Remove goes back down the order: the emoji shows again.
+  await page.locator('#fMission [data-medit]').click();
+  const again = page.locator('#mdlBody [data-row="1"]');
+  await again.locator('[data-pic-remove]').click();
+  await again.locator('[data-save]').click();
+  await again.locator('[data-save]', { hasText: 'Confirm save' }).click();
+  await page.locator('#mdlBody [data-row="1"] [data-msg]', { hasText: 'Saved.' }).waitFor({ timeout: 10000 });
+  assert.equal('picture' in JSON.parse(await readFile(registry, 'utf8')).apps[1], false);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => /🧪/.test(document.querySelector('#fMission .ltile[data-launch="Notes"]')?.innerText ?? '') && !document.querySelector('#fMission .ltile[data-launch="Notes"] img'), null, { timeout: 15000 });
+  console.log('PASS tile icons: site icon, program icon, picture via the form (asked first), Remove, and the order picture > emoji > automatic > letters');
 });

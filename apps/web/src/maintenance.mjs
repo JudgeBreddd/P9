@@ -19,13 +19,20 @@ const UPDATE_TEXT = {
   ready: u => 'P9 ' + (u.available || '') + ' is downloaded. Restart P9 to update.',
   error: u => 'The last check failed' + (u.reason ? ': ' + u.reason : '') + '.',
 };
-const updatesRow = u => `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="mtUpdText">You have P9 ${esc(u.current || window.p9.version || '?')}. ${esc((UPDATE_TEXT[u.state] || UPDATE_TEXT.error)(u))}</span></span><span class="spacer"></span>`
+// Updates off (a source checkout, or a build with no updater): Check now opens GitHub's newest release instead (threat
+// model row 28), and the row says how to update from there.
+const opens = u => u.state === 'off' && !!window.p9.openUpdates;
+const openText = () => " Check now opens GitHub's newest release in your browser; if its number is higher, " + (/Windows/.test(navigator.userAgent)
+  ? 'download its .exe there and run it. Your workspace and settings stay.' : "update as the README's Update section says (git pull, build, restart).");
+const updatesRow = u => `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="mtUpdText">You have P9 ${esc(u.current || window.p9.version || '?')}. ${esc((UPDATE_TEXT[u.state] || UPDATE_TEXT.error)(u) + (opens(u) ? openText() : ''))}</span></span><span class="spacer"></span>`
   + (u.state === 'ready' ? '<button data-slot="button" data-variant="default" id="mtUpdInstall">Restart to update</button>'
+    : opens(u) ? '<button data-slot="button" data-variant="outline" id="mtUpdOpen">Check now</button>'
     : `<button data-slot="button" data-variant="outline" id="mtUpdCheck" ${['off', 'checking', 'downloading'].includes(u.state) ? 'disabled' : ''}>Check now</button>`)
-  + info('Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>';
+  + info(opens(u) ? 'Opens the newest P9 release on GitHub.' : 'Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>';
 
-// updates: the last answer from window.p9.updates(), or null when this build has no updater.
+// updates: the last answer from window.p9.updates(), or null when this build has no updater (then the off row, if this
+// window can open the releases page).
 export const maintenanceGroup = updates => `<fieldset class="set-group"><legend>Maintenance ${info('Fixes for when P9 misbehaves. Each is also in Ctrl K.', 'maintenance')}</legend>`
-  + (updates ? updatesRow(updates) : '')
+  + (updates || window.p9?.openUpdates ? updatesRow(updates || { state: 'off' }) : '')
   + MAINTENANCE.filter(m => m.when()).map(m => `<div class="set-row"><button data-slot="button" data-variant="outline" id="${m.id}">${m.label}</button><span class="spacer"></span>${info(m.tip, 'maintenance')}</div>`).join('')
   + '</fieldset>';

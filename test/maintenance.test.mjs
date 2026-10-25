@@ -121,3 +121,18 @@ test('Updates row: one line and one button per updater state; no updater, no row
   assert.match(maintenanceGroup({ state: 'idle', current: '<b>' }), /You have P9 &lt;b&gt;\./, 'escaped');
   delete globalThis.window;
 });
+
+test('Updates off: the one Updates row is in Maintenance, and its Check now opens the newest release', async () => {
+  globalThis.window = { p9: { version: '0.1.5', openUpdates: () => {} } };
+  const { maintenanceGroup } = await import('../apps/web/src/maintenance.mjs');
+  // A source checkout's updater says off; a build with no updater gives null. Both get the row that opens the releases page.
+  for (const u of [{ state: 'off', current: '0.1.5', reason: 'source checkout' }, null]) {
+    const html = maintenanceGroup(u);
+    assert.equal(html.match(/<strong>Updates<\/strong>/g)?.length, 1, JSON.stringify(u));
+    assert.match(html, /<button[^>]*id="mtUpdOpen">Check now<\/button>/);
+    assert.doesNotMatch(html, /mtUpdCheck/);
+    assert.match(/id="mtUpdText">([^<]*)</.exec(html)[1], /^You have P9 0\.1\.5\. Automatic updates are off(: source checkout)?\. Check now opens GitHub&#39;s newest release in your browser; if its number is higher, /);
+  }
+  assert.match(maintenanceGroup({ state: 'idle', current: '0.1.5' }), /id="mtUpdCheck" *>Check now/, 'an updater that is on checks for itself');
+  delete globalThis.window;
+});

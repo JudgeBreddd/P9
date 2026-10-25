@@ -32,6 +32,10 @@ const id = { type: 'string', required: true, check: (value) => typeof value === 
 // A tile icon: an emoji or a few letters, never a link or a file path (no / \\ :), so nothing is fetched or opened for it.
 const icon = { type: 'string', check: (value) => typeof value === 'string' && /^[^\s\x00-\x1f\x7f/\\:]{1,16}$/u.test(value),
   doc: 'The tile icon: an emoji, or up to 16 characters of text with no spaces. Never a link or a file path (no / \\ or :). Omit it for the lettered default.' };
+// A tile picture: the name P9 gave a file it stored in the icons folder beside the registry (a hash and an extension), never a path.
+export const PICTURE = /^[0-9a-f]{16}\.(png|jpg|webp|ico|svg)$/;
+const picture = { type: 'string', check: (value) => typeof value === 'string' && PICTURE.test(value),
+  doc: 'The tile picture, set by the Mission edit form: the name of a file P9 stored in the icons folder beside the registry. Never a path or a link.' };
 const relative = (doc) => ({ type: 'string', check: relativePath, doc: doc + ' A relative path with / separators and no empty, . or .. parts.' });
 
 // A registry script or app, and a space section's button (which runs like a registry script).
@@ -39,6 +43,7 @@ export const RECORD = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The button label.' },
   icon,
+  picture,
   cmd: { type: 'array', items: 'string', required: true, check: (value) => strings(value) && value.length > 0,
     doc: 'The program and its fixed arguments, run without a shell. At least one non-empty string. ~ and ~/workspace expand (to the home folder and settings.scripts_root).' },
   args: { type: 'array', check: (value) => Array.isArray(value) && value.length <= 4 && value.every(argSpec),
@@ -59,6 +64,7 @@ export const PAGE = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The link label.' },
   icon,
+  picture,
   url: { type: 'string', required: true, check: pageUrl,
     doc: 'An http(s) link, or a link whose scheme is listed in settings.page_schemes (never javascript, file, data, vbscript or blob). A non-http(s) link asks the user before it opens.' },
 };
@@ -70,6 +76,7 @@ export const LOG = {
 export const SECTION = {
   title: { type: 'string', required: true, check: (value) => typeof value === 'string' && Boolean(value.trim()), doc: 'The section heading. Not blank.' },
   icon,
+  picture,
   text: { type: 'string', check: text, doc: 'A paragraph shown under the heading.' },
   buttons: { type: 'array', check: Array.isArray, doc: 'Buttons, each a script record. They share the registry scripts\' IDs: an ID used in both drops both.' },
   logs: { type: 'array', check: Array.isArray, doc: 'Log views.' },

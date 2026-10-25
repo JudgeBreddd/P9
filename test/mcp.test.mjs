@@ -214,6 +214,9 @@ for (const provider of ['claude', 'codex']) {
     assert.equal((await tool('update_button', { id: 'nope', icon: 'x' })).error, 'unknown-id');
     assert.equal((await tool('update_button', { id: 'hello' })).error, 'nothing-to-change');
     assert.equal(await file(instance, SETTINGS.registry), text);
+    // An agent cannot set a picture (the edit form's alone): a call naming one changes nothing.
+    assert.notEqual((await tool('update_button', { id: 'hello', picture: '0123456789abcdef.png' })).isError, false);
+    assert.equal(await file(instance, SETTINGS.registry), text);
     // An empty icon removes it.
     await tool('update_button', { id: 'hello', icon: '' });
     assert.equal('icon' in JSON.parse(await file(instance, SETTINGS.registry)).scripts[0], false);

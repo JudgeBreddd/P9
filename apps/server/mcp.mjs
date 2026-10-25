@@ -187,9 +187,10 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
 
   // Title and icon of one record (kind scripts|apps|pages) or one space section (kind sections, key = its title). icon '' removes it.
   const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
-  function update(kind, { key, section: sectionTitle, title, icon, hash }, by) {
-    if (!string(key, 200) || ![sectionTitle, title, icon].every((value) => value === undefined || string(value, 200))) return { error: 'request-refused' };
-    if (title === undefined && icon === undefined) return { error: 'nothing-to-change', detail: 'Give a title, an icon, or both.' };
+  // picture (the name of a stored file, '' removes it) is the desktop form's alone: an agent's tool call is refused if it names one.
+  function update(kind, { key, section: sectionTitle, title, icon, picture, hash }, by) {
+    if (!string(key, 200) || ![sectionTitle, title, icon, picture].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)) return { error: 'request-refused' };
+    if (title === undefined && icon === undefined && picture === undefined) return { error: 'nothing-to-change', detail: 'Give a title, an icon, or both.' };
     if (kind !== 'scripts' && sectionTitle !== undefined) return { error: 'request-refused' };
     return edit(kind === 'sections' || sectionTitle !== undefined ? 'space' : 'registry', hash, (data) => {
       let entry, rest;
@@ -205,6 +206,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       const before = { ...entry };
       if (title !== undefined) entry.title = title;
       if (icon === '') delete entry.icon; else if (icon !== undefined) entry.icon = icon;
+      if (picture === '') delete entry.picture; else if (picture !== undefined) entry.picture = picture;
       const wrong = problem(entry, FIELDS[kind], false, current()?.page_schemes);
       if (wrong) return { error: 'invalid-record', detail: wrong };
       if (kind === 'sections' && rest.some((other) => typeof other?.title === 'string' && other.title.trim() === entry.title.trim())) return { error: 'duplicate-section', section: entry.title };

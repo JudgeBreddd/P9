@@ -497,7 +497,7 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
   their own origin, p9://webview, walled off from the editor page and its save bridge, as in
   VS Code. Their scripts run, and their files come from the editor host; a request for them
   that would leave the machine is cancelled. All extension pages share that one origin.
-- **Check for updates.** Settings > Check for updates opens P9's newest GitHub release
+- **Check for updates.** Where automatic updates are off, Settings > Maintenance > Updates > Check now opens P9's newest GitHub release
   (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser (threat model row 28).
 - **Auto-update.** The installed app (Windows installer, Linux AppImage) asks GitHub for P9's
   newest release, downloads it and installs it when you quit; see Auto-update below (threat

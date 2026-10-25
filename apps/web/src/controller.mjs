@@ -33,7 +33,13 @@ const written = new WeakMap();
 // event rebuilt the panes, tabs and cards, restarting halos, blinks and thumbnails). Nodes are matched by position; kept
 // ones keep their animations, decoded images and scroll. Form values follow the new markup, as a rebuild did. Pets
 // (canvas.pet, added by tickPets) are left in place.
-function morph(el, html) { const t = document.createElement('template'); t.innerHTML = html; sync(el, t.content); return el; }
+function morph(el, html) { const t = document.createElement('template'); t.innerHTML = html; sync(el, addHalos(t.content)); return el; }
+// Every .fx-halo gets one ring child (builder-look.css turns it by transform, so the browser does not repaint the ring each
+// frame). Added here, on each path that writes markup, so the templates stay as they were. Not read by screen readers or clicks.
+function addHalos(root) {
+  for (const h of [root, ...root.querySelectorAll('.fx-halo')]) if (h.matches?.('.fx-halo') && !h.querySelector(':scope > .halo')) h.insertAdjacentHTML('beforeend', '<span class="halo" aria-hidden="true"><i></i></span>');
+  return root;
+}
 function sync(a, b) {
   const olds = [...a.childNodes].filter(n => !(n.nodeType === 1 && n.matches('canvas.pet'))), news = [...b.childNodes];
   news.forEach((n, i) => {
@@ -55,7 +61,7 @@ function attrs(o, n) {
   for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
   for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
 }
-const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; } return el; };
+const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; addHalos(el); } return el; };
 // note 7: every chat starts in Auto mode
 // Each agent's last model and command lists (daemon config / available_commands_update), so a new chat has them before its own session starts.
 const lastModels = {}, lastCommands = {}, lastPickers = {};
@@ -364,7 +370,7 @@ const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copi
 function toast(a, done) {
   if (!done) S.alerts.push(a);
   const el = document.createElement('button');
-  el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`;
+  el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
   el.onclick = () => { el.remove(); if (!done) openModal({ kind: 'alert', a }); };
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
   $('#toasts').append(el); renderCards();
@@ -522,7 +528,7 @@ function paint(root, ss, only) {
   if (part && !panes.length) return;
   panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
-  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
+  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); addHalos(t.content); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
   else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
@@ -804,7 +810,15 @@ async function loadMission() {
     return renderMission();
   }
   applyOverview(r.body);
-  renderMission(); renderTabs(); loadHub();
+  renderMission(); renderTabs(); loadHub(); loadArt();
+}
+// The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
+let lastArt = '';
+async function loadArt() {
+  const r = await window.p9.mission('icons').catch(() => null);
+  if (r?.status !== 200 || lifetime.signal.aborted) return;
+  const key = JSON.stringify(r.body); if (key === lastArt) return; lastArt = key;
+  M.art = r.body; renderMission();
 }
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
@@ -825,6 +839,7 @@ async function refreshMission() {
   if (!live.on || document.hidden || S.focus !== 'mission' || lifetime.signal.aborted) return;
   const r = await window.p9.mission('overview').catch(() => null);
   if (r?.status !== 200 || lifetime.signal.aborted) return;
+  loadArt(); // a site's icon can arrive or age out with no change to the overview
   const key = JSON.stringify(r.body); if (key === lastOverview) return; lastOverview = key;
   applyOverview(r.body); renderMission(); renderTabs();
   if (S.modal?.kind === 'scripts' && !M.scripts[S.modal.g]) closeModal(); // its group is gone
@@ -930,14 +945,17 @@ const wins = {
   mlaunch: { title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
-    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4])).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3])).join('')}</div>` },
+    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
   musage: { title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's 5 h and week bars, the same bars as the chat's meters
     inline: () => { const now = Date.now(), rows = Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now);
       return `<div class="uagent"><b>${names[a]}</b>${meterBar('5 h', lim.fiveHour, line, now)}${meterBar('Week', lim.sevenDay, line, now)}</div>`; }).join('');
       return (rows || '<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
 };
-const launchTile = (name, title, data, id, page, icon) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : `<span class="mono-ico"${tint(name)}${icon ? ' data-icon' : ''}>${esc(icon || name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
+// Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
+// shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
+const art = (kind, key) => M.art?.[kind]?.[key] || {};
+const launchTile = (name, title, data, id, page, icon, shown = {}) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : shown.picture || (!icon && shown.auto) ? `<img src="${esc(shown.picture || shown.auto)}" alt="">` : `<span class="mono-ico"${tint(name)}${icon ? ' data-icon' : ''}>${esc(icon || name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
 const winTop = {};
 const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
   return `<button class="win${lvl === 'bad' ? ' bad fx-halo' : ''}" data-win="${id}"><h4><span class="lvl" data-l="${lvl}"></span>${esc(w.title())}</h4><b class="big${id === 'mprimary' ? ' fx-title' : ''}">${esc(big)}</b><span class="line">${esc(line)}</span></button>`; };
@@ -947,7 +965,7 @@ const PANELS = ['mlogs', 'musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 function renderMission() {
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${(M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
@@ -1101,7 +1119,7 @@ function missionModal(m, body, row) {
   if (m.kind === 'win') {
     const w = wins[m.id]; if (!w || (w.show && !w.show())) return closeModal();
     $('#mdlT').textContent = w.title();
-    body.innerHTML = panel(m.id, esc(w.title()), w.body());
+    body.innerHTML = panel(m.id, esc(w.title()), w.body()); addHalos(body);
     bindWin(body, m); missionLive();
     body.onscroll = () => { winTop[m.id] = body.scrollTop; };
   } else if (m.kind === 'scripts') {
@@ -1163,7 +1181,7 @@ function missionModal(m, body, row) {
     };
   } else if (m.kind === 'medit') {
     $('#mdlT').textContent = 'Edit names and icons';
-    editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, esc, toast, again: () => S.modal === m && renderModal(),
+    editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => M.art, esc, toast, again: () => S.modal === m && renderModal(),
       reload: async keep => { await refreshMission(); if (keep) S.modal === m && renderModal(); else openModal({ kind: 'medit', items: editItems(M) }); } });
   } else if (m.kind === 'handoffs') {
     $('#mdlT').textContent = `Work in flight · ${H.handoffs.length} HANDOFF.md`;
@@ -1551,8 +1569,6 @@ function renderSettings() {
     + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents can read and answer but cannot change anything.', 'agent-lock') : '')
     + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
     + (missionFiles?.settings ? missionGroup() : '')
-    // The updater's own row (maintenance.mjs) replaces this one, unless the updater is off (a source checkout).
-    + (window.p9?.openUpdates && (!updates || updates.state === 'off') ? `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="setVer">You have P9 ${esc(window.p9.version || '?')}. Opens GitHub's newest release in your browser; if its number is higher, ${/Windows/.test(navigator.userAgent) ? 'download its .exe there and run it. Your workspace and settings stay.' : 'update as the README\'s Update section says (git pull, build, restart).'}</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setUpd">Check for updates</button>${info('Opens the newest P9 release on GitHub.', 'updates')}</div>` : '')
     + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
@@ -1566,7 +1582,6 @@ function renderSettings() {
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
   if ($('#setProtect')) $('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); fileProtect = r?.status === 200 ? r.body.on : fileProtect; renderSettings(); };
-  if ($('#setUpd')) $('#setUpd').onclick = () => window.p9.openUpdates();
   $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
   $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };
   if ($('#setWel')) $('#setWel').onclick = () => { $('#setDlg').close(); welcome(); };
@@ -1574,6 +1589,7 @@ function renderSettings() {
   const asked = async ask => { updates = await window.p9.updates(ask).catch(() => updates); renderSettings(); };
   if ($('#mtUpdCheck')) $('#mtUpdCheck').onclick = () => asked({ check: true });
   if ($('#mtUpdInstall')) $('#mtUpdInstall').onclick = () => asked({ install: true });
+  if ($('#mtUpdOpen')) $('#mtUpdOpen').onclick = () => window.p9.openUpdates();
   clearTimeout(updatesTimer); // a check or download in progress: show its next state while Settings is open
   if (['checking', 'downloading'].includes(updates?.state)) updatesTimer = setTimeout(() => { if ($('#setDlg').open) asked(); }, 2000);
   // HI1: an "i" shows its tip on hover and opens its part of the guide on click (main allows only the guide's sections).

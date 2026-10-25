@@ -24,6 +24,7 @@ import { createAuth } from './auth.mjs';
 import { planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
+import { createIcons } from './icons.mjs';
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
 const boot = { pid: process.pid, started: Date.now() };
@@ -537,10 +538,27 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // MCP tools' own update() with its guards. File protection asks first: the form sends confirm once the user agreed.
   const editing = async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); };
   app.get('/mission/edit', editing, async (c) => c.json(await mcp.editState()));
+  // Tile art (apps/server/icons.mjs): site icons fetched from the sites themselves, program icons, and the user's pictures,
+  // all as data: URIs for <img>. Desktop only; the phone lists links and shows no tiles.
+  const icons = createIcons({ dir: state, workspace, registry: () => settings.registry });
+  app.get('/mission/icons', editing, async (c) => c.json(await icons.collect(await mission.iconSources())));
   app.post('/mission/edit', editing, async (c) => {
     const { kind, confirm, ...rest } = (await json(c)) ?? {};
     if (!['apps', 'pages', 'sections'].includes(kind) || (confirm !== undefined && typeof confirm !== 'boolean')
-      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'hash'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'picture', 'hash'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+    // A picture is '' (back to the automatic icon) or {data: base64}. The file is stored only after File protection's confirm and a
+    // matching hash, so a refused save leaves nothing behind; the record then names it by the name P9 gave it.
+    const { picture } = rest;
+    if (picture !== undefined && picture !== '') {
+      if (!picture || typeof picture !== 'object' || Object.keys(picture).join() !== 'data' || typeof picture.data !== 'string' || picture.data.length > 400_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(picture.data)) return c.json({ error: 'request-refused' }, 400);
+      const now = await mcp.editState();
+      if (now.protection && confirm !== true) return c.json({ error: 'registry-read-only' }, 403);
+      const disk = kind === 'sections' ? now.space : now.registry;
+      if (rest.hash !== undefined && rest.hash !== disk) return c.json({ error: 'hash-conflict', diskHash: disk }, 409);
+      const stored = await icons.savePicture(Buffer.from(picture.data, 'base64'));
+      if (stored.error) return c.json(stored, 400);
+      rest.picture = stored.name;
+    }
     const { error, ...result } = await mcp.update(kind, rest, { user: true, confirm });
     return c.json(error ? { error, ...result } : result, !error ? 200 : error === 'hash-conflict' ? 409 : error === 'registry-read-only' ? 403 : 400);
   });

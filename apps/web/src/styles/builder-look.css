@@ -6,14 +6,18 @@
 
 /* Notification halo (from HALO_CSS in design-suite/eh-editor/overlay/eh.js; not in DUWOP yet).
    Builder 2026-10-14: spins until handled. */
-@property --eh-halo-a{syntax:'<angle>';inherits:false;initial-value:0deg}
-@keyframes eh-halo-spin{to{--eh-halo-a:360deg}}
+/* The ring is drawn once and turned by transform (the compositor does it), not repainted each frame: a conic gradient
+   under a fixed ring mask. The .halo child comes from addHalos in controller.mjs. The old ::after drop-shadow was cut
+   to the ring by its own mask and added at most 35/255 on the ring pixels, so the new ring has none. */
+@keyframes eh-halo-spin{to{transform:rotate(360deg)}}
 :where(.fx-halo){position:relative}
-.fx-halo::after{content:'';position:absolute;inset:0;border-radius:inherit;padding:2px;pointer-events:none;z-index:1;
-  background:conic-gradient(from var(--eh-halo-a),var(--glow,var(--primary)),var(--glow2,var(--chart-2,var(--accent))),transparent 45%,var(--glow,var(--primary)) 70%,var(--glow2,var(--chart-2,var(--accent))));
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);
-  filter:drop-shadow(0 0 6px var(--glow,var(--primary)));animation:eh-halo-spin 4s linear infinite}
-@media (prefers-reduced-motion:reduce){.fx-halo::after{animation:none}}
+.fx-halo>.halo{position:absolute;inset:0;border-radius:inherit;padding:2px;overflow:hidden;pointer-events:none;z-index:1;
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
+/* square, centred, at least 1.42x the card's longer side so the turning square always covers the card's corners */
+.fx-halo>.halo>i{position:absolute;left:50%;top:50%;translate:-50% -50%;min-width:142%;min-height:142%;aspect-ratio:1;will-change:transform;
+  background:conic-gradient(var(--glow,var(--primary)),var(--glow2,var(--chart-2,var(--accent))),transparent 45%,var(--glow,var(--primary)) 70%,var(--glow2,var(--chart-2,var(--accent))));
+  animation:eh-halo-spin 4s linear infinite}
+@media (prefers-reduced-motion:reduce){.fx-halo>.halo>i{animation:none;will-change:auto}}
 
 /* Pure-black working surfaces */
 nav.rail{background-color:#000;border-width:0}

@@ -180,7 +180,12 @@ test('Profile: main-thread time idle, with a question open, while a 2,100-event 
   const out = {};
   out.idle = await measure(page, 10000);
   await ask();
+  // The halo ring is one child turned by transform: hidden from readers, cannot catch clicks, still there after the pane re-renders.
+  const ring = () => chat.pane.locator('[data-question]').evaluate(f => { const h = f.querySelectorAll(':scope > .halo'); return { n: h.length, hidden: h[0]?.getAttribute('aria-hidden'), events: h[0] && getComputedStyle(h[0]).pointerEvents, spin: h[0]?.firstElementChild.getAnimations().map(a => a.animationName), after: getComputedStyle(f, '::after').content }; });
+  const want = { n: 1, hidden: 'true', events: 'none', spin: ['eh-halo-spin'], after: 'none' };
+  assert.deepEqual(await ring(), want, 'the question card has one hidden, click-through ring that turns');
   out.pendingQuestion = await measure(page, 10000);
+  assert.deepEqual(await ring(), want, 'the ring survives the card being re-rendered');
   await chat.pane.locator('[data-decline]').click();
   await until(async () => await ends() === 2, 'declined');
   out.stream = await measure(page, 0, async () => { await chat.send('stream 700'); await until(async () => await ends() === 3, 'stream turn ended', 120000); await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 30000 }); });

@@ -330,6 +330,20 @@ export async function createDesktop({ state, open } = {}) {
     // The Mission edit form (names and icons): the daemon checks the kind, fields, hash and File protection.
     editState: () => ['GET', '/mission/edit'],
     edit: body => ['POST', '/mission/edit', body],
+    // Tile art (threat model row 44): the daemon's cache of site icons and pictures; programs the daemon cannot find an icon for
+    // (not Linux) are asked of the OS below, with app.getFileIcon.
+    icons: () => ['GET', '/mission/icons'],
+  };
+  // The program on PATH (or the absolute path) that an app's first command word names, or null.
+  const programPath = async (name) => {
+    if (path.isAbsolute(name)) return name;
+    for (const folder of (process.env.PATH ?? '').split(path.delimiter)) {
+      for (const ext of process.platform === 'win32' ? ['', ...(process.env.PATHEXT ?? '.EXE').split(';')] : ['']) {
+        const file = path.join(folder, name + ext);
+        if (folder && await stat(file).then(info => info.isFile(), () => false)) return file;
+      }
+    }
+    return null;
   };
   ipcMain.handle('p9:mission', async (event, ...args) => {
     const [action, payload = {}] = args;
@@ -338,8 +352,35 @@ export async function createDesktop({ state, open } = {}) {
     const route = missionRoutes[action](payload);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
-    try { return await daemonRequest(state, route[0], route[1], route[2], undefined, action === 'fix' ? AGENT_START_MS : undefined); }
+    try {
+      const result = await daemonRequest(state, route[0], route[1], route[2], undefined, action === 'fix' ? AGENT_START_MS : undefined);
+      if (action === 'icons' && result.status === 200) {
+        const { programs = [], ...art } = result.body;
+        for (const { id: app_id, program } of programs) {
+          try {
+            const file = await programPath(program), image = file && await app.getFileIcon(file, { size: 'large' });
+            if (image && !image.isEmpty()) (art.apps[app_id] ??= {}).auto = image.toDataURL();
+          } catch {}
+        }
+        return { status: 200, body: art };
+      }
+      return result;
+    }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
+  // The Mission edit form's Picture button (ME6, row 44): the native file picker, then the file's bytes for the form to send with its Save.
+  // Nothing is written here; the daemon checks the bytes' type and size again and stores the file only after the guarded save's checks.
+  ipcMain.handle('p9:pick-picture', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    const pick = await dialog.showOpenDialog(window, { title: 'Choose a picture', buttonLabel: 'Use picture', properties: ['openFile'],
+      filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'ico', 'svg'] }] });
+    if (pick.canceled || !pick.filePaths[0]) return null;
+    const info = await stat(pick.filePaths[0]).catch(() => null);
+    if (!info?.isFile()) return { error: 'picture-unreadable' };
+    if (info.size > 256_000) return { error: 'picture-too-big' };
+    // mime only to preview the choice in the form; the daemon decides what the bytes are
+    const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ico: 'image/x-icon', svg: 'image/svg+xml' }[path.extname(pick.filePaths[0]).slice(1).toLowerCase()] ?? 'image/png';
+    return { data: (await readFile(pick.filePaths[0])).toString('base64'), mime };
   });
   // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);

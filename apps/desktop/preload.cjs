@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   usage: () => ipcRenderer.invoke('p9:usage'),
   anymouse: (note) => ipcRenderer.invoke('p9:anymouse', note),
   mission: (action, payload) => ipcRenderer.invoke('p9:mission', action, payload),
+  pickPicture: () => ipcRenderer.invoke('p9:pick-picture'),
   agentLogin: (...args) => ipcRenderer.invoke('p9:agent-login', ...args),
   workspaceChange: () => ipcRenderer.invoke('p9:workspace-change'),
   restartService: () => ipcRenderer.invoke('p9:restart-service'),

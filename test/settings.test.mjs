@@ -88,10 +88,11 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), DOCS_URL);
-  // Check for updates (threat model row 28): shows this build's version and opens only the newest-release page.
+  // Check for updates (threat model row 28): updates are off in a source checkout, so Maintenance > Updates shows this
+  // build's version and its Check now opens only the newest-release page.
   const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-  assert.match(await page.locator('#setVer').innerText(), new RegExp('^You have P9 ' + version.replaceAll('.', '\\.') + '\\. '));
-  await page.click('#setUpd');
+  assert.match(await page.locator('#mtUpdText').innerText(), new RegExp('^You have P9 ' + version.replaceAll('.', '\\.') + '\\. '));
+  await page.click('#mtUpdOpen');
   for (let i = 0; i < 50 && url.trim() !== RELEASES_URL; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (url.trim() !== RELEASES_URL) await new Promise((r) => setTimeout(r, 100)); }
   assert.equal(url.trim(), RELEASES_URL);
   // Settings → Pets: petdex.dev is a link and opens only that page (the owner, 2026-10-20).
@@ -1728,9 +1729,9 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
     probe.style.color = 'var(--primary)'; const primary = getComputedStyle(probe).color; probe.remove();
     return [link.textDecorationLine, link.color === primary];
   }), ['underline', true]);
-  // MT1: the Updates row's Check now, off in a source checkout, then the five buttons (maintenance.test.mjs has the row's states).
+  // MT1: the Updates row's Check now (the releases page in a source checkout), then the five buttons (maintenance.test.mjs has the row's states).
   assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
-  assert.deepEqual([await page.locator('#mtUpdCheck').isDisabled(), await page.locator('#setUpd').count()], [true, 1], 'updates off; the old Check for updates row stays');
+  assert.deepEqual([await page.locator('#mtUpdOpen').isEnabled(), await page.locator('#setBody strong', { hasText: /^Updates$/ }).count()], [true, 1], 'updates off: one Updates row, its Check now opens the releases page');
   await page.locator('#setBody fieldset:last-child').scrollIntoViewIfNeeded();
   const png = await page.locator('#setDlg').screenshot({ type: 'png' });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-maintenance ' + png.toString('base64'));

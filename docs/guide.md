@@ -153,7 +153,7 @@ Once Mission Control's settings file is loaded, Settings shows its paths, so you
 
 ### Updates
 
-**Check for updates** opens the newest P9 release on GitHub. If its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.
+The Updates row sits in the Maintenance group. In the installed app, **Check now** asks GitHub for a newer P9, and **Restart to update** installs one that has downloaded. Where automatic updates are off (a source checkout), **Check now** opens the newest P9 release on GitHub instead; if its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.
 
 ### Maintenance
 
