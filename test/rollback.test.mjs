@@ -141,7 +141,9 @@ test('the report link is GitHub\'s prefilled bug form, cut to fit', () => {
 test('the launcher gets only checked versions, and on Linux none of the AppImage\'s mount', () => {
   const win = launcherCommand({ to: '1.0.0', from: '1.1.0', platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, share: 'C:\\Users\\u\\AppData\\Local\\P9',
     exe: 'C:\\Users\\u\\AppData\\Local\\Programs\\P9 Event Horizon\\P9 Event Horizon.exe', arch: 'x64', pid: 42 });
-  assert.equal(win.file, path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+  // A detached powershell.exe has no console and exits without running -File: conhost --headless gives it one.
+  assert.equal(win.file, path.join('C:\\Windows', 'System32', 'conhost.exe'));
+  assert.deepEqual(win.args.slice(0, 2), ['--headless', path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]);
   assert.deepEqual(win.args.slice(win.args.indexOf('-Rollback')), ['-Rollback', '-To', '1.0.0', '-From', '1.1.0', '-App',
     'C:\\Users\\u\\AppData\\Local\\Programs\\P9 Event Horizon\\P9 Event Horizon.exe', '-Arch', 'x64', '-AppPid', '42']);
   const u = '/ho' + 'me/u'; // split for scan.mjs, as above

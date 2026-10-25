@@ -96,8 +96,12 @@ export function launcherCommand({ to, from, platform = process.platform, env = p
   exe = process.execPath, arch = process.arch, pid = process.pid }) {
   if (![to, from].every(isVersion)) throw new Error('version-refused');
   if (platform === 'win32') {
-    return { file: path.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(share, 'launcher', 'p9-launch.ps1'),
+    // conhost --headless, as the P9 Foundation task runs its host: a detached spawn (DETACHED_PROCESS) gives powershell.exe
+    // no console, and it then exits 0 without running -File (GitHub run 40170347685, events 4688/4689). Windows 10 1809+.
+    const system = path.join(env.SystemRoot || 'C:\\Windows', 'System32');
+    return { file: path.join(system, 'conhost.exe'),
+      args: ['--headless', path.join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe'), '-NoLogo', '-NoProfile', '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass', '-File', path.join(share, 'launcher', 'p9-launch.ps1'),
         '-Rollback', '-To', to, '-From', from, '-App', exe, '-Arch', arch, '-AppPid', String(pid)], env };
   }
   // The AppImage's mount, and its PATH entries, go once it quits (teh.mjs appImageService does the same).

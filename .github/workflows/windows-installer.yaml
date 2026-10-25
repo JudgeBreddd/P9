@@ -677,8 +677,9 @@ jobs:
                 'event ' + $_.Id + ' ' + $_.TimeCreated.ToString('o') + ': ' + ((($_.Message -split '\r?\n') | Where-Object { $_ -match 'Process ID|Process Name|Exit Status|Command Line' } | ForEach-Object { $_.Trim() }) -join '; ') }
           }
           # main's logged command with -AppPid 0, which the launcher refuses after its first checks with one rollback.log
-          # line, so a probe never rolls back. A: node, attached, output piped. B: node, detached, output to a file, exiting
-          # at once as main does. C: B in the installed app's own binary as node (ELECTRON_RUN_AS_NODE).
+          # line, so a probe never rolls back. A: node, attached, output piped, powershell.exe without conhost (the control:
+          # run 40170347685 ran it). B: node, detached, output to a file, exiting at once as main does. C: B in the installed
+          # app's own binary as node (ELECTRON_RUN_AS_NODE). B and C run the command as logged (conhost --headless).
           function Probe {
             $line = Get-Content (Join-Path (UserData) 'p9-update.log') | Where-Object { $_ -like '* rollback launcher command: *' } | Select-Object -Last 1
             if (-not $line) { 'probe: no launcher command in p9-update.log'; return }
@@ -692,7 +693,8 @@ jobs:
           const fs = require('node:fs');
           const [file, ...args] = JSON.parse(process.env.P9_PROBE);
           if (process.argv[2] === 'attached') {
-            const run = spawnSync(file, args, { encoding: 'utf8', timeout: 120000, windowsHide: true });
+            const plain = /conhost\.exe$/i.test(file) ? args.slice(1) : [file, ...args];
+            const run = spawnSync(plain[0], plain.slice(1), { encoding: 'utf8', timeout: 120000, windowsHide: true });
             console.log('exit ' + run.status + ', signal ' + run.signal + (run.error ? ', error ' + run.error.message : ''));
             console.log(run.stdout + run.stderr);
           } else {
