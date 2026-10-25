@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, backTo, startHealthy, launcherCommand, promoteLauncher,
+import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, backTo, startHealthy, launcherCommand, quoteWindows, promoteLauncher,
   readRollback, sanitize, reportLink } from '../apps/desktop/rollback.mjs';
 
 const temp = () => mkdtemp(path.join(os.tmpdir(), 'p9-rollback-'));
@@ -141,11 +141,22 @@ test('the report link is GitHub\'s prefilled bug form, cut to fit', () => {
 test('the launcher gets only checked versions, and on Linux none of the AppImage\'s mount', () => {
   const win = launcherCommand({ to: '1.0.0', from: '1.1.0', platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, share: 'C:\\Users\\u\\AppData\\Local\\P9',
     exe: 'C:\\Users\\u\\AppData\\Local\\Programs\\P9 Event Horizon\\P9 Event Horizon.exe', arch: 'x64', pid: 42 });
-  // A detached powershell.exe has no console and exits without running -File: conhost --headless gives it one.
-  assert.equal(win.file, path.join('C:\\Windows', 'System32', 'conhost.exe'));
-  assert.deepEqual(win.args.slice(0, 2), ['--headless', path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]);
-  assert.deepEqual(win.args.slice(win.args.indexOf('-Rollback')), ['-Rollback', '-To', '1.0.0', '-From', '1.1.0', '-App',
+  // A hop powershell.exe (not detached: a detached one has no console) starts the launcher with no window and prints
+  // its pid; the launcher's file and arguments reach it in the env, never in the script.
+  const powershell = path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  assert.equal(win.file, powershell);
+  assert.equal(win.args.at(-2), '-EncodedCommand');
+  const hop = Buffer.from(win.args.at(-1), 'base64').toString('utf16le');
+  assert.match(hop, /UseShellExecute = \$false;[^]*CreateNoWindow = \$true;[^]*'launcher pid ' \+ \[Diagnostics\.Process\]::Start\(\$p\)\.Id$/);
+  assert.doesNotMatch(hop, /1\.0\.0|P9 Event Horizon/);
+  assert.equal(win.launcher[0], powershell);
+  assert.deepEqual(win.launcher.slice(win.launcher.indexOf('-Rollback')), ['-Rollback', '-To', '1.0.0', '-From', '1.1.0', '-App',
     'C:\\Users\\u\\AppData\\Local\\Programs\\P9 Event Horizon\\P9 Event Horizon.exe', '-Arch', 'x64', '-AppPid', '42']);
+  assert.equal(win.env.P9_LAUNCH_FILE, powershell);
+  assert.ok(win.env.P9_LAUNCH_ARGS.endsWith('-App "C:\\Users\\u\\AppData\\Local\\Programs\\P9 Event Horizon\\P9 Event Horizon.exe" -Arch x64 -AppPid 42'));
+  // CommandLineToArgvW's rules: backslashes count only before a quote.
+  assert.deepEqual(['a', 'a b', '', 'C:\\x y\\', 'say "hi"', 'C:\\a\\b'].map(quoteWindows),
+    ['a', '"a b"', '""', '"C:\\x y\\\\"', '"say \\"hi\\""', 'C:\\a\\b']);
   const u = '/ho' + 'me/u'; // split for scan.mjs, as above
   const linux = launcherCommand({ to: '1.0.0', from: '1.1.0', platform: 'linux', share: `${u}/.local/share/p9`, pid: 42,
     env: { APPDIR: '/tmp/.mount_P9x', APPIMAGE: `${u}/P9.AppImage`, ARGV0: 'P9', OWD: u, PATH: '/tmp/.mount_P9x/usr/bin:/usr/bin', HOME: u } });

@@ -679,8 +679,9 @@ jobs:
           # main's logged command with -AppPid 0, which the launcher refuses after its first checks with one rollback.log
           # line, so a probe never rolls back. A: node, attached, output piped, powershell.exe without conhost (the control:
           # run 40170347685 ran it). B: node, detached, output to a file, exiting at once as main does. C: B in the installed
-          # app's own binary as node (ELECTRON_RUN_AS_NODE). B and C run the command as logged (conhost --headless); in run
-          # 40172084661 its powershell.exe exited 0xC000013A in 40 ms. held: B with stdin a pipe node keeps open 15 s (does
+          # app's own binary as node (ELECTRON_RUN_AS_NODE). B and C run the logged launcher command detached (now plain
+          # powershell.exe, as in run 40170347685; with conhost --headless in front, run 40172084661, its powershell.exe
+          # exited 0xC000013A in 40 ms). main now runs hop-nowindow. held: B with stdin a pipe node keeps open 15 s (does
           # headless conhost close at stdin's EOF?). The candidates, each from the installed app's binary, which exits once
           # its child does: a hop powershell.exe, not detached (so in libuv's job, which allows silent breakaway, and with
           # no fd in its stdio, so CREATE_NO_WINDOW), starts the launcher and exits. hop-nowindow: Process.Start with

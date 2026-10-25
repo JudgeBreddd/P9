@@ -215,12 +215,33 @@ export async function createDesktop({ state, open } = {}) {
     rolledBack(start, version);
     try { writeState(startFile, start); } catch (error) { line('update-state.json not written: ' + error.message); }
     line(`rollback: ${version} failed 2 starts, going back to ${to}`);
-    const { file, args, env } = launcherCommand({ to, from: version });
+    const { file, args, env, launcher } = launcherCommand({ to, from: version });
     // The exact command, and the names (not values) of what it inherits: the CI step replays it.
-    line('rollback launcher command: ' + JSON.stringify([file, ...args]));
+    line('rollback launcher command: ' + JSON.stringify(launcher ?? [file, ...args]));
     line('rollback launcher env names: ' + Object.keys(env).sort().join(','));
-    // The launcher's own output (a PowerShell or sh error before its first rollback.log line) goes to rollback-launch.log
-    // beside rollback.log, not into it: the launcher's appends there would be refused while this handle is open (Windows).
+    if (process.platform === 'win32') {
+      // The hop (rollback.mjs launcherCommand): the app exits once it has reported the launcher's pid; the launcher is
+      // outside libuv's job, so ending the hop with the app does not end it. Pipes, not a log file: an inherited fd would
+      // cost the hop its CREATE_NO_WINDOW. Not 'close': the launcher inherits the pipes' handles and holds them open.
+      let output = '', errors = '', finished = false;
+      const done = (text) => { if (finished) return; finished = true; clearTimeout(timer); line(text); app.exit(0); };
+      const timer = setTimeout(() => done('rollback launcher did not start: the hop did not answer in 60 s'), 60000);
+      try {
+        const hop = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+        hop.stdout.on('data', (data) => {
+          output += data;
+          const pid = /launcher pid (\d+)/.exec(output)?.[1];
+          if (pid) done(`rollback launcher started (pid ${pid})`);
+        });
+        hop.stderr.on('data', (data) => { errors += data; });
+        hop.on('error', (error) => done('rollback launcher did not start: ' + error.message));
+        // Output still in the pipe when the hop exits gets 1 s.
+        hop.on('exit', (code) => setTimeout(() => done(`rollback launcher did not start: hop exit ${code}: ` + (output + errors).slice(-2000)), 1000));
+      } catch (error) { done('rollback launcher did not start: ' + error.message); }
+      return;
+    }
+    // The launcher's own output (an sh error before its first rollback.log line) goes to rollback-launch.log beside
+    // rollback.log, not into it.
     let out = 'ignore';
     try { out = openSync(path.join(share, 'rollback-launch.log'), 'a'); } catch (error) { line('rollback-launch.log not opened: ' + error.message); }
     try {

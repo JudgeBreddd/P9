@@ -89,6 +89,16 @@ export function startHealthy({ version, ready, health, ms = START_MS, every = 10
     .finally(() => { over = true; clearTimeout(timer); });
 }
 
+// The hop (Windows): start the launcher with no window and print its pid. Its file and arguments come in the env, so no
+// value is ever part of a script.
+const HOP = "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; " +
+  '$p = New-Object Diagnostics.ProcessStartInfo $env:P9_LAUNCH_FILE, $env:P9_LAUNCH_ARGS; $p.UseShellExecute = $false; ' +
+  "$p.CreateNoWindow = $true; 'launcher pid ' + [Diagnostics.Process]::Start($p).Id";
+
+// One argument as CommandLineToArgvW reads it back: quoted when it has a space or a quote, backslashes before a quote doubled.
+export const quoteWindows = (arg) => !arg || /[\s"]/.test(arg)
+  ? '"' + arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1') + '"' : arg;
+
 // The launcher's rollback run. Windows: wait for this app to quit, run the version's kept installer (or the release's,
 // checked against its latest.yml) with /S, set daemon\current back, start the app. Linux: copy the kept AppImage over this
 // one, set daemon/current back, restart the daemon, start it. The launcher checks every value again.
@@ -96,13 +106,18 @@ export function launcherCommand({ to, from, platform = process.platform, env = p
   exe = process.execPath, arch = process.arch, pid = process.pid }) {
   if (![to, from].every(isVersion)) throw new Error('version-refused');
   if (platform === 'win32') {
-    // conhost --headless, as the P9 Foundation task runs its host: a detached spawn (DETACHED_PROCESS) gives powershell.exe
-    // no console, and it then exits 0 without running -File (GitHub run 40170347685, events 4688/4689). Windows 10 1809+.
-    const system = path.join(env.SystemRoot || 'C:\\Windows', 'System32');
-    return { file: path.join(system, 'conhost.exe'),
-      args: ['--headless', path.join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe'), '-NoLogo', '-NoProfile', '-NonInteractive',
-        '-ExecutionPolicy', 'Bypass', '-File', path.join(share, 'launcher', 'p9-launch.ps1'),
-        '-Rollback', '-To', to, '-From', from, '-App', exe, '-Arch', arch, '-AppPid', String(pid)], env };
+    // A short-lived hop starts the launcher and prints its pid; the app waits for the hop, not the launcher. Spawned
+    // detached (DETACHED_PROCESS), powershell.exe has no console and exits without running -File (GitHub run
+    // 40170347685); through conhost --headless with stdin NUL it exits 0xC000013A (run 40172084661). The hop is not
+    // detached: it is in libuv's job, whose SILENT_BREAKAWAY_OK leaves the launcher out of it, and with no fd in its stdio
+    // libuv gives it CREATE_NO_WINDOW. The launcher gets CreateNoWindow too, so neither opens a window, nor a Windows
+    // Terminal one (Terminal ignores a hidden window, not a missing one). Run 40174199205 probe hop-nowindow.
+    const powershell = path.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const launcher = [powershell, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(share, 'launcher', 'p9-launch.ps1'), '-Rollback', '-To', to, '-From', from, '-App', exe, '-Arch', arch, '-AppPid', String(pid)];
+    return { file: powershell, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+      Buffer.from(HOP, 'utf16le').toString('base64')], launcher,
+      env: { ...env, P9_LAUNCH_FILE: powershell, P9_LAUNCH_ARGS: launcher.slice(1).map(quoteWindows).join(' ') } };
   }
   // The AppImage's mount, and its PATH entries, go once it quits (teh.mjs appImageService does the same).
   const { APPDIR, APPIMAGE, ARGV0, OWD, ...rest } = env;
