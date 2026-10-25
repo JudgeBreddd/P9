@@ -612,6 +612,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     // request_restart: shown in the chat; the user restarts P9 (or not) themselves.
     restartRequest: (id, reason) => emit(id, 'restart-request', { reason }),
+    // pin_card and unpin_card (artifacts.mjs checked the card).
+    pin: (id, card) => emit(id, 'card', card),
+    unpin: (id, card) => emit(id, 'unpin', { id: card }),
     // Desktop only (server.mjs). Live sessions switch now; one whose mode change fails is stopped rather than left writable.
     async setLock(body) {
       if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return refused(400, 'request-refused');
@@ -758,6 +761,21 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!ID.test(id) || !row(id)) return refused(404, 'unknown-conversation');
       const result = await stopConversation(id);
       return { status: result === 'stopped' ? 200 : 500, result };
+    },
+    // Hand off (PH5): the chat stops and gives server.mjs the command that resumes its Claude Code session with Remote
+    // Control, and the folder to run it in (Claude Code keeps sessions per folder). The adapter's session ID is the CLI's
+    // own. Claude only: Codex has no Remote Control. The session must be a UUID, as it is typed into a shell.
+    async handoff(id) {
+      await recovered;
+      const conversation = ID.test(id) && row(id);
+      if (!conversation) return refused(404, 'unknown-conversation');
+      if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '')) return refused(409, 'handoff-unavailable');
+      if (!await listDirectory(workspace, conversation.folder ?? '').then(() => true, () => false)) return refused(409, 'folder-unavailable');
+      const result = await stopConversation(id);
+      if (result !== 'stopped') return { status: 500, result };
+      emit(id, 'handed-off', { session: conversation.session });
+      return { status: 200, session: conversation.session, cwd: conversation.folder ? path.join(workspace, conversation.folder) : workspace,
+        command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.

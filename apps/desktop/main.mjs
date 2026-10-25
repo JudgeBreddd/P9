@@ -404,6 +404,7 @@ export async function createDesktop({ state, open } = {}) {
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
+    handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and

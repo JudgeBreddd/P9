@@ -5,6 +5,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollDevice } from './helpers.mjs';
+import { pinned, applyCard } from '../apps/web/src/pinned.mjs';
+import { md } from '../apps/web/src/helpers.mjs';
 // The real MCP SDK client (a dependency of the Claude adapter), so P9's hand-written server is held to what clients send.
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -67,7 +69,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 19);
+  assert.equal((await client.listTools()).tools.length, 21);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -84,7 +86,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.equal((await mcp(entry.env[1].value, [1])).body.error.code, -32600);
   await call(instance, `/chat/${conversation}/stop`, 'POST', {});
   assert.equal((await mcp(entry.env[1].value)).status, 401);
-  console.log('PASS MCP: SDK client initialized and listed 19 tools; wrong, missing, cookie-only and stopped-chat tokens all 401');
+  console.log('PASS MCP: SDK client initialized and listed 21 tools; wrong, missing, cookie-only and stopped-chat tokens all 401');
 });
 
 test('MCP writes: File protection and the agent lock refuse them; the parser, a stale hash and a clashing ID keep the file', async (t) => {
@@ -234,6 +236,51 @@ for (const provider of ['claude', 'codex']) {
     await call(instance, '/agent-lock', 'POST', { on: true });
     assert.equal((await tool('update_app', { id: 'editor', icon: 'E' })).error, 'agent-lock-on');
     console.log(`PASS MCP update tools (${provider}): button, app, link, section changed; stale hash, link/path icons, unknown ID, lock and protection refused`);
+  });
+}
+
+// AR2 (threat model row 42): pin_card and unpin_card reach Claude's and Codex's chats alike. A card is a chat event, so
+// the ledger replays it in order, and the strip renders the text through md(), which shows HTML as text.
+for (const provider of ['claude', 'codex']) {
+  test(`MCP pin_card (${provider} chat): cards replace by id, the 8 KB cap counts UTF-8 bytes, the lock does not stop them, unpin replays`, async (t) => {
+    const instance = await start(t);
+    const { conversation, tool } = await agent(t, instance, provider);
+    assert.equal((await tool('pin_card', { id: 'todo', kind: 'checklist', text: '- [ ] one' })).pinned, 'todo');
+    const hostile = '- [x] one\n\n<img src=x onerror="alert(1)"> <script>alert(2)</script> [link](javascript:alert(3))';
+    assert.equal((await tool('pin_card', { id: 'todo', kind: 'checklist', text: hostile })).pinned, 'todo');
+    // 8192 bytes go in, 8193 do not; 4097 two-byte characters are 8194 bytes, under 8192 characters.
+    assert.equal((await tool('pin_card', { id: 'big', kind: 'markdown', text: 'a'.repeat(8192) })).pinned, 'big');
+    assert.equal((await tool('pin_card', { id: 'wide', kind: 'markdown', text: 'é'.repeat(4096) })).pinned, 'wide');
+    for (const text of ['a'.repeat(8193), 'é'.repeat(4097)]) assert.equal((await tool('pin_card', { id: 'over', kind: 'markdown', text })).error, 'too-large', text.length + ' characters');
+    for (const args of [{ id: 'a b', kind: 'markdown', text: 'x' }, { id: '../x', kind: 'markdown', text: 'x' }, { id: 'x'.repeat(65), kind: 'markdown', text: 'x' },
+      { id: '', kind: 'markdown', text: 'x' }, { id: 'k', kind: 'html', text: 'x' }, { id: 'k', kind: 'table', text: ' \n' }, { id: 'k', kind: 'table' }]) {
+      assert.notEqual((await tool('pin_card', args)).isError, false, JSON.stringify(args));
+    }
+    assert.notEqual((await tool('unpin_card', { id: '../x' })).isError, false);
+    // Pinning writes no file, so the agent lock leaves it alone.
+    await call(instance, '/agent-lock', 'POST', { on: true });
+    assert.equal((await tool('pin_card', { id: 'locked', kind: 'table', text: '| a |\n|---|\n| 1 |' })).pinned, 'locked');
+    await call(instance, '/agent-lock', 'POST', { on: false });
+    assert.equal((await tool('unpin_card', { id: 'big' })).unpinned, 'big');
+    const { hit } = await until(instance, (event) => event.conversation === conversation && event.type === 'unpin');
+    assert.deepEqual(hit.data, { id: 'big' });
+
+    // The replay a desktop or phone does from the ledger: refused cards never landed, the replaced and unpinned ones are gone.
+    const all = [];
+    for (let after = 0, page; (page = (await call(instance, `/chat/events?after=${after}&only=${conversation}`)).body).events.length; after = page.cursor) all.push(...page.events);
+    const cards = all.filter((event) => event.type === 'card' || event.type === 'unpin');
+    assert.deepEqual(cards.map((event) => event.type + ':' + event.data.id), ['card:todo', 'card:todo', 'card:big', 'card:wide', 'card:locked', 'unpin:big']);
+    assert.deepEqual(cards[1].data, { id: 'todo', kind: 'checklist', text: hostile });
+    const s = { events: [] };
+    for (const event of cards) applyCard(s, event.type, event.data);
+    assert.deepEqual([...s.cards.keys()], ['todo', 'wide', 'locked']);
+    const html = pinned(s, (card) => md.parse(card.text));
+    assert.match(html, /^<div class="pinned"/);
+    assert.ok(!/<img|<script|<a |href=/i.test(html), html);
+    assert.ok(html.includes('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;') && html.includes('&lt;script&gt;'), html);
+    assert.ok(!html.includes('data-card="big"') && html.includes('data-card="locked"') && html.includes('<table>'));
+    assert.equal(pinned({ events: [], cards: new Map() }, () => ''), '');
+    console.log(`PASS MCP pin_card (${provider}): replace by id, 8192 bytes in and 8193 (or 4097 x é) refused, bad id/kind/text refused, lock did not stop it, replay showed HTML as text and dropped the unpinned card`);
   });
 }
 

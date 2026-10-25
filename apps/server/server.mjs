@@ -259,6 +259,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/unhold', async (c) => reply(c, chat.unhold(c.req.param('id'), await json(c))));
   api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
+  // Hand off (PH5): the chat stops; a new P9 terminal opens in its folder with the claude command typed in. The user
+  // presses Enter, so nothing reaches claude.ai before they do.
+  api.post('/chat/:id/handoff', async (c) => {
+    const { cwd, command, ...result } = await chat.handoff(c.req.param('id'));
+    if (result.status !== 200) return reply(c, result);
+    const made = await terminals.create({}, { cwd, typed: command });
+    return reply(c, made.terminal ? { ...result, terminal: made.terminal } : { ...made, command });
+  });
   api.get('/chat/:id/images/:hash', (c) => reply(c, chat.image(c.req.param('id'), c.req.param('hash'))));
   api.get('/terminals', async (c) => {
     try { return c.json({ terminals: await terminals.list() }); } catch (error) {
@@ -506,20 +514,26 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const disk = await settingsOnDisk();
     return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null });
   });
+  let settingsSaves = Promise.resolve();
   app.post('/setup/settings', async (c) => {
     const body = await json(c);
     if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length || !Object.keys(body).every((key) => Object.hasOwn(SETTINGS, key))) return c.json({ error: 'request-refused' }, 400);
     if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
-    await reloadSettings();
-    const disk = await settingsOnDisk();
-    if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
-    if (!disk.parsed || !settings) return c.json({ error: 'settings-missing' }, 409);
-    const next = { ...disk.parsed };
-    for (const [key, value] of Object.entries(body)) { if (value === null) delete next[key]; else next[key] = value; }
-    let parsed;
-    try { parsed = parseSettings(JSON.stringify(next)); } catch (error) { return c.json({ error: 'settings-refused', detail: error.detail ?? error.message }, 400); }
-    await replaceSettings(disk.text, parsed);
-    return c.json({ settings: parsed });
+    // One save at a time: each reads the file the one before it wrote, so quick saves of different keys all land.
+    const turn = settingsSaves.then(async () => {
+      await reloadSettings();
+      const disk = await settingsOnDisk();
+      if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
+      if (!disk.parsed || !settings) return c.json({ error: 'settings-missing' }, 409);
+      const next = { ...disk.parsed };
+      for (const [key, value] of Object.entries(body)) { if (value === null) delete next[key]; else next[key] = value; }
+      let parsed;
+      try { parsed = parseSettings(JSON.stringify(next)); } catch (error) { return c.json({ error: 'settings-refused', detail: error.detail ?? error.message }, 400); }
+      await replaceSettings(disk.text, parsed);
+      return c.json({ settings: parsed });
+    });
+    settingsSaves = turn.then(() => {}, () => {});
+    return turn;
   });
   // Wizard sign-in (threat model row 31), desktop only: main is the only caller, and opens the URL only after its origin check.
   app.get('/setup/login', (c) => reply(c, chat.login.state()));

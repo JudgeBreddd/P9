@@ -163,6 +163,15 @@ lock or File protection), never over an edit you made since its last read, and r
 chat: running a script and answering a needs-you item raise the chat's own approval prompt. An agent that can run
 shell commands can read its relay's token, as it can read the desktop's own connection file.
 
+The agent can pin text cards above its own chat's composer with `pin_card` and remove them with `unpin_card` (threat model
+row 42). A card is text only, at most 8 KB, and renders like an agent reply: raw HTML shows as text, a link as its text
+with nothing to click, an image as its alt text. Cards are kept in the chat's history in the daemon's ledger, so the
+desktop and a paired phone show them again after a restart. Pinning writes no file, so the agent lock does not stop it.
+
+Hand off (Claude chats only) stops the chat and opens a P9 terminal in the chat's folder with
+`claude --resume <session> --remote-control` typed in but not run. Nothing reaches claude.ai until you press Enter;
+Remote Control then needs Claude Code signed in with a claude.ai subscription.
+
 ## File protection
 
 File protection is on by default. While it is on, P9's file routes and editor, on the desktop and on a paired phone,

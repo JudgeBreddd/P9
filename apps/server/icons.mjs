@@ -147,11 +147,13 @@ export async function programIcon(program, env = process.env) {
   return null;
 }
 
-// dir: the state folder's icons cache. registry(): the registry's path under the workspace; pictures live in icons/ beside it.
+// dir: the state folder's icons cache; without one (a listener built without a state folder) no site is fetched.
+// registry(): the registry's path under the workspace; pictures live in icons/ beside it.
 export function createIcons({ dir, workspace, registry, discoverIcon = discover, now = Date.now }) {
-  const cache = path.join(dir, 'icons');
+  const cache = dir && path.join(dir, 'icons');
   const pending = new Map();
   const site = async (link) => {
+    if (!cache) return null;
     let origin;
     try { const url = new URL(link); if (!/^https?:$/.test(url.protocol)) return null; origin = url.origin; } catch { return null; }
     const file = path.join(cache, createHash('sha256').update(origin).digest('hex').slice(0, 32) + '.json');

@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
+import { randomUUID } from 'node:crypto';
 import * as acp from '@agentclientprotocol/sdk';
 
 // Run as the adapter's login CLI (threat model row 31): records its arguments in fake-login-argv, prints the URL in
@@ -88,9 +89,10 @@ const connection = new acp.AgentSideConnection(() => ({
     return { outcome: 'injected' };
   },
   async authenticate() { return {}; },
-  async newSession(params) { cwd = 'new:' + params.cwd; mcpServers = params.mcpServers; const sessionId = `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
+  async newSession(params) { cwd = 'new:' + params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
   async resumeSession(params) {
-    if (!params.sessionId.startsWith('fake-')) throw new Error('unknown session');
+    // uuid-sessions: IDs shaped like the real Claude adapter's (Hand off types one into a shell, so it takes only those).
+    if (!params.sessionId.startsWith('fake-') && !existsSync('uuid-sessions')) throw new Error('unknown session');
     cwd = 'resume:' + params.cwd;
     mcpServers = params.mcpServers;
     commands(params.sessionId);
@@ -156,6 +158,11 @@ const connection = new acp.AgentSideConnection(() => ({
     }
     if (text === 'mode') { await say('mode:' + mode); return { stopReason: 'end_turn' }; }
     if (text === 'model') { await say('model:' + model); return { stopReason: 'end_turn' }; }
+    if (text === 'plan') {
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'plan', entries: [['completed', 'Read the chat ledger'], ['in_progress', 'Pin the plan above the composer'],
+        ['pending', 'Check it on the phone']].map(([status, content]) => ({ status, content, priority: 'medium' })) } });
+      return { stopReason: 'end_turn' };
+    }
     // Both real adapters name a chat this way after a turn; the padding checks P9 tidies the name.
     if (text.startsWith('title ')) { await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'session_info_update', title: text.slice(6) } }); return { stopReason: 'end_turn' }; }
     if (text === 'cwd') { await say('cwd:' + cwd); return { stopReason: 'end_turn' }; }

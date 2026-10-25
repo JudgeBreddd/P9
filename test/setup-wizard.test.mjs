@@ -150,6 +150,10 @@ test('Setup settings (ST1): only settings.json keys, checked as the file is; the
   assert.equal((await call(instance, '/mission')).body.waiting, 'inbox');
   // null removes a key.
   assert.deepEqual((await call(instance, '/setup/settings', 'POST', { server_host: null })).body.settings, { ...STARTER, waiting: 'inbox', page_schemes: ['obsidian'] });
+  // Three saves of different keys sent at once all land (each used to read the same old file, and the last write dropped the others).
+  const together = await Promise.all([{ server_host: 'box-2' }, { page_schemes: ['obsidian', 'notion'] }, { waiting: 'needs-you' }].map((body) => call(instance, '/setup/settings', 'POST', body)));
+  assert.deepEqual(together.map((r) => r.status), [200, 200, 200]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { ...STARTER, server_host: 'box-2', page_schemes: ['obsidian', 'notion'] });
   // A file made invalid by hand is shown, never overwritten from here.
   await writeFile(file, '{"primary": 1}');
   const bad = await call(instance, '/setup/settings', 'POST', { server_host: 'box' });

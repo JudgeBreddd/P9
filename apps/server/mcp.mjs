@@ -13,6 +13,7 @@ import { readFile, guardedSave } from '../../packages/files/index.mjs';
 import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom } from './mission.mjs';
 import { problem, jsonSchema, SCHEMAS, RECORD, PAGE, SECTION } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
+import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
 
 const run = promisify(execFile);
@@ -34,6 +35,7 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Read p9://schema/regist
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
 const sectionField = { type: 'string', description: 'A space section title. Without it the button goes to (or comes from) the registry\'s scripts.' };
 const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty string removes it.' };
+const cardIdField = { type: 'string', description: 'Your name for the card, like status or todo: 1 to 64 of A-Z a-z 0-9 . _ -' };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const TOOLS = [
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
@@ -65,6 +67,10 @@ const TOOLS = [
     input({ run: { type: 'string', description: 'A run ID from run_script.' }, from: { type: 'integer', minimum: 0, description: 'Output offset: the last call\'s next.' } })],
   ['request_restart', 'Ask the user to restart P9 (after a settings change, say). Shows your reason in the chat; only the user restarts P9.',
     input({ reason: { type: 'string', maxLength: 500 } }, ['reason'])],
+  ['pin_card', 'Pin a card above the composer of this chat, for the user to keep in view: Markdown, a checklist (- [ ] and - [x] items) or a table (GitHub '
+    + 'Markdown). The same id replaces that card in place. Text only, at most 8 KB; HTML shows as text, a link as its text, an image as its alt text.',
+    input({ id: cardIdField, kind: { type: 'string', enum: KINDS }, text: { type: 'string', description: 'Markdown, at most ' + MAX_TEXT + ' bytes of UTF-8.' } }, ['id', 'kind', 'text'])],
+  ['unpin_card', 'Remove a card pinned in this chat.', input({ id: cardIdField }, ['id'])],
 ].map(([name, description, inputSchema]) => ({ name, description, inputSchema }));
 
 const RESOURCES = [
@@ -304,6 +310,17 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       if (!string(reason, 500) || !reason.trim()) return { error: 'request-refused', detail: 'reason: 1 to 500 characters' };
       chat.restartRequest(conversation, reason.trim());
       return { asked: true, detail: 'The user sees your reason in this chat. Only the user restarts P9.' };
+    },
+    pin_card: (args, conversation) => {
+      const data = card(args);
+      if (data.error) return data;
+      chat.pin(conversation, data);
+      return { pinned: data.id, detail: 'Shown above this chat\'s composer, on the desktop and the phone.' };
+    },
+    unpin_card: ({ id }, conversation) => {
+      if (typeof id !== 'string' || !CARD_ID.test(id)) return { error: 'request-refused', detail: 'id: 1 to 64 of A-Z a-z 0-9 . _ -' };
+      chat.unpin(conversation, id);
+      return { unpinned: id };
     },
   };
 

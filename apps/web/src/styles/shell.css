@@ -264,6 +264,13 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 .plan li[data-s="completed"]{color:var(--muted-foreground);text-decoration:line-through}
 .plan li[data-s="in_progress"] .i{color:var(--primary)}
 .plan li[data-s="pending"] .i{color:var(--muted-foreground)}
+/* AR1/AR2: the plan and the agent's pinned cards, above the composer; a long strip scrolls instead of pushing the composer down */
+.pinned{display:flex;flex-direction:column;gap:6px;max-height:35vh;overflow:auto}
+.pinned .plan,.card-pin{flex:none}
+.card-pin{border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);padding:8px 14px;background:color-mix(in oklch,var(--card) 60%,transparent)}
+.card-pin .eyebrow{margin-bottom:4px}
+.card-pin .msg.agent{font-size:13px;line-height:1.5}
+.card-pin li:has(>input[type=checkbox]){list-style:none;margin-left:-1.2em}
 .notice{font-size:12.5px;color:var(--muted-foreground);text-align:center;padding:4px}
 .working{display:flex;align-items:center;gap:8px;color:var(--muted-foreground);font-size:12.5px}
 .working .glyph{color:var(--primary);width:1em;text-align:center;font-size:14px}

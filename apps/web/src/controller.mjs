@@ -8,6 +8,7 @@ import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
+import { pinned, applyCard } from './pinned.mjs';
 
 export function mountShell() {
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
@@ -459,7 +460,6 @@ function event(e, s) {
     case 'agent': return `<div class="msg agent"><div class="who">${names[s.agent]}</div>${mdOf(e)}${agentImgs(e.images, names[s.agent])}</div>`;
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
     case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${agentImgs(e.images, names[s.agent])}`;
-    case 'plan': return `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan</div><ul style="margin:0;padding:0">${e.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${st === 'completed' ? '✓' : st === 'in_progress' ? '▸' : '○'}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}</div>`;
   }
@@ -496,9 +496,10 @@ function pane(s, i, bare) {
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Tool calls and thinking">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
+      ${s.live && s.agent === 'claude' && s.session ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
-    <div class="bottom"><div class="col">${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
+    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !s.readonly ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
@@ -569,6 +570,15 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
     p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
     p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => restartP9(b));
+    // PH5: the daemon stops the chat and opens a terminal with the command typed in; the dock shows that terminal.
+    p.querySelectorAll('[data-handoff]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const r = await liveChat.call('handoff', { id: s.id });
+      if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
+      const shown = dockTerm?.open;
+      S.termOpen[S.focus] = true; showTerm();
+      if (shown) { dockTerm.attach(r.body.terminal); dockTerm.focus(); }
+    });
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
@@ -2041,8 +2051,10 @@ function applyChat(ev) {
     // cancel (loadChat puts the text back in the box), or not sent at all.
     case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when }); break;
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
-    case 'connected': notice('Connected over ACP'); s.state = 'running'; break;
-    case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; break;
+    case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
+    case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
+    case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
+    case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
       if (Array.isArray(d.pickers)) { s.pickers = lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; } break;
     case 'update':

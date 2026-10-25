@@ -99,7 +99,8 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
   // A failed recovery is tried again on the next route call, so installing tmux needs no daemon restart.
   const ready = () => recovered.catch(() => (recovered = recover()));
 
-  async function create(body) {
+  // start (Hand off, from server.mjs only, never a request's body): the folder, and a command typed in but not run.
+  async function create(body, start = {}) {
     try { await ready(); } catch (error) { if (error.message === 'tmux-not-found') return { status: 503, error: 'tmux-not-found' }; throw error; }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
@@ -110,7 +111,8 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       await ensureServer();
       stillAuthorized();
-      await tmux(['new-session', '-d', '-s', name(id), '-c', workspace]);
+      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace]);
+      if (start.typed) await tmux(['send-keys', '-t', '=' + name(id) + ':', '-l', start.typed]);
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);
       return { status: 201, terminal: id };
     } catch (error) {
@@ -228,7 +230,7 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
   // ponytail: replay is the last 256 KiB of raw output, which can start mid escape sequence; a redraw (cls) clears it.
   const REPLAY = 256 * 1024;
 
-  async function create(body) {
+  async function create(body, start = {}) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
     if (!release) return { status: 503, error: 'stop-all-running' };
@@ -237,7 +239,7 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
       stillAuthorized();
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       let pty;
-      try { pty = await conpty.spawnPty({ cwd: workspace, env: childEnv() }); } catch (error) {
+      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: childEnv() }); } catch (error) {
         // spawnPty undoes its own partial start, so nothing is left running.
         db.prepare("UPDATE terminals SET state = 'stopped' WHERE id = ?").run(id);
         return { status: 503, error: 'terminal-unavailable', reason: 'The Windows terminal did not start: ' + String(error.message).slice(0, 200) };
@@ -255,6 +257,7 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
         db.prepare("UPDATE terminals SET state = 'stopped' WHERE id = ?").run(id);
         for (const { end } of terminal.attached) end(1000, 'terminal-ended');
       });
+      if (start.typed) pty.write(Buffer.from(start.typed));
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);
       return { status: 201, terminal: id };
     } catch (error) {
