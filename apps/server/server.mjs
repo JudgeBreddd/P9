@@ -25,11 +25,13 @@ import { agentDirs, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
+import pkg from '../../package.json' with { type: 'json' };
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
 const boot = { pid: process.pid, started: Date.now() };
-// The daemon's version: package.json's (an installed build's daemon folder holds a copy of it).
-const VERSION = JSON.parse(await readAsset(new URL('../../package.json', import.meta.url), 'utf8')).version;
+// The daemon's version: package.json's, imported so the daemon bundle (bundle-daemon.mjs) carries it inline and needs no
+// package.json beside it at runtime.
+const VERSION = pkg.version;
 
 function equal(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;

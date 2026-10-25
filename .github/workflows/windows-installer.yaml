@@ -644,7 +644,16 @@ jobs:
             if ($dir) { Get-Content (Join-Path $dir 'p9-update.log') | Select-Object -Last 30 | ForEach-Object { 'p9-update.log: ' + $_ }
               Get-Content (Join-Path $dir 'update-state.json') -ErrorAction SilentlyContinue | ForEach-Object { 'update-state.json: ' + $_ } }
             Get-Content (Join-Path $p9 'rollback.log') -ErrorAction SilentlyContinue | ForEach-Object { 'rollback.log: ' + $_ }
+            # The launcher's own output: what PowerShell said if it stopped before its first rollback.log line.
+            Get-Content (Join-Path $p9 'rollback-launch.log') -ErrorAction SilentlyContinue | ForEach-Object { 'rollback-launch.log: ' + $_ }
+            Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object CommandLine -like '*p9-launch.ps1*-Rollback*' | ForEach-Object { 'launcher still running: ' + $_.ProcessId }
             Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object { 'hook: ' + $_ }
+          }
+          function Save-Evidence {
+            $dir = UserData
+            $files = @('rollback.json', 'rollback.log', 'rollback-launch.log' | ForEach-Object { Join-Path $p9 $_ })
+            if ($dir) { $files += 'p9-update.log', 'update-state.json' | ForEach-Object { Join-Path $dir $_ } }
+            $files | Where-Object { Test-Path $_ } | Copy-Item -Destination $evidence
           }
           $server = Start-Process python -ArgumentList '-m', 'http.server', '8123', '--bind', '127.0.0.1', '--directory', $feed -PassThru
           try {
@@ -672,7 +681,7 @@ jobs:
             Wait-For "$bad did not go back to $good" 6 { Log-Has "rollback: $bad failed 2 starts, going back to $good" }
             Wait-For "the launcher did not put $good back" 15 { Test-Path (Join-Path $p9 'rollback.json') }
             Wait-For "$good did not show the notice" 5 { Log-Has 'rollback notice shown' }
-          } catch { Show-Logs; throw }
+          } catch { Show-Logs; Save-Evidence; throw }
           Start-Sleep 5
           try {
             Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -682,8 +691,7 @@ jobs:
             $shot.Save((Join-Path $evidence 'rollback-notice.png'), [System.Drawing.Imaging.ImageFormat]::Png)
           } catch { Write-Output "no screenshot: $_" }
           Show-Logs
-          Copy-Item (Join-Path $p9 'rollback.json'), (Join-Path $p9 'rollback.log') $evidence
-          Copy-Item (Join-Path (UserData) 'p9-update.log'), (Join-Path (UserData) 'update-state.json') $evidence
+          Save-Evidence
           $record = Get-Content (Join-Path $p9 'rollback.json') -Raw | ConvertFrom-Json
           if ($record.from -ne $bad -or $record.to -ne $good -or $record.installer -ne 'kept') { throw "rollback.json is not $bad to $good with the kept installer" }
           if (-not $record.shown) { throw 'rollback.json does not say the notice was shown' }

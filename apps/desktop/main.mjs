@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { constants, watch } from 'node:fs';
+import { appendFileSync, constants, openSync, watch } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -210,12 +210,21 @@ export async function createDesktop({ state, open } = {}) {
   const watched = offReason({ packaged: app.isPackaged, resources: process.resourcesPath, platform: process.platform, env: process.env }) === null;
   const startFile = path.join(app.getPath('userData'), 'update-state.json'), share = shareRoot();
   const goBack = (start, to) => {
+    // Sync lines, and the exit only once the launcher's start is known: app.exit drops pending writes.
+    const line = text => { try { appendFileSync(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + text + '\n'); } catch {} };
     rolledBack(start, version);
-    try { writeState(startFile, start); } catch (error) { updateLog('update-state.json not written: ' + error.message); }
-    updateLog(`rollback: ${version} failed 2 starts, going back to ${to}`);
+    try { writeState(startFile, start); } catch (error) { line('update-state.json not written: ' + error.message); }
+    line(`rollback: ${version} failed 2 starts, going back to ${to}`);
     const { file, args, env } = launcherCommand({ to, from: version });
-    spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: true, env }).on('error', () => {}).unref();
-    app.exit(0);
+    // The launcher's own output (a PowerShell or sh error before its first rollback.log line) goes to rollback-launch.log
+    // beside rollback.log, not into it: the launcher's appends there would be refused while this handle is open (Windows).
+    let out = 'ignore';
+    try { out = openSync(path.join(share, 'rollback-launch.log'), 'a'); } catch (error) { line('rollback-launch.log not opened: ' + error.message); }
+    try {
+      const child = spawn(file, args, { detached: true, stdio: ['ignore', out, out], windowsHide: true, env });
+      child.on('spawn', () => { line(`rollback launcher started (pid ${child.pid})`); child.unref(); app.exit(0); });
+      child.on('error', error => { line('rollback launcher did not start: ' + error.message); app.exit(0); });
+    } catch (error) { line('rollback launcher did not start: ' + error.message); app.exit(0); }
   };
   // A deliberate quit (the user quits or closes the last window) before the start is healthy clears it; a crash emits no
   // event, so it still counts at the next start. Sync: Electron does not wait for promises on quit. session-end is a Windows
