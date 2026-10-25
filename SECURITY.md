@@ -282,7 +282,11 @@ enrollment mutation; a missing or different Origin is 403.
   12 h session expires, and one whose client stops reading (8 MiB queued) is dropped.
 - **Desktop only.** `/devices` and its approve, refuse, lock, revoke and reset routes,
   and `/setup` (it names the workspace and settings file), exist only on the Unix socket;
-  on TCP they are 404. `/health` on TCP leaves out the workspace path. A failed New idea
+  on TCP they are 404. That includes `/setup/settings`, which Settings > Mission Control files uses: it changes
+  settings.json only from the desktop, through the same checks P9 runs at start, and keeps the old file as
+  settings.json.bak (threat model row 49). It takes only settings.json keys; a value those checks refuse writes
+  nothing and shows its reason under its box. Saves run one at a time, and each lands by a temporary file and a
+  rename, so a quick second save never drops the first. `/health` on TCP leaves out the workspace path. A failed New idea
   save answers with an allowlisted code (`request-refused`, `storage-unavailable`), never
   the system's error text, which can hold paths.
 - **Rate limit and audit.** 10 failed logins in a sliding 5-minute window close
@@ -303,6 +307,16 @@ enrollment mutation; a missing or different Origin is 403.
   the server does not check it. Approval on the desktop is the gate.
 - **Terminal socket.** `/terminals/:id/socket` attaches a tmux control-mode client; input
   goes back only as `send-keys -H` hex, so no byte is parsed as a tmux command.
+- **Phone link (threat model row 46).** The Phone button in a desktop chat shows a QR code and a link,
+  `https://<server_host>/phone#chat=<id>`. It holds only the chat's ID: no token, no session. The QR is drawn on
+  your computer, never by a QR service. The phone still signs in with your passkey, and opens the chat only if it is
+  in the phone's own list.
+- **Phone queue (threat model row 45).** A message you queue on the phone (typed offline, or while a question or
+  approval waits) stays in that phone's browser storage until it is sent or you take it back. It is sent once: a
+  retry carries the same operation ID, and it waits for the turn's end, so it declines nothing.
+- **Phone first read (threat model row 47).** On opening, the phone reads only the chats that are still running; a
+  stopped chat loads when you pick it. The daemon takes at most 100 chat IDs in that read and refuses any that are
+  not chat IDs; the phone then falls back to its full read. It never returns more than the phone could read before.
 
 What an agent or a terminal can do with what it can see: P9 gives children no session
 cookie, CSRF token or desktop cookie (the allowlisted environment), and the remote port
@@ -372,8 +386,20 @@ entirely. Each session serves only its own origin: the shell's session answers 4
 p9://dev/, and the dev session 404 for p9://app/. A failed start, a failed page load or
 a crashed editor page is rebuilt on the next open. Its CSP allows only self scripts plus wasm, and connections only to the
 editor host's loopback port. Its preload exposes p9dev.config(), p9dev.save(path, hash,
-content), p9dev.create(path, content), p9dev.hostPath(path, kind) and p9dev.openInCode(name, line, reason); the main process accepts them only
+content), p9dev.create(path, content), p9dev.hostPath(path, kind), p9dev.openInCode(name, line, reason) and, since v0.1.5,
+p9dev.openFolder() (no arguments); the main process accepts them only
 from that view's main frame on that exact page, and refuses them from the shell.
+
+Open Folder (since v0.1.5, threat model row 41): Dev Focus can open a folder outside your workspace only from the
+desktop, after you confirm it, and never your home folder, a drive root or P9's own folders. Its saves get the same
+conflict check as the workspace, and the phone cannot write there. The page passes nothing: main shows the system
+folder dialog. A folder inside the workspace opens at once, as the workspace. For one outside, main shows a confirm
+naming it, then sends it to the daemon's desktop-only `POST /dev/root`. The daemon refuses a folder that holds the
+workspace, home, or P9's state, recovery or ownership folder, or that sits inside one of P9's folders, and checks it
+again on every save. It keeps the folder in memory only: a daemon restart, a workspace change or going back to the
+workspace ends it. Main adds the folder to each save; the page never names it. A save from a page left from an earlier
+folder is refused, never written into the new one. Saves go through the same guarded writer as the workspace (hash
+check, no `..` or links out, File protection's locked names).
 
 New File and Save As reach the daemon's desktop-only POST /files, which calls the same create-only writer as
 Mission's New idea: it makes a new name and refuses locked names while File protection is on. Once made, the file
@@ -444,9 +470,11 @@ them. Install only extensions you trust. The terminal is a real shell.
 The editor host's port is not the remote port: the phone/remote transport has no route
 to it, and /files on the remote transport answers 401 without a session (phase 3 remote
 isolation test); with a session it serves files like the desktop.
-**Surface 6: no workspace trust prompt.** Dev Focus opens one folder only, the configured
-workspace root, and treats it as trusted (workspace trust off). A trust prompt would be
-answered once for that one folder and never shown again, so it adds no protection here.
+**Surface 6: no workspace trust prompt.** Dev Focus opens the configured workspace root, or
+a folder you pick with Open Folder (above), and treats it as trusted (workspace trust off).
+For the workspace a trust prompt would be answered once and never shown again, so it adds
+no protection there; for a folder outside the workspace, the confirm before it opens is the
+prompt. Opening a folder in Dev Focus applies its settings and tools as soon as it opens.
 What does hold (phase 12, tested): a folder-open task never runs by itself. VS Code reads
 task.allowAutomaticTasks only from user settings (application scope), so a repository's
 own "on" is ignored, and with the default VS Code asks before running a folder-open task.
@@ -488,10 +516,19 @@ and 8 MiB of base64 each, and stores any other image as a short note; the window
 image. P9 never loads an image from an address an agent names, and Markdown images in a reply stay their
 alt text (threat model row 26).
 
+## Photos you send
+
+Photos you send are kept on your computer, in P9's state folder, so the chat can show them again; only that chat's
+view asks for them, the phone needs your passkey session, and P9 deletes the oldest once they pass 200 MB (threat
+model row 43). Each is stored under the hash of its bytes (folder 0700, file 0600), after the same checks as before:
+PNG, JPEG, GIF or WebP, at most 4 a message and 2 MiB of base64 each. The daemon answers a request for one only when
+that chat's own history names that hash; the file name is built from the hash, never from the request. Deleting a chat
+is not possible, so the 200 MB limit is what removes them. The phone does not show sent photos.
+
 ## Outbound requests a reader of this file should know about
 
 Things P9 does that reach the network or a host outside your machine, each covered
-in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28, 39):
+in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28, 39, 40, 44):
 
 - **Pets (petdex).** Settings > Pets fetches petdex.dev's manifest (https only, capped) and,
   for a pet found there, its `pet.json` and spritesheet from `https://assets.petdex.dev` only;
@@ -510,7 +547,16 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
   (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser (threat model row 28).
 - **Auto-update.** The installed app (Windows installer, Linux AppImage) asks GitHub for P9's
   newest release, downloads it and installs it when you quit; see Auto-update below (threat
-  model row 39). A source checkout never does.
+  model row 39). A source checkout never does. On Windows, a rollback (threat model row 40) can download the
+  installer of the version you had from that release on GitHub, when it was not kept.
+- **Mission Control tile icons.** A link tile with no picture and no text icon of its own shows the site's icon
+  (threat model row 44). The daemon asks that site itself for its page head and icon (GET only, no cookies, 5 s,
+  128 KB for the page and 200 KB for the icon, at most 4 icons), never a favicon service, so the site learns your IP
+  address and that P9 looked. A link you saved to a host on your own network is asked as you saved it; a redirect or
+  an icon on another site is followed only to a public address, never to your router or another private address. The
+  icon must be a PNG, JPEG, WebP or ICO by its bytes, is cached in P9's state folder (7 days, a miss 1 day) and is
+  shown as an image only. Your own pictures (the Picture button in Edit names and icons) are saved beside your
+  registry only after you confirm, at most 256 KB, and agents cannot set them.
 - **Landing page name.** The landing greeting's name comes from Settings (or your account's
   first name, once, if the file is new); it is shown as text on your own screen and never sent
   anywhere.
@@ -534,8 +580,8 @@ version never replaces a newer one, except by the rollback below.
 - **How it is checked.** The downloaded file's sha512 must equal the one in `latest*.yml`, or it is
   thrown away. P9's builds are not code-signed, so there is no publisher signature to check: the
   sha512 proves the file is the one the release names, not who made the release.
-- **When it is off.** Running from a source checkout (`!app.isPackaged`), a build without
-  `resources/app-update.yml`, and on Linux any run that is not the AppImage. Settings shows the
+- **When it is off.** Running from a source checkout (`!app.isPackaged`), any system other than
+  Windows and Linux, a build without `resources/app-update.yml`, and on Linux any run that is not the AppImage. Settings shows the
   Updates row as off and says why.
 - **Rollback (threat model row 40).** An update that fails its first 2 starts (window not ready, or the
   service not answering as that version, within 180 s; quitting P9 or closing its window first does not
