@@ -10,6 +10,7 @@
 # Tags before v0.1.2 lack the packaging fix and fail on this machine (the NSIS 260-character path).
 # A candidate (Run workflow with a version, e.g. 0.1.5-rc.1, and no tag): the check build with that version, set here for
 # this run only and never committed; it attaches nothing. Installed, it is offered the release it leads to.
+# only=rollback (Run workflow, no tag): the x64 build, the local-feed update and the rollback check, nothing else.
 name: Installers
 
 on:
@@ -26,6 +27,10 @@ on:
         description: A candidate's version, <package.json version>-rc.<n> (e.g. 0.1.5-rc.1), for this build only. Leave the tag empty
         required: false
         default: ''
+      only:
+        description: rollback runs only the x64 build and the steps the rollback check needs (no arm64, no AppImage). Leave the tag empty
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -36,12 +41,8 @@ jobs:
       # One architecture failing still finishes the other's installer.
       fail-fast: false
       matrix:
-        include:
-          - arch: x64
-            os: windows-latest
-          - arch: arm64
-            os: windows-11-arm
-    runs-on: ${{ matrix.os }}
+        arch: ${{ fromJSON(inputs.only == 'rollback' && '["x64"]' || '["x64", "arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     # One run per branch and architecture at a time; a newer push waits and replaces any run still waiting. Not
     # cancel-in-progress: four chunks pushing release/v0.1.3 cancelled the 35-minute job before it ever finished
     # (2026-10-22, run 39724311084).
@@ -94,7 +95,7 @@ jobs:
           path: dist/windows/latest.yml
           retention-days: 1
       - name: Show the check build
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: bash
         run: |
           cat dist/windows/SHA256SUMS-$P9_ARCH
@@ -103,7 +104,7 @@ jobs:
           ls -l dist/windows/*-unpacked/resources/app.asar
       # The check build, to download from the run's page and install by hand (a tester's laptop).
       - uses: actions/upload-artifact@v4
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         with:
           name: windows-installer-${{ matrix.arch }}
           path: |
@@ -113,41 +114,41 @@ jobs:
       # The Windows-only tests on a real Windows machine of each architecture: the host (.cmd through cmd.exe, a new
       # console, the folder ACL check, the prebuilt DLL) and Job Object stop. After the upload, so a failure keeps the installer.
       - name: Windows host and process-tree tests
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: node --test test/windows-process-tree.test.mjs
       # GitHub issue #11: the dock's terminal on Windows (ConPTY), through the real routes and the daemon's pipe.
       - name: Windows terminal test
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: node --test test/windows-terminal.test.mjs
       # GitHub issue #11 (v0.1.5 N1): Mission notes in a folder outside the workspace, through win.canonical and the new
       # renameNamed (no replace): links out, locked names, the 409 conflict and rename onto an existing name.
       - name: Windows notes test
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: node --test test/mission-notes.test.mjs
       # BL9: the file guard's and the editor host's owner-only checks compare SDDL text. The runner's account is the
       # built-in Administrator (RID 500), which SDDL writes as LA, so the tests now ask Windows for that form.
       # Their powershell.exe (5.1) would inherit this pwsh 7 step's module folders and fail to load Get-Acl's module
       # (run 40139947301): keep only its own folders, as install-windows.ps1 does.
       - name: Windows file guard test
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: |
           $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
           node --test test/files-windows.test.mjs
       - name: Windows editor host test
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: |
           $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
           node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs
       # v0.1.5 DV2: Dev Focus's folder outside the workspace, on Windows paths: %LOCALAPPDATA%\P9 and the drive root refused,
       # saves there through the guarded save, a junction out refused.
       - name: Windows Dev folder test
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: node --test test/dev-root.test.mjs
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.
       - name: Install it here and start the daemon
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: pwsh
         timeout-minutes: 28
         run: |
@@ -377,7 +378,7 @@ jobs:
       # every later release ships the bundled daemon. Install that release, wait for its daemon, install this build over
       # it, then count. Uninstalls at the end, so the next step starts clean.
       - name: Update over the newest release
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: pwsh
         timeout-minutes: 40
         env:
@@ -430,7 +431,7 @@ jobs:
       # again, then runs teh doctor. p9user's files are owner-only, so every check runs as p9user, through a Scheduled Task
       # with its password (a batch logon); the scripts and their output go through C:\p9ci, which p9user may write.
       - name: Install twice as a standard user
-        if: env.TAG == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: pwsh
         timeout-minutes: 40
         run: |
@@ -655,6 +656,63 @@ jobs:
             if ($dir) { $files += 'p9-update.log', 'update-state.json' | ForEach-Object { Join-Path $dir $_ } }
             $files | Where-Object { Test-Path $_ } | Copy-Item -Destination $evidence
           }
+          # Bisecting a launcher that wrote nothing (run 40167272465: started, pid 5168, then no output and no
+          # rollback.log). Windows' process creation and exit events, with command lines and exit codes, say what became
+          # of it; the probes replay main's exact command outside the app.
+          auditpol /set /subcategory:"Process Creation" /success:enable | Out-Null
+          auditpol /set /subcategory:"Process Termination" /success:enable | Out-Null
+          $audit = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
+          if (-not (Test-Path $audit)) { New-Item $audit | Out-Null }
+          New-ItemProperty -Force -Path $audit -Name ProcessCreationIncludeCmdLine_Enabled -Value 1 -PropertyType DWord | Out-Null
+          $since = Get-Date
+          function Show-Launch {
+            Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | ForEach-Object { 'powershell.exe ' + $_.ProcessId + ' (parent ' + $_.ParentProcessId + '): ' + $_.CommandLine }
+            $launcher = Join-Path $p9 'launcher\p9-launch.ps1'
+            'launcher exists: ' + (Test-Path $launcher)
+            Get-Content $launcher -TotalCount 12 -ErrorAction SilentlyContinue | ForEach-Object { 'launcher: ' + $_ }
+          }
+          function Show-Events {
+            Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688, 4689; StartTime = $since } -ErrorAction SilentlyContinue |
+              Where-Object { $_.Message -match 'powershell\.exe' } | Sort-Object TimeCreated | ForEach-Object {
+                'event ' + $_.Id + ' ' + $_.TimeCreated.ToString('o') + ': ' + ((($_.Message -split '\r?\n') | Where-Object { $_ -match 'Process ID|Process Name|Exit Status|Command Line' } | ForEach-Object { $_.Trim() }) -join '; ') }
+          }
+          # main's logged command with -AppPid 0, which the launcher refuses after its first checks with one rollback.log
+          # line, so a probe never rolls back. A: node, attached, output piped. B: node, detached, output to a file, exiting
+          # at once as main does. C: B in the installed app's own binary as node (ELECTRON_RUN_AS_NODE).
+          function Probe {
+            $line = Get-Content (Join-Path (UserData) 'p9-update.log') | Where-Object { $_ -like '* rollback launcher command: *' } | Select-Object -Last 1
+            if (-not $line) { 'probe: no launcher command in p9-update.log'; return }
+            $cmd = @(($line -replace '^.*? rollback launcher command: ', '') | ConvertFrom-Json)
+            $cmd[-1] = '0'
+            $env:P9_PROBE = ConvertTo-Json -Compress $cmd
+            'probe command: ' + $env:P9_PROBE
+            $script = Join-Path $env:RUNNER_TEMP 'probe.cjs'
+            Set-Content $script @'
+          const { spawn, spawnSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const [file, ...args] = JSON.parse(process.env.P9_PROBE);
+          if (process.argv[2] === 'attached') {
+            const run = spawnSync(file, args, { encoding: 'utf8', timeout: 120000, windowsHide: true });
+            console.log('exit ' + run.status + ', signal ' + run.signal + (run.error ? ', error ' + run.error.message : ''));
+            console.log(run.stdout + run.stderr);
+          } else {
+            const out = fs.openSync(process.argv[3], 'a');
+            const child = spawn(file, args, { detached: true, stdio: ['ignore', out, out], windowsHide: true });
+            child.on('spawn', () => { console.log('detached pid ' + child.pid); child.unref(); process.exit(0); });
+            child.on('error', (error) => { console.log('error ' + error.message); process.exit(1); });
+          }
+          '@
+            $log = Join-Path $p9 'rollback.log'
+            foreach ($probe in 'A', 'B', 'C') {
+              $out = Join-Path $evidence "probe-$probe.out"
+              if ($probe -eq 'A') { node $script attached 2>&1 | ForEach-Object { "probe A: $_" } }
+              elseif ($probe -eq 'B') { node $script detached $out 2>&1 | ForEach-Object { "probe B: $_" }; Start-Sleep 30 }
+              else { $env:ELECTRON_RUN_AS_NODE = '1'; & $exe $script detached $out 2>&1 | ForEach-Object { "probe C: $_" }; Remove-Item Env:ELECTRON_RUN_AS_NODE; Start-Sleep 30 }
+              Get-Content $out -ErrorAction SilentlyContinue | ForEach-Object { "probe $probe output: $_" }
+              if (Test-Path $log) { Get-Content $log | ForEach-Object { "probe $probe rollback.log: $_" }; Move-Item $log (Join-Path $evidence "probe-$probe-rollback.log") -Force }
+              else { "probe ${probe}: no rollback.log" }
+            }
+          }
           $server = Start-Process python -ArgumentList '-m', 'http.server', '8123', '--bind', '127.0.0.1', '--directory', $feed -PassThru
           try {
             Start-Process $exe
@@ -679,9 +737,19 @@ jobs:
             Start-Sleep 5
             Start-Process $exe
             Wait-For "$bad did not go back to $good" 6 { Log-Has "rollback: $bad failed 2 starts, going back to $good" }
+            Show-Launch
+            # The launcher's first act is a rollback.log line (its trap writes one too): none in 3 min means it never ran.
+            Wait-For "the launcher wrote no rollback.log" 3 { Test-Path (Join-Path $p9 'rollback.log') }
             Wait-For "the launcher did not put $good back" 15 { Test-Path (Join-Path $p9 'rollback.json') }
             Wait-For "$good did not show the notice" 5 { Log-Has 'rollback notice shown' }
-          } catch { Show-Logs; Save-Evidence; throw }
+          } catch {
+            $failed = $_
+            Show-Logs
+            if (-not (Test-Path (Join-Path $p9 'rollback.log'))) { try { Probe } catch { "probe failed: $_" } }
+            Show-Events
+            Save-Evidence
+            throw $failed
+          }
           Start-Sleep 5
           try {
             Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -712,6 +780,7 @@ jobs:
   # AU2: the Linux AppImage, x64 only (no arm64 Linux build yet). Its daemon cannot run from the AppImage's mount, which
   # goes away when the app quits: AU4 copies it to ~/.local/share/p9/daemon first.
   appimage:
+    if: inputs.only != 'rollback'
     runs-on: ubuntu-24.04
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-appimage

@@ -216,6 +216,9 @@ export async function createDesktop({ state, open } = {}) {
     try { writeState(startFile, start); } catch (error) { line('update-state.json not written: ' + error.message); }
     line(`rollback: ${version} failed 2 starts, going back to ${to}`);
     const { file, args, env } = launcherCommand({ to, from: version });
+    // The exact command, and the names (not values) of what it inherits: the CI step replays it.
+    line('rollback launcher command: ' + JSON.stringify([file, ...args]));
+    line('rollback launcher env names: ' + Object.keys(env).sort().join(','));
     // The launcher's own output (a PowerShell or sh error before its first rollback.log line) goes to rollback-launch.log
     // beside rollback.log, not into it: the launcher's appends there would be refused while this handle is open (Windows).
     let out = 'ignore';
