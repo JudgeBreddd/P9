@@ -34,7 +34,7 @@ function upgrade(server, route, headers) {
 // the reply carries nothing but the error (no file content, no workspace path).
 async function sweep(server, auth, expected) {
   const headers = auth ? { cookie: 'p9s=' + auth.token, 'x-p9-csrf': auth.csrf } : {};
-  for (const route of [...ROUTES, '/files?path=note.txt', '/unknown']) {
+  for (const route of [...ROUTES, '/files?path=note.txt', '/chat/' + randomUUID() + '/images/' + '0'.repeat(64), '/unknown']) {
     for (const method of METHODS) {
       const result = await server.remote(route, { method, headers });
       assert.equal(result.status, expected, method + ' ' + route + ' ' + result.text);

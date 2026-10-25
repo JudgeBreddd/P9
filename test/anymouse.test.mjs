@@ -302,7 +302,7 @@ test('v0.1.5 cD mission editor: File protection asks first, an icon shows on the
   assert.equal(await readFile(registry, 'utf8'), outside, 'a stale form never overwrites');
   await shot('editor-stale', page.locator('#mdl'));
   await page.click('#mdlBody [data-medit-reload]');
-  await page.locator('#mdlBody [data-row="2"]').waitFor({ timeout: 10000 });
+  await page.locator('#mdlBody [data-row="4"]').waitFor({ timeout: 10000 });
   assert.equal(await page.locator('#mdlBody [data-row]').count(), 5, 'the reload shows the file as it is now');
   // Close the form: the icon is on the tile.
   await page.keyboard.press('Escape');

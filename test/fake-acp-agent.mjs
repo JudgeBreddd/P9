@@ -1,11 +1,14 @@
 // Test-only ACP agent, ported from agent-first-workspace's _engine/fake-acp-agent.ts. The prompt text picks the
-// behaviour: "permission" asks for approval, "ask" sends a form question ("ask-later" after 2 s of work), "stream <n>" streams 3n updates, "background" ends
+// behaviour: "permission" asks for approval, "ask" sends a form question ("ask-later" after 2 s of work, "ask-text" a free-text one), "stream <n>" streams 3n updates, "background" ends
 // its turn and works on unprompted without end, asking once ("background quiet" never); messages steered (_session/steering, off with a no-steering file) or prompted
 // into it come back as "got:<text>" at its next step, "ask-strict" one with required, integer,
 // multi-select, pattern and format fields (some limits null) and optional choices, "ask-object" one with a nested
 // object P9 cannot render, "slow" waits for cancel, "crash" exits, "auth-required" fails the turn signed out, "detach" starts a setsid sleeper and replies with its
 // pid, "env" replies with its environment's names (never values), "mcp" with the MCP servers P9 handed it, "config" with its model and settings, "probe <port> <host> <script>" runs the phase 10 credential probe, anything else is echoed. A file named slow-init in
 // the working directory stalls initialize for 10 s, hang-init never answers it; slow-close stalls session/close for 2 s.
+// "tools <n>" runs n tool calls of 3 s each (10 s with a slow-tools file; a cancel ends them), "tool-open" one that never completes before the turn ends, "tool-last" one
+// that completes as the turn ends. Each steer is appended to steers.log; as Codex, one past the turn starts a turn of its
+// own (startedNewTurn) that answers "got:<text>" and reports no end.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -72,6 +75,12 @@ const connection = new acp.AgentSideConnection(() => ({
   // Like claude-agent-acp 0.88's _session/steering with idleBehavior promptRequired.
   async extMethod(method, params) {
     if (method !== '_session/steering' || existsSync('no-steering')) throw acp.RequestError.methodNotFound(method);
+    appendFileSync('steers.log', textOf(params.prompt) + '\n');
+    if (!turns.has(params.sessionId) && process.argv[2] === 'codex') {
+      const text = textOf(params.prompt);
+      setTimeout(() => connection.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'got:' + text } } }), 300);
+      return { outcome: 'startedNewTurn' };
+    }
     if (!turns.has(params.sessionId)) return { outcome: 'promptRequired', reason: 'noRunningTurn' };
     if (existsSync('slow-steering')) await new Promise((resolve) => setTimeout(resolve, 6000)); // past chat.mjs's 5 s wait
     if (existsSync('steering-refuses')) throw new Error('steering refused');
@@ -226,6 +235,13 @@ const connection = new acp.AgentSideConnection(() => ({
       await say('ask:' + JSON.stringify(result));
       return { stopReason: 'end_turn' };
     }
+    // A free-text answer, like AskUserQuestion's "Other" box.
+    if (text === 'ask-text') {
+      const result = await connection.createElicitation({ sessionId, mode: 'form', message: 'Name it',
+        requestedSchema: { type: 'object', properties: { name: { type: 'string' } } } });
+      await say('ask:' + JSON.stringify(result));
+      return { stopReason: 'end_turn' };
+    }
     // Works for 2 s, then asks: messages sent meanwhile queue, and the question keeps the turn from ending.
     if (text === 'ask-later') {
       await say('working');
@@ -233,6 +249,30 @@ const connection = new acp.AgentSideConnection(() => ({
       const result = await connection.createElicitation({ sessionId, mode: 'form', message: 'Pick a colour',
         requestedSchema: { type: 'object', properties: { colour: { type: 'string', enum: ['red', 'blue'] } } } });
       await say('ask:' + JSON.stringify(result));
+      return { stopReason: 'end_turn' };
+    }
+    // Tool calls that take a while, so a message sent meanwhile waits for one to end (CP1, CP8).
+    if (text === 'diff and code') { // one line changed (a long one) in a 9-line file, then a reply with a code block
+      const old = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n';
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-1', title: 'Edit notes.md', kind: 'edit', status: 'completed',
+        content: [{ type: 'diff', path: 'notes.md', oldText: old, newText: old.replace('five', 'FIVE' + ' long'.repeat(60)) }] } });
+      await say('Run this:\n\n```sh\nnpm test\n```');
+      return { stopReason: 'end_turn' };
+    }
+    if (text.startsWith('tools ') || text === 'tool-open' || text === 'tool-last') {
+      const n = text.startsWith('tools ') ? Number(text.slice(6)) : 1, ms = existsSync('slow-tools') ? 10000 : 3000;
+      cancelled.delete(sessionId);
+      for (let i = 1; i <= n; i++) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tool-' + i, title: 'Run tool ' + i, kind: 'execute', status: 'in_progress' } });
+        for (const end = Date.now() + ms; Date.now() < end && !cancelled.has(sessionId);) await new Promise((resolve) => setTimeout(resolve, 20));
+        if (cancelled.has(sessionId)) return { stopReason: 'cancelled' };
+        if (text === 'tool-open') break;
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-' + i, status: 'completed' } });
+        if (text === 'tool-last') return { stopReason: 'end_turn' };
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await take(sessionId, say);
+      }
+      await say('tools done');
       return { stopReason: 'end_turn' };
     }
     // A long streamed turn: n tool calls, each updated once, with a reply chunk after each (3n events, 21 per 10 ms).

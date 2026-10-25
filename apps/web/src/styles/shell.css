@@ -229,11 +229,14 @@ html,body{height:100%;overflow:hidden}
 .msg.user{align-self:flex-end;max-width:85%;background:color-mix(in oklch,var(--card) 80%,var(--primary) 6%);border:1px solid color-mix(in oklch,var(--primary) 22%,var(--border));border-radius:var(--radius);padding:10px 14px;white-space:pre-wrap;overflow-wrap:anywhere}
 .msg.agent{font-size:15px;line-height:1.6}
 .agent-imgs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}.agent-imgs img{max-width:100%;max-height:480px;border-radius:8px;border:1px solid var(--border)}
+/* CP3: the photos sent with a message, above its bubble */
+.user-imgs{display:flex;flex-wrap:wrap;justify-content:flex-end;align-self:flex-end;gap:6px;max-width:85%;margin-bottom:6px}.user-imgs img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:var(--muted)}
 .msg.agent>:first-child{margin-top:0}.msg.agent>:last-child{margin-bottom:0}
 .msg.agent :is(p,ul,ol,pre,table,blockquote){margin:0 0 .6em}.msg.agent :is(ul,ol){padding-left:1.4em}.msg.agent li>:is(p,ul,ol){margin:0}
 .msg.agent :is(h1,h2,h3,h4){font-size:15px;font-weight:650;margin:.9em 0 .3em}.msg.agent h1{font-size:17px}.msg.agent h2{font-size:16px}
 .msg.agent code{font:12.5px "JetBrains Mono",ui-monospace,monospace;padding:1px 4px;border-radius:4px;background:color-mix(in oklch,var(--foreground) 8%,transparent)}
 .msg.agent pre{overflow-x:auto;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:color-mix(in oklch,var(--background) 70%,black)}.msg.agent pre code{padding:0;background:none}
+.msg.agent pre{position:relative}.msg.agent pre [data-copycode]{position:absolute;top:4px;right:4px;opacity:0;transition:opacity .15s}.msg.agent pre:hover [data-copycode],.msg.agent pre [data-copycode]:focus-visible,.msg.agent pre [data-copycode][data-said]{opacity:1} /* CP5 */
 .msg.agent table{border-collapse:collapse;font-size:13px}.msg.agent :is(th,td){border:1px solid var(--border);padding:3px 8px;text-align:left}
 .msg.agent blockquote{padding-left:10px;border-left:3px solid var(--border);color:var(--muted-foreground)}.msg.agent .link{color:var(--primary);text-decoration:underline dotted}
 .meter[data-stale]{opacity:.55}
@@ -245,7 +248,7 @@ details[open].tool summary .chev{rotate:90deg}
 details.tool .ttl{font-family:"JetBrains Mono",monospace;font-size:12px;font-size-adjust:none}
 details.tool pre{margin:0;padding:8px 12px 10px;border-top:1px solid var(--border);font-size:11.5px;line-height:1.55;overflow:auto;white-space:pre-wrap}
 .diff{font-family:"JetBrains Mono",monospace;font-size:11.5px;font-size-adjust:none;border-top:1px solid var(--border)}
-.diff div{padding:1px 12px;white-space:pre}
+.diff div{padding:1px 12px;white-space:pre-wrap;overflow-wrap:anywhere} /* CP4: long lines wrap */
 .diff .add{background:color-mix(in oklch,var(--ok) 14%,transparent);color:var(--ok)}
 .diff .del{background:color-mix(in oklch,var(--destructive) 14%,transparent);color:var(--destructive)}
 .diff .ctx{color:var(--muted-foreground)}

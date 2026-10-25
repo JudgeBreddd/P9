@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { request } from 'node:http';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { formSpec } from '../apps/server/chat.mjs';
@@ -308,11 +308,23 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'look', images: [{ mimeType: 'image/png', data: png }] })).status, 202);
   const { hit, seen } = await until(instance, said(id, 'echo:'));
   assert.equal(hit.data.content.text, `echo:look[image image/png ${bytes}]`);
-  assert.deepEqual(seen.find((event) => event.type === 'user').data, { text: 'look', images: 1 }, 'the event keeps the count, not the image');
+  const hash = createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex'), images = path.join(instance.state, 'images');
+  assert.deepEqual(seen.find((event) => event.type === 'user').data, { text: 'look', images: [{ hash, type: 'image/png' }] }, 'the event keeps the hash and type, not the image');
+  // CP3 (threat model row 43): kept by hash in the state folder, and served only to the chat whose message names it.
+  assert.deepEqual(await readdir(images), [hash + '.png']);
+  const back = await json(call(instance, `/chat/${id}/images/${hash}`));
+  assert.deepEqual([back.status, back.body.mimeType, Buffer.from(back.body.data, 'base64').equals(Buffer.from(png, 'base64'))], [200, 'image/png', true]);
+  const other = await create(instance);
+  for (const [why, route] of [['another chat', `/chat/${other}/images/${hash}`], ['not hex', `/chat/${id}/images/${'g'.repeat(64)}`],
+    ['a path', `/chat/${id}/images/..%2F..%2Fdesktop.json`], ['not in the chat', `/chat/${id}/images/${'0'.repeat(64)}`], ['not a chat', `/chat/../images/${hash}`]])
+    assert.equal((await call(instance, route)).status, 404, why);
   let at = (await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, hit.cursor - 1)).cursor;
+  // Over 200 MB the oldest go first (a sparse 201 MB file stands in for months of photos).
+  await writeFile(path.join(images, 'old.png'), ''); await truncate(path.join(images, 'old.png'), 201 * 1024 * 1024); await utimes(path.join(images, 'old.png'), 0, 0);
   // A photo alone is a message too.
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: '', images: [{ mimeType: 'image/png', data: png }] })).status, 202);
   assert.equal((await until(instance, said(id, 'echo:'), at)).hit.data.content.text, `echo:[image image/png ${bytes}]`);
+  assert.deepEqual(await readdir(images), [hash + '.png'], 'the oldest went, the newest stayed');
   at = (await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, at)).cursor;
   const image = { mimeType: 'image/png', data: png };
   for (const [why, images] of [['svg', [{ mimeType: 'image/svg+xml', data: png }]], ['not base64', [{ mimeType: 'image/png', data: '<script>' }]], ['five', Array(5).fill(image)],
@@ -324,7 +336,7 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   const refused = await json(call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'look', images: [image] }));
   assert.deepEqual([refused.status, refused.body.error], [400, 'images-unsupported']);
   assert.equal((await call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'words' })).status, 202, 'the conversation still takes text');
-  console.log('PASS images: PNG delivered as an image block, photo-only message, 7 bad requests 400, image-free agent refused');
+  console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused');
 });
 
 test('operation IDs: required, replayed once finished, refused when reused, outcome unknown after a crash', async (t) => {

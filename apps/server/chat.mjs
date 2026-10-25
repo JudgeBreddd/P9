@@ -3,15 +3,15 @@
 // agent-first-workspace (_engine/acp-connection.ts, os-process.ts, provider-service.ts, 2026-10-09); the adapter
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
-import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { childEnv } from './child-env.mjs';
-import { stillAuthorized } from './authority.mjs';
+import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
 
@@ -23,6 +23,7 @@ const MAX_TEXT = 100_000, MAX_EVENT = 64 * 1024;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']), MAX_IMAGES = 4, MAX_IMAGE = 2 * 1024 * 1024;
 const imagesOk = (images) => Array.isArray(images) && images.length <= MAX_IMAGES && images.every((image) => image && typeof image === 'object'
   && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data));
+const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }, MAX_STORED = 200 * 1024 * 1024;
 // A start holds the Stop All barrier, so an adapter that never answers the handshake must not hold it forever.
 const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -191,13 +192,28 @@ function trim(update) {
 }
 
 // socketPath: the desktop socket the P9 MCP relay calls; without it (tests that never start the daemon) chats get no MCP server.
-export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath }) {
+export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath, state }) {
   const db = ledger.db;
   const live = new Map(); // conversation -> { proc, agent, sessionId, exited, turn, pending: Map }
   const listeners = new Set();
   const stops = new Map(); // conversation -> the Stop in progress
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
+  // CP3 (threat model row 43): a sent photo is kept as <state>/images/<sha256>.<ext>, so the chat can show it again; the
+  // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. Chats are never deleted, so nothing else removes them.
+  const imageDir = state && path.join(state, 'images');
+  const keep = (images) => images.map(({ mimeType, data }) => {
+    const bytes = Buffer.from(data, 'base64'), hash = createHash('sha256').update(bytes).digest('hex');
+    if (imageDir) {
+      mkdirSync(imageDir, { recursive: true, mode: 0o700 });
+      writeFileSync(path.join(imageDir, hash + EXT[mimeType]), bytes, { mode: 0o600 });
+      // ponytail: a scan of the folder per photo sent; fine for the few thousand 200 MB holds, an index past that.
+      const files = readdirSync(imageDir).map((name) => { const { size, mtimeMs } = statSync(path.join(imageDir, name)); return { name, size, mtimeMs }; }).sort((a, b) => a.mtimeMs - b.mtimeMs);
+      let total = files.reduce((sum, file) => sum + file.size, 0);
+      for (const file of files) { if (total <= MAX_STORED) break; unlinkSync(path.join(imageDir, file.name)); total -= file.size; }
+    }
+    return { hash, type: mimeType };
+  });
   const emit = (conversation, type, data = {}) => { ledger.append(conversation, type, data); for (const wake of listeners) wake(); };
   const row = (id) => db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
   const setState = (id, state) => db.prepare('UPDATE conversations SET state = ? WHERE id = ?').run(state, id);
@@ -337,7 +353,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
     // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.
-    const session = { proc, pending: new Map(), turn: null, mcpToken: randomBytes(32).toString('hex') };
+    const session = { proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
     const mcpServers = socketPath ? [{ name: 'p9', command: process.execPath, args: [mcpRelay],
       env: [{ name: 'P9_MCP_SOCKET', value: socketPath }, { name: 'P9_MCP_TOKEN', value: session.mcpToken }] }] : [];
     session.exited = new Promise((resolve) => {
@@ -381,6 +397,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           if (title) db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, conversation.id);
         }
         emit(conversation.id, 'update', trim(agentImages(update)));
+        if (session.ghost) session.ghost.refresh();
+        if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);
       },
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       requestPermission: (request) => session.approve(request),
@@ -485,16 +503,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // A message during a turn goes into it at the agent's next step (ACP _session/steering, which both adapters
   // advertise), the way Claude Code's own queue does. Refused (no steering, or the turn just ended): 409 as before, and
   // the desktop keeps the message queued for the turn's end.
-  async function steer(id, body, images) {
+  async function steer(id, body, images, held) {
     const session = live.get(id);
     if (!session?.turn || !session.steering || session.stopping) return refused(409, 'turn-running');
     if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
     stillAuthorized();
     decline(id, session);
-    // ponytail: Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is
-    // delivered, but that turn's end is not reported (it is not this prompt's), so the chat shows working until the next.
+    // Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is delivered,
+    // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
-    const user = { ...(images.length ? { text: body.text, images: images.length } : { text: body.text }), steered: true };
+    const user = { ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }) };
     const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: blocks(body.text, images),
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
@@ -509,12 +527,75 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }
     if (!delivered(result)) return refused(409, 'turn-running');
     emit(id, 'user', user);
+    // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
+    // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
+    if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(() => {
+      session.ghost = null;
+      if (!session.turn && live.get(id) === session) emit(id, 'turn-end', { stopReason: 'end_turn', unprompted: true });
+    }, 10000);
     return { status: 202, steered: true };
   }
 
-  return {
+  // CP1: a message sent mid-turn waits in the daemon. Steer (the default): held while a tool call runs and steered in
+  // when one completes or fails, so it lands between steps; with no tool call running it is steered in at once, as
+  // before. Queue: sent when the turn ends. At the end, whatever still waits goes as the next prompt, held first; after
+  // a cancel it goes back to the window's box instead. Each keeps its sender's authority (a revoked phone sends nothing).
+  function hold(id, session, body, images, when) {
+    if (images.length && !session.capabilities.promptCapabilities?.image) return refused(400, 'images-unsupported');
+    stillAuthorized();
+    const item = { id: randomUUID(), body, images, allowed: captureAuthority() };
+    (when === 'queue' ? session.queued : session.held).push(item);
+    emit(id, 'held', { id: item.id, text: body.text, ...(images.length && { images: keep(images) }), when });
+    return { status: 202, held: item.id, when };
+  }
+  const unheld = (id, items, why) => { for (const item of items) emit(id, 'unheld', { id: item.id, text: item.body.text, why }); };
+  function toolStep(id, session, update) {
+    if (update.status === 'completed' || update.status === 'failed') {
+      session.tools.delete(update.toolCallId);
+      for (const item of session.held.splice(0)) steerHeld(id, session, item);
+    } else if (update.status === 'pending' || update.status === 'in_progress') session.tools.add(update.toolCallId);
+  }
+  async function steerHeld(id, session, item) {
+    if (!item.allowed()) return unheld(id, [item], 'session-ended');
+    const result = await authority.run(item.allowed, () => steer(id, item.body, item.images, item.id)).catch(() => refused(403, 'session-ended'));
+    if (result.status === 202) return;
+    if (result.status === 403) return unheld(id, [item], 'session-ended');
+    // Refused (the turn ended meanwhile, or the agent would not take it): it goes as the next prompt instead.
+    session.queued.unshift(item);
+    if (!session.turn) drain(id, session);
+  }
+  // At a turn's end: one prompt of as many waiting messages as fit its limits, held first; the rest wait for its end.
+  async function drain(id, session, cancelled) {
+    const items = [...session.held.splice(0), ...session.queued.splice(0)];
+    if (!items.length) return;
+    if (cancelled || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
+    const gone = items.filter((item) => !item.allowed());
+    unheld(id, gone, 'session-ended');
+    const send = [];
+    let text = '', images = [];
+    for (const item of items.filter((x) => !gone.includes(x))) {
+      const joined = send.length ? text + '\n\n' + item.body.text : item.body.text;
+      if (send.length && (joined.length > MAX_TEXT || images.length + item.images.length > MAX_IMAGES)) { session.queued.push(item); continue; }
+      send.push(item); text = joined; images = [...images, ...item.images];
+    }
+    if (!send.length) return;
+    const allowed = () => send.every((item) => item.allowed());
+    const result = await authority.run(allowed, () => api.prompt(id, { ...send.at(-1).body, text, images }, send.map((item) => item.id))).catch(() => refused(403, 'session-ended'));
+    if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
+  }
+
+  const api = {
     login: loginRoutes,
     lock: () => ({ status: 200, on: locked }),
+    // CP3: a photo sent in this chat, by hash. Only one this chat's own messages name; base64 in JSON, as it was sent.
+    image(id, hash) {
+      if (!ID.test(id) || typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash) || !imageDir) return refused(404, 'not-found');
+      const event = db.prepare("SELECT data FROM events WHERE conversation = ? AND type IN ('user', 'held') AND data LIKE ? LIMIT 1").get(id, `%"hash":"${hash}"%`);
+      const type = event && JSON.parse(event.data).images?.find?.((image) => image.hash === hash)?.type;
+      if (!Object.hasOwn(EXT, type ?? '')) return refused(404, 'not-found');
+      try { return { status: 200, mimeType: type, data: readFileSync(path.join(imageDir, hash + EXT[type])).toString('base64') }; }
+      catch { return refused(404, 'not-found'); }
+    },
     // The P9 MCP server (mcp.mjs): which live chat a relay's token belongs to, or null.
     mcpConversation(token) {
       if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null;
@@ -559,7 +640,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       emit(id, 'created', { provider: body.provider, title, folder: body.folder ?? '' });
       return { status: 201, conversation: id };
     },
-    async prompt(id, body) {
+    // held: the waiting messages this prompt carries (drain), named in its user event so the window drops them.
+    async prompt(id, body, held) {
       await recovered;
       const release = lifecycle.begin();
       if (!release) return refused(503, 'stop-all-running');
@@ -568,15 +650,23 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const images = body?.images ?? [];
       if (typeof body?.text !== 'string' || !imagesOk(images) || (!body.text.trim() && !images.length) || body.text.length > MAX_TEXT) { release(); return refused(400, 'request-refused'); }
       if (body.mode !== undefined && !Object.hasOwn(MODES[conversation.provider], body.mode)) { release(); return refused(400, 'request-refused'); }
+      if (body.when !== undefined && body.when !== 'steer' && body.when !== 'queue') { release(); return refused(400, 'request-refused'); }
       if (body.model !== undefined && (typeof body.model !== 'string' || !body.model || body.model.length > 200)) { release(); return refused(400, 'request-refused'); }
       const picks = body.config === undefined ? [] : body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? Object.entries(body.config) : null;
       if (!picks || picks.length > 6 || picks.some(([k, v]) => k.length > 60 || typeof v !== 'string' || !v || v.length > 200)) { release(); return refused(400, 'request-refused'); }
-      if (conversation.state === 'turn') { try { return await steer(id, body, images); } finally { release(); } }
+      if (conversation.state === 'turn') {
+        const session = live.get(id);
+        try {
+          // No steering: 409 as before, and the window keeps the message queued itself.
+          if (session?.turn && !session.stopping && (body.when === 'queue' || session.steering && session.tools.size && !session.pending.size)) return hold(id, session, body, images, body.when ?? 'steer');
+          return await steer(id, body, images);
+        } finally { release(); }
+      }
       // A prompt during Stop, or after a cleanup P9 could not confirm, would launch a second adapter beside old work.
       if (!['idle', 'running', 'stopped'].includes(conversation.state)) { release(); return refused(409, conversation.state); }
       if (closing) { release(); return refused(503, 'shutting-down'); }
       setState(id, 'turn');
-      emit(id, 'user', images.length ? { text: body.text, images: images.length } : { text: body.text }); // the count only: events stay small
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
       release();
@@ -617,12 +707,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       try { stillAuthorized(); } catch (error) { if (live.get(id) === session) setState(id, 'running'); throw error; }
       decline(id, session);
       const turn = session.turn = randomUUID();
+      clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
+      let ended;
       const prompt = blocks(body.text, images);
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
-        (result) => { if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
+        (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
         (error) => { if (session.turn === turn && !session.stopping) emit(id, 'error', { message: agentError(error, conversation.provider) }); },
-      ).finally(() => { if (session.turn === turn) { session.turn = null; if (live.get(id) === session) setState(id, 'running'); } });
+      ).finally(() => {
+        if (session.turn !== turn) return;
+        session.turn = null;
+        session.tools.clear();
+        if (live.get(id) === session) setState(id, 'running');
+        drain(id, session, ended?.stopReason === 'cancelled');
+      });
       return { status: 202, turn };
     },
     answer(id, body) {
@@ -643,6 +741,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       for (const pending of session.pending.values()) pending.resolve(null);
       await session.agent.cancel({ sessionId: session.sessionId });
       return { status: 200, ok: true };
+    },
+    // CP1: the x on a message still waiting in this turn. Gone already (sent, or handed back at the turn's end): 409.
+    unhold(id, body) {
+      const session = ID.test(id) && live.get(id);
+      if (typeof body?.held !== 'string') return refused(400, 'request-refused');
+      for (const list of session ? [session.held, session.queued] : []) {
+        const at = list.findIndex((item) => item.id === body.held);
+        if (at >= 0) { unheld(id, list.splice(at, 1), 'removed'); return { status: 200, ok: true }; }
+      }
+      return refused(409, 'not-held');
     },
     async stop(id) {
       // Startup recovery settles every row first, so it never overwrites a Stop that began meanwhile.
@@ -684,4 +792,5 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return stopAll();
     },
   };
+  return api;
 }

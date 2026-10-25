@@ -354,7 +354,9 @@ export async function createDesktop({ state, open } = {}) {
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
+    unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
+    image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
     // "Create my starter files" with them; {} is the settings file's paths, or the starter set in an empty folder.

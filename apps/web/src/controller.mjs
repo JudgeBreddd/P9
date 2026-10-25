@@ -4,6 +4,7 @@ const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
 import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
+import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
@@ -421,7 +422,8 @@ $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
-const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text); e.mdFor = e.text; } return e.md; };
+// CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
+const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
@@ -441,14 +443,18 @@ function meters(s) {
     <div class="cache" data-s="${cache[1]}" title="1-hour prompt cache, timed from the last turn end">${svg.clock}${cache[0]}</div>
   </div>`;
 }
+// CP3: a sent photo comes back from the daemon by hash, once; until then (or once pruned) its tile stays blank.
+const chatImgs = new Map();
+const loadImg = (s, hash) => { if (chatImgs.has(hash) || !s.live) return; chatImgs.set(hash, '');
+  window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) chatImgs.delete(hash); }); };
 function event(e, s) {
   switch (e.t) {
-    case 'user': return `<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images)} image${e.images > 1 ? 's' : ''}</div>` : ''}</div>`;
+    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${chatImgs.get(i.hash) ? ` src="${chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${names[s.agent]}</div>${mdOf(e)}${agentImgs(e.images, names[s.agent])}</div>`;
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
     case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${agentImgs(e.images, names[s.agent])}`;
     case 'plan': return `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan</div><ul style="margin:0;padding:0">${e.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${st === 'completed' ? '✓' : st === 'in_progress' ? '▸' : '○'}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>`;
-    case 'notice': return `<div class="notice">${esc(e.text)}</div>`;
+    case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}</div>`;
   }
   return '';
@@ -487,8 +493,8 @@ function pane(s, i, bare) {
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
-      ${s.queue.length ? `<div class="queue">${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="hint">${working ? 'Enter · queue  Ctrl Enter · interrupt and send' : 'Shift Enter · new line / for commands'}</span><span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button>${working ? `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Stop this turn" data-cancel>${svg.stop}</button>` : ''}<button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Queue (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !s.readonly ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
@@ -523,6 +529,7 @@ function paint(root, ss, only) {
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
     place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
     p.querySelectorAll('details[data-ev]').forEach(d => d.ontoggle = () => { s.events[d.dataset.ev].open = d.open; });
+    p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
     p.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => { if (s.live) return liveChat.approve(s, b.dataset.approve); const a = s.events.find(e => e.t === 'approval'); s.events = s.events.filter(e => e !== a); s.pending = null; if (b.dataset.approve === 'reject') { s.events.push({t:'notice', text:'Denied: ' + a.title + '. ' + names[s.agent] + ' will take another approach.'}); reply(s, 'Understood, I will not touch server.ts. I can expose the grace through the existing /api/conversations payload instead; say so and I will do that.'); } else { s.events.push({t:'tool', status:'completed', title:a.title, diff:a.diff}); const plan = s.events.find(e => e.t === 'plan'); if (plan) { plan.entries[2][0] = 'completed'; plan.entries[3][0] = 'in_progress'; } reply(s, 'Bootstrap now carries leaseGraceMs. Next I will read it in the chat-pane footer so the 60 s copy stops being hardcoded.'); } answered(s); });
     const q = p.querySelector('[data-question]'); if (q) { q.oninput = e => { const qe = s.events.find(e => e.t === 'question'); qe.vals = Object.fromEntries(new FormData(q)); (qe.touched ??= new Set()).add(e.target.name.split('~')[0]); }; q.onsubmit = e => { e.preventDefault(); if (s.live) return liveChat.answer(s, Object.fromEntries(new FormData(q))); const v = new FormData(q).get('f0'), qe = s.events.find(e => e.t === 'question'); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'tool', status:'completed', title:qe.title, output:'answer: ' + v}); reply(s, v); answered(s); }; q.querySelector('[data-decline]').onclick = () => { if (s.live) return liveChat.decline(s); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'notice', text:'Question declined.'}); answered(s); }; }
     const ta = p.querySelector('textarea');
@@ -537,17 +544,27 @@ function paint(root, ss, only) {
     };
     showSlash();
     ta.oninput = () => { s.draft = ta.value; showSlash(); };
-    if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; c.focus(); c.setSelectionRange(caret.s, caret.e); }
+    if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
     // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
-    const go = now => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t); if (bare && settings.closeOnSend) closeModal(); };
+    // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
+    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
+    const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
+      // Tab with an empty box still moves focus on.
+      const key = busy(s) && !s.readonly && turnKey(e);
+      if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
+      if (key === 'steer' || key === 'queue' && ta.value.trim()) { e.preventDefault(); return go(false, key); }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(e.ctrlKey || e.metaKey); }
     };
     p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
-    const cancel = p.querySelector('[data-cancel]'); if (cancel) cancel.onclick = () => { cancelTurn(s); renderTabs(); renderChats(); };
+    p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
+    p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
+    p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => restartP9(b));
+    p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
+    p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
     p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
     // note 7: a mode picked mid-turn shows at once but applies when the turn ends
@@ -603,9 +620,9 @@ async function addImages(s, files) {
   }
   renderChats();
 }
-function startTurn(s, t) {
+function startTurn(s, t, when) {
   const images = s.images || []; s.images = [];
-  if (s.live) return liveChat.prompt(s, t, images);
+  if (s.live) return liveChat.prompt(s, t, images, when);
   if (s.state === 'idle') s.state = 'running';
   s.events.push({t:'user', text:t, when: new Date().toTimeString().slice(0,5), images: images.length || undefined}); view['chats:' + s.id] = view['mdlBody:' + s.id] = null;
   s.events.push({t:'tool', status:'in_progress', title:'Thinking about: ' + t.slice(0, 40)});
@@ -621,7 +638,9 @@ function interrupt(s, t) {
   cancelTurn(s); startTurn(s, t);
 }
 function cancelTurn(s, quiet) {
-  if (s.live) { if (!quiet) liveChat.call('cancel', { id: s.id }); return; }
+  // CP7: no turn to cancel (it ended, or its end never came) means idle: the chat stops showing working and an
+  // interrupt's message, queued first, goes now.
+  if (s.live) { if (!quiet) liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn') { s.working = s.prompted = false; turnEnd(s); } }); return; }
   s.turn = (s.turn || 0) + 1; s.streaming = false; // stale timers see a new turn number and stop
   s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress'));
   if (!quiet) s.events.push({t:'notice', text:'Turn cancelled.'});
@@ -1854,7 +1873,7 @@ liveChat.call = async (action, payload = {}) => {
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
-  if (r.status >= 400 && !(action === 'prompt' && r.body?.error === 'turn-running')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  if (r.status >= 400 && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {
@@ -1864,7 +1883,7 @@ liveChat.create = async (agent, folder = '') => {
 };
 // Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
 // 2026-10-24: one refused because a turn runs is queued instead, and shown and kept as queued.
-liveChat.prompt = async (s, text, images = []) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status === 202) return; s.images = [...images, ...(s.images || [])].slice(0, 4);
+liveChat.prompt = async (s, text, images = [], when) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status === 202) return; s.images = [...images, ...(s.images || [])].slice(0, 4);
   // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
   // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
   if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift(text); keepQueue(s); setTimeout(() => { if (!s.prompted && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
@@ -1886,7 +1905,8 @@ liveChat.answer = (s, vals) => {
 liveChat.decline = s => { const q = s.events.find(e => e.t === 'question'); if (q) liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'decline' } }); };
 liveChat.stop = s => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id }); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
-const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => [...(c.oldText || '').split('\n').filter(Boolean).map(l => ['del', l]), ...(c.newText || '').split('\n').filter(Boolean).map(l => ['add', l])]).slice(0, 200); return rows.length ? rows : null; };
+const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
+const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
 // Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
 // built here; a block's uri is never used. ponytail: data: strings are re-diffed each render; blob: needs a CSP change.
 const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
@@ -1923,7 +1943,12 @@ function applyChat(ev) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = true; break;
+    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = true;
+      if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
+    // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
+    // cancel (loadChat puts the text back in the box), or not sent at all.
+    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when }); break;
+    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; break;
     case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; break;
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
@@ -1957,13 +1982,14 @@ function applyChat(ev) {
     case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
       notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
     case 'lock-rejected': notice('Agent lock: rejected ' + (d.toolCall?.title || 'a tool call')); break;
-    case 'restart-request': notice('The agent asks you to restart P9: ' + d.reason); break;
+    case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
     case 'turn-end': settle(); s.lastEnd = ev.at; queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
     case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
     case 'exited': settle(); s.state = 'stopped'; notice('The agent process exited' + (d.code != null ? ' (code ' + d.code + ')' : '') + '. Send again to resume.'); break;
     case 'stopped': settle(); s.state = 'stopped'; notice(d.result === 'stopped' ? 'Stopped. Everything this session started has ended.' : 'Stop could not confirm that everything ended.'); break;
-    case 'interrupted': settle(); s.state = 'stopped'; notice('Interrupted: the P9 daemon restarted mid-turn. Send again to resume.'); break;
+    case 'interrupted': settle(); s.state = 'stopped'; notice('Interrupted: the P9 daemon restarted mid-turn. Send again to resume.');
+      for (const h of s.held?.splice(0) ?? []) notice('Not sent (the daemon restarted): ' + h.text); break; // held only in the daemon's memory
   }
   return null;
 }
@@ -1984,11 +2010,15 @@ async function loadChat() {
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
-      if (stub) await history(stub, ev.cursor - 1);
+      if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       if (created) show(ev.conversation);
       if (ev.type === 'answered') answered_.push(ev.conversation);
+      // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
+      // ponytail: its images are not returned; attach them again.
+      const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && S.sessions.find(s => s.id === ev.conversation);
+      if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
     }
     liveChat.cursor = r.body.cursor;
     if (replaying && r.body.events.length < 500) {
@@ -2002,8 +2032,9 @@ async function loadChat() {
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
       for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
     }
-    else if (!replaying) { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } }
-    renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation)));
+    // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
+    else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
+    try { renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
 

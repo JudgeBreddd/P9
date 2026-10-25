@@ -36,7 +36,8 @@ details.tool summary{background-color:#000;border-width:0}
 
 /* Composer */
 .composer{background-color:var(--popover);min-height:100px}
-.composer textarea{height:20px}
+/* CP2: grows with its text to twice its 60px floor, then scrolls */
+.composer textarea{field-sizing:content;height:auto;max-height:120px}
 /* note 3: left padding lines the hint up with the textarea text (14px) */
 .composer .bar{padding:2px 2px 2px 14px;font-weight:300;border:0 none;color:color-mix(in oklab,var(--foreground) 50%,transparent)}
 .composer .bar .hint{color:var(--muted-foreground);font-size:12px}
