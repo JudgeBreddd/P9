@@ -85,8 +85,9 @@ test('Anymouse in the desktop: the box sends, and with no token main opens only 
   await page.locator('#amSend').click();
   await page.locator('#amNote', { hasText: 'Opened GitHub' }).waitFor({ timeout: 10000 });
   assert.equal(await page.locator('#amDlg img').count(), 0, 'the note never becomes markup');
-  // The repo is private: the page says why GitHub may show 404 and keeps the note to copy (GitHub issue #4 item 6).
-  assert.match(await page.locator('#amNote').innerText(), /private, so GitHub shows "404" unless you are signed in/);
+  // The note stays to copy (GitHub issue #4 item 6). The repo is public now, so no "private ... 404" warning.
+  assert.match(await page.locator('#amNote').innerText(), /^Opened GitHub in your browser: finish the issue there\. Your note is still here to copy\./);
+  assert.doesNotMatch(await page.locator('#amNote').innerText(), /private|404/);
   assert.equal(await page.locator('#amText').inputValue(), '<img src=x onerror=alert(1)> the save button');
   let url = '';
   for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
@@ -211,7 +212,7 @@ test('v0.1.5 c4 notes: list, preview, edit, conflict, rename', { timeout: 60000 
   const page = await app.firstWindow();
   const shot = async (name, locator) => {
     const png = await locator.screenshot({ type: 'png' });
-    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); // BL3: gated as above
     if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
   };
   await page.click('#rMission');
@@ -272,7 +273,7 @@ test('v0.1.5 cD mission editor: File protection asks first, an icon shows on the
   const page = await app.firstWindow();
   const shot = async (name, locator) => {
     const png = await locator.screenshot({ type: 'png' });
-    console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); // BL3: gated as above
     if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
   };
   await page.click('#rMission');

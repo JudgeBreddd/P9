@@ -112,7 +112,11 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
   // Issue #6 B7: a task with no --workspace gave IndexOf -1, so argv[0] (node.exe) became the workspace.
   assert.doesNotMatch(ps1, /IndexOf\([^)]*'--workspace'\) \+ 1/);
-  assert.match(ps1, /if \(\$i -ge 0\) \{ \$Workspace = \$old\.argv\[\$i \+ 1\] \}([^]*?\} catch \{[^\n]*\})?\s*\}\s*if \(-not \$Workspace\)/, 'no --workspace falls back to the new default');
+  // BL7 (v0.1.4 note 5): exact, not a lazy [^]*? that let any line in between pass: from the argv read to the default, the
+  // only assignments are the saved folder and the unreadable payload's $null, so no --workspace reaches the default.
+  const argvRead = ps1.indexOf('if ($i -ge 0) { $Workspace = $old.argv[$i + 1] }'), noWorkspace = ps1.slice(argvRead, ps1.indexOf('if (-not $Workspace) {', argvRead));
+  assert.ok(argvRead >= 0 && noWorkspace.length > 0, 'the argv read comes before the default');
+  assert.deepEqual(noWorkspace.match(/\$Workspace = [^;}\n]*/g).map((line) => line.trim()), ['$Workspace = $old.argv[$i + 1]', '$Workspace = $null'], 'no --workspace falls back to the new default');
   // Issue #6 B6 and B4: timestamped lines and the failing line in service-install.log; the task's daemon writes daemon.log.
   assert.match(ps1, /^trap \{ Say \('failed at line '/m);
   // AU4: the installed app's task runs the launcher, which passes -Mode Daemon itself; a source run's runs the host.

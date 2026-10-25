@@ -8,6 +8,8 @@
 # (latest.yml, latest-linux.yml), so an app is never offered a version whose files are not all there. One installer
 # failing attaches no feed. Installed apps take only a published release that is not a pre-release (Stable channel).
 # Tags before v0.1.2 lack the packaging fix and fail on this machine (the NSIS 260-character path).
+# A candidate (Run workflow with a version, e.g. 0.1.5-rc.1, and no tag): the check build with that version, set here for
+# this run only and never committed; it attaches nothing. Installed, it is offered the release it leads to.
 name: Installers
 
 on:
@@ -18,6 +20,10 @@ on:
     inputs:
       tag:
         description: Release tag to build and attach the installers to (the release must exist). Empty runs the check on the chosen branch
+        required: false
+        default: ''
+      version:
+        description: A candidate's version, <package.json version>-rc.<n> (e.g. 0.1.5-rc.1), for this build only. Leave the tag empty
         required: false
         default: ''
 
@@ -62,6 +68,15 @@ jobs:
           node-version: 26.10.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Candidate version
+        if: inputs.version != ''
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test -z "$TAG" || { echo "::error::A candidate attaches nothing to a release: leave the tag empty"; exit 1; }
+          version=$(node scripts/candidate-version.mjs "$VERSION")
+          npm pkg set "version=$version"
       - run: pnpm package:win
       - name: Attach to the release
         if: env.TAG != ''
@@ -541,7 +556,7 @@ jobs:
           $p9 = Join-Path $env:LOCALAPPDATA 'P9'
           function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like "$p9\daemon\*\node.exe" }) }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $v = [version]$version
+          $v = [version]($version -replace '-.*$')
           $next = '{0}.{1}.{2}' -f $v.Major, $v.Minor, ($v.Build + 1)
           $setup = Start-Process -FilePath (Resolve-Path "dist/windows/p9-event-horizon-$version-windows-x64.exe") -ArgumentList '/S' -PassThru
           $null = $setup.Handle
@@ -611,6 +626,14 @@ jobs:
           node-version: 26.10.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Candidate version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test -z "$TAG" || { echo "::error::A candidate attaches nothing to a release: leave the tag empty"; exit 1; }
+          version=$(node scripts/candidate-version.mjs "$VERSION")
+          npm pkg set "version=$version"
       - run: pnpm package:linux
       # What the AppImage holds, unpacked without FUSE: the feed, the daemon's own Linux node, the bundled daemon.
       - name: Check the AppImage

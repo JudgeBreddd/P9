@@ -645,8 +645,9 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
-  // The wizard's writes and sign-in are desktop-only too (threat model rows 17, 31).
-  for (const route of ['/setup/starter', '/setup/login', '/setup/login/code', '/setup/login/stop']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
+  assert.equal((await server.remote('/setup/settings', { session: auth })).status, 404);
+  // The wizard's writes, sign-in and Settings → Mission Control files are desktop-only too (threat model rows 17, 31).
+  for (const route of ['/setup/starter', '/setup/settings', '/setup/login', '/setup/login/code', '/setup/login/stop']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {
     const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });

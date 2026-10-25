@@ -123,8 +123,9 @@ const instance = createHash('sha256').update(ownershipDirectory).digest('hex').s
 const tmuxSocket = values['tmux-socket'] ?? `p9-${instance}`;
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tmuxSocket)) throw new Error('invalid-tmux-socket');
 // ponytail: --terminal-platform is for tests (another platform's terminal backend, or none); it can only take terminals away.
+// BL4: honoured only under the test home (test/helpers.mjs sets P9_TEST_HOME), so a shipped unit never takes it.
 const terminalPlatform = values['terminal-platform'];
-if (terminalPlatform !== undefined && !['darwin', process.platform].includes(terminalPlatform)) throw new Error('invalid-terminal-platform');
+if (terminalPlatform !== undefined && (!process.env.P9_TEST_HOME || !['darwin', process.platform].includes(terminalPlatform))) throw new Error('invalid-terminal-platform');
 // Remote logins (phase 10) are off unless both flags are given: the port binds 127.0.0.1 only, for tailscale serve to
 // proxy, and the origin pins the passkey RP ID and the Host header (https, or http://localhost for tests).
 let remote;

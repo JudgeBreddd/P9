@@ -20,7 +20,7 @@ export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/' + REPO + '#readme';
 // HI1: a Settings row's "i" opens its part of the guide (docs/guide.md headings); any other section is refused.
 export const GUIDE_URL = 'https://github.com/' + REPO + '/blob/main/docs/guide.md#';
-export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance']);
+export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance', 'mission-control-files', 'buttons-apps-and-pages']);
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
 export const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 // Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
@@ -343,7 +343,14 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-  const wizardPaths = body => Object.entries(body).every(([key, value]) => ['primary', 'registry', 'waiting', 'hub'].includes(key) && typeof value === 'string' && value.length <= 400);
+  const wizardPaths = body => Object.entries(body).every(([key, value]) => ['primary', 'registry', 'waiting', 'hub', 'scripts_root'].includes(key) && typeof value === 'string' && value.length <= 400);
+  // Settings → Mission Control files (ST1/ST2): settings.json keys only, small values (null removes one); the daemon checks
+  // the rest as it checks the file itself.
+  const SETTINGS_KEYS = ['primary', 'registry', 'waiting', 'scripts_root', 'hub', 'space', 'page_schemes', 'server_host', 'notes_roots'];
+  const short = value => typeof value === 'string' && value.length <= 400;
+  const settingsChange = body => Object.keys(body).length > 0 && Object.entries(body).every(([key, value]) => SETTINGS_KEYS.includes(key) && (value === null || short(value)
+    || (Array.isArray(value) && value.length <= 16 && value.every(short))
+    || (key === 'notes_roots' && typeof value === 'object' && Object.keys(value).length <= 16 && Object.entries(value).every(([name, folder]) => name.length <= 64 && short(folder)))));
   const chatRoutes = {
     list: () => ['GET', '/chat'],
     // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
@@ -362,6 +369,8 @@ export async function createDesktop({ state, open } = {}) {
     // "Create my starter files" with them; {} is the settings file's paths, or the starter set in an empty folder.
     setup: body => wizardPaths(body) && ['GET', '/setup' + (Object.keys(body).length ? '?' + new URLSearchParams(body) : '')],
     starter: body => wizardPaths(body) && ['POST', '/setup/starter', body],
+    missionFiles: body => !Object.keys(body).length && ['GET', '/setup/settings'],
+    saveMissionFiles: body => settingsChange(body) && ['POST', '/setup/settings', body],
     setLock: body => ['POST', '/agent-lock', body],
     stopAll: body => !Object.keys(body).length && ['POST', '/stop-all', body],
   };

@@ -113,6 +113,51 @@ test('Setup wizard: an empty workspace gets the whole starter set, _ideas/ inclu
   assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', '_ideas', 'mission', 'needs-you']);
   console.log('PASS starter: an empty folder gets AGENTS.md, the registry, needs-you/, _ideas/ and the settings file');
 });
+test('Setup wizard: a path naming a file where a folder goes is a 409 path-is-a-file, and nothing is made (BL1)', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const made = await call(instance, '/setup/starter', 'POST', { ...STARTER, waiting: 'note.txt' });
+  assert.deepEqual([made.status, made.body], [409, { error: 'path-is-a-file', detail: 'note.txt' }]);
+  assert.deepEqual(await readdir(instance.workspace), ['note.txt']);
+  await assert.rejects(stat(settingsPath(instance.directory)));
+  console.log('PASS starter: waiting naming a file is path-is-a-file before anything is made');
+});
+test('Setup settings (ST1): only settings.json keys, checked as the file is; the old file kept as .bak; Mission reads the change live', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const file = settingsPath(instance.directory);
+  assert.deepEqual(Object.values(await call(instance, '/setup/settings')), [200, { settings: null, error: null }]);
+  assert.deepEqual(Object.values(await call(instance, '/setup/settings', 'POST', { server_host: 'box' })), [409, { error: 'settings-missing' }]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', STARTER)).status, 201);
+  const old = await readFile(file, 'utf8');
+  assert.deepEqual((await call(instance, '/setup/settings')).body, { settings: STARTER, error: null });
+  // Refused: no key, an unknown key, not an object, and anything parseSettings refuses (a required key removed too). The file stays.
+  for (const [body, type] of [[{}], [{ x: 1 }], [[]], ['null'], [{ server_host: 'box' }, 'text/plain']])
+    assert.deepEqual(Object.values(await call(instance, '/setup/settings', 'POST', body, type)), [400, { error: 'request-refused' }], JSON.stringify(body));
+  for (const [body, word] of [[{ server_host: 'bad host!' }, 'server_host'], [{ waiting: '../out' }, 'waiting'], [{ primary: null }, 'primary is required'],
+    [{ scripts_root: 'relative' }, 'scripts_root'], [{ page_schemes: ['javascript:'] }, 'page_schemes'], [{ notes_roots: { vault: 'rel' } }, 'notes_roots']]) {
+    const r = await call(instance, '/setup/settings', 'POST', body);
+    assert.deepEqual([r.status, r.body.error], [400, 'settings-refused'], JSON.stringify(body));
+    assert.match(r.body.detail, new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.equal(await readFile(file, 'utf8'), old);
+  await assert.rejects(stat(file + '.bak'));
+  // Accepted: merged into the file, the old text kept as .bak, and Mission's waiting folder follows at once.
+  await mkdir(path.join(instance.workspace, 'inbox'));
+  const saved = await call(instance, '/setup/settings', 'POST', { server_host: 'box-1', page_schemes: ['obsidian'], waiting: 'inbox' });
+  const want = { ...STARTER, waiting: 'inbox', server_host: 'box-1', page_schemes: ['obsidian'] };
+  assert.deepEqual([saved.status, saved.body], [200, { settings: want }]);
+  assert.deepEqual([JSON.parse(await readFile(file, 'utf8')), await readFile(file + '.bak', 'utf8')], [want, old]);
+  if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.equal((await call(instance, '/mission')).body.waiting, 'inbox');
+  // null removes a key.
+  assert.deepEqual((await call(instance, '/setup/settings', 'POST', { server_host: null })).body.settings, { ...STARTER, waiting: 'inbox', page_schemes: ['obsidian'] });
+  // A file made invalid by hand is shown, never overwritten from here.
+  await writeFile(file, '{"primary": 1}');
+  const bad = await call(instance, '/setup/settings', 'POST', { server_host: 'box' });
+  assert.deepEqual([bad.status, bad.body.error], [409, 'settings-invalid']);
+  assert.equal(await readFile(file, 'utf8'), '{"primary": 1}');
+  assert.match((await call(instance, '/setup/settings')).body.error, /invalid-settings/);
+  console.log('PASS setup settings: keys only, parseSettings rules, .bak kept, 0600, Mission live, null removes, an invalid file is left alone');
+});
 
 test('Setup wizard: an existing workspace-hub is used as it is; only the settings file is written', { timeout: 60000 }, async (t) => {
   const hub = 'work/projects/workspace-hub';

@@ -1485,6 +1485,59 @@ function wirePetSettings() {
     const look = IND.looks.get(name); if (look) cv.getContext('2d').drawImage(look.img, 0, 0, 192, 208, 0, 0, 192, 208);
   });
 }
+// ST1/ST2: Settings → Mission Control files, the daemon's settings.json (not this window's settings), so the paths stay
+// editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
+// which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
+let missionFiles = null;
+const MISSION_TIPS = { primary: 'The workspace file naming your main project. Mission Control reads it.', registry: "The JSON file listing Mission Control's scripts, apps and pages.",
+  waiting: 'The folder of .md items waiting on you.', hub: 'Your workspace-hub folder, if you have one.', scripts_root: 'A full path where registry commands run. Empty: the workspace.' };
+// A function: PATH_KEYS is declared further down, with the wizard.
+const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
+  ['space', 'Space file (optional)', 'setup-file', 'The JSON file with your own sections, buttons and log views.'],
+  ['server_host', 'Server host name (optional)', '', "Your second machine's name, for workspace-hub's view of it."],
+  ['page_schemes', 'Page link schemes (optional, comma-separated)', '', 'Extra link schemes pages may open, for example obsidian.'],
+  ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Notes folders a space section may show, by name.']];
+const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;
+// The box's text as the settings value; empty removes the key. No checks here: the daemon's are the rules.
+const missionValue = (k, text) => {
+  text = text.trim();
+  if (!text) return null;
+  if (k === 'page_schemes') return text.split(/[\s,]+/).filter(Boolean);
+  if (k === 'notes_roots') return Object.fromEntries(text.split('\n').filter(l => l.trim()).map(l => { const i = l.indexOf('='); return i < 0 ? [l.trim(), ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
+  return text;
+};
+function missionGroup() {
+  const s = missionFiles.settings;
+  return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The paths and options in Mission Control\'s settings file. Each row saves when you leave it.', 'mission-control-files')}</legend>`
+    + missionKeys().map(([k, name, kind, tip]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span>`
+      + (k === 'notes_roots' ? `<textarea data-slot="input" class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${esc(missionShown(k, s[k]))}</textarea>`
+        : `<input data-slot="input" class="mono" data-mission="${k}" value="${esc(missionShown(k, s[k]))}" maxlength="400" autocomplete="off" spellcheck="false">`)
+      + (window.p9.pickFolder && kind ? `<button data-slot="button" data-variant="outline" data-size="sm" data-mission-pick="${k}:${kind}">Pick</button>` : '')
+      + info(tip, 'mission-control-files') + '</label>').join('')
+    + '<p class="muted sm">The old file is kept as settings.json.bak.</p></fieldset>';
+}
+async function saveMission(change) {
+  const r = await window.p9.chat('saveMissionFiles', change).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  const box = $('#setBody').querySelector(`[data-mission="${Object.keys(change)[0]}"]`), row = box?.closest('.set-row');
+  row?.querySelector('[data-mission-err]')?.remove(); box?.removeAttribute('aria-invalid');
+  if (r.status === 200) { missionFiles = { ...missionFiles, settings: r.body.settings }; loadMission(); return; }
+  const why = 'Not saved: ' + (r.body?.detail || WIZ_ERR[r.body?.error]?.[0] || r.body?.error || r.status);
+  if (!row) return toast({ kind: 'mission-files', txt: why, level: 'bad' }, true);
+  box.setAttribute('aria-invalid', 'true');
+  row.insertAdjacentHTML('beforeend', `<small class="field-err" data-mission-err role="alert">${esc(why)}</small>`);
+}
+function wireMission() {
+  $('#setBody').querySelectorAll('[data-mission]').forEach(box => { box.onchange = () => saveMission({ [box.dataset.mission]: missionValue(box.dataset.mission, box.value) }); });
+  $('#setBody').querySelectorAll('[data-mission-pick]').forEach(b => { b.onclick = async e => {
+    e.preventDefault();
+    const [k, kind] = b.dataset.missionPick.split(':');
+    const picked = await window.p9.pickFolder(kind).catch(() => undefined);
+    if (picked === undefined) return;
+    if (picked === null || picked === '') return toast({ kind: 'mission-files', txt: WIZ_ERR[picked === '' ? 'pick-root' : 'pick-outside'].join(' '), level: 'warn' }, true); // BL6
+    $('#setBody').querySelector(`[data-mission="${k}"]`).value = picked;
+    saveMission({ [k]: picked });
+  }; });
+}
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -1497,6 +1550,7 @@ function renderSettings() {
     + (pets ? petSettings() : '')
     + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents can read and answer but cannot change anything.', 'agent-lock') : '')
     + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
+    + (missionFiles?.settings ? missionGroup() : '')
     // The updater's own row (maintenance.mjs) replaces this one, unless the updater is off (a source checkout).
     + (window.p9?.openUpdates && (!updates || updates.state === 'off') ? `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="setVer">You have P9 ${esc(window.p9.version || '?')}. Opens GitHub's newest release in your browser; if its number is higher, ${/Windows/.test(navigator.userAgent) ? 'download its .exe there and run it. Your workspace and settings stay.' : 'update as the README\'s Update section says (git pull, build, restart).'}</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setUpd">Check for updates</button>${info('Opens the newest P9 release on GitHub.', 'updates')}</div>` : '')
     + maintenanceGroup(updates);
@@ -1507,6 +1561,7 @@ function renderSettings() {
   $('#setStartLast').onchange = e => saveSettings({ ...settings, startLast: e.target.checked });
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
   if (pets) wirePetSettings();
+  if (missionFiles?.settings) wireMission();
   Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
@@ -1531,6 +1586,7 @@ $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
   if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
   if (window.p9?.fileProtection) { const r = await window.p9.fileProtection().catch(() => null); fileProtect = r?.status === 200 ? r.body.on : null; }
+  if (window.p9?.chat) { const r = await window.p9.chat('missionFiles', {}).catch(() => null); missionFiles = r?.status === 200 ? r.body : null; }
   updates = window.p9?.updates ? await window.p9.updates().catch(() => null) : null;
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
@@ -1718,14 +1774,17 @@ async function welcome(at) {
   W.s = await loadSetup();
   const d = W.s && setupDone(W.s);
   W.i = at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
+  // BL5: every 10 s (was 2 s) while a check fails or a sign-in runs; wizRefresh stops it once neither is so, and starts it again.
+  clearInterval(W.timer); W.timer = setInterval(wizRefresh, 10000);
   await wizRefresh();
   if (!$('#welDlg').open) $('#welDlg').showModal();
-  clearInterval(W.timer); W.timer = setInterval(wizRefresh, 2000);
 }
 async function wizRefresh() {
   const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
   W.s = s; W.login = l?.status === 200 ? l.body : {};
   if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
+  if (s && !S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
+  else if (!W.timer && $('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
   wizRender();
 }
 // Each error a step can get back, as [cause, fix].
@@ -1750,6 +1809,8 @@ const WIZ_ERR = {
   'paths-invalid': ['A path is not one P9 can use.', 'Each is inside the workspace, written with / and without .. (for example docs/AGENTS.md).'],
   'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
   'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
+  'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
+  'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
@@ -1789,8 +1850,15 @@ function wizRender() {
     // there, shown and editable, and the list says exactly what Create adds. Nothing that is there is replaced.
     const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
     const creates = d.mission ? [] : [...(s.creates || []), ...(s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
-    body = `<p class="muted sm">Its buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
-      + (choosing ? PATH_KEYS.map(([k, name, kind]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('')
+    // RH2 (the owner, 2026-10-24: B, and how to set them up when there are none yet).
+    const none = choosing && !found && !s.settingsPresent;
+    body = `<p class="muted sm">Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
+      + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create these makes a starter set you can change any time:</p><ul>'
+        + '<li><strong>Main AGENTS file</strong>: what you are working on, in plain words. Your agents read it; Mission shows it as the Main Project card.</li>'
+        + '<li><strong>Mission Control registry</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
+        + '<li><strong>Waiting-on-you folder</strong>: one .md file for each thing waiting on you.</li></ul>'
+        + (window.p9.openDocs ? `<div class="set-row">${btn('docs', 'How to add buttons')}</div>` : '') + '</div>' : '')
+      + (choosing ? '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
         + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
       + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
       + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
@@ -1834,6 +1902,7 @@ $('#welDlg').addEventListener('click', async e => {
     skipWelcome(); return $('#welDlg').close();
   }
   if (act === 'close') return $('#welDlg').close();
+  if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
   if (act === 'tour') { W.then = tour; return $('#welDlg').close(); }
   if (act === 'pets') { W.then = null; $('#welDlg').close(); await $('#setBtn').onclick(); return [...$('#setBody').querySelectorAll('legend')].find(l => l.textContent === 'Pets')?.scrollIntoView(); }
   if (act === 'retry') W.note = {};
@@ -1844,7 +1913,7 @@ $('#welDlg').addEventListener('click', async e => {
   }
   if (act === 'pick') {
     const picked = await window.p9.pickFolder(kind).catch(() => undefined);
-    if (picked === null || picked === '') W.note.mission = { error: 'pick-outside' };
+    if (picked === null || picked === '') W.note.mission = { error: picked === '' ? 'pick-root' : 'pick-outside' }; // BL6
     else if (picked !== undefined) { W.paths = { ...wizPaths(), [agent]: picked }; W.note.mission = null; }
   }
   if (act === 'starter') {
@@ -1913,6 +1982,13 @@ const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
 const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
+// A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
+const picDlg = $('#picDlg');
+addEventListener('click', e => {
+  const i = e.target.closest?.('.user-imgs img[src], .agent-imgs img'); if (!i) return;
+  Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
+});
+picDlg.onclick = () => picDlg.close();
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
 // A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
@@ -2070,9 +2146,9 @@ $('#amForm').onsubmit = async (e) => {
     if (!window.p9?.anymouse) throw new Error('Anymouse needs the desktop app');
     const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus });
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
-    // P9's repo is private: GitHub shows 404 to anyone not signed in with access (GitHub issue #4 item 6), so the note stays to copy.
+    // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
     if (!r.body.opened) amText.value = '';
-    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. P9\'s repo is private, so GitHub shows "404" unless you are signed in with an account that has access. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
+    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
   } catch (err) { amNote.textContent = err.message; }
   finally { amCheck(); }
 };

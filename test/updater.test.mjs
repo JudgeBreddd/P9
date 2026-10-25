@@ -9,6 +9,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { offReason, updateAction, startUpdater } from '../apps/desktop/updater.mjs';
 import { mergeLatest } from '../scripts/merge-latest.mjs';
+import { candidateVersion } from '../scripts/candidate-version.mjs';
 
 const feed = async () => {
   const resources = await mkdtemp(path.join(os.tmpdir(), 'p9-updater-'));
@@ -80,4 +81,12 @@ test('the merged latest.yml lists both Windows installers and keeps the first on
   assert.equal(merged.version, '0.1.6');
   assert.throws(() => mergeLatest([latest('x64'), latest('arm64').replace('0.1.6', '0.1.5')]), /latest-yml-versions-differ/);
   assert.throws(() => mergeLatest([latest('x64'), 'version: 0.1.6\n']), /latest-yml-unreadable/);
+});
+
+test('a candidate build takes only <package.json version>-rc.<n>', () => {
+  for (const wanted of ['0.1.5-rc.1', '0.1.5-rc.12']) assert.equal(candidateVersion('0.1.5', wanted), wanted);
+  for (const wanted of ['', '0.1.5', '0.1.6-rc.1', '0.1.5-rc.0', '0.1.5-rc.01', '0.1.5-rc.1a', '0.1.5-beta.1', '0.1.5-rc.1 ', 'v0.1.5-rc.1', '0.1.5-rc.1\nx']) {
+    assert.throws(() => candidateVersion('0.1.5', wanted), /not-a-candidate/, JSON.stringify(wanted));
+  }
+  assert.throws(() => candidateVersion('0.1.5-rc.1', '0.1.5-rc.1-rc.1'), /not-a-candidate/);
 });

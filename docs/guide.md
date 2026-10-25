@@ -140,6 +140,17 @@ The gear opens Settings. Each row has an **i**: hover it for what the row does, 
 - **Close the chat window on send** closes a chat opened from a card once your message is sent.
 - **Focus modes**, **Pets**, **Agent lock** and **File protection**: see [Focus modes](#focus-modes), [Pets](#pets), [Agent lock](#agent-lock) and [File protection](#file-protection).
 
+### Mission Control files
+
+Once Mission Control's settings file is loaded, Settings shows its paths, so you can change them after setup without a text editor. Each row saves when you leave it; P9 checks it as it checks the file at start, and a value it refuses stays in the box with the reason. The old file is kept as `settings.json.bak`.
+
+- **Main AGENTS file**, **Mission Control registry**, **Waiting-on-you folder** and **workspace-hub folder**: the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
+- **Folder the registry commands run from**: a full path. Empty: the workspace.
+- **Space file**: the JSON file with your own sections, buttons and log views. Empty: no space.
+- **Server host name**: your second machine's name, for workspace-hub's view of it.
+- **Page link schemes**: extra link schemes pages may open, separated by commas (for example `obsidian`).
+- **Notes folders**: one `name = /full/path` per line. A space section shows a folder by its name. Your home folder, a folder holding the workspace and P9's recovery folder are refused.
+
 ### Updates
 
 **Check for updates** opens the newest P9 release on GitHub. If its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.

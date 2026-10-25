@@ -228,6 +228,8 @@ html,body{height:100%;overflow:hidden}
 .msg .who{font-size:11px;color:var(--muted-foreground);margin-bottom:4px;display:flex;gap:8px;align-items:center}
 .msg.user{align-self:flex-end;max-width:85%;background:color-mix(in oklch,var(--card) 80%,var(--primary) 6%);border:1px solid color-mix(in oklch,var(--primary) 22%,var(--border));border-radius:var(--radius);padding:10px 14px;white-space:pre-wrap;overflow-wrap:anywhere}
 .msg.agent{font-size:15px;line-height:1.6}
+.user-imgs img[src],.agent-imgs img{cursor:zoom-in}
+dialog.pic{width:fit-content;height:fit-content;max-width:none;max-height:none;border:0;background:none;box-shadow:none;overflow:visible;cursor:zoom-out}dialog.pic::backdrop{background:rgb(0 0 0/.8)}dialog.pic img{display:block;max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px}
 .agent-imgs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}.agent-imgs img{max-width:100%;max-height:480px;border-radius:8px;border:1px solid var(--border)}
 /* CP3: the photos sent with a message, above its bubble */
 .user-imgs{display:flex;flex-wrap:wrap;justify-content:flex-end;align-self:flex-end;gap:6px;max-width:85%;margin-bottom:6px}.user-imgs img{width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:var(--muted)}
@@ -339,6 +341,17 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 .set-group legend{padding:0 4px;font-size:12px;color:var(--muted-foreground)}
 #zVal{min-width:44px;text-align:center}
 .set-group legend{display:flex;align-items:center;gap:6px}
+/* Mission Control files and the wizard's path rows: one label column, one input column, then Pick (and the "i" in
+   Settings); a refused value's reason under its box. */
+#setMission{grid-template-columns:15rem minmax(0,1fr) auto auto}
+.wiz-paths{display:grid;gap:8px;grid-template-columns:13rem minmax(0,1fr) auto}
+#setMission>*,.wiz-paths>*{grid-column:1/-1}
+:is(#setMission,.wiz-paths) .set-row{display:grid;grid-template-columns:subgrid}
+:is(#setMission,.wiz-paths) .set-row>.spacer{display:none}
+#setMission .set-row>[data-mission],.wiz-paths .set-row>[data-path]{grid-column:2;width:100%}
+#setMission .set-row>.info{grid-column:4}
+#setMission .field-err{grid-column:2/-1;color:var(--destructive);font-size:12px}
+#setMission [aria-invalid="true"]{border-color:var(--destructive)}
 /* HI1: the hover "i" (T-tracer's .info, in P9's colours) */
 .info{flex:0 0 auto;width:22px;height:22px;border-radius:50%;padding:0;background:transparent;border:1px solid var(--border);color:var(--muted-foreground);font-size:11px;font-style:italic;font-weight:600;line-height:1;display:flex;align-items:center;justify-content:center;cursor:help}
 .info:hover,.info:focus-visible{color:var(--foreground);border-color:var(--primary)}

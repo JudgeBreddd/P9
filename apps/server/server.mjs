@@ -12,6 +12,7 @@ import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection } from '../../packages/files/index.mjs';
 import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
+import { SETTINGS } from './mission-fields.mjs';
 import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
@@ -345,6 +346,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
     try { return { text, parsed: parseSettings(text) }; } catch (error) { return { text, error: String(error.message).slice(0, 200) }; }
   };
+  // The old file is kept as settings.json.bak (an older .bak is replaced); the new one lands by rename, never half written.
+  const replaceSettings = async (old, next) => {
+    if (old !== undefined) await writeFile(settingsFile + '.bak', old, { mode: 0o600 });
+    const file = await open(settingsFile + '.tmp', 'w', 0o600);
+    try { await file.writeFile(JSON.stringify(next, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+    await rename(settingsFile + '.tmp', settingsFile);
+    await reloadSettings();
+  };
   const isFolder = (relative) => stat(path.join(workspace, relative)).then((s) => s.isDirectory(), () => false);
   // "Use what's here" (needs-done p9-wizard-respects-existing-workspace): with no settings in a folder that already has things
   // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
@@ -455,6 +464,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const made = (promise) => promise.then(() => true, (error) => { if (error.code === 'EEXIST') return false; throw error; });
     const folders = async (relative) => { for (let i = 1; i < relative.length; i++) await made(createDirectory(workspace, relative.slice(0, i).join('/'))); };
     const created = [], plan = await planFor(paths, empty);
+    // BL1: a file where a planned folder goes (waiting named a file) failed mid-create as ENOTDIR, a 400 request-refused.
+    // Checked before anything is made, so nothing is half laid.
+    for (const relative of plan) {
+      const parts = relative.replace(/\/$/, '').split('/');
+      for (let i = 1; i < parts.length; i++) {
+        const segment = parts.slice(0, i).join('/');
+        if (await stat(path.join(workspace, segment)).then((s) => !s.isDirectory(), () => false)) return c.json({ error: 'path-is-a-file', detail: segment }, 409);
+      }
+    }
     for (const [relative, content] of [[paths.primary, STARTER_AGENTS], [paths.registry, '{"scripts":[],"apps":[],"pages":[]}\n'], [paths.waiting + '/AGENTS.md', STARTER_WAITING]]) {
       if (!plan.includes(relative)) continue;
       await folders(relative.split('/'));
@@ -462,12 +480,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     }
     if (plan.includes('_ideas/') && await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
     if (repoint) {
-      // The old file is kept as settings.json.bak (an older .bak is replaced); the new one lands by rename, never half written.
-      if (disk.text !== undefined) await writeFile(settingsFile + '.bak', disk.text, { mode: 0o600 });
-      const file = await open(settingsFile + '.tmp', 'w', 0o600);
-      try { await file.writeFile(JSON.stringify(paths, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
-      await rename(settingsFile + '.tmp', settingsFile);
-      await reloadSettings();
+      await replaceSettings(disk.text, paths);
       created.push(settingsFile);
     } else if (disk.text === undefined) {
       await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 });
@@ -483,6 +496,29 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       hub = createHub({ workspace, settings });
     }
     return c.json({ created, settings: true }, 201);
+  });
+  // ST1/ST2: Settings → Mission Control files edits the loaded settings.json, desktop only like the rest of /setup. The body
+  // names only settings.json keys (null removes one); the result is checked by parseSettings, the same rules as at start, so
+  // this route has none of its own. Notes folders keep their read-time refusals (home, workspace, recovery).
+  // ponytail: read-change-write with no lock; the one caller saves one row at a time.
+  app.get('/setup/settings', async (c) => {
+    const disk = await settingsOnDisk();
+    return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null });
+  });
+  app.post('/setup/settings', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length || !Object.keys(body).every((key) => Object.hasOwn(SETTINGS, key))) return c.json({ error: 'request-refused' }, 400);
+    if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
+    await reloadSettings();
+    const disk = await settingsOnDisk();
+    if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
+    if (!disk.parsed || !settings) return c.json({ error: 'settings-missing' }, 409);
+    const next = { ...disk.parsed };
+    for (const [key, value] of Object.entries(body)) { if (value === null) delete next[key]; else next[key] = value; }
+    let parsed;
+    try { parsed = parseSettings(JSON.stringify(next)); } catch (error) { return c.json({ error: 'settings-refused', detail: error.detail ?? error.message }, 400); }
+    await replaceSettings(disk.text, parsed);
+    return c.json({ settings: parsed });
   });
   // Wizard sign-in (threat model row 31), desktop only: main is the only caller, and opens the URL only after its origin check.
   app.get('/setup/login', (c) => reply(c, chat.login.state()));

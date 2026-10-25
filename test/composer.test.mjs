@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { deflateSync, crc32 } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -209,6 +210,37 @@ for (const provider of ['claude', 'codex']) {
     console.log('PASS CP3 ' + provider + ': the photo showed above its message from the daemon\'s copy, before and after a reload');
   });
 }
+
+// CP10: a chat picture opens large in a dialog of its own; a click anywhere or Esc closes it. The same render serves
+// both agents, so it runs once. The picture is a 480x320 PNG (blue, a white band) so the screenshot shows it.
+const bigPng = (() => {
+  const w = 480, h = 320, raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) raw.writeUInt32BE(y > 140 && y < 180 ? 0xffffffff : 0x3f7fffff, y * (w * 4 + 1) + 1 + x * 4);
+  const chunk = (type, data) => { const len = Buffer.alloc(4), crc = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]); len.writeUInt32BE(data.length); crc.writeUInt32BE(crc32(body)); return Buffer.concat([len, body, crc]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 6, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
+})();
+test('CP10: clicking a chat picture shows it large; a click anywhere or Esc closes it', { timeout: 90000 }, async (t) => {
+  const { instance, id, page, pane, agentSaid } = await setup(t, 'cp10');
+  assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'look', images: [{ mimeType: 'image/png', data: bigPng }] })).status, 202);
+  await until(() => agentSaid('echo:look[image image/png ' + Buffer.from(bigPng, 'base64').length + ']'), 'the agent got the photo');
+  const thumb = pane.locator('.user-imgs img[src]');
+  await until(async () => await thumb.count() === 1, 'the thumbnail loaded', 10000);
+  assert.equal(await thumb.evaluate((i) => getComputedStyle(i).cursor), 'zoom-in');
+  const viewer = () => page.locator('#picDlg').evaluate((d) => ({ open: d.open, modal: d.matches(':modal'), same: d.firstElementChild.src === document.querySelector('.user-imgs img[src]').src,
+    large: ((r) => r.width > 400 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight)(d.firstElementChild.getBoundingClientRect()),
+    centred: ((r) => Math.abs(r.left + r.width / 2 - innerWidth / 2) < 2 && Math.abs(r.top + r.height / 2 - innerHeight / 2) < 2)(d.firstElementChild.getBoundingClientRect()) }));
+  for (const [how, close] of [['a backdrop click', () => page.mouse.click(5, 5)], ['Esc', () => page.keyboard.press('Escape')]]) {
+    await thumb.click({ timeout: 5000 });
+    await until(async () => (await viewer()).open, 'the viewer opened', 5000);
+    await page.locator('#picDlg').evaluate((d) => Promise.all(d.getAnimations().map((a) => a.finished)));
+    assert.deepEqual(await viewer(), { open: true, modal: true, same: true, large: true, centred: true });
+    if (how === 'Esc' && !process.env.GITHUB_ACTIONS) console.log('P9_SHOT cp10-viewer ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+    await close();
+    await until(async () => !(await viewer()).open, 'the viewer closed on ' + how, 5000);
+  }
+  console.log('PASS CP10: the picture opened large over a dim backdrop; a backdrop click and Esc each closed it');
+});
 
 // RS2: the agent asks through P9's MCP server, as a real one would. The native "Restart P9?" dialog is answered Cancel,
 // so nothing restarts; it opening proves the button reached the restart.

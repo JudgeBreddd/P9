@@ -748,8 +748,8 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.click('[data-act="start:claude"]');
   await page.locator('[data-act="open:claude"]').waitFor({ timeout: 10000 });
   await page.fill('#welCode', 'abc 123');
-  await page.waitForTimeout(2500);
-  assert.equal(await page.locator('#welCode').inputValue(), 'abc 123', 'a 2 s refresh keeps what is typed');
+  await page.waitForTimeout(10500);
+  assert.equal(await page.locator('#welCode').inputValue(), 'abc 123', 'a 10 s refresh keeps what is typed');
   await shot('wizard-2-signing-in.png');
   await page.click('[data-act="code:claude"]');
   assert.equal(await until(() => readFile(path.join(instance.workspace, 'fake-login-code'), 'utf8').catch(() => ''), 'the code'), '"abc 123"\n');
@@ -764,13 +764,31 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await shot('wizard-2-ended.png');
   // The credentials file appears: shown within a refresh, never read.
   await mkdir(path.dirname(credentials), { recursive: true }); await writeFile(credentials, JSON.stringify({ token: marker }));
-  await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 5000 });
+  await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 12000 }); // the 10 s poll (BL5)
   assert.ok(!(await page.content()).includes(marker));
   assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
   await shot('wizard-2-agents.png');
 
   await next(); await at(4, 'Mission Control');
   assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
+  // RH2: the first sentence names Mission Control; with none of the files yet, the step says what each is and opens the guide.
+  assert.match(await body(), /Mission Control's buttons, apps and pages come from files in your workspace\./);
+  assert.match(await page.locator('#welBody [data-setup-help]').innerText(), /None of these is here yet[\s\S]*Main AGENTS file[\s\S]*Mission Control registry[\s\S]*Waiting-on-you folder/);
+  await page.waitForTimeout(400);
+  // The path rows share one label column and one box column, as in Settings: every box at the same x and width.
+  const wizEdges = await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
+  assert.equal(wizEdges.length, 5);
+  assert.deepEqual(wizEdges, wizEdges.map(() => wizEdges[0]), 'aligned wizard boxes');
+  const rh2 =await page.locator('#welDlg').screenshot({ type: 'png' });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT wizard-mission-empty ' + rh2.toString('base64'));
+  // The desktop passes scripts_root through to the daemon like the other four paths (it was refused as request-refused).
+  const checked = await page.evaluate(async (folder) => {
+    const r = await window.p9.chat('setup', { ...(await window.p9.chat('setup', {})).body.proposed, scripts_root: folder });
+    return [r.status, r.body?.pathsInvalid ?? false, r.body?.proposed?.scripts_root];
+  }, instance.workspace);
+  assert.deepEqual(checked, [200, false, instance.workspace], 'scripts_root checked');
+  await page.click('[data-act="docs"]');
+  await until(async () => (await readFile(opened, 'utf8')).includes('docs/guide.md#buttons-apps-and-pages'), 'the guide opened');
   assert.equal(await page.locator('#welFile').textContent(), settingsFile);
   // No settings in a folder with things in it: the paths P9 will use, editable, and exactly what Create adds.
   assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)), ['AGENTS.md', 'mission/registry.json', 'needs-you', '', '']);
@@ -792,7 +810,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   }
   await at(total - 1, 'You');
   await page.fill('#welName', 'Ada');
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(10500); // across one 10 s poll (BL5)
   assert.equal(await page.locator('#welName').inputValue(), 'Ada');
   await page.locator('#welName').press('Tab');
   await until(() => page.evaluate(() => window.p9.getSettings().then((x) => x.name === 'Ada')), 'the name saved');
@@ -836,7 +854,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.click('#setWel');
   await at(3, 'Sign in to an agent');
   await writeFile(credentials, JSON.stringify({ token: marker }));
-  await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 5000 });
+  await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 12000 }); // the 10 s poll (BL5)
   await page.keyboard.press('Escape');
   if (s.tmux !== false) {
     await page.keyboard.press('Control+Shift+N');
@@ -1758,4 +1776,159 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   await packaged.page.keyboard.press('Escape');
   assert.equal(await ipc(packaged.app, 'p9:rebuild'), 'ipc-sender-refused');
   assert.equal((await lines(built)).length, 2, 'nothing built');
+});
+
+// ST1/ST2 and BL5/BL6: Settings → Mission Control files and the setup wizard's poll, against a real daemon.
+const MISSION_FILES = { primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' };
+const missionDaemon = (t, signedIn, args = []) => daemon(t, undefined, false, async ({ directory, workspace }) => {
+  const file = path.join(directory, '.config', 'p9', 'settings.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(MISSION_FILES));
+  await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+  await mkdir(path.join(workspace, 'mission')); await mkdir(path.join(workspace, 'needs-you')); await mkdir(path.join(workspace, 'inbox'));
+  await writeFile(path.join(workspace, 'mission/registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+  if (signedIn) { await mkdir(path.join(directory, '.claude'), { recursive: true }); await writeFile(path.join(directory, '.claude', '.credentials.json'), '{}'); }
+  return { args: ['--acp-override', fake, ...args] };
+});
+const launchOn = async (t, instance, profile) => {
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  return { app, page };
+};
+const pickNext = (app, filePaths) => app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths }); }, filePaths);
+
+test('Settings → Mission Control files: rows save to settings.json and survive a restart; refused values stay with the reason (ST1, ST2)', { skip: process.platform === 'win32', timeout: 180000 }, async (t) => {
+  const instance = await missionDaemon(t, true);
+  const file = path.join(instance.directory, '.config', 'p9', 'settings.json'), notes = path.join(instance.directory, 'notes');
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-mission-files-')), 'profile');
+  let { app, page } = await launchOn(t, instance, profile);
+  const keys = ['primary', 'registry', 'waiting', 'hub', 'scripts_root', 'space', 'server_host', 'page_schemes', 'notes_roots'];
+  const boxes = () => page.locator('#setMission [data-mission]').evaluateAll((all) => all.map((box) => [box.dataset.mission, box.value]));
+  const disk = async () => JSON.parse(await readFile(file, 'utf8'));
+  const until = async (check, what) => {
+    for (let i = 0; i < 100; i++) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 100)); }
+    throw new Error('timed out: ' + what);
+  };
+  const set = async (key, value) => {
+    const box = page.locator('#setMission [data-mission="' + key + '"]');
+    await box.fill(value); await box.dispatchEvent('change');
+  };
+  await page.click('#setBtn');
+  await page.locator('#setMission').waitFor({ timeout: 10000 });
+  assert.deepEqual(await boxes(), keys.map((key) => [key, MISSION_FILES[key] ?? '']));
+  // Each row has the "i" that opens its guide section, and every path row but scripts_root (a full path) has Pick.
+  assert.equal(await page.locator('#setMission [data-docs="mission-control-files"]').count(), keys.length + 1);
+  assert.deepEqual(await page.locator('#setMission [data-mission-pick]').evaluateAll((all) => all.map((b) => b.dataset.missionPick.split(':')[0])),
+    ['primary', 'registry', 'waiting', 'hub', 'space']);
+
+  // ST1: each row saves on change; the file is what parseSettings accepts.
+  await set('server_host', 'box-1');
+  await set('page_schemes', 'obsidian, zotero');
+  await set('notes_roots', 'vault = ' + notes);
+  const want = { ...MISSION_FILES, server_host: 'box-1', page_schemes: ['obsidian', 'zotero'], notes_roots: { vault: notes } };
+  await until(async () => JSON.stringify(await disk()) === JSON.stringify(want), 'three rows saved');
+  // A value the daemon refuses stays in its box with the reason under it, and the file is left alone.
+  await set('server_host', 'bad host!');
+  const hostErr = page.locator('#setMission [data-mission="server_host"] ~ [data-mission-err]');
+  await hostErr.filter({ hasText: 'Not saved: server_host:' }).waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#setMission [data-mission="server_host"]').inputValue(), 'bad host!');
+  assert.equal(await page.locator('#setMission [data-mission="server_host"]').getAttribute('aria-invalid'), 'true');
+  assert.deepEqual(await disk(), want);
+  // ST2: the wizard's paths, by Pick and by typing.
+  await pickNext(app, [path.join(instance.workspace, 'inbox')]);
+  await page.click('#setMission [data-mission-pick="waiting:setup-folder"]');
+  await until(async () => (await disk()).waiting === 'inbox', 'waiting picked');
+  assert.equal(await page.locator('#setMission [data-mission="waiting"]').inputValue(), 'inbox');
+  await set('primary', 'needs-you/AGENTS.md');
+  await until(async () => (await disk()).primary === 'needs-you/AGENTS.md', 'primary typed');
+  assert.deepEqual(JSON.parse(await readFile(file + '.bak', 'utf8')), { ...want, waiting: 'inbox' }, 'the file before the last save');
+  await page.locator('#setMission').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  const png = await page.locator('#setDlg').screenshot({ type: 'png' });
+  if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await writeFile(path.join(process.env.P9_EVIDENCE, 'settings-mission-files.png'), png); }
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-mission-files ' + png.toString('base64'));
+  // One label column and one input column: every box starts at the same x and is as wide as the others.
+  const edges = await page.locator('#setMission [data-mission]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
+  assert.deepEqual(edges, edges.map(() => edges[0]), 'aligned boxes');
+  // A good value clears the reason.
+  await set('server_host', 'box-1');
+  await until(async () => !(await hostErr.count()), 'the reason cleared');
+  assert.equal(await page.locator('#setMission [data-mission="server_host"]').getAttribute('aria-invalid'), null);
+  assert.deepEqual(await disk(), { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' });
+
+  // A restart reads them back from the daemon's file.
+  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
+  ({ app, page } = await launchOn(t, instance, profile));
+  await page.click('#setBtn');
+  await page.locator('#setMission').waitFor({ timeout: 10000 });
+  const saved = { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' };
+  assert.deepEqual(await boxes(), keys.map((key) => [key, { page_schemes: 'obsidian, zotero', notes_roots: 'vault = ' + notes }[key] ?? saved[key] ?? '']));
+  // Emptying an optional row removes its key.
+  await set('server_host', '');
+  await until(async () => !('server_host' in await disk()), 'server_host removed');
+  console.log('PASS Settings → Mission Control files: rows save and survive a restart, refused values stay with the reason');
+});
+
+test('Pick: the workspace folder itself and a folder outside get their own refusals, in Settings and in the setup wizard (BL6)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  // Starter settings on a folder with its own layout: Settings shows the files and the wizard offers its paths with Pick.
+  const instance = await missionDaemon(t, true);
+  await mkdir(path.join(instance.workspace, 'work/workspace-hub'), { recursive: true });
+  await writeFile(path.join(instance.workspace, 'work/workspace-hub/registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+  await rm(path.join(instance.workspace, 'mission'), { recursive: true });
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-pick-')), 'profile');
+  const { app, page } = await launchOn(t, instance, profile);
+  await page.click('#setBtn');
+  await page.locator('#setMission').waitFor({ timeout: 10000 });
+  for (const [pick, text] of [[instance.workspace, 'That is the workspace folder itself.'], [instance.directory, 'That is outside the workspace.']]) {
+    await pickNext(app, [pick]);
+    await page.click('#setMission [data-mission-pick="waiting:setup-folder"]');
+    await page.locator('#toasts', { hasText: text }).waitFor({ timeout: 5000 });
+  }
+  assert.equal(await page.locator('#setMission [data-mission="waiting"]').inputValue(), 'needs-you');
+  await page.click('#setClose');
+  const card = page.locator('#cards [data-key="welcome"]');
+  await card.waitFor({ timeout: 10000 });
+  await card.locator('.open').click();
+  await page.locator('#welBody [data-path]').first().waitFor({ timeout: 10000 });
+  for (const [pick, text] of [[instance.workspace, 'That is the workspace folder itself.'], [instance.directory, 'That is outside the workspace.']]) {
+    await pickNext(app, [pick]);
+    await page.click('#welBody [data-act="pick:waiting:setup-folder"]');
+    await page.locator('#welBody .wiz-fail', { hasText: text }).waitFor({ timeout: 5000 });
+  }
+  console.log('PASS Pick: the root and outside are refused with their own words in Settings and the wizard');
+});
+
+test('Setup wizard: polls every 10 s while a check fails and stops once setup is done (BL5)', { skip: process.platform === 'win32', timeout: 180000 }, async (t) => {
+  // darwin: no terminal check, so signing in is the only step left.
+  const instance = await missionDaemon(t, false, ['--terminal-platform', 'darwin']);
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-poll-')), 'profile');
+  const { app, page } = await launchOn(t, instance, profile);
+  // Count the renderer's setup checks in main, where every one passes.
+  await app.evaluate(({ ipcMain }) => {
+    const handler = ipcMain._invokeHandlers.get('p9:chat');
+    globalThis.setupChecks = 0;
+    ipcMain._invokeHandlers.set('p9:chat', (event, action, ...rest) => { if (action === 'setup') globalThis.setupChecks++; return handler(event, action, ...rest); });
+  });
+  const checks = () => app.evaluate(() => globalThis.setupChecks);
+  const card = page.locator('#cards [data-key="welcome"]');
+  await card.waitFor({ timeout: 10000 });
+  await card.locator('.open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  const before = await checks();
+  await page.waitForTimeout(25000);
+  const failing = (await checks()) - before;
+  assert.ok(failing >= 1 && failing <= 3, 'about one check per 10 s while sign-in is missing, got ' + failing + ' in 25 s');
+  await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
+  await writeFile(path.join(instance.directory, '.claude', '.credentials.json'), '{}');
+  await page.waitForTimeout(12000); // the next check sees it done
+  assert.equal(await card.count(), 0, 'setup done: the card is gone');
+  const done = await checks();
+  await page.waitForTimeout(22000);
+  assert.equal((await checks()) - done, 0, 'no checks once setup is done');
+  assert.equal(await page.locator('#welDlg[open]').count(), 1, 'the wizard is still open');
+  console.log('PASS wizard poll: ' + failing + ' checks in 25 s while a check fails, none once done');
 });
