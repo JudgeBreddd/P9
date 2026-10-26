@@ -632,7 +632,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }));
       return { status: 200, on: locked };
     },
-    list: () => db.prepare('SELECT id, provider, title, state, created, folder FROM conversations ORDER BY created').all(),
+    // Most recently used first, for the desktop's History and the phone (owner, 2026-10-25). used: the chat's newest event,
+    // not counting the stops a close, an exit or a daemon restart write; sent: a message was ever sent (History leaves out
+    // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
+    list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
+        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
+        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent
+      FROM conversations c ORDER BY used DESC, created DESC`).all().map((c) => ({ ...c, sent: c.sent === 1 })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     async create(body) {
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
@@ -755,11 +761,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       }
       return refused(409, 'not-held');
     },
-    async stop(id) {
+    // close: the tab's x (owner, 2026-10-25: closing a chat stops it, running or idle); 'closed' takes its tab out of
+    // every window, and History opens it again.
+    async stop(id, body = {}) {
       // Startup recovery settles every row first, so it never overwrites a Stop that began meanwhile.
       await recovered;
       if (!ID.test(id) || !row(id)) return refused(404, 'unknown-conversation');
+      if (body?.close !== undefined && body.close !== true) return refused(400, 'request-refused');
       const result = await stopConversation(id);
+      if (body?.close) emit(id, 'closed');
       return { status: result === 'stopped' ? 200 : 500, result };
     },
     // Hand off (PH5): the chat stops and gives server.mjs the command that resumes its Claude Code session with Remote

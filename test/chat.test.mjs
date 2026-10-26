@@ -363,7 +363,7 @@ test('operation IDs: required, replayed once finished, refused when reused, outc
   assert.equal(retried.status, 201);
   assert.equal(retried.headers['x-p9-replayed'], '1');
   const titles = (await json(call(instance, '/chat'))).body.conversations.map((conversation) => conversation.title);
-  assert.deepEqual(titles, ['Claude', 'lost']);
+  assert.deepEqual(titles, ['lost', 'Claude']);
   // The daemon dies mid-operation: the retry is told the outcome is unknown, never re-run; the turn is interrupted.
   await writeFile(path.join(instance.workspace, 'slow-init'), '');
   const crashed = randomUUID();
@@ -696,3 +696,35 @@ test('an adapter that never answers the handshake fails its start and cannot hol
   assert.ok(Date.now() - began < 55_000, 'start held the barrier past its limit');
   console.log('PASS hung adapter handshake: start refused 502 after the limit, Stop All finished');
 });
+
+// Chats are listed most recently used first, and the tab's x stops a chat, idle too, in every window.
+for (const provider of ['claude', 'codex']) {
+  test(`chat list (${provider}): most recently used first, with sent; a close stops an idle chat, is logged and does not move it`, async (t) => {
+    const instance = await start(t);
+    const older = await create(instance, provider);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const unsent = await create(instance, provider);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = await create(instance, provider);
+    assert.equal((await call(instance, `/chat/${older}/prompt`, 'POST', { text: 'hello' })).status, 202);
+    const { cursor } = await until(instance, (event) => event.conversation === older && event.type === 'turn-end');
+    const list = async () => (await json(call(instance, '/chat'))).body.conversations;
+    let chats = await list();
+    assert.deepEqual(chats.map((c) => c.id), [older, newer, unsent]);
+    assert.deepEqual(chats.map((c) => c.sent), [true, false, false]);
+    assert.equal(chats[2].used, chats[2].created);
+    assert.ok(chats[0].used > chats[1].used);
+    // close is true or absent; the x stops an idle chat and a used one, and the log says it was closed.
+    assert.equal((await call(instance, `/chat/${unsent}/stop`, 'POST', { close: 'yes' })).status, 400);
+    assert.equal((await call(instance, `/chat/${unsent}/stop`, 'POST', { close: true })).status, 200);
+    assert.equal((await call(instance, `/chat/${older}/stop`, 'POST', { close: true })).status, 200);
+    await until(instance, (event) => event.conversation === older && event.type === 'closed', cursor);
+    // The in-chat Stop sends no body and writes no closed event.
+    assert.equal((await call(instance, `/chat/${newer}/stop`, 'POST')).status, 200);
+    const events = (await json(call(instance, `/chat/events?after=${cursor}`))).body.events;
+    assert.deepEqual(events.filter((event) => event.type === 'closed').map((event) => event.conversation).sort(), [older, unsent].sort());
+    chats = await list();
+    assert.deepEqual(chats.map((c) => [c.id, c.state]), [[older, 'stopped'], [newer, 'stopped'], [unsent, 'stopped']]);
+    console.log(`PASS chat list ${provider}: used first, sent flagged, close stops idle and used chats without moving them`);
+  });
+}

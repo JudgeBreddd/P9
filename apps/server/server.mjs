@@ -263,7 +263,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
   api.post('/chat/:id/unhold', async (c) => reply(c, chat.unhold(c.req.param('id'), await json(c))));
-  api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
+  api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'), c.req.header('content-type') ? await json(c) : {})));
   // Hand off (PH5): the chat stops; a new P9 terminal opens in its folder with the claude command typed in. The user
   // presses Enter, so nothing reaches claude.ai before they do.
   api.post('/chat/:id/handoff', async (c) => {

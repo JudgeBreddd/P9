@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
@@ -25,15 +26,17 @@ const rollout = (instance, n) => writeFile(path.join(instance.directory, '.codex
     primary: { used_percent: n, window_minutes: 300, resets_at: Date.now() / 1000 + 3 * 3600 },
     secondary: { used_percent: n, window_minutes: 10080, resets_at: Date.now() / 1000 + 72 * 3600 } } } }) + '\n');
 
-async function open(t, provider) {
+// text: the first prompt, sent before the window opens; done: the event that says it was answered; before: run then.
+async function open(t, provider, { text = 'hello', done = (e) => e.data?.content?.text === 'echo:' + text, before } = {}) {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.directory, '.codex', 'sessions', '2026', '10', '24'), { recursive: true });
   await rollout(instance, 74);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-meters-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
-  await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
-  await until(async () => (await call(instance, '/chat/events?after=0&only=' + id)).events.some((e) => e.data?.content?.text === 'echo:hello'), 'hello answered');
+  await call(instance, '/chat/' + id + '/prompt', 'POST', { text });
+  await until(async () => (await call(instance, '/chat/events?after=0&only=' + id)).events.some(done), text + ' answered');
+  await before?.(instance, id);
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -94,3 +97,22 @@ test('MR2: the cache clock moves on every 15 s without rebuilding the pane', { t
   await until(async () => (await cache.getAttribute('data-s')) === 'cooling', 'the state moved to cooling', 20000);
   console.log('PASS MR2: the cache clock moved on its own from 60 to 50 min and then cooling, in place');
 });
+
+// A background task's report wakes the agent with no prompt; that work reads the cache too, so the clock starts again.
+for (const provider of ['claude', 'codex']) {
+  test('cache clock ' + provider + ': unprompted agent work after the turn ended starts the clock again', { timeout: 90000 }, async (t) => {
+    // The turn ended half an hour ago: everything logged so far is moved back 30 min; the work goes on live.
+    const back = (instance, id) => {
+      const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+      try { db.prepare('UPDATE events SET at = at - 1800000 WHERE conversation = ?').run(id); } finally { db.close(); }
+    };
+    const { page, pane, errors } = await open(t, provider, { text: 'background quiet', done: (e) => e.data?.toolCallId === 'bg-2', before: back });
+    const clock = () => pane.locator('.meters .cache').evaluate((el) => el.lastChild.textContent);
+    await pane.locator('.meters .cache').waitFor({ timeout: 10000 });
+    // Claude's clock reads from its newest output, not the 30-min-old turn end; Codex shows no clock, as before.
+    if (provider === 'claude') await until(async () => /^(59|60) min$/.test(await clock()), 'the clock is back near 60 min', 20000);
+    else { await page.waitForTimeout(2000); assert.equal(await clock(), '—'); }
+    assert.deepEqual(errors, []);
+    console.log('PASS cache clock ' + provider + ': ' + await clock() + ' with the turn end 30 min back');
+  });
+}

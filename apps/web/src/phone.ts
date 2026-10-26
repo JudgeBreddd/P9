@@ -75,11 +75,21 @@ async function loadChat() {
   try {
     const list = await request('/chat'); state.conversations = list.conversations ?? [];
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
-    // Newest first, labelled with when it started and its state, so two "Claude" chats are told apart.
-    one<HTMLSelectElement>('#conversation').innerHTML = [...state.conversations].reverse().map((item) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`).join('') || '<option value="">No conversations yet</option>';
+    fillPicker();
     if (!linked && applyLink()) linked = true;
     render();
   } catch { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
+}
+// Most recently used first, in the daemon's order (owner, 2026-10-25): the open chats, then History, the stopped ones a
+// message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
+// apart. The chat shown stays picked.
+function fillPicker() {
+  const select = one<HTMLSelectElement>('#conversation'), was = select.value;
+  const option = (item: Json) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`;
+  const group = (label: string, items: Json[]) => items.length ? `<optgroup label="${label}">${items.map(option).join('')}</optgroup>` : '';
+  select.innerHTML = group('Open', state.conversations.filter((item) => item.state !== 'stopped')) + group('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
+    || '<option value="">No conversations yet</option>';
+  if ([...select.options].some((option) => option.value === was)) select.value = was;
 }
 // PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
 // link changes on an open page).
@@ -225,7 +235,13 @@ async function listen() {
   for (;;) {
     if (document.hidden || !navigator.onLine) { await pause(2000); continue; }
     const held = state.events.length;
-    try { await fetchEvents(8000); if (state.events.length !== held) render(); }
+    try {
+      await fetchEvents(8000);
+      if (state.events.length === held) continue;
+      // A chat made, used, stopped or closed anywhere moves in the picker.
+      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; fillPicker(); }
+      render();
+    }
     catch { await pause(3000); }
   }
 }

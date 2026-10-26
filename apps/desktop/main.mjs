@@ -505,7 +505,7 @@ export async function createDesktop({ state, open } = {}) {
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
     cancel: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/cancel`],
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
-    stop: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/stop`],
+    stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],

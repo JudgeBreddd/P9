@@ -377,23 +377,26 @@ function toast(a, done) {
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
   $('#toasts').append(el); renderCards();
 }
-function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) { s.hidden = false; closedChats.delete(id); keepClosed(); } show(id); renderTabs(); renderChats(); }
+function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
 const show = id => { S.open = [id, ...S.open.filter(x => x !== id)].slice(0, 2); if (S.files) renderTree(); }; // Current project files follow the chat shown
-// Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped and not
-// closed by you; the rest wait in History. Closed IDs stay in localStorage so a reload does not bring them back.
+// Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped; the rest
+// wait in History. The x stops it on the daemon, so every window and the phone agree (owner, 2026-10-25: a new window
+// reopened 9 chats closed in another). Before that, closed IDs lived in this window's localStorage: loadChat stops the
+// idle ones among them once, then forgets the list.
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
-const keepClosed = () => localStorage.setItem('eh-closed-chats', JSON.stringify([...closedChats]));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
 function closeTab(id) {
   const s = S.sessions.find(x => x.id === id);
   if (s) s.done = false; // closing it is seeing it
-  // The x stops a running chat, like closing a VS Code terminal tab (Builder, 2026-10-18); History reopens it.
-  if (s?.live) { if (s.state === 'running') liveChat.stop(s); s.hidden = true; closedChats.add(id); keepClosed(); } else S.sessions = S.sessions.filter(x => x.id !== id);
-  S.open = S.open.map(o => o === id ? (S.sessions.find(x => !x.hidden && !S.open.includes(x.id)) || {}).id : o).filter(Boolean); renderTabs(); renderChats();
+  // The x stops the chat, running or idle, like closing a VS Code terminal tab (Builder, 2026-10-18; owner, 2026-10-25:
+  // "hitting the x is going to make them think they closed it. like stopped it"); History reopens it.
+  if (s?.live) { liveChat.stop(s, true); s.hidden = true; } else S.sessions = S.sessions.filter(x => x.id !== id);
+  untab(id);
 }
+const untab = id => { S.open = S.open.map(o => o === id ? (S.sessions.find(x => !x.hidden && !S.open.includes(x.id)) || {}).id : o).filter(Boolean); renderTabs(); renderChats(); };
 function newSession(agent, model) {
   if (liveChat.on) return liveChat.create(agent, newFolder);
   const s = { id: 's-' + Date.now(), agent, title: `${names[agent]} ${S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [] };
@@ -421,9 +424,10 @@ $('#newFolder').onchange = async e => {
 };
 const newPop = popover($('#newBtn'), $('#newPop'), renderNewFolder);
 $('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model); newPop.close(); });
-// History: with the daemon, every live chat, newest first (Open gives it a tab again); without it, the sample list.
+// History: with the daemon, every live chat a message was sent in, most recently used first (owner, 2026-10-25; Open
+// gives it a tab again); without it, the sample list.
 const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.slice().reverse().map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
+const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
 const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
 const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
 $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
@@ -2020,7 +2024,7 @@ liveChat.answer = (s, vals) => {
   liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'accept', content: Object.fromEntries(content) } });
 };
 liveChat.decline = s => { const q = s.events.find(e => e.t === 'question'); if (q) liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'decline' } }); };
-liveChat.stop = s => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id }); };
+liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id, ...(close && { close }) }); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
 const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
@@ -2070,10 +2074,12 @@ function applyChat(ev) {
   const d = ev.data;
   if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
   const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
+  // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
+  if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = true;
+    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -2091,6 +2097,9 @@ function applyChat(ev) {
       // usage_update (the one with a cost) marks it done.
       if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
       else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
+      // Such a turn reads the prompt cache too, so the cache clock starts again from its output (owner, 2026-10-25: a
+      // background task's wake-up left the clock at 57 min); a prompted turn's clock starts at its turn-end.
+      if (!s.prompted && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content);
         if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
@@ -2151,15 +2160,20 @@ async function loadChat() {
       // ponytail: its images are not returned; attach them again.
       const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && S.sessions.find(s => s.id === ev.conversation);
       if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
+      // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
+      const closed = !replaying && ev.type === 'closed' && S.sessions.find(s => s.id === ev.conversation && !s.hidden);
+      if (closed) { closed.hidden = true; untab(closed.id); }
     }
     liveChat.cursor = r.body.cursor;
     if (replaying && r.body.events.length < 500) {
       replaying = false;
-      const all = await list(), have = new Map(S.sessions.map(s => [s.id, s]));
-      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
-      for (const s of S.sessions) s.hidden = s.state === 'stopped' || closedChats.has(s.id);
-      for (const id of closedChats) if (!S.sessions.some(s => s.id === id)) closedChats.delete(id);
-      keepClosed();
+      // Tabs keep the order the chats were made in; History sorts by last used.
+      const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(S.sessions.map(s => [s.id, s]));
+      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
+      // running (the phone may have resumed it) and gets its tab back.
+      for (const s of S.sessions) { s.hidden = s.state === 'stopped'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
+      closedChats.clear(); localStorage.removeItem('eh-closed-chats');
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
       for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);

@@ -384,7 +384,9 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   const tabs = () => page.evaluate(() => [...document.querySelectorAll('#tabs .tab')].map((t) => t.dataset.id).sort());
   assert.deepEqual(await tabs(), [id, codex].sort(), 'stopped and closed chats get no tab');
   await page.click('#histBtn');
-  assert.equal(await page.locator('#histPop [data-open]').count(), 4);
+  // A chat no message was sent in is not in History.
+  assert.equal(await page.locator('#histPop [data-open]').count(), 3);
+  assert.equal(await page.locator(`#histPop [data-open="${stopped}"]`).count(), 0);
   await page.locator(`#histPop [data-open="${md}"]`).click();
   assert.deepEqual(await tabs(), [id, codex, md].sort(), 'History opens a closed chat again');
   await page.locator(`#tabs .tab[data-id="${md}"] .close`).click();
@@ -1248,7 +1250,7 @@ test('Chat folder: Start in offers the workspace, recent folders and Choose fold
   await folder.selectOption({ label: 'Workspace' });
   await page.locator('#newPop [data-new="claude"]').first().click();
   await page.waitForFunction(async () => (await window.p9.chat('list')).body.conversations.length === 2, null, { timeout: 10000 });
-  assert.deepEqual((await call(instance, '/chat')).conversations.map((c) => c.folder), ['proj/sub', '']);
+  assert.deepEqual((await call(instance, '/chat')).conversations.map((c) => c.folder), ['', 'proj/sub']);
   console.log('PASS chat folder: outside, linked-out and cancelled picks give nothing; a chosen folder reaches the daemon and the welcome; kept as a recent folder after a reload');
 });
 
