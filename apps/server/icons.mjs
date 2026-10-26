@@ -26,6 +26,9 @@ export function sniff(bytes) {
   if (/^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)?(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(b.toString('utf8', 0, 2048).replace(/^﻿/, ''))) return 'svg';
 }
 const uri = (ext, bytes) => `data:${MIME[ext]};base64,${bytes.toString('base64')}`;
+// Shells, interpreters and env, by base name without .exe or a version (python3.12 is python).
+const INTERPRETERS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'env', 'node', 'python', 'perl', 'ruby', 'pnpm', 'npm', 'npx', 'cmd', 'powershell', 'pwsh']);
+const interpreter = (program) => INTERPRETERS.has(path.basename(program).toLowerCase().replace(/\.exe$/, '').replace(/[\d.]+$/, ''));
 
 // Loopback, link-local, private, carrier-grade and multicast addresses: a site (not the user) must not aim the daemon at these.
 export function privateAddress(address) {
@@ -225,6 +228,10 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
       ...apps.map(async (item) => {
         put('apps', item.id, 'picture', item.picture && await picture(item.picture));
         if (item.picture || item.icon) return;
+        // A browser's --app window is the site it opens, and an interpreter runs someone else's script: neither program's
+        // icon is the tile's. The site's icon (the --app link, else the link the tile names), else the letter tile.
+        const link = item.cmd.map((arg) => arg.match(/^--app=(https?:\/\/.+)/)?.[1]).find(Boolean);
+        if (link || item.cmd.some((arg) => arg.startsWith('--app=')) || interpreter(item.cmd[0])) { put('apps', item.id, 'auto', await site(link ?? item.url)); return; }
         if (platform !== 'linux') { programs.push({ id: item.id, program: item.cmd[0] }); return; }
         const found = await programIcon(item.cmd[0], env);
         if (found) put('apps', item.id, 'auto', uri(found.ext, found.bytes));

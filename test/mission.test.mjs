@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile, readdir, access, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, access, chmod, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { daemon, http, authenticated, root } from './helpers.mjs';
@@ -258,8 +258,8 @@ test('every workspace-hub registry record parses, and the module never uses a sh
   }
   const source = (await Promise.all(['mission.mjs', 'process-tree.mjs'].map((name) => readFile(path.join(root, 'apps/server', name), 'utf8')))).join('\n');
   assert.equal(/shell:\s*true|\bexec(?:Sync)?\(/.test(source), false);
-  assert.equal((source.match(/spawn\(/g) ?? []).length, 4);
-  assert.equal((source.match(/shell: false/g) ?? []).length, 4);
+  assert.equal((source.match(/spawn\(/g) ?? []).length, 5);
+  assert.equal((source.match(/shell: false/g) ?? []).length, 5);
   console.log(`PASS phase5 registry: ${real ? 'every live workspace-hub record valid' : 'live registry absent (publish checkout)'}; spawn only with shell:false`);
 });
 
@@ -336,6 +336,43 @@ test('the registry is read-only through the file API, and print_url apps open th
   assert.equal((await readFile(log, 'utf8')).trim(), 'http://127.0.0.1:8123/?tkn=1');
   assert.equal((await call(instance, '/apps/quiet/launch', 'POST', {})).status, 502);
   console.log('PASS phase5 registry lock + print_url: PUT /files on the registry refused (any case), swapped ID never runs; printed URL opened, no URL = 502');
+});
+
+test('Linux window apps and links start through systemd-run --user without the daemon\'s environment; a refusal falls back to the plain spawn', {
+  skip: process.platform !== 'linux' && 'systemd-run is the Linux launcher; Windows launching is covered by windows-process-tree.test.mjs', timeout: 60_000,
+}, async (t) => {
+  let bin;
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    bin = path.join(paths.directory, 'bin');
+    await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify(BUILDER));
+    return { ...await layout(paths.workspace, { ...BUILDER, scripts: [] }), path: `${bin}:${process.env.PATH}`, env: { ANTHROPIC_API_KEY: 'sk-sentinel' } };
+  });
+  const log = (name) => path.join(instance.directory, name + '.log');
+  const lines = async (name) => {
+    for (let i = 0; i < 100 && !(await access(log(name)).then(() => true, () => false)); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+    return (await readFile(log(name), 'utf8')).trim().split('\n');
+  };
+  await mkdir(bin);
+  // The stand-in records what it was asked and the environment it got, and refuses while the fail file exists.
+  const stub = (name, tail = '') => writeFile(path.join(bin, name), `#!/bin/sh\n{ printf '%s\\n' "$@"; echo "key=\${ANTHROPIC_API_KEY:-absent}"; } > '${log(name)}'\n${tail}`, { mode: 0o755 });
+  await stub('systemd-run', `[ -e '${path.join(instance.directory, 'fail')}' ] && exit 1\nexit 0\n`);
+  await stub('p9-app');
+  const registry = path.join(instance.workspace, BUILDER.registry);
+  await writeFile(registry, JSON.stringify({ scripts: [], apps: [{ id: 'win', title: 'Win', cmd: [path.join(bin, 'p9-app'), 'one'] }],
+    pages: [{ id: 'dash', title: 'Dashboard', url: 'http://127.0.0.1:5000/' }] }));
+  const unit = ['--user', '--collect', '--quiet', '--service-type=exec', '-p', 'ExitType=cgroup', `--working-directory=${instance.workspace}`, '--'];
+
+  assert.equal((await call(instance, '/apps/win/launch', 'POST', {})).status, 200);
+  assert.deepEqual(await lines('systemd-run'), [...unit, path.join(bin, 'p9-app'), 'one', 'key=absent']);
+  assert.equal(await access(log('p9-app')).then(() => true, () => false), false, 'the app is the unit\'s, not the daemon\'s child');
+  await unlink(log('systemd-run'));
+  assert.equal((await call(instance, '/pages/dash/launch', 'POST', {})).status, 200);
+  assert.deepEqual((await lines('systemd-run')).slice(-3), ['xdg-open', 'http://127.0.0.1:5000/', 'key=absent']);
+
+  await writeFile(path.join(instance.directory, 'fail'), '');
+  assert.equal((await call(instance, '/apps/win/launch', 'POST', {})).status, 200);
+  assert.deepEqual(await lines('p9-app'), ['one', 'key=absent']);
+  console.log('PASS launcher: app and link go to systemd-run --user (exec type, cgroup exit, workdir), no daemon secret reaches it; refused = plain spawn');
 });
 
 test('an "A:" line holding only an italic placeholder is answerable like an empty A. line', async (t) => {

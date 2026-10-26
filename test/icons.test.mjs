@@ -151,3 +151,31 @@ test('A program\'s icon on Linux comes from its .desktop file, in the icon folde
   assert.equal(sniff(Buffer.from('<html><svg/></html>')), undefined);
   console.log('PASS program icon: .desktop Exec match, largest PNG, traversal and unknown programs give none');
 });
+
+test('A browser --app tile or an interpreter tile takes the site\'s icon or its letter, never the program\'s', async (t) => {
+  const data = await mkdtemp(path.join(os.tmpdir(), 'xdg-'));
+  await mkdir(path.join(data, 'applications'), { recursive: true });
+  await mkdir(path.join(data, 'icons/hicolor/48x48/apps'), { recursive: true });
+  for (const [name, exec] of [['chrome', '/usr/bin/google-chrome-stable %U'], ['bash', 'bash'], ['python', 'python3.12']]) {
+    await writeFile(path.join(data, `applications/${name}.desktop`), `[Desktop Entry]\nName=${name}\nExec=${exec}\nIcon=${name}\n`);
+    await writeFile(path.join(data, `icons/hicolor/48x48/apps/${name}.png`), png(name));
+  }
+  const asked = [];
+  const icons = createIcons({ dir: data, workspace: data, registry: () => 'hub/registry.json',
+    discoverIcon: async (link) => { asked.push(link); return { ext: 'png', bytes: png(new URL(link).host) }; } });
+  const apps = [
+    { id: 'chat', cmd: ['google-chrome-stable', '--app=https://chat.example/'] },
+    { id: 'calc', cmd: ['google-chrome-stable', '--app=file:///opt/calc/calc.html'] },
+    { id: 'wave', cmd: ['bash', 'hub.sh', 'wave'] },
+    { id: 'front', cmd: ['env', 'BROWSER=true', 'bash', 'run.sh'], url: 'http://front.example/' },
+    { id: 'script', cmd: ['/usr/bin/python3.12', 'status.py'] },
+    { id: 'chrome', cmd: ['google-chrome-stable'] },
+  ];
+  const art = await icons.collect({ pages: [], apps, sections: [] }, { platform: 'linux', env: { XDG_DATA_HOME: data, XDG_DATA_DIRS: data } });
+  assert.deepEqual(Object.fromEntries(Object.entries(art.apps).map(([id, entry]) => [id, entry.auto])), {
+    chat: uri('image/png', png('chat.example')), front: uri('image/png', png('front.example')), chrome: uri('image/png', png('chrome')) });
+  assert.deepEqual(asked.sort(), ['http://front.example/', 'https://chat.example/']);
+  const win = await icons.collect({ pages: [], apps, sections: [] }, { platform: 'win32' });
+  assert.deepEqual(win.programs, [{ id: 'chrome', program: 'google-chrome-stable' }], 'Windows asks the OS only about real programs');
+  console.log('PASS tile icons: --app=https uses the site icon, --app=file and bash/env/python give the letter tile or the named link, Chrome alone keeps its icon');
+});

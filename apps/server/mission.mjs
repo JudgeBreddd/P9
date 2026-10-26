@@ -334,11 +334,25 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       child.once('exit', (code) => done(code === 0 ? child : null));
     });
   }
+  // Linux: a window app or a link starts as a transient unit of the user's systemd, the way the desktop's own launcher
+  // starts apps. It gets the session's environment (X refuses a client without XAUTHORITY), not this unit's
+  // NoNewPrivileges (an AppImage needs the setuid fusermount), and it outlives a daemon restart. systemd-run passes on
+  // none of its own environment, and that is childEnv, so the daemon's secrets stay here. Type exec: a program that
+  // cannot start fails here (D1). ExitType=cgroup: a launcher that starts its app and exits (hub.sh wave) leaves it running.
+  // No systemd-run, no user manager or systemd before 250: the plain spawn. Scripts and terminals keep the plain spawn.
+  function transient(argv, cwd) {
+    return new Promise((done) => {
+      const child = spawn('systemd-run', ['--user', '--collect', '--quiet', '--service-type=exec', '-p', 'ExitType=cgroup',
+        `--working-directory=${cwd}`, '--', ...argv], { cwd, shell: false, env: childEnv(), stdio: 'ignore' });
+      child.once('error', () => done(false));
+      child.once('exit', (code) => done(code === 0));
+    }).then((started) => started || launchDetached(argv, cwd));
+  }
   // Linux: konsole.
   const terminal = (argv, cwd) => windows ? hosted(argv, cwd, 'Console') : launchDetached(['konsole', '--workdir', cwd, '-e', ...argv], cwd);
-  const app = (argv, cwd) => windows ? hosted(argv, cwd, 'Launch') : launchDetached(argv, cwd);
+  const app = (argv, cwd) => windows ? hosted(argv, cwd, 'Launch') : transient(argv, cwd);
   // Windows opens a URL through its protocol handler, never cmd's start, which would parse an & in the URL (D1).
-  const open = (url) => windows ? app([system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url], root()) : launchDetached(['xdg-open', url], root());
+  const open = (url) => windows ? app([system32('rundll32.exe'), 'url.dll,FileProtocolHandler', url], root()) : transient(['xdg-open', url], root());
   const notStarted = { status: 502, error: 'could-not-start' };
   async function resolve(kind, id, body, allowedKeys) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 404, error: 'unknown-id' };
