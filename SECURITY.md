@@ -136,6 +136,42 @@ save over that file. Approve/Reject on a Wiki batch is written by the hub's code
 through P9's guarded save. A doctor sweep started for notifications is not stopped by Stop All; it only reads and ends
 within three minutes. Anyone logged in to P9 sees these sections, including full paths on your machine.
 
+## Mission notes
+
+A Mission space section can show a notes folder outside the workspace, such as an Obsidian vault (threat model row 34).
+The folder must be listed by name in `notes_roots` in settings.json, which P9 never writes, and named by a section;
+the page and the phone send only that name and a path inside the folder. P9 opens only `.md` files, refuses `..`,
+absolute paths, names starting with a dot (`.obsidian`, `.git`) and links that lead out of the folder, and applies
+File protection there as in the workspace. A folder that holds the workspace, the home folder or P9's recovery folder
+is refused. Saves use the same guarded save as workspace files: a note changed on disk since you opened it is never
+overwritten without your say. Rename keeps the note in its folder and refuses a name that exists. The preview shows a
+note's HTML, links and images as text. A paired phone has the same access to the folder as the desktop.
+
+## Mission pages with other schemes
+
+A registry page opens a scheme other than http(s) only if you list it in `page_schemes` in settings.json, which P9
+never writes, and only after you confirm the full link (threat model row 35). `javascript:`, `file:`, `data:`,
+`vbscript:` and `blob:` links are refused even when listed. A handler you list, such as `ms-settings:` or `obsidian:`,
+is trusted as you chose.
+
+## P9 MCP server
+
+The agent in each of P9's chats gets a `p9` MCP server (threat model row 33). It reaches the daemon only through the
+desktop socket or pipe with a random token for that chat, which dies when the chat stops; the phone listener has no
+`/mcp` route. An agent in a P9 chat can change Mission buttons only while you let it edit files (not under the agent
+lock or File protection), never over an edit you made since its last read, and runs nothing without your yes in that
+chat: running a script and answering a needs-you item raise the chat's own approval prompt. An agent that can run
+shell commands can read its relay's token, as it can read the desktop's own connection file.
+
+The agent can pin text cards above its own chat's composer with `pin_card` and remove them with `unpin_card` (threat model
+row 42). A card is text only, at most 8 KB, and renders like an agent reply: raw HTML shows as text, a link as its text
+with nothing to click, an image as its alt text. Cards are kept in the chat's history in the daemon's ledger, so the
+desktop and a paired phone show them again after a restart. Pinning writes no file, so the agent lock does not stop it.
+
+Hand off (Claude chats only) stops the chat and opens a P9 terminal in the chat's folder with
+`claude --resume <session> --remote-control` typed in but not run. Nothing reaches claude.ai until you press Enter;
+Remote Control then needs Claude Code signed in with a claude.ai subscription.
+
 ## File protection
 
 File protection is on by default. While it is on, P9's file routes and editor, on the desktop and on a paired phone,
@@ -186,7 +222,7 @@ table with slug- or UUID-shaped IDs (chat may add an operation ID), and map each
 daemon route; the daemon validates every body again. The socket cookie and
 bootstrap file never reach the renderer. No process argv or arbitrary URL crosses the bridge, and the only filesystem paths are workspace-relative ones the daemon
 checks again (since 2026-10-19: the Chat Focus file browser's read-only list and read, threat model row 23, and a new
-chat's folder, row 24): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
+chat's folder, row 24; since v0.1.5, paths inside a Mission notes folder named in settings.json, row 34): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
 browser cannot write. A chat's folder is where its agent starts, not a sandbox (Codex's own sandbox keeps its writes there;
 Claude can still reach the rest of the workspace under its permission rules). The app ships no sample data (GitHub issue #4):
 it lives in `test/sample-data.mjs`, which the packaged build leaves out. The one test-only path is `window.p9.sample`: the desktop
@@ -246,7 +282,11 @@ enrollment mutation; a missing or different Origin is 403.
   12 h session expires, and one whose client stops reading (8 MiB queued) is dropped.
 - **Desktop only.** `/devices` and its approve, refuse, lock, revoke and reset routes,
   and `/setup` (it names the workspace and settings file), exist only on the Unix socket;
-  on TCP they are 404. `/health` on TCP leaves out the workspace path. A failed New idea
+  on TCP they are 404. That includes `/setup/settings`, which Settings > Mission Control files uses: it changes
+  settings.json only from the desktop, through the same checks P9 runs at start, and keeps the old file as
+  settings.json.bak (threat model row 49). It takes only settings.json keys; a value those checks refuse writes
+  nothing and shows its reason under its box. Saves run one at a time, and each lands by a temporary file and a
+  rename, so a quick second save never drops the first. `/health` on TCP leaves out the workspace path. A failed New idea
   save answers with an allowlisted code (`request-refused`, `storage-unavailable`), never
   the system's error text, which can hold paths.
 - **Rate limit and audit.** 10 failed logins in a sliding 5-minute window close
@@ -267,6 +307,16 @@ enrollment mutation; a missing or different Origin is 403.
   the server does not check it. Approval on the desktop is the gate.
 - **Terminal socket.** `/terminals/:id/socket` attaches a tmux control-mode client; input
   goes back only as `send-keys -H` hex, so no byte is parsed as a tmux command.
+- **Phone link (threat model row 46).** The Phone button in a desktop chat shows a QR code and a link,
+  `https://<server_host>/phone#chat=<id>`. It holds only the chat's ID: no token, no session. The QR is drawn on
+  your computer, never by a QR service. The phone still signs in with your passkey, and opens the chat only if it is
+  in the phone's own list.
+- **Phone queue (threat model row 45).** A message you queue on the phone (typed offline, or while a question or
+  approval waits) stays in that phone's browser storage until it is sent or you take it back. It is sent once: a
+  retry carries the same operation ID, and it waits for the turn's end, so it declines nothing.
+- **Phone first read (threat model row 47).** On opening, the phone reads only the chats that are still running; a
+  stopped chat loads when you pick it. The daemon takes at most 100 chat IDs in that read and refuses any that are
+  not chat IDs; the phone then falls back to its full read. It never returns more than the phone could read before.
 
 What an agent or a terminal can do with what it can see: P9 gives children no session
 cookie, CSRF token or desktop cookie (the allowlisted environment), and the remote port
@@ -299,6 +349,17 @@ the Dev Focus editor host (its own `p9-editor-host-*` scope, stopped when the wi
 and pages launched from Mission Control, and registry entries marked `terminal: true`, which start
 detached in their own Konsole window.
 
+Windows: each chat and registry script runs in its own kill-on-close Job Object
+(scripts/windows-host.ps1), and Stop or Stop All closes it, which ends everything inside. One exception: a script
+record marked `detach: true` in the registry or space file (P9's file API cannot write either while file
+protection is on). That script still ends, but whatever it starts leaves its job and keeps running past
+Stop, Stop All and a daemon restart. Apps, pages and terminal entries start outside the daemon's job, so a daemon
+restart leaves them running, as on Linux. A `print_url` server stays in the daemon's job and ends with it (known gap).
+Stopping the task (schtasks /end, Stop-ScheduledTask) ends only its conhost. The daemon's host watches that
+parent process and closes the daemon's job when it ends, so node and every process still inside go too.
+A Job Object is not a security boundary on Windows: any process can already start another outside it (through WMI or
+Task Scheduler).
+
 Linux terminal sessions are real tmux sessions recorded in the daemon ledger and
 reconciled against the dedicated socket at startup. The tmux server runs as its own
 transient user unit with only P9's allowlisted environment, and tmux puts each pane in a
@@ -325,8 +386,20 @@ entirely. Each session serves only its own origin: the shell's session answers 4
 p9://dev/, and the dev session 404 for p9://app/. A failed start, a failed page load or
 a crashed editor page is rebuilt on the next open. Its CSP allows only self scripts plus wasm, and connections only to the
 editor host's loopback port. Its preload exposes p9dev.config(), p9dev.save(path, hash,
-content), p9dev.create(path, content), p9dev.hostPath(path, kind) and p9dev.openInCode(name, line, reason); the main process accepts them only
+content), p9dev.create(path, content), p9dev.hostPath(path, kind), p9dev.openInCode(name, line, reason) and, since v0.1.5,
+p9dev.openFolder() (no arguments); the main process accepts them only
 from that view's main frame on that exact page, and refuses them from the shell.
+
+Open Folder (since v0.1.5, threat model row 41): Dev Focus can open a folder outside your workspace only from the
+desktop, after you confirm it, and never your home folder, a drive root or P9's own folders. Its saves get the same
+conflict check as the workspace, and the phone cannot write there. The page passes nothing: main shows the system
+folder dialog. A folder inside the workspace opens at once, as the workspace. For one outside, main shows a confirm
+naming it, then sends it to the daemon's desktop-only `POST /dev/root`. The daemon refuses a folder that holds the
+workspace, home, or P9's state, recovery or ownership folder, or that sits inside one of P9's folders, and checks it
+again on every save. It keeps the folder in memory only: a daemon restart, a workspace change or going back to the
+workspace ends it. Main adds the folder to each save; the page never names it. A save from a page left from an earlier
+folder is refused, never written into the new one. Saves go through the same guarded writer as the workspace (hash
+check, no `..` or links out, File protection's locked names).
 
 New File and Save As reach the daemon's desktop-only POST /files, which calls the same create-only writer as
 Mission's New idea: it makes a new name and refuses locked names while File protection is on. Once made, the file
@@ -397,9 +470,11 @@ them. Install only extensions you trust. The terminal is a real shell.
 The editor host's port is not the remote port: the phone/remote transport has no route
 to it, and /files on the remote transport answers 401 without a session (phase 3 remote
 isolation test); with a session it serves files like the desktop.
-**Surface 6: no workspace trust prompt.** Dev Focus opens one folder only, the configured
-workspace root, and treats it as trusted (workspace trust off). A trust prompt would be
-answered once for that one folder and never shown again, so it adds no protection here.
+**Surface 6: no workspace trust prompt.** Dev Focus opens the configured workspace root, or
+a folder you pick with Open Folder (above), and treats it as trusted (workspace trust off).
+For the workspace a trust prompt would be answered once and never shown again, so it adds
+no protection there; for a folder outside the workspace, the confirm before it opens is the
+prompt. Opening a folder in Dev Focus applies its settings and tools as soon as it opens.
 What does hold (phase 12, tested): a folder-open task never runs by itself. VS Code reads
 task.allowAutomaticTasks only from user settings (application scope), so a repository's
 own "on" is ignored, and with the default VS Code asks before running a folder-open task.
@@ -441,10 +516,19 @@ and 8 MiB of base64 each, and stores any other image as a short note; the window
 image. P9 never loads an image from an address an agent names, and Markdown images in a reply stay their
 alt text (threat model row 26).
 
+## Photos you send
+
+Photos you send are kept on your computer, in P9's state folder, so the chat can show them again; only that chat's
+view asks for them, the phone needs your passkey session, and P9 deletes the oldest once they pass 200 MB (threat
+model row 43). Each is stored under the hash of its bytes (folder 0700, file 0600), after the same checks as before:
+PNG, JPEG, GIF or WebP, at most 4 a message and 2 MiB of base64 each. The daemon answers a request for one only when
+that chat's own history names that hash; the file name is built from the hash, never from the request. Deleting a chat
+is not possible, so the 200 MB limit is what removes them. The phone does not show sent photos.
+
 ## Outbound requests a reader of this file should know about
 
 Things P9 does that reach the network or a host outside your machine, each covered
-in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28):
+in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28, 39, 40, 44):
 
 - **Pets (petdex).** Settings > Pets fetches petdex.dev's manifest (https only, capped) and,
   for a pet found there, its `pet.json` and spritesheet from `https://assets.petdex.dev` only;
@@ -459,13 +543,60 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28)
   their own origin, p9://webview, walled off from the editor page and its save bridge, as in
   VS Code. Their scripts run, and their files come from the editor host; a request for them
   that would leave the machine is cancelled. All extension pages share that one origin.
-- **Check for updates.** Settings > Check for updates opens P9's newest GitHub release
-  (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser; GitHub's sign-in and the
-  download happen there. P9 itself sends nothing, downloads nothing and keeps no GitHub token
-  (threat model row 28).
+- **Check for updates.** Where automatic updates are off, Settings > Maintenance > Updates > Check now opens P9's newest GitHub release
+  (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser (threat model row 28).
+- **Auto-update.** The installed app (Windows installer, Linux AppImage) asks GitHub for P9's
+  newest release, downloads it and installs it when you quit; see Auto-update below (threat
+  model row 39). A source checkout never does. On Windows, a rollback (threat model row 40) can download the
+  installer of the version you had from that release on GitHub, when it was not kept.
+- **Mission Control tile icons.** A link tile with no picture and no text icon of its own shows the site's icon
+  (threat model row 44). The daemon asks that site itself for its page head and icon (GET only, no cookies, 5 s,
+  128 KB for the page and 200 KB for the icon, at most 4 icons), never a favicon service, so the site learns your IP
+  address and that P9 looked. A link you saved to a host on your own network is asked as you saved it; a redirect or
+  an icon on another site is followed only to a public address, never to your router or another private address. The
+  icon must be a PNG, JPEG, WebP or ICO by its bytes, is cached in P9's state folder (7 days, a miss 1 day) and is
+  shown as an image only. Your own pictures (the Picture button in Edit names and icons) are saved beside your
+  registry only after you confirm, at most 256 KB, and agents cannot set them.
 - **Landing page name.** The landing greeting's name comes from Settings (or your account's
   first name, once, if the file is new); it is shown as text on your own screen and never sent
   anywhere.
+
+## Auto-update
+
+The installed app updates itself from P9's public GitHub Releases (threat model row 39). It uses
+electron-updater, Stable releases only: a draft or a pre-release is never offered, and an older
+version never replaces a newer one, except by the rollback below.
+
+- **What is downloaded.** `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the newest
+  version, its file and that file's sha512; then the Windows installer `.exe` (with its `.blockmap`, so
+  only the changed parts download) or the `.AppImage`. Nothing else.
+- **From where.** `https://github.com` and GitHub's download host, over HTTPS, for the one repository
+  P9 is published from. No sign-in, no token, no account: the release is public. GitHub learns your IP
+  address, that P9 checked, and when.
+- **When.** Shortly after the app starts and every few hours while it is open. A found update downloads
+  in the background and installs when you quit the app, or at once from Settings > Maintenance >
+  Updates. Installing restarts the background service on the new version, which ends a chat turn in
+  progress; on Linux the restart happens the next time the AppImage starts.
+- **How it is checked.** The downloaded file's sha512 must equal the one in `latest*.yml`, or it is
+  thrown away. P9's builds are not code-signed, so there is no publisher signature to check: the
+  sha512 proves the file is the one the release names, not who made the release.
+- **When it is off.** Running from a source checkout (`!app.isPackaged`), any system other than
+  Windows and Linux, a build without `resources/app-update.yml`, and on Linux any run that is not the AppImage. Settings shows the
+  Updates row as off and says why.
+- **Rollback (threat model row 40).** An update that fails its first 2 starts (window not ready, or the
+  service not answering as that version, within 180 s; quitting P9 or closing its window first does not
+  count, a crash does) goes back to the last version that started: the
+  installer or AppImage of that version kept in P9's folder, or on Windows, when it was not kept, that
+  release's installer downloaded from GitHub and run only when its sha512 matches that release's
+  `latest.yml`. The failed version is not offered again; the restored app says what happened once and
+  offers a prefilled GitHub bug report with the logs, home folder, user and machine names, tokens and IP
+  addresses removed, which you read and submit yourself.
+- **What a person who controls a release can do.** Anyone who can publish a release in P9's repository
+  (the owner's GitHub account, or the CI token that uploads the files) can ship any program, and every
+  installed P9 will download it and run it as you, with everything you can reach. HTTPS and the sha512
+  stop a change on the way; they do not stop a bad release. Protecting that account and that token is
+  what protects you. If you would rather check each version yourself, use a source checkout, which
+  never updates on its own.
 
 ## Phase 12 adversarial results
 

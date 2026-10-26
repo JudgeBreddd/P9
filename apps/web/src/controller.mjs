@@ -1,10 +1,15 @@
-import { popover as createPopover, svg, esc, limitLine, md } from './helpers.mjs';
+import { popover as createPopover, svg, esc, limitLine, md, info } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
 import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
+import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
+import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
+import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
+import { phoneDialogBody } from './phone-link.mjs';
+import { pinned, applyCard } from './pinned.mjs';
 
 export function mountShell() {
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
@@ -30,7 +35,13 @@ const written = new WeakMap();
 // event rebuilt the panes, tabs and cards, restarting halos, blinks and thumbnails). Nodes are matched by position; kept
 // ones keep their animations, decoded images and scroll. Form values follow the new markup, as a rebuild did. Pets
 // (canvas.pet, added by tickPets) are left in place.
-function morph(el, html) { const t = document.createElement('template'); t.innerHTML = html; sync(el, t.content); return el; }
+function morph(el, html) { const t = document.createElement('template'); t.innerHTML = html; sync(el, addHalos(t.content)); return el; }
+// Every .fx-halo gets one ring child (builder-look.css turns it by transform, so the browser does not repaint the ring each
+// frame). Added here, on each path that writes markup, so the templates stay as they were. Not read by screen readers or clicks.
+function addHalos(root) {
+  for (const h of [root, ...root.querySelectorAll('.fx-halo')]) if (h.matches?.('.fx-halo') && !h.querySelector(':scope > .halo')) h.insertAdjacentHTML('beforeend', '<span class="halo" aria-hidden="true"><i></i></span>');
+  return root;
+}
 function sync(a, b) {
   const olds = [...a.childNodes].filter(n => !(n.nodeType === 1 && n.matches('canvas.pet'))), news = [...b.childNodes];
   news.forEach((n, i) => {
@@ -52,7 +63,7 @@ function attrs(o, n) {
   for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
   for (const { name, value } of [...n.attributes]) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
 }
-const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; } return el; };
+const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; addHalos(el); } return el; };
 // note 7: every chat starts in Auto mode
 // Each agent's last model and command lists (daemon config / available_commands_update), so a new chat has them before its own session starts.
 const lastModels = {}, lastCommands = {}, lastPickers = {};
@@ -361,28 +372,31 @@ const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copi
 function toast(a, done) {
   if (!done) S.alerts.push(a);
   const el = document.createElement('button');
-  el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`;
+  el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
   el.onclick = () => { el.remove(); if (!done) openModal({ kind: 'alert', a }); };
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
   $('#toasts').append(el); renderCards();
 }
-function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) { s.hidden = false; closedChats.delete(id); keepClosed(); } show(id); renderTabs(); renderChats(); }
+function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
 const show = id => { S.open = [id, ...S.open.filter(x => x !== id)].slice(0, 2); if (S.files) renderTree(); }; // Current project files follow the chat shown
-// Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped and not
-// closed by you; the rest wait in History. Closed IDs stay in localStorage so a reload does not bring them back.
+// Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped; the rest
+// wait in History. The x stops it on the daemon, so every window and the phone agree (owner, 2026-10-25: a new window
+// reopened 9 chats closed in another). Before that, closed IDs lived in this window's localStorage: loadChat stops the
+// idle ones among them once, then forgets the list.
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
-const keepClosed = () => localStorage.setItem('eh-closed-chats', JSON.stringify([...closedChats]));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
 function closeTab(id) {
   const s = S.sessions.find(x => x.id === id);
   if (s) s.done = false; // closing it is seeing it
-  // The x stops a running chat, like closing a VS Code terminal tab (Builder, 2026-10-18); History reopens it.
-  if (s?.live) { if (s.state === 'running') liveChat.stop(s); s.hidden = true; closedChats.add(id); keepClosed(); } else S.sessions = S.sessions.filter(x => x.id !== id);
-  S.open = S.open.map(o => o === id ? (S.sessions.find(x => !x.hidden && !S.open.includes(x.id)) || {}).id : o).filter(Boolean); renderTabs(); renderChats();
+  // The x stops the chat, running or idle, like closing a VS Code terminal tab (Builder, 2026-10-18; owner, 2026-10-25:
+  // "hitting the x is going to make them think they closed it. like stopped it"); History reopens it.
+  if (s?.live) { liveChat.stop(s, true); s.hidden = true; } else S.sessions = S.sessions.filter(x => x.id !== id);
+  untab(id);
 }
+const untab = id => { S.open = S.open.map(o => o === id ? (S.sessions.find(x => !x.hidden && !S.open.includes(x.id)) || {}).id : o).filter(Boolean); renderTabs(); renderChats(); };
 function newSession(agent, model) {
   if (liveChat.on) return liveChat.create(agent, newFolder);
   const s = { id: 's-' + Date.now(), agent, title: `${names[agent]} ${S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [] };
@@ -410,51 +424,65 @@ $('#newFolder').onchange = async e => {
 };
 const newPop = popover($('#newBtn'), $('#newPop'), renderNewFolder);
 $('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model); newPop.close(); });
-// History: with the daemon, every live chat, newest first (Open gives it a tab again); without it, the sample list.
+// History: with the daemon, every live chat a message was sent in, most recently used first (owner, 2026-10-25; Open
+// gives it a tab again); without it, the sample list.
 const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.slice().reverse().map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
+const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
 const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
 const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
 $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
-const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text); e.mdFor = e.text; } return e.md; };
+// CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
+const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
-const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= 80 ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
-function meters(s) {
-  const ctx = s.context ? Math.round(s.context.used / s.context.size * 100) : null;
+// Amber from 75% on every bar (MR1).
+const HOT = 75;
+const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
+// The same reading as a ring (Mission's Usage card and dialog); the label comes first in the markup and is drawn under the ring.
+const ringMeter = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="uring" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><span class="lbl">${label}</span><div class="ring" role="img" aria-label="${esc(label)} ${p == null ? 'no reading' : p + '%'}" style="--p:${Math.min(p || 0, 100)}" ${p >= HOT ? 'data-hot' : ''}><b>${p == null ? '—' : p + '%'}</b></div></div>`; };
+const usageRings = () => { const now = Date.now(); return Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now); return `<div class="uagent"><b>${names[a]}</b>${ringMeter('5 h', lim.fiveHour, line, now)}${ringMeter('Week', lim.sevenDay, line, now)}</div>`; }).join(''); };
+// The cache clock: text and state, so the 15 s tick can move it without rebuilding the pane.
+const cacheOf = s => {
   const cacheMin = !s.live ? s.cacheMin : s.agent === 'claude' && s.lastEnd ? Math.floor((Date.now() - s.lastEnd) / 60000) : null;
   const left = cacheMin == null ? null : 60 - cacheMin;
+  return left == null ? ['—', ''] : left <= 0 ? ['cold', 'cold'] : [left + ' min', left < 20 ? 'cooling' : 'warm'];
+};
+function meters(s) {
+  const ctx = s.context ? Math.round(s.context.used / s.context.size * 100) : null;
   const lim = s.live ? usage.limits?.[s.agent] : { fiveHour: { usedPercent: s.limits.h5 * 100 }, sevenDay: { usedPercent: s.limits.d7 * 100 }, asOf: Date.now() };
   const line = limitLine(names[s.agent], lim), now = Date.now();
   const bar = (label, w) => meterBar(label, w, line, now);
-  const cache = left == null ? ['—', ''] : left <= 0 ? ['cold', 'cold'] : [left + ' min', left < 20 ? 'cooling' : 'warm'];
+  const cache = cacheOf(s);
   return `<div class="meters">
-    <div class="meter" title="${esc(ctx == null ? 'No usage_update from this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= 80 ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
+    <div class="meter" title="${esc(ctx == null ? 'No context size reported by this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
     ${bar('5 h', lim?.fiveHour)}
     ${bar('7 d', lim?.sevenDay)}
-    <div class="cache" data-s="${cache[1]}" title="1-hour prompt cache, timed from the last turn end">${svg.clock}${cache[0]}</div>
+    <div class="cache" data-s="${cache[1]}" title="How long the agent still has this chat saved for a cheaper next message (the 1-hour prompt cache, counted from its last output)">${svg.clock}${cache[0]}</div>
   </div>`;
 }
+// CP3: a sent photo comes back from the daemon by hash, once; until then (or once pruned) its tile stays blank.
+const chatImgs = new Map();
+const loadImg = (s, hash) => { if (chatImgs.has(hash) || !s.live) return; chatImgs.set(hash, '');
+  window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) chatImgs.delete(hash); }); };
 function event(e, s) {
   switch (e.t) {
-    case 'user': return `<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images)} image${e.images > 1 ? 's' : ''}</div>` : ''}</div>`;
+    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${chatImgs.get(i.hash) ? ` src="${chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${names[s.agent]}</div>${mdOf(e)}${agentImgs(e.images, names[s.agent])}</div>`;
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
     case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${agentImgs(e.images, names[s.agent])}`;
-    case 'plan': return `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan</div><ul style="margin:0;padding:0">${e.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${st === 'completed' ? '✓' : st === 'in_progress' ? '▸' : '○'}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>`;
-    case 'notice': return `<div class="notice">${esc(e.text)}</div>`;
+    case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}</div>`;
   }
   return '';
 }
 const diff = rows => `<div class="diff">${rows.map(([k, l]) => `<div class="${esc(k)}">${k === 'add' ? '+' : k === 'del' ? '−' : ' '} ${esc(l)}</div>`).join('')}</div>`;
 function pending(s) {
-  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
-  if (s.pending === 'question') { const q = s.events.find(e => e.t === 'question'); return `<form class="pending fx-halo" data-question><div class="eyebrow">${names[s.agent]} asks</div><h4>${esc(q.title)}</h4>${q.unsupported ? '<p class="hint">P9 cannot show this form faithfully. Decline, or answer in a message.</p>' : ''}${q.fields.map((f, i) => { const head = `<span>${esc(f.label)}${f.required ? ' *' : ''}</span>${f.hint ? `<small>${esc(f.hint)}</small>` : ''}`; return f.kind === 'radio' ? `<div class="field">${head}${f.options.map(opt).map(([v, l]) => `<label><input type="radio" name="f${i}" value="${esc(v)}" ${(q.vals?.['f' + i] ?? ('def' in f ? f.def : opt(f.options[0])[0])) === v ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>`
+  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}${s.live ? '<p class="hint">Sending a message declines this and sends the message instead.</p>' : ''}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
+  if (s.pending === 'question') { const q = s.events.find(e => e.t === 'question'); return `<form class="pending fx-halo" data-question><div class="eyebrow">${names[s.agent]} asks</div><h4>${esc(q.title)}</h4>${q.unsupported ? '<p class="hint">P9 cannot show this form faithfully. Decline, or answer in a message.</p>' : ''}${s.live ? '<p class="hint">Sending a message declines this question and sends the message instead.</p>' : ''}${q.fields.map((f, i) => { const head = `<span>${esc(f.label)}${f.required ? ' *' : ''}</span>${f.hint ? `<small>${esc(f.hint)}</small>` : ''}`; return f.kind === 'radio' ? `<div class="field">${head}${f.options.map(opt).map(([v, l]) => `<label><input type="radio" name="f${i}" value="${esc(v)}" ${(q.vals?.['f' + i] ?? ('def' in f ? f.def : opt(f.options[0])[0])) === v ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>`
     : f.kind === 'multi' ? `<div class="field">${head}${f.options.map(opt).map(([v, l], j) => `<label><input type="checkbox" name="f${i}~${j}" value="${esc(v)}" ${q.vals?.[`f${i}~${j}`] !== undefined ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>` : `<div class="field">${head}<input data-slot="input" name="f${i}" value="${esc(q.vals?.['f' + i] || '')}"></div>`; }).join('')}<div class="acts">${q.unsupported ? '' : '<button data-slot="button" data-variant="default" data-size="sm" type="submit">Submit answer</button>'}<button data-slot="button" data-variant="outline" data-size="sm" type="button" data-decline>Decline</button></div></form>`; }
   return '';
 }
@@ -479,14 +507,16 @@ function pane(s, i, bare) {
       <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
       <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
       ${pickerSelects(s)}
-      <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Tool calls and thinking">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
+      <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
+      ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
+      ${s.live && s.agent === 'claude' && s.session ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
-    <div class="bottom"><div class="col">${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
-      ${s.queue.length ? `<div class="queue">${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="hint">${working ? 'Enter · queue  Ctrl Enter · interrupt and send' : 'Shift Enter · new line / for commands'}</span><span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button>${working ? `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Stop this turn" data-cancel>${svg.stop}</button>` : ''}<button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Queue (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
+      ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !s.readonly ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
@@ -514,13 +544,14 @@ function paint(root, ss, only) {
   if (part && !panes.length) return;
   panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
-  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
+  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); addHalos(t.content); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
   else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
     place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
     p.querySelectorAll('details[data-ev]').forEach(d => d.ontoggle = () => { s.events[d.dataset.ev].open = d.open; });
+    p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
     p.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => { if (s.live) return liveChat.approve(s, b.dataset.approve); const a = s.events.find(e => e.t === 'approval'); s.events = s.events.filter(e => e !== a); s.pending = null; if (b.dataset.approve === 'reject') { s.events.push({t:'notice', text:'Denied: ' + a.title + '. ' + names[s.agent] + ' will take another approach.'}); reply(s, 'Understood, I will not touch server.ts. I can expose the grace through the existing /api/conversations payload instead; say so and I will do that.'); } else { s.events.push({t:'tool', status:'completed', title:a.title, diff:a.diff}); const plan = s.events.find(e => e.t === 'plan'); if (plan) { plan.entries[2][0] = 'completed'; plan.entries[3][0] = 'in_progress'; } reply(s, 'Bootstrap now carries leaseGraceMs. Next I will read it in the chat-pane footer so the 60 s copy stops being hardcoded.'); } answered(s); });
     const q = p.querySelector('[data-question]'); if (q) { q.oninput = e => { const qe = s.events.find(e => e.t === 'question'); qe.vals = Object.fromEntries(new FormData(q)); (qe.touched ??= new Set()).add(e.target.name.split('~')[0]); }; q.onsubmit = e => { e.preventDefault(); if (s.live) return liveChat.answer(s, Object.fromEntries(new FormData(q))); const v = new FormData(q).get('f0'), qe = s.events.find(e => e.t === 'question'); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'tool', status:'completed', title:qe.title, output:'answer: ' + v}); reply(s, v); answered(s); }; q.querySelector('[data-decline]').onclick = () => { if (s.live) return liveChat.decline(s); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'notice', text:'Question declined.'}); answered(s); }; }
     const ta = p.querySelector('textarea');
@@ -535,17 +566,38 @@ function paint(root, ss, only) {
     };
     showSlash();
     ta.oninput = () => { s.draft = ta.value; showSlash(); };
-    if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; c.focus(); c.setSelectionRange(caret.s, caret.e); }
-    // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now
-    const go = now => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; s.draft = ''; if (busy(s) && !now) { s.queue.push(t); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } interrupt(s, t); if (bare && settings.closeOnSend) closeModal(); };
+    if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
+    // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
+    // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
+    // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
+    // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
+    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
+    const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
+      // Tab with an empty box still moves focus on.
+      const key = busy(s) && !s.readonly && turnKey(e);
+      if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
+      if (key === 'steer' || key === 'queue' && ta.value.trim()) { e.preventDefault(); return go(false, key); }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(e.ctrlKey || e.metaKey); }
     };
     p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
-    const cancel = p.querySelector('[data-cancel]'); if (cancel) cancel.onclick = () => { cancelTurn(s); renderTabs(); renderChats(); };
-    p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); renderChats(); });
-    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); interrupt(s, t); });
+    p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
+    p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
+    p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => restartP9(b));
+    // PH5: the daemon stops the chat and opens a terminal with the command typed in; the dock shows that terminal.
+    p.querySelectorAll('[data-handoff]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const r = await liveChat.call('handoff', { id: s.id });
+      if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
+      const shown = dockTerm?.open;
+      S.termOpen[S.focus] = true; showTerm();
+      if (shown) { dockTerm.attach(r.body.terminal); dockTerm.focus(); }
+    });
+    p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
+    p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
+    p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
+    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
     // note 7: a mode picked mid-turn shows at once but applies when the turn ends
     p.querySelector('[data-mode]').onchange = async e => {
       const m = e.target.value;
@@ -566,6 +618,7 @@ function paint(root, ss, only) {
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); renderTabs(); renderChats(); };
     p.querySelector('[data-steps]').onclick = () => { hideSteps = !hideSteps; localStorage.setItem('p9-hide-steps', hideSteps ? '1' : '0'); renderChats(); };
     const cl = p.querySelector('[data-close]'); if (cl) cl.onclick = () => closeTab(s.id);
+    const ph = p.querySelector('[data-phone]'); if (ph) ph.onclick = () => continueOnPhone(s);
   });
 }
 function answered(s) {
@@ -599,9 +652,9 @@ async function addImages(s, files) {
   }
   renderChats();
 }
-function startTurn(s, t) {
+function startTurn(s, t, when) {
   const images = s.images || []; s.images = [];
-  if (s.live) return liveChat.prompt(s, t, images);
+  if (s.live) return liveChat.prompt(s, t, images, when);
   if (s.state === 'idle') s.state = 'running';
   s.events.push({t:'user', text:t, when: new Date().toTimeString().slice(0,5), images: images.length || undefined}); view['chats:' + s.id] = view['mdlBody:' + s.id] = null;
   s.events.push({t:'tool', status:'in_progress', title:'Thinking about: ' + t.slice(0, 40)});
@@ -613,11 +666,13 @@ function startTurn(s, t) {
 // still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
 function interrupt(s, t) {
   if (!busy(s)) return startTurn(s, t);
-  if (s.live) { s.queue.unshift(t); cancelTurn(s); renderChats(); return; }
+  if (s.live) { s.queue.unshift(t); keepQueue(s); cancelTurn(s); renderChats(); return; }
   cancelTurn(s); startTurn(s, t);
 }
 function cancelTurn(s, quiet) {
-  if (s.live) { if (!quiet) liveChat.call('cancel', { id: s.id }); return; }
+  // CP7: no turn to cancel (it ended, or its end never came) means idle: the chat stops showing working and an
+  // interrupt's message, queued first, goes now.
+  if (s.live) { if (!quiet) liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn') { s.working = s.prompted = false; turnEnd(s); } }); return; }
   s.turn = (s.turn || 0) + 1; s.streaming = false; // stale timers see a new turn number and stop
   s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress'));
   if (!quiet) s.events.push({t:'notice', text:'Turn cancelled.'});
@@ -634,7 +689,7 @@ function finished(s) {
 }
 function turnEnd(s) {
   if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
-  if (s.queue.length) startTurn(s, s.queue.shift()); else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
+  if (s.queue.length) { const t = s.queue.shift(); keepQueue(s); startTurn(s, t); } else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
   const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
@@ -714,14 +769,14 @@ function editorHtml(name, id) {
   return `<div class="ed"><pre class="gut" aria-hidden="true">${lines(d.text)}</pre><textarea id="${id}" spellcheck="false" aria-label="${esc(name)}">${esc(d.text)}</textarea></div>`;
 }
 // Keeps the doc, the gutter and the caret in step with the textarea; after() repaints dirty marks.
-function wireEditor(root, name, after) {
+function wireEditor(root, name, after, save = () => saveDoc(name)) {
   const d = doc(name), ta = root.querySelector('.ed textarea'), gut = root.querySelector('.ed .gut');
   ta.setSelectionRange(...d.sel); ta.scrollTop = d.top; gut.scrollTop = d.top;
   ta.oninput = () => { const was = dirty(name); d.text = ta.value; fitGut(ta, gut); d.sel = [ta.selectionStart, ta.selectionEnd]; if (was !== dirty(name)) after(); };
   ta.onscroll = () => { d.top = gut.scrollTop = ta.scrollTop; };
   observe(() => fitGut(ta, gut)).observe(ta);
   ta.onselect = ta.onkeyup = ta.onclick = () => { d.sel = [ta.selectionStart, ta.selectionEnd]; };
-  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveDoc(name); after(); } };
+  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); after(); } };
 }
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
@@ -750,8 +805,26 @@ async function loadUsage() {
   Object.assign(usage, result.status === 200 ? result.body : { state: 'unavailable' });
   renderMission();
 }
-// The chat meters read usage.limits: fetched again each minute, which also moves the cache timer on.
+// The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
+// ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
 const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+let usageSoon = 0;
+// Panes are redrawn only when the figures moved, so a turn end in one chat does not rebuild the others (E2).
+const usageNow = () => { clearTimeout(usageSoon); usageSoon = setTimeout(() => { const was = JSON.stringify(usage.limits); loadUsage().then(() => { if (JSON.stringify(usage.limits) !== was) renderChats(); }); }, 300); };
+setInterval(() => { if (document.hidden) return; for (const s of S.sessions) for (const el of document.querySelectorAll('.pane[data-id="' + s.id + '"] .cache')) { const [text, state] = cacheOf(s); el.dataset.s = state; el.lastChild.textContent = text; } }, 15000);
+// Restart P9's background service (finding 6): the one way back for a service that hangs or lost a file, from the Mission
+// notes and Settings. Main asks first, and restarts a service that does not answer at all. RS1: main answers once the new
+// service answers, or says why not. repair (MT1): set the service up again first. button: none from Ctrl K.
+const restartBtn = () => (window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-restart-btn>Restart P9</button>' : '');
+async function restartP9(button, repair) {
+  if (button) button.disabled = true;
+  const r = await (repair ? window.p9.repairService() : window.p9.restartService()).catch(() => ({ error: (repair ? 'repair' : 'restart') + '-failed' }));
+  if (button) button.disabled = false;
+  if (r.cancelled) return;
+  const done = repair ? 'repaired' : 'restarted';
+  toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
+  if (r.restarted) loadMission();
+}
 async function loadMission() {
   if (!window.p9?.mission) return;
   const r = await window.p9.mission('overview');
@@ -759,24 +832,54 @@ async function loadMission() {
     const why = r.body?.error || r.status;
     if (sampleView) live.note = 'Sample data: the P9 daemon did not answer (' + why + ')';
     else if (why === 'settings-missing' || why === 'settings-invalid') live.note = 'Mission Control is not set up yet (' + why + '): see Set up P9.';
-    else { live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.'; if (!lifetime.signal.aborted) setTimeout(loadMission, 5000); }
+    // A file the settings name is missing: which one, so the fix is one path in settings.json (finding 5). Retried, as the
+    // settings and the files load live.
+    else if (why === 'file-not-found') live.note = 'Mission Control cannot find its ' + r.body.setting + ' file, ' + r.body.file + '. Fix that path in P9\'s settings file or create the file; trying again every 5 seconds.';
+    else live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.';
+    live.noteRestart = !sampleView && why !== 'settings-missing' && why !== 'settings-invalid';
+    if (live.noteRestart && !lifetime.signal.aborted) setTimeout(loadMission, 5000);
     return renderMission();
   }
-  const o = r.body;
-  live.on = true; live.note = ''; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
+  applyOverview(r.body);
+  renderMission(); renderTabs(); loadHub(); loadArt();
+}
+// The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
+let lastArt = '';
+async function loadArt() {
+  const r = await window.p9.mission('icons').catch(() => null);
+  if (r?.status !== 200 || lifetime.signal.aborted) return;
+  const key = JSON.stringify(r.body); if (key === lastArt) return; lastArt = key;
+  M.art = r.body; renderMission();
+}
+// Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
+function applyOverview(o) {
+  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
   M.scripts = {}; M.tools = [];
   for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
-  M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id]);
-  M.pages = o.pages.map(x => [x.title, x.url, x.id]);
+  M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
+  M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
   M.space = o.space || [];
   for (const s of M.space) M.scripts[s.title] ||= [];
   applyQueue(o);
-  renderMission(); renderTabs(); loadHub();
 }
+// M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
+// showing; renderMission writes only what changed, so an idle poll costs one local request.
+let lastOverview = '';
+async function refreshMission() {
+  if (!live.on || document.hidden || S.focus !== 'mission' || lifetime.signal.aborted) return;
+  const r = await window.p9.mission('overview').catch(() => null);
+  if (r?.status !== 200 || lifetime.signal.aborted) return;
+  loadArt(); // a site's icon can arrive or age out with no change to the overview
+  const key = JSON.stringify(r.body); if (key === lastOverview) return; lastOverview = key;
+  applyOverview(r.body); renderMission(); renderTabs();
+  if (S.modal?.kind === 'scripts' && !M.scripts[S.modal.g]) closeModal(); // its group is gone
+  else if (['scripts', 'win', 'reviews', 'center'].includes(S.modal?.kind)) renderModal();
+}
+const pollMission = () => { refreshMission(); setTimeout(pollMission, 20000); };
 // _tyler/ items a chat makes get their card when its turn ends (Builder, 2026-10-17); otherwise the queue is read at start.
 let queueTimer = 0;
-const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { applyQueue(r.body); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
+const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { lastOverview = JSON.stringify(r.body); applyOverview(r.body); renderMission(); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
 function applyQueue(o) {
   const drafts = Object.fromEntries(S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
@@ -793,13 +896,25 @@ function applyQueue(o) {
 function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'project' ? 'project' : 'updated';
   S.reviews.sort(by === 'project' ? (a, b) => (a.name || a.proj).localeCompare(b.name || b.proj) : (a, b) => (b.updated || 0) - (a.updated || 0)); return by; }
 // The old workspace-hub sections, live: notifications, Wiki inbox, logs and incidents, work in flight, audit, last solo run.
-const H = { on: false, notices: [], handoffs: [], timer: 0 };
+const H = { on: false, notices: [], handoffs: [], timer: 0, hint: '', unchecked: null };
+// Why no job was checked: an empty list then never reads as "every job reported in" (finding 8).
+const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings' };
+const noticeLine = () => (H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function loadHub() {
   clearTimeout(H.timer);
   const r = await window.p9.mission('hub').catch(() => ({ status: 503 }));
-  if (r.status !== 200) return;
-  const o = r.body; H.on = true;
+  if (lifetime.signal.aborted) return;
+  // No hub in the settings: the sections stay off and the page says why. Asked again, as the settings load live; any other
+  // failure is asked again sooner.
+  if (r.status !== 200) {
+    const off = r.body?.error === 'hub-not-set', hint = off ? 'Logs, incidents and work in flight are off: set hub in the Mission settings file.' : '';
+    if (off) H.unchecked = 'hub-not-set';
+    if (hint !== H.hint) { H.hint = hint; renderMission(); }
+    H.timer = setTimeout(loadHub, off ? 60000 : 15000);
+    return;
+  }
+  const o = r.body; H.on = true; H.hint = ''; H.unchecked = o.unchecked;
   H.handoffs = o.handoffs.sort((a, b) => a.age_days - b.age_days);
   // null while the first doctor sweep runs (it can take two minutes): ask again soon
   H.notices = o.notices && o.notices.map(n => ({ kind: n.kind === 'job' ? 'silent job' : 'setup', txt: n.text, level: 'bad', hub: true }));
@@ -828,7 +943,7 @@ async function answerLive(r) {
 async function runLive(m, id) {
   const res = await window.p9.mission('run', { id, args: m.args, ...(m.armedRun ? { confirm: true } : {}) });
   if (res.status === 200 && res.body.launched) { m.out = ['Opened in a terminal.']; return S.modal === m && renderModal(); }
-  if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.error || res.status)]; return S.modal === m && renderModal(); }
+  if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.reason || res.body?.error || res.status)]; return S.modal === m && renderModal(); }
   let text = '', from = 0;
   for (;;) {
     const o = await window.p9.mission('output', { run: res.body.run, from });
@@ -845,14 +960,14 @@ async function runLive(m, id) {
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
 const allNotes = () => [...(H.notices || []), ...S.alerts];
-const usageBody = () => (usage.limits ? `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex)].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
+const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex)].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`);
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
 const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
-  mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || (H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.'), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
+  mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
   minbox: { show: () => sampleView || H.on, title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
   mlogs: { show: () => sampleView || H.on, title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
     body: () => `<ul class="plist">${M.logs.incidents.map((i, n) => `<li><button data-inc="${n}"${i.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(i.level)}"></span><span class="txt">${esc(i.txt)}</span></button></li>`).join('')}${M.logs.rows.map((r, n) => `<li class="mono sm"${tint(r[0])}><button data-log="${n}"><b>${esc(r[0])}</b><span class="muted">${esc(r[1])}</span><span class="truncate">${esc(r[2])}</span></button></li>`).join('')}</ul>` },
@@ -861,14 +976,16 @@ const wins = {
   mlaunch: { title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
-    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3])).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true)).join('')}</div>` },
+    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
   musage: { title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
-    // On the page: each agent's 5 h and week bars, the same bars as the chat's meters
-    inline: () => { const now = Date.now(), rows = Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now);
-      return `<div class="uagent"><b>${names[a]}</b>${meterBar('5 h', lim.fiveHour, line, now)}${meterBar('Week', lim.sevenDay, line, now)}</div>`; }).join('');
-      return (rows || '<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
+    // On the page: each agent's 5 h and week as rings
+    inline: () => { const rows = usageRings();
+      return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
 };
-const launchTile = (name, title, data, id, page) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : `<span class="mono-ico"${tint(name)}>${esc(name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
+// Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
+// shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
+const art = (kind, key) => M.art?.[kind]?.[key] || {};
+const launchTile = (name, title, data, id, page, icon, shown = {}) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : shown.picture || (!icon && shown.auto) ? `<img src="${esc(shown.picture || shown.auto)}" alt="">` : `<span class="mono-ico"${tint(name)}${icon ? ' data-icon' : ''}>${esc(icon || name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
 const winTop = {};
 const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
   return `<button class="win${lvl === 'bad' ? ' bad fx-halo' : ''}" data-win="${id}"><h4><span class="lvl" data-l="${lvl}"></span>${esc(w.title())}</h4><b class="big${id === 'mprimary' ? ' fx-title' : ''}">${esc(big)}</b><span class="line">${esc(line)}</span></button>`; };
@@ -878,18 +995,27 @@ const PANELS = ['mlogs', 'musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 function renderMission() {
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : ''}</div>`
-    + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}</p>` : '')
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+    + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
+    + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
+    + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
+    + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
     + '<div class="mrow"><section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>'
     + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
+  $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
+  $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
+}
+async function launchLive(name, req) {
+  const res = await window.p9.mission('launch', req);
+  toast({ kind: res.status === 200 ? 'launched' : 'not launched', txt: name + (res.status === 200 ? '' : ' (' + (res.body?.reason || res.body?.error || res.status) + ')'), level: res.status === 200 ? 'ok' : 'bad' }, true);
 }
 // A section window's buttons; back returns to the window
 function bindWin(root, m) {
@@ -900,8 +1026,10 @@ function bindWin(root, m) {
   root.querySelectorAll('[data-handoffs]').forEach(b => b.onclick = () => openModal({ kind: 'handoffs', back: m }));
   root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
     if (!live.on) return toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
-    const res = await window.p9.mission('launch', b.dataset.page ? { kind: 'pages', id: M.pages[+b.dataset.page][2] } : { kind: 'apps', id: M.apps[+b.dataset.app][3] });
-    toast({ kind: res.status === 200 ? 'launched' : 'not launched', txt: b.dataset.launch + (res.status === 200 ? '' : ' (' + (res.body?.error || res.status) + ')'), level: res.status === 200 ? 'ok' : 'bad' }, true);
+    // A link that is not http(s) opens another program: the full link is shown first, and only Open sends confirm (M6).
+    const page = b.dataset.page ? M.pages[+b.dataset.page] : null;
+    if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back: m });
+    launchLive(b.dataset.launch, b.dataset.page ? { kind: 'pages', id: page[2] } : { kind: 'apps', id: M.apps[+b.dataset.app][3] });
   });
 }
 // The parts that change: the queue and notices are the same S.reviews and S.alerts the cards use. Redraws the
@@ -919,33 +1047,134 @@ function missionLive() {
   (needs ? setHTML(needs, S.reviews.length ? `<ul class="plist">${S.reviews.map((r, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted"> · ${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>') : { querySelectorAll: () => [] })
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'review', i: +b.dataset.i }, 'reviews'));
   const notes = allNotes();
-  set('mnotes', notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button data-i="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.'}</p>`)
+  set('mnotes', notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button data-i="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`)
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'alert', a: notes[+b.dataset.i], back: S.modal }));
   set('minbox', M.inbox.length ? `<ul class="plist">${M.inbox.map((x, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(x.status)}>${esc(x.status)}</span><span class="muted sm">${esc(x.pages)} page${x.pages > 1 ? 's' : ''}</span><span class="txt mono sm">${esc(x.batch)}</span></button></li>`).join('')}</ul>` : '<p class="empty">No Wiki batches waiting for review.</p>')
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'inbox', x: M.inbox[+b.dataset.i], back: S.modal }));
+}
+// Notes (threat model row 34): a folder outside the workspace, named in settings.notes_roots; the daemon checks every path.
+// The preview goes through md, which shows raw HTML as text and links and images as plain text (row 18).
+const noteKey = (root, path) => 'notes:' + root + '/' + path;
+const noteError = { exists: 'A note with that name already exists; nothing was changed.', 'no-such-folder': 'That folder does not exist; make it in your notes app first.',
+  'request-refused': 'Use a .md name with no part starting with a dot.' };
+function notesModal(m, body, row) {
+  $('#mdlT').textContent = m.title + ' · notes';
+  if (m.list === undefined) { m.list = null; window.p9.mission('notes', { root: m.root }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
+  const l = m.list, now = Date.now();
+  body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error ? `<p class="sm muted">Could not list the notes (${esc(l.error)})</p>`
+    : `<div class="notes-new"><input data-slot="input" data-new value="${esc(m.draftName || '')}" placeholder="folder/new-note.md" aria-label="New note"><button data-slot="button" data-size="sm" data-create>New note</button></div>`
+      + (l.files.length ? `<ul class="mlist">${l.files.map((f, i) => row(i, '<span class="kind">md</span>', esc(f.path), esc(ago(Math.max(0, Math.round((now - f.modified) / 60000)))) + ' ago')).join('')}</ul>` : '<p class="empty">No .md notes in this folder yet.</p>');
+  $('#mdlFoot').innerHTML = l && !l.error ? `<span class="muted sm" data-notes-count>${l.total > l.files.length ? `Showing the newest ${l.files.length} of ${l.total} notes` : `${l.total} note${l.total === 1 ? '' : 's'}`}${l.partial ? ' · a very big folder: some subfolders were not read' : ''}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-reload>Reload</button>` : '';
+  $('#mdlFoot [data-reload]')?.addEventListener('click', () => { m.list = undefined; renderModal(); });
+  body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'note', root: m.root, path: l.files[+b.dataset.i].path, back: m }));
+  const input = body.querySelector('[data-new]'); if (!input) return;
+  input.oninput = () => { m.draftName = input.value; };
+  const create = async () => {
+    let p = (m.draftName || '').trim().replace(/^\/+/, '');
+    if (!p) return toast({ kind: 'not saved', txt: 'Type a name for the new note first.', level: 'warn' }, true);
+    if (!/\.md$/i.test(p)) p += '.md';
+    const r = await window.p9.mission('noteCreate', { root: m.root, path: p, content: '# ' + p.split('/').pop().replace(/\.md$/i, '') + '\n\n' });
+    if (r.status === 201) { m.draftName = ''; m.list = undefined; openModal({ kind: 'note', root: m.root, path: r.body.path, edit: true, back: m }); }
+    else toast({ kind: 'not saved', txt: p + ': ' + (noteError[r.body?.error] || 'could not create it (' + (r.body?.error || r.status) + ')'), level: 'warn' }, true);
+  };
+  body.querySelector('[data-create]').onclick = create;
+  input.onkeydown = e => { if (e.key === 'Enter') create(); };
+}
+// One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
+function noteModal(m, body) {
+  const key = noteKey(m.root, m.path);
+  $('#mdlT').textContent = m.path;
+  // a draft kept from an earlier open keeps the hash it was read with; otherwise read the disk again
+  if (!m.asked && !dirty(key)) {
+    m.asked = true;
+    window.p9.mission('noteRead', { root: m.root, path: m.path }).then(r => {
+      if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
+      else if (r.status !== 200) m.error = r.body?.error || String(r.status);
+      if (S.modal === m) renderModal();
+    });
+  }
+  const d = S.docs[key];
+  if (!d) { body.innerHTML = `<p class="sm muted">${m.error ? 'Not readable: ' + esc(m.error) : 'Loading…'}</p>`; return; }
+  const c = m.conflict;
+  body.innerHTML = (c ? `<div class="review notes-conflict" data-conflict>${c.diskHash !== undefined
+    ? `<p>Changed on disk since you opened it. Your text is still here.</p><div class="notes-row"><button data-slot="button" data-variant="outline" data-size="sm" data-disk>Load disk version</button><button data-slot="button" data-size="sm" data-mine>Save mine over it</button></div>`
+    : `<p>This note is no longer on disk (moved, renamed or deleted elsewhere). Your text is still here: copy it before you close.</p><div class="notes-row"><button data-slot="button" data-size="sm" data-copytext>Copy my text</button></div>`}</div>` : '')
+    + (m.edit ? editorHtml(key, 'mdlEd') : `<div class="msg agent notes-md" data-preview>${md.parse(d.text)}</div>`);
+  if (m.edit) wireEditor(body, key, () => noteFoot(m), () => saveNote(m));
+  body.querySelector('[data-disk]')?.addEventListener('click', () => { Object.assign(d, { text: c.diskContent, saved: c.diskContent, hash: c.diskHash }); m.conflict = null; renderModal(); });
+  body.querySelector('[data-mine]')?.addEventListener('click', () => saveNote(m, c.diskHash));
+  body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
+  noteFoot(m);
+}
+function noteFoot(m) {
+  const key = noteKey(m.root, m.path), base = m.path.split('/').pop();
+  $('#mdlFoot').innerHTML = m.renaming
+    ? `<input data-slot="input" data-rename value="${esc(m.newName ?? base)}" aria-label="New name"><button data-slot="button" data-size="sm" data-rename-go>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-rename-x>Cancel</button>`
+    : `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-rename-open>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-mode>${m.edit ? 'Preview' : 'Edit'}</button>${dirty(key) ? `<span data-slot="badge">draft</span><button data-slot="button" data-size="sm" data-savenote>Save</button>` : '<span class="muted sm">saved</span>'}`;
+  const on = (sel, fn) => { const b = $('#mdlFoot ' + sel); if (b) b.onclick = fn; };
+  on('[data-mode]', () => { m.edit = !m.edit; renderModal(); });
+  on('[data-savenote]', () => saveNote(m));
+  on('[data-rename-open]', () => { m.renaming = true; m.newName = base; noteFoot(m); $('#mdlFoot [data-rename]').focus(); });
+  on('[data-rename-x]', () => { m.renaming = false; noteFoot(m); });
+  const input = $('#mdlFoot [data-rename]'); if (!input) return;
+  input.oninput = () => { m.newName = input.value; };
+  const go = async () => {
+    let name = (m.newName || '').trim();
+    if (name.includes('/')) return toast({ kind: 'not renamed', txt: 'Type a new name only; moving a note to another folder is not supported.', level: 'warn' }, true);
+    if (!/\.md$/i.test(name)) name += '.md';
+    if (name === base) { m.renaming = false; return noteFoot(m); }
+    const r = await window.p9.mission('noteRename', { root: m.root, path: m.path, name });
+    if (r.status !== 200) return toast({ kind: 'not renamed', txt: name + ': ' + (noteError[r.body?.error] || 'could not rename it (' + (r.body?.error || r.status) + ')'), level: 'warn' }, true);
+    S.docs[noteKey(m.root, r.body.path)] = S.docs[key]; delete S.docs[key];
+    m.path = r.body.path; m.renaming = false; if (m.back) m.back.list = undefined;
+    toast({ kind: 'renamed', txt: base + ' → ' + name, level: 'ok' }, true);
+    if (S.modal === m) renderModal();
+  };
+  on('[data-rename-go]', go);
+  input.onkeydown = e => { if (e.key === 'Enter') go(); else if (e.key === 'Escape') { e.preventDefault(); m.renaming = false; noteFoot(m); } };
+}
+// The same reply as answerLive: on 409 the draft stays and the banner offers the disk version or a save over it.
+async function saveNote(m, hash) {
+  const d = S.docs[noteKey(m.root, m.path)]; if (!d || m.saving) return;
+  m.saving = true; const text = d.text;
+  const r = await window.p9.mission('noteSave', { root: m.root, path: m.path, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
+  m.saving = false;
+  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
+  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  if (S.modal === m) renderModal();
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
 function missionModal(m, body, row) {
   if (m.kind === 'win') {
     const w = wins[m.id]; if (!w || (w.show && !w.show())) return closeModal();
     $('#mdlT').textContent = w.title();
-    body.innerHTML = panel(m.id, esc(w.title()), w.body());
+    body.innerHTML = panel(m.id, esc(w.title()), w.body()); addHalos(body);
     bindWin(body, m); missionLive();
     body.onscroll = () => { winTop[m.id] = body.scrollTop; };
   } else if (m.kind === 'scripts') {
+    if (!M.scripts[m.g]) return closeModal();
     const l = M.scripts[m.g], tools = m.g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === m.g);
     $('#mdlT').textContent = `${m.g} · ${l.length} script${l.length === 1 ? '' : 's'}`;
-    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
+    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
     body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
+    body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: m.g, back: m }));
+  } else if (m.kind === 'notes') notesModal(m, body, row);
+  else if (m.kind === 'note') noteModal(m, body);
+  else if (m.kind === 'link') {
+    $('#mdlT').textContent = 'Open ' + m.page[0] + '?';
+    body.innerHTML = `<div class="review"><p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(m.page[1])}</pre><p class="muted sm">It is on your allowed-schemes list in settings.json. Only open it if you recognise it.</p></div>`;
+    $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open link</button>`;
+    $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
+    $('#mdlFoot [data-open]').onclick = () => { launchLive(m.page[0], { kind: 'pages', id: m.page[2], confirm: true }); m.back ? openModal(m.back) : closeModal(); };
   } else if (m.kind === 'script') {
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
-    // ponytail: registry {label, choices} args get a typed input; the hub's pick list (e.g. plans) comes later
     m.args ||= (x.args || []).map(() => '');
     $('#mdlT').textContent = name;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : ''}</div>`;
-    body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = () => { m.args[+inp.dataset.arg] = inp.value; });
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : ''}</div>`;
+    body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = inp.onchange = () => { m.args[+inp.dataset.arg] = inp.value; });
     $('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${m.out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
     $('#mdlFoot [data-run]').onclick = () => {
       if (x.confirm && !m.armed) { m.armed = true; return renderModal(); }
@@ -980,6 +1209,10 @@ function missionModal(m, body, row) {
       toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: r.status === 201 ? r.body.path : 'New idea: ' + (r.body?.error || r.status), level: r.status === 201 ? 'ok' : 'bad' }, true);
       if (r.status === 201) { closeModal(); loadHub(); }
     };
+  } else if (m.kind === 'medit') {
+    $('#mdlT').textContent = 'Edit names and icons';
+    editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => M.art, esc, toast, again: () => S.modal === m && renderModal(),
+      reload: async keep => { await refreshMission(); if (keep) S.modal === m && renderModal(); else openModal({ kind: 'medit', items: editItems(M) }); } });
   } else if (m.kind === 'handoffs') {
     $('#mdlT').textContent = `Work in flight · ${H.handoffs.length} HANDOFF.md`;
     body.innerHTML = `<ul class="mlist">${H.handoffs.map((x, i) => row(i, '', esc(x.project), 'updated ' + esc(x.age_days) + ' d ago')).join('')}</ul>`;
@@ -1056,6 +1289,7 @@ onLookChange(look => { focusLooks[S.focus] = look; try { localStorage.setItem('p
 function setFocus(f, stay = false) {
   if (!settings.focus[f]) return; // turned off in Settings
   S.focus = f;
+  if (f === 'mission') refreshMission();
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
   if (focusLooks[f]?.theme) { applyLook(focusLooks[f]); DUWOP.init(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
@@ -1111,31 +1345,38 @@ window.p9?.onTerminal?.((serial, m) => {
   else if ('close' in m) { socket.readyState = 3; socket.onclose?.({ code: m.close }); }
 });
 // Loaded in the window only: the page is prerendered in Node, where xterm has no named exports.
-let dockTerm = null, tmuxMissing = '', noteShown = false;
+let dockTerm = null, tmuxMissing = '', unavailableText = null, noteShown = false;
 // The install lines are too long for the toolbar's one-line state, so the dock body carries them; Refresh clears them.
 const noTmux = () => { dockTerm.show('tmux not found'); $('#termView').textContent = tmuxMissing; noteShown = true; };
+// No backend on this computer (issue #11): the badge says so instead of 'closed', which read as a daemon that was down.
+const noTerminal = (reason) => {
+  dockTerm.show(unavailableText()); $('#dBadge').textContent = 'unavailable';
+  $('#termView').textContent = unavailableText(reason); noteShown = true;
+};
 // Opening the dock attaches the newest running shell, or starts one.
 let docking = null;
 const openDock = () => docking ??= (async () => {
   if (noteShown) { $('#termView').textContent = ''; noteShown = false; }
   const list = await window.p9.terminal('list').catch(() => null);
   if (list?.body?.error === 'tmux-not-found') return noTmux();
+  if (list?.body?.error === 'terminal-unavailable') return noTerminal(list.body.reason);
   if (list?.status !== 200) return dockTerm.show('Terminals are unavailable');
   let id = list.body.terminals.filter(x => x.state === 'running').at(-1)?.id;
   if (!id) {
     const made = await window.p9.terminal('create').catch(() => null);
+    if (made?.body?.error === 'terminal-unavailable') return noTerminal(made.body.reason);
     if (made?.status !== 201) return made?.body?.error === 'tmux-not-found' ? noTmux() : dockTerm.show('Not started: ' + (made?.body?.error ?? 'daemon unavailable'));
     id = made.body.terminal;
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING }) => {
+if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING, unavailableText: text }) => {
   if (lifetime.signal.aborted) return;
-  tmuxMissing = TMUX_MISSING;
+  tmuxMissing = TMUX_MISSING; unavailableText = text;
   dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
-  dockTerm.show('Not connected');
+  dockTerm.show('No terminal open');
   $('#dRefresh').onclick = openDock;
   observe(() => dockTerm.fit()).observe($('#termView'));
   lifetime.signal.addEventListener('abort', () => dockTerm.close());
@@ -1144,7 +1385,7 @@ if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TM
 let dragY = null; const dock = $('#dock');
 $('#grip').onpointerdown = e => { dragY = e.clientY; const h0 = dock.offsetHeight; const mv = ev => { dock.style.height = Math.max(120, Math.min(innerHeight * .7, h0 + (dragY - ev.clientY))) + 'px'; }; const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); }; addEventListener('pointermove', mv); addEventListener('pointerup', up); };
 $('#grip').onkeydown = e => { if (e.key === 'ArrowUp') dock.style.height = dock.offsetHeight + 24 + 'px'; if (e.key === 'ArrowDown') dock.style.height = Math.max(120, dock.offsetHeight - 24) + 'px'; };
-$('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
+$('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
 // Floating terminal (Builder, 2026-10-17: "wigs out on click and drag to move, highlights all the stuff below it, and wont resize").
 // left/top are relative to the dock's parent, not the viewport (the jump); pointer capture and preventDefault stop the selection;
 // CSS resize: both gives the corner handle.
@@ -1199,7 +1440,23 @@ function walkthrough(i = 0, from = S.focus) {
   placeDev();
   tickPets();
 }
-const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', () => $('#rSplit').click()], ['Browse files', () => $('#rSearch').click()], ['Toggle files pane', () => $('#rFiles').click()], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')]];
+// MT1: what each Maintenance button (maintenance.mjs) and its Ctrl K entry does.
+const maintain = {
+  mtReload: () => location.reload(), // the window loads again; chats live in the daemon
+  mtMission: async () => {
+    await loadMission().catch(() => {});
+    toast(live.on && !live.note ? { kind: 'mission', txt: 'Mission Control refreshed.', level: 'ok' } : { kind: 'mission', txt: live.note || 'Mission Control did not answer.', level: 'warn' }, true);
+  },
+  mtRestart: () => restartP9($('#mtRestart')),
+  mtRepair: () => restartP9($('#mtRepair'), true),
+  mtRebuild: async () => {
+    const b = $('#mtRebuild'); if (b) { b.disabled = true; b.textContent = 'Rebuilding…'; }
+    const r = await window.p9.rebuild().catch(() => ({ error: 'build-failed' })); // done: the window reloads
+    if (b) { b.disabled = false; b.textContent = 'Rebuild + reload'; }
+    if (r.error) toast({ kind: 'not rebuilt', txt: 'Could not rebuild P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: 'bad' }, true);
+  },
+};
+const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', () => $('#rSplit').click()], ['Browse files', () => $('#rSearch').click()], ['Toggle files pane', () => $('#rFiles').click()], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
 let palSel = 0;
 function renderPal() { const q = $('#palIn').value.toLowerCase(); const list = cmds.filter(c => c[0].toLowerCase().includes(q)); palSel = Math.min(palSel, Math.max(0, list.length - 1)); $('#palList').innerHTML = list.map((c, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${cmds.indexOf(c)}">${svg.bolt.replace('<svg', '<svg width="14" height="14"')}${esc(c[0])}${i === palSel ? '<kbd>↵</kbd>' : ''}</li>`).join('') || '<li class="muted">No matching command</li>'; $('#palList').querySelectorAll('li[data-i]').forEach(li => li.onclick = () => run(+li.dataset.i)); }
 function run(i) { $('#palette').close(); cmds[i][1](); }
@@ -1212,7 +1469,7 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, pets = null, petMode = null;
+let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 async function saveSettings(next) {
   try { settings = window.p9?.setSettings ? await window.p9.setSettings(next) : (localStorage.setItem('p9-settings', JSON.stringify(next)), next); }
   catch { toast({ kind: 'settings', txt: 'Settings not saved', level: 'bad' }, true); }
@@ -1227,15 +1484,15 @@ function applySettings() {
 // Pets in Settings: the library (add from a folder picker, remove), then one focus mode's pets at a time.
 const PET_WHY = { name: 'its folder name must be lowercase letters, digits and dashes', invalid: 'it is not a petdex pet (pet.json and a sheet)', exists: 'a pet with that name is already in P9', command: 'paste the install command from petdex.dev', unknown: 'petdex.dev has no pet by that name', offline: 'petdex.dev could not be reached' };
 function petSettings() {
-  const mode = petMode ||= S.focus, f = settings.pet[mode], pick = (role, label, none) => `<label class="set-row"><span><strong>${label}</strong></span><span class="spacer"></span><select data-slot="input" id="setPet-${role}" data-pet-role="${role}"><option value="">${none}</option>${pets.pets.map(p => `<option value="${esc(p.name)}" ${f[role] === p.name ? 'selected' : ''}>${esc(p.displayName)}</option>`).join('')}</select></label>`;
-  return `<fieldset class="set-group"><legend>Pets</legend>`
+  const mode = petMode ||= S.focus, f = settings.pet[mode], pick = (role, label, none) => `<label class="set-row"><span><strong>${label}</strong></span><span class="spacer"></span><select data-slot="input" id="setPet-${role}" data-pet-role="${role}"><option value="">${none}</option>${pets.pets.map(p => `<option value="${esc(p.name)}" ${f[role] === p.name ? 'selected' : ''}>${esc(p.displayName)}</option>`).join('')}</select>${info('The pet shown while ' + (role === 'system' ? 'P9 itself' : label) + ' is working.', 'pets')}</label>`;
+  return `<fieldset class="set-group"><legend>Pets ${info('A small animated character (a petdex pet) that shows while an agent works, in place of the spinner (in Chat Focus chats and the top bar).', 'pets')}</legend>`
     + `<p class="muted sm">Find a pet at <a id="petdexLink" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, copy its install command and paste it below.</p>`
     + (window.p9?.installPets ? `<form class="set-row" id="petInstallForm"><input data-slot="input" id="petInstall" placeholder="npx petdex@latest install boba" autocomplete="off" spellcheck="false" style="flex:1"><button data-slot="button" data-variant="default" id="petInstallGo">Install</button></form>` : '')
     + `<div class="pet-lib">${pets.pets.map(p => `<figure><canvas data-thumb="${esc(p.name)}" width="192" height="208"></canvas><figcaption>${esc(p.displayName)}</figcaption><button data-slot="button" data-variant="ghost" data-size="icon-sm" data-pet-remove="${esc(p.name)}" title="Remove ${esc(p.displayName)}">×</button></figure>`).join('') || '<p class="muted sm">No pets yet.</p>'}</div>`
     + (window.p9?.addPets ? `<div class="set-row">${pets.importable ? `<button data-slot="button" data-variant="default" id="petImport">Import ${pets.importable} new petdex pet${pets.importable === 1 ? '' : 's'}</button>` : ''}<button data-slot="button" data-variant="outline" id="petAdd">Add pets…</button></div>` : '')
     + `<div class="set-row" role="group" aria-label="Focus mode">${Object.entries(focusNames).map(([m, n]) => `<button data-slot="button" data-variant="${m === mode ? 'default' : 'outline'}" data-size="sm" data-pet-mode="${m}" aria-pressed="${m === mode}">${n}</button>`).join('')}</div>`
-    + `<label class="set-row"><input type="checkbox" id="setPetOn" ${f.on ? 'checked' : ''}><span><strong>Show pets in ${focusNames[mode]}</strong><span class="muted sm">Off: chats show no pet. The top-bar pet always shows.</span></span></label>`
-    + `<label class="set-row"><span><strong>Size</strong></span><span class="spacer"></span><input type="range" id="setPetSize" min="24" max="128" step="4" value="${f.size}"><span class="mono">${f.size}px</span></label>`
+    + `<label class="set-row"><input type="checkbox" id="setPetOn" ${f.on ? 'checked' : ''}><span><strong>Show pets in ${focusNames[mode]}</strong><span class="muted sm">Off: chats show no pet. The top-bar pet always shows.</span></span><span class="spacer"></span>${info('Shows the pets in this focus mode\'s chats.', 'pets')}</label>`
+    + `<label class="set-row"><span><strong>Size</strong></span><span class="spacer"></span><input type="range" id="setPetSize" min="24" max="128" step="4" value="${f.size}"><span class="mono">${f.size}px</span>${info('How big the pets are in this focus mode.', 'pets')}</label>`
     + pick('system', 'System', 'None (spinner)') + pick('claude', 'Claude', 'Same as System') + pick('codex', 'Codex', 'Same as System')
     + `<div class="set-row"><span class="muted sm">Show, size and positions stay per focus.</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" id="petAll" ${Object.values(settings.pet).every(o => PET_ROLES.every(r => o[r] === f[r])) ? 'disabled' : ''}>Use these pets in all focus modes</button></div>`
     + `<div class="set-row"><span class="muted sm">Drag a pet to move it.</span><span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="petReset" ${f.top || f.pane || Object.keys(petSpots).length ? '' : 'disabled'}>Reset positions</button></div></fieldset>`;
@@ -1276,19 +1533,79 @@ function wirePetSettings() {
     const look = IND.looks.get(name); if (look) cv.getContext('2d').drawImage(look.img, 0, 0, 192, 208, 0, 0, 192, 208);
   });
 }
+// ST1/ST2: Settings → Mission Control files, the daemon's settings.json (not this window's settings), so the paths stay
+// editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
+// which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
+let missionFiles = null;
+const MISSION_TIPS = { primary: 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)',
+  registry: "JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card)",
+  waiting: 'Folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane\'s Needs you view)',
+  hub: "Folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it)",
+  scripts_root: 'Full path of the folder your buttons and apps run in, and the one ~/workspace stands for (for the Mission Control buttons). Empty: the workspace' };
+// A function: PATH_KEYS is declared further down, with the wizard.
+const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
+  ['space', 'Extra sections file (optional)', 'setup-file', 'JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page)'],
+  ['server_host', 'Server host name (optional)', '', "Network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
+  ['page_schemes', 'Extra link types for pages (optional, comma-separated)', '', 'Link types besides http and https that a Mission Control page may open, for example obsidian (a page link of that type asks before it opens)'],
+  ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Named folders of .md notes (for the notes an extra Mission Control section shows, by that name)']];
+const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;
+// The box's text as the settings value; empty removes the key. No checks here: the daemon's are the rules.
+const missionValue = (k, text) => {
+  text = text.trim();
+  if (!text) return null;
+  if (k === 'page_schemes') return text.split(/[\s,]+/).filter(Boolean);
+  if (k === 'notes_roots') return Object.fromEntries(text.split('\n').filter(l => l.trim()).map(l => { const i = l.indexOf('='); return i < 0 ? [l.trim(), ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
+  return text;
+};
+function missionGroup() {
+  const s = missionFiles.settings;
+  return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The files and folders Mission Control reads, from its settings file (for the Mission Control focus). Each row saves when you leave it.', 'mission-control-files')}</legend>`
+    + missionKeys().map(([k, name, kind, tip]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span>`
+      + (k === 'notes_roots' ? `<textarea data-slot="input" class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${esc(missionShown(k, s[k]))}</textarea>`
+        : `<input data-slot="input" class="mono" data-mission="${k}" value="${esc(missionShown(k, s[k]))}" title="${esc(missionShown(k, s[k]))}" maxlength="400" autocomplete="off" spellcheck="false">`)
+      + (window.p9.pickFolder && kind ? `<button data-slot="button" data-variant="outline" data-size="sm" data-mission-pick="${k}:${kind}">Pick</button>` : '')
+      + info(tip, 'mission-control-files') + '</label>').join('')
+    + '<p class="muted sm">The old file is kept as settings.json.bak.</p></fieldset>';
+}
+async function saveMission(change) {
+  const r = await window.p9.chat('saveMissionFiles', change).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  const box = $('#setBody').querySelector(`[data-mission="${Object.keys(change)[0]}"]`), row = box?.closest('.set-row');
+  row?.querySelector('[data-mission-err]')?.remove(); box?.removeAttribute('aria-invalid');
+  if (r.status === 200) { missionFiles = { ...missionFiles, settings: r.body.settings }; loadMission(); return; }
+  const why = 'Not saved: ' + (r.body?.detail || WIZ_ERR[r.body?.error]?.[0] || r.body?.error || r.status);
+  if (!row) return toast({ kind: 'mission-files', txt: why, level: 'bad' }, true);
+  box.setAttribute('aria-invalid', 'true');
+  row.insertAdjacentHTML('beforeend', `<small class="field-err" data-mission-err role="alert">${esc(why)}</small>`);
+}
+// A narrow box shows the end of a long path (the file name), not the start every path shares; the full path is the hover.
+const showEnd = box => { box.title = box.value; box.scrollLeft = box.scrollWidth; };
+function wireMission() {
+  $('#setBody').querySelectorAll('input[data-mission]').forEach(box => { showEnd(box); box.onblur = () => showEnd(box); });
+  $('#setBody').querySelectorAll('[data-mission]').forEach(box => { box.onchange = () => saveMission({ [box.dataset.mission]: missionValue(box.dataset.mission, box.value) }); });
+  $('#setBody').querySelectorAll('[data-mission-pick]').forEach(b => { b.onclick = async e => {
+    e.preventDefault();
+    const [k, kind] = b.dataset.missionPick.split(':');
+    const picked = await window.p9.pickFolder(kind).catch(() => undefined);
+    if (picked === undefined) return;
+    if (picked === null || picked === '') return toast({ kind: 'mission-files', txt: WIZ_ERR[picked === '' ? 'pick-root' : 'pick-outside'].join(' '), level: 'warn' }, true); // BL6
+    $('#setBody').querySelector(`[data-mission="${k}"]`).value = picked;
+    saveMission({ [k]: picked });
+  }; });
+}
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
-  const box = (id, label, checked, note = '', disabled = false) => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span></label>`;
-  $('#setBody').innerHTML = (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button></div>` : '')
-    + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false"></label>`
-    + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.')
-    + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.')
-    + `<fieldset class="set-group"><legend>Focus modes</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
+  const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
+  $('#setBody').innerHTML = `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}<span class="spacer"></span>${info('The P9 guide (opens on GitHub), Anymouse (a note to P9\'s makers: an idea, a bug or a gripe) and Setup (the first-start window again).', 'settings')}</div>`
+    + (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button>${info('Makes everything in this window bigger or smaller, in every focus mode.', 'settings')}</div>` : '')
+    + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
+    + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
+    + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
+    + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
-    + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null) : '')
-    + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null) : '')
-    + (window.p9?.openUpdates ? `<div class="set-row"><span><strong>Updates</strong><span class="muted sm" id="setVer">You have P9 ${esc(window.p9.version || '?')}. Opens GitHub's newest release in your browser; if its number is higher, ${/Windows/.test(navigator.userAgent) ? 'download its .exe there and run it. Your workspace and settings stay.' : 'update as the README\'s Update section says (git pull, build, restart).'}</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setUpd">Check for updates</button></div>` : '')
-    + `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}</div>`;
+    + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents in every chat can read and answer but cannot edit files or run anything that asks permission.', 'agent-lock') : '')
+    + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor (Dev Focus, here and on your phone) cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
+    + (missionFiles?.settings ? missionGroup() : '')
+    + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
   $('#setName').value = settings.name || '';
@@ -1296,19 +1613,33 @@ function renderSettings() {
   $('#setStartLast').onchange = e => saveSettings({ ...settings, startLast: e.target.checked });
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
   if (pets) wirePetSettings();
+  if (missionFiles?.settings) wireMission();
   Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
   if ($('#setProtect')) $('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); fileProtect = r?.status === 200 ? r.body.on : fileProtect; renderSettings(); };
-  if ($('#setUpd')) $('#setUpd').onclick = () => window.p9.openUpdates();
   $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
   $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };
   if ($('#setWel')) $('#setWel').onclick = () => { $('#setDlg').close(); welcome(); };
+  MAINTENANCE.forEach(m => { if ($('#' + m.id)) $('#' + m.id).onclick = maintain[m.id]; });
+  const asked = async ask => { updates = await window.p9.updates(ask).catch(() => updates); renderSettings(); };
+  if ($('#mtUpdCheck')) $('#mtUpdCheck').onclick = () => asked({ check: true });
+  if ($('#mtUpdInstall')) $('#mtUpdInstall').onclick = () => asked({ install: true });
+  if ($('#mtUpdOpen')) $('#mtUpdOpen').onclick = () => window.p9.openUpdates();
+  clearTimeout(updatesTimer); // a check or download in progress: show its next state while Settings is open
+  if (['checking', 'downloading'].includes(updates?.state)) updatesTimer = setTimeout(() => { if ($('#setDlg').open) asked(); }, 2000);
+  // HI1: an "i" shows its tip on hover and opens its part of the guide on click (main allows only the guide's sections).
+  $('#setBody').querySelectorAll('[data-docs]').forEach(b => { b.onclick = e => {
+    e.preventDefault(); e.stopPropagation();
+    window.p9?.openDocs?.(b.dataset.docs).catch(() => {}); // a browser preview: the tip only
+  }; });
 }
 $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
   if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
   if (window.p9?.fileProtection) { const r = await window.p9.fileProtection().catch(() => null); fileProtect = r?.status === 200 ? r.body.on : null; }
+  if (window.p9?.chat) { const r = await window.p9.chat('missionFiles', {}).catch(() => null); missionFiles = r?.status === 200 ? r.body : null; }
+  updates = window.p9?.updates ? await window.p9.updates().catch(() => null) : null;
   petMode = null; renderSettings(); $('#setDlg').showModal();
 };
 $('#setClose').onclick = () => $('#setDlg').close();
@@ -1460,9 +1791,9 @@ async function landPets() {
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
-async function loadSetup() {
+async function loadSetup(paths) {
   if (!window.p9?.chat) return null;
-  const r = await liveChat.call('setup').catch(() => null);
+  const r = await liveChat.call('setup', paths || {}).catch(() => null);
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
@@ -1482,22 +1813,30 @@ async function firstRun() {
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
   W.then = tour; welcome(0);
 }
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null };
+// The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
+// starter paths). Empty fields are left out; hub is optional.
+const PATH_KEYS = [['primary', 'Main project file', 'setup-file'], ['registry', 'Buttons, apps and pages file', 'setup-file'], ['waiting', 'Folder of items waiting on you', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder your buttons run in (optional, full path)', '']];
+const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
+const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
 const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
 async function welcome(at) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '' });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null });
   W.s = await loadSetup();
   const d = W.s && setupDone(W.s);
   W.i = at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
+  // BL5: every 10 s (was 2 s) while a check fails or a sign-in runs; wizRefresh stops it once neither is so, and starts it again.
+  clearInterval(W.timer); W.timer = setInterval(wizRefresh, 10000);
   await wizRefresh();
   if (!$('#welDlg').open) $('#welDlg').showModal();
-  clearInterval(W.timer); W.timer = setInterval(wizRefresh, 2000);
 }
 async function wizRefresh() {
-  const [s, l] = await Promise.all([loadSetup(), window.p9.agentLogin('state').catch(() => null)]);
+  const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
   W.s = s; W.login = l?.status === 200 ? l.body : {};
   if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
+  if (s && !S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
+  else if (!W.timer && $('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
   wizRender();
 }
 // Each error a step can get back, as [cause, fix].
@@ -1518,6 +1857,12 @@ const WIZ_ERR = {
   'settings-file-unknown': ['P9 does not know where its settings file goes.', 'Restart P9, then Retry.'],
   'settings-changed': ['Something else wrote the settings file just now.', 'Retry reads it again.'],
   'settings-invalid': ['Your settings file has an error.', 'Fix it in a text editor, or delete it, then Retry. P9 never changes a file it cannot read.'],
+  'paths-required': ['This folder already has things in it, so P9 needs the paths to use.', 'Check the paths above, then Create again.'],
+  'paths-invalid': ['A path is not one P9 can use.', 'Each is inside the workspace, written with / and without .. (for example docs/AGENTS.md).'],
+  'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
+  'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
+  'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
+  'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
@@ -1553,10 +1898,25 @@ function wizRender() {
     if (!d.agents) next = `<span class="muted sm">Sign in to one to go on, or Skip.</span>` + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
     title = 'Mission Control';
-    body = `<p class="muted sm">Its buttons, apps and pages come from files in your workspace. Create my starter files adds the ones missing and never replaces a file: AGENTS.md, the Mission Control registry, a waiting folder for things that need you, _ideas/, and P9's settings file.</p>`
+    // A folder with things in it keeps them (needs-done p9-wizard-respects-existing-workspace): the paths are what P9 found
+    // there, shown and editable, and the list says exactly what Create adds. Nothing that is there is replaced.
+    const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
+    const creates = d.mission ? [] : [...(s.creates || []), ...(s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
+    // RH2 (the owner, 2026-10-24: B, and how to set them up when there are none yet).
+    const none = choosing && !found && !s.settingsPresent;
+    body = `<p class="muted sm">Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
+      + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create these makes a starter set you can change any time:</p><ul>'
+        + '<li><strong>Main project file</strong>: names your main project, in plain words. Your agents read it; Mission Control shows it as the Main Project card.</li>'
+        + '<li><strong>Buttons, apps and pages file</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
+        + '<li><strong>Folder of items waiting on you</strong>: one .md file for each thing waiting on you.</li></ul>'
+        + (window.p9.openDocs ? `<div class="set-row">${btn('docs', 'How to add buttons')}</div>` : '') + '</div>' : '')
+      + (choosing ? '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
+        + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
       + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
       + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
-      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission ? '' : `<div class="set-row">${btn('starter', 'Create my starter files', 'default')}</div>`)
+      + (creates.length ? `<p class="sm">Create adds: <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
+      + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then Use these. Your old settings file is kept as settings.json.bak.</p>` : '')
+      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', creates.length ? 'Create these' : 'Use these', 'default')}</div>`)
       + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
       + (note?.error ? fail(note.error, note.detail) : '')
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
@@ -1579,12 +1939,14 @@ function wizRender() {
   morph($('#welBody'), body);
   morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (key === 'done' ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
 }
-$('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value; });
+$('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value;
+  if (e.target.dataset.path) W.paths = { ...wizPaths(), [e.target.dataset.path]: e.target.value.trim() }; });
+$('#welDlg').addEventListener('change', e => { if (e.target.dataset.path) wizRefresh(); });
 $('#welDlg').addEventListener('change', e => { if (e.target.id === 'welName') saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) }); });
 $('#welDlg').addEventListener('click', async e => {
   if (e.target.id === 'welPetdex' && window.p9?.openPetdex) { e.preventDefault(); return window.p9.openPetdex(); }
   const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
-  const [act, agent] = b.dataset.act.split(':');
+  const [act, agent, kind] = b.dataset.act.split(':');
   const run = async (fn) => { W.busy = act; wizRender(); try { return await fn(); } finally { W.busy = ''; } };
   if (act === 'next' || act === 'back') { W.i += act === 'next' ? 1 : -1; return wizRender(); }
   if (act === 'skip' || act === 'mission-off') {
@@ -1592,6 +1954,7 @@ $('#welDlg').addEventListener('click', async e => {
     skipWelcome(); return $('#welDlg').close();
   }
   if (act === 'close') return $('#welDlg').close();
+  if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
   if (act === 'tour') { W.then = tour; return $('#welDlg').close(); }
   if (act === 'pets') { W.then = null; $('#welDlg').close(); await $('#setBtn').onclick(); return [...$('#setBody').querySelectorAll('legend')].find(l => l.textContent === 'Pets')?.scrollIntoView(); }
   if (act === 'retry') W.note = {};
@@ -1600,8 +1963,14 @@ $('#welDlg').addEventListener('click', async e => {
     W.note.workspace = r.error ? r : null;
     if (!r.error) { files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder
   }
+  if (act === 'pick') {
+    const picked = await window.p9.pickFolder(kind).catch(() => undefined);
+    if (picked === null || picked === '') W.note.mission = { error: picked === '' ? 'pick-root' : 'pick-outside' }; // BL6
+    else if (picked !== undefined) { W.paths = { ...wizPaths(), [agent]: picked }; W.note.mission = null; }
+  }
   if (act === 'starter') {
-    const r = await run(() => liveChat.call('starter').catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    const body = wizChoosing(W.s) ? wizPaths() : {};
+    const r = await run(() => liveChat.call('starter', body).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
   }
@@ -1625,7 +1994,7 @@ liveChat.call = async (action, payload = {}) => {
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
-  if (r.status >= 400) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  if (r.status >= 400 && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {
@@ -1634,7 +2003,12 @@ liveChat.create = async (agent, folder = '') => {
   return r;
 };
 // Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
-liveChat.prompt = async (s, text, images = []) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status !== 202) { s.images = [...images, ...(s.images || [])].slice(0, 4); s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); } };
+// 2026-10-24: one refused because a turn runs is queued instead, and shown and kept as queued.
+liveChat.prompt = async (s, text, images = [], when) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status === 202) return; s.images = [...images, ...(s.images || [])].slice(0, 4);
+  // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
+  // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
+  if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift(text); keepQueue(s); setTimeout(() => { if (!s.prompted && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
+  s.draft = text + (s.draft ? '\n' + s.draft : ''); s.working = false; renderTabs(); renderChats(); };
 liveChat.approve = (s, optionId) => { const a = s.events.find(e => e.t === 'approval'); if (a) liveChat.call('answer', { id: s.id, request: a.request, answer: { optionId } }); };
 liveChat.answer = (s, vals) => {
   const q = s.events.find(e => e.t === 'question'); if (!q || q.unsupported) return;
@@ -1650,17 +2024,35 @@ liveChat.answer = (s, vals) => {
   liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'accept', content: Object.fromEntries(content) } });
 };
 liveChat.decline = s => { const q = s.events.find(e => e.t === 'question'); if (q) liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'decline' } }); };
-liveChat.stop = s => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id }); };
+liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id, ...(close && { close }) }); };
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
-const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => [...(c.oldText || '').split('\n').filter(Boolean).map(l => ['del', l]), ...(c.newText || '').split('\n').filter(Boolean).map(l => ['add', l])]).slice(0, 200); return rows.length ? rows : null; };
+const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
+const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
 // Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
 // built here; a block's uri is never used. ponytail: data: strings are re-diffed each render; blob: needs a CSP change.
 const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
 const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
+// PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
+async function continueOnPhone(s) {
+  const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
+  $('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
+  $('#phoneDlg').showModal();
+}
+// A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
+const picDlg = $('#picDlg');
+addEventListener('click', e => {
+  const i = e.target.closest?.('.user-imgs img[src], .agent-imgs img'); if (!i) return;
+  Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
+});
+picDlg.onclick = () => picDlg.close();
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
-const liveSession = (id, provider, title, folder, created) => ({ id, agent: provider, title, model: chatModel[provider], mode: startMode(provider), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
+// A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
+// ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
+const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
+const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return Array.isArray(q) ? q.filter(t => typeof t === 'string') : []; } catch { return []; } };
+const liveSession = (id, provider, title, folder, created) => ({ id, agent: provider, title, model: chatModel[provider], mode: startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
 // E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
 function history(s, until = liveChat.cursor) {
@@ -1682,12 +2074,21 @@ function applyChat(ev) {
   const d = ev.data;
   if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
   const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
+  // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
+  if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = true; break;
-    case 'connected': notice('Connected over ACP'); s.state = 'running'; break;
-    case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; break;
+    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
+      if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
+    // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
+    // cancel (loadChat puts the text back in the box), or not sent at all.
+    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when }); break;
+    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
+    case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
+    case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
+    case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
+    case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
       if (Array.isArray(d.pickers)) { s.pickers = lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; } break;
     case 'update':
@@ -1696,6 +2097,9 @@ function applyChat(ev) {
       // usage_update (the one with a cost) marks it done.
       if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
       else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
+      // Such a turn reads the prompt cache too, so the cache clock starts again from its output (owner, 2026-10-25: a
+      // background task's wake-up left the clock at 57 min); a prompted turn's clock starts at its turn-end.
+      if (!s.prompted && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content);
         if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
@@ -1703,7 +2107,7 @@ function applyChat(ev) {
       else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-      else if (d.sessionUpdate === 'usage_update' && d.size > 0) s.context = { used: Number(d.used) || 0, size: Number(d.size) };
+      else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) usageNow(); }
       else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
       break;
     case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]) }); s.pending = 'approval'; break;
@@ -1719,11 +2123,14 @@ function applyChat(ev) {
     case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
       notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
     case 'lock-rejected': notice('Agent lock: rejected ' + (d.toolCall?.title || 'a tool call')); break;
-    case 'turn-end': settle(); s.lastEnd = ev.at; queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
+    case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
+    case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
+    case 'turn-end': settle(); s.lastEnd = ev.at; usageNow(); queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
     case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
     case 'exited': settle(); s.state = 'stopped'; notice('The agent process exited' + (d.code != null ? ' (code ' + d.code + ')' : '') + '. Send again to resume.'); break;
     case 'stopped': settle(); s.state = 'stopped'; notice(d.result === 'stopped' ? 'Stopped. Everything this session started has ended.' : 'Stop could not confirm that everything ended.'); break;
-    case 'interrupted': settle(); s.state = 'stopped'; notice('Interrupted: the P9 daemon restarted mid-turn. Send again to resume.'); break;
+    case 'interrupted': settle(); s.state = 'stopped'; notice('Interrupted: the P9 daemon restarted mid-turn. Send again to resume.');
+      for (const h of s.held?.splice(0) ?? []) notice('Not sent (the daemon restarted): ' + h.text); break; // held only in the daemon's memory
   }
   return null;
 }
@@ -1744,29 +2151,41 @@ async function loadChat() {
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
-      if (stub) await history(stub, ev.cursor - 1);
+      if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       if (created) show(ev.conversation);
       if (ev.type === 'answered') answered_.push(ev.conversation);
+      // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
+      // ponytail: its images are not returned; attach them again.
+      const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && S.sessions.find(s => s.id === ev.conversation);
+      if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
+      // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
+      const closed = !replaying && ev.type === 'closed' && S.sessions.find(s => s.id === ev.conversation && !s.hidden);
+      if (closed) { closed.hidden = true; untab(closed.id); }
     }
     liveChat.cursor = r.body.cursor;
     if (replaying && r.body.events.length < 500) {
       replaying = false;
-      const all = await list(), have = new Map(S.sessions.map(s => [s.id, s]));
-      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
-      for (const s of S.sessions) s.hidden = s.state === 'stopped' || closedChats.has(s.id);
-      for (const id of closedChats) if (!S.sessions.some(s => s.id === id)) closedChats.delete(id);
-      keepClosed();
+      // Tabs keep the order the chats were made in; History sorts by last used.
+      const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(S.sessions.map(s => [s.id, s]));
+      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
+      // running (the phone may have resumed it) and gets its tab back.
+      for (const s of S.sessions) { s.hidden = s.state === 'stopped'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
+      closedChats.clear(); localStorage.removeItem('eh-closed-chats');
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
+      // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
+      for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
     }
-    else if (!replaying) { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } }
-    renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation)));
+    // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
+    else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
+    try { renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
 
 addEventListener('focus', () => renderChats());
-renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission(); pollUsage(); loadChat(); checkSetup();
+renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
 // bell with test data (Builder, 2026-10-18); live notices come from loadHub.
@@ -1774,27 +2193,39 @@ if (!window.p9?.mission) M.notifications.forEach((n, i) => setTimeout(() => toas
 
 // Anymouse: DUWOP's idea / bug / gripe box. The desktop main process sends it; the daemon files it or main opens
 // GitHub's prefilled page. Only textContent here: nothing the note or GitHub returns becomes markup.
-const amDlg = $('#amDlg'), amText = $('#amText'), amNote = $('#amNote'), amSend = $('#amSend');
+const amDlg = $('#amDlg'), amText = $('#amText'), amNote = $('#amNote'), amSend = $('#amSend'), amCount = $('#amCount'), amWeb = $('#amWeb');
+const AM_MAX = 50000; // the daemon's limit (anymouse.mjs MAX_NOTE); a longer note stays in the box, marked, and does not send
 let amKind = 'idea';
-$('#amBtn').onclick = () => { amNote.textContent = ''; amDlg.showModal(); amText.focus(); };
+$('#amBtn').onclick = () => { amNote.textContent = ''; amWeb.hidden = true; amCheck(); amDlg.showModal(); amText.focus(); };
 $('#amClose').onclick = () => amDlg.close();
 amDlg.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
   amKind = b.dataset.kind;
   amDlg.querySelectorAll('[data-kind]').forEach(x => { x.setAttribute('aria-checked', String(x === b)); x.dataset.variant = x === b ? 'default' : 'outline'; });
 });
-amText.oninput = () => { amSend.disabled = !amText.value.trim(); };
-$('#amForm').onsubmit = async (e) => {
-  e.preventDefault(); amSend.disabled = true; amNote.textContent = '';
+// Live counter; over the limit nothing is cut, the count turns into the message and Send waits.
+const amCheck = () => {
+  const n = amText.value.trim().length, over = n > AM_MAX;
+  amCount.textContent = over ? n.toLocaleString('en-US') + ' / 50,000: ' + (n - AM_MAX).toLocaleString('en-US') + ' too many. Your text is kept; shorten it to send.' : n.toLocaleString('en-US') + ' / 50,000';
+  amCount.classList.toggle('over', over); amText.setAttribute('aria-invalid', String(over));
+  amSend.disabled = !n || over;
+};
+amText.oninput = amCheck;
+// browser: send it the tokenless way (GitHub's prefilled page), offered when GitHub refused the daemon's token.
+const amSendNote = async (browser) => {
+  amSend.disabled = true; amNote.textContent = '';
   try {
     if (!window.p9?.anymouse) throw new Error('Anymouse needs the desktop app');
-    const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus });
+    const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus, ...(browser ? { browser } : {}) });
+    amWeb.hidden = r.body?.refused !== true;
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
-    // P9's repo is private: GitHub shows 404 to anyone not signed in with access (GitHub issue #4 item 6), so the note stays to copy.
+    // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
     if (!r.body.opened) amText.value = '';
-    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. P9\'s repo is private, so GitHub shows "404" unless you are signed in with an account that has access. Your note is still here to copy.' : 'Sent as issue #' + r.body.number + '. Thanks.';
+    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
   } catch (err) { amNote.textContent = err.message; }
-  finally { amSend.disabled = !amText.value.trim(); }
+  finally { amCheck(); }
 };
+$('#amForm').onsubmit = (e) => { e.preventDefault(); amSendNote(false); };
+amWeb.onclick = () => amSendNote(true);
 
 return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };
 }

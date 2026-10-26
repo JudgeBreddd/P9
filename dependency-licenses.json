@@ -2001,6 +2001,11 @@
     }
   },
   {
+    "name": "qrcode-generator@2.0.4",
+    "license": "MIT",
+    "files": {}
+  },
+  {
     "name": "radix3@1.1.2",
     "license": "MIT",
     "files": {

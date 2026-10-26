@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readdir, readFile as readAsset, stat, access, mkdir, open } from 'node:fs/promises';
+import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,17 +11,27 @@ import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection } from '../../packages/files/index.mjs';
-import { createMission, parseSettings } from './mission.mjs';
+import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
+import { SETTINGS } from './mission-fields.mjs';
 import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
 import { createChat } from './chat.mjs';
+import { createMcp } from './mcp.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { createAuth } from './auth.mjs';
-import { planLimits } from './limits.mjs';
+import { agentDirs, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
+import { createIcons } from './icons.mjs';
+import pkg from '../../package.json' with { type: 'json' };
+
+// RS1: a restart is done when /health names a different boot, not when the old process is gone.
+const boot = { pid: process.pid, started: Date.now() };
+// The daemon's version: package.json's, imported so the daemon bundle (bundle-daemon.mjs) carries it inline and needs no
+// package.json beside it at runtime.
+const VERSION = pkg.version;
 
 function equal(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -81,12 +91,12 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
-export function createListener({ workspace, savedWorkspace, recovery, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, remote, anymouse = createAnymouse() }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
-  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle });
-  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket });
+  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state });
+  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
   setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
@@ -99,6 +109,9 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   const statuses = { ENOENT: 404, EACCES: 403, EPERM: 403, EROFS: 403, EBUSY: 503, ENOSPC: 507, EDQUOT: 507, EIO: 500 };
   const onError = (error) => {
     if (error.message === 'session-ended') return new Response(JSON.stringify({ error: 'login-required' }), { status: 401, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    // A Mission file a settings key names is not there (mission.mjs): which key, and its workspace-relative path from
+    // settings.json, never the system's error text.
+    if (error.message === 'file-not-found') return new Response(JSON.stringify({ error: 'file-not-found', setting: error.setting, file: error.file }), { status: 404, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     const invalid = error instanceof SyntaxError || ['unsafe-path', 'locked-path', 'unsafe-file', 'path-changed',
       'binary-or-oversize', 'invalid-save', 'json-required'].includes(error.message) || ['ELOOP', 'ENOTDIR'].includes(error.code);
     const code = Object.hasOwn(statuses, error.code) ? error.code : invalid ? 'REQUEST_REFUSED' : 'INTERNAL_FAILURE';
@@ -119,7 +132,8 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   api.onError(onError);
   // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
   // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
-  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, ...(savedWorkspace ? { savedWorkspace } : {}) }),
+  // version: the daemon's own; the installed app counts a start healthy only when it matches its own (AU5, rollback.mjs).
+  api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
   api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));
@@ -132,19 +146,64 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
     || (settings?.space && name === settings.space.toLowerCase())
     // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
     || (settings?.hub && name === (settings.hub + '/mission_control.py').toLowerCase()));
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection });
+  // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
+  // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
+  // the page of a folder Dev Focus has since left is refused, never written into the new one.
+  let devRoot = null;
+  const devCheck = async (folder) => {
+    let root;
+    try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
+    const also = [state, ownership && await realpath(ownership).catch(() => ownership)].filter(Boolean);
+    if (!(await stat(root)).isDirectory() || await rootRefused(root, { workspace, recovery, also })) return { status: 403, error: 'root-refused' };
+    // A folder inside the workspace is opened as the workspace, with its own guards (File protection's read-only files).
+    if (inside(await realpath(workspace), root)) return { status: 409, error: 'inside-workspace' };
+    return { root };
+  };
+  const devTarget = (body) => {
+    if (!body || typeof body !== 'object' || !Object.hasOwn(body, 'root')) return { root: workspace };
+    if (!devRoot) return { status: 409, error: 'dev-root-unset' };
+    return body.root === devRoot ? devCheck(devRoot) : { status: 409, error: 'dev-root-changed' };
+  };
+  const withoutRoot = (body) => (body && typeof body === 'object' && Object.hasOwn(body, 'root') ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'root')) : body);
   api.put('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
-    const input = parseSave(await c.req.json());
-    if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
-    const result = await guardedSave(workspace, input.path, input.hash, input.content, recovery);
+    const body = await c.req.json(), dev = Boolean(body) && typeof body === 'object' && Object.hasOwn(body, 'root');
+    if (dev && c.get('device')) return c.json({ error: 'request-refused' }, 403); // the phone never writes in the second root
+    const target = await devTarget(body);
+    if (target.error) return reply(c, target);
+    const input = parseSave(withoutRoot(body));
+    await reloadSettings();
+    // Read-only names are workspace paths; the second root has none.
+    if (!dev && readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
+    const result = await guardedSave(target.root, input.path, input.hash, input.content, recovery);
     if (result.draftRetained) console.error(JSON.stringify({ event: 'P9_DRAFT_RETAINED' }));
     if (result.kind === 'failed') console.error(JSON.stringify({ event: 'P9_REQUEST_FAILED', code: result.code }));
     return c.json(result, result.kind === 'saved' ? 200 : result.kind === 'conflict' ? 409 : statuses[result.code] ?? 500);
   });
+  // M2: the settings file is read again on every Mission request and swapped in when its text changed, so an edit shows
+  // in the next refresh with no restart. A file that no longer parses keeps the last good settings (the overview says so).
+  // ponytail: one small file read per Mission request; a watcher if that ever shows up in a profile.
+  let settingsText, settingsError = null;
+  const reloadSettings = async () => {
+    if (!settingsFile) return;
+    let text;
+    try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') return; }
+    if (text === settingsText) return;
+    settingsText = text;
+    if (text === undefined) { settingsError = null; return; } // deleted: the last good settings stay until a valid file returns
+    try { settings = parseSettings(text); settingsInvalid = false; settingsError = null; }
+    catch (error) { settingsError = String(error.message).slice(0, 200); if (!settings) settingsInvalid = true; return; }
+    mission.setSettings(settings);
+    hub = createHub({ workspace, settings });
+  };
+  // What a restart would apply: no settings.json key needs one (all of them are read per request), so the only reason is a
+  // saved workspace folder that was missing at start (main.mjs); the desktop button restarts the service once it is back.
+  const restart = () => (savedWorkspace ? { needed: true, reason: 'workspace-folder-missing', folder: savedWorkspace } : { needed: false });
   for (const route of ['/mission', '/mission/*', '/scripts/*', '/runs/*', '/apps/*', '/pages/*']) {
-    api.use(route, async (c, next) => (settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503)));
+    api.use(route, async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); });
   }
-  api.get('/mission', async (c) => c.json(await mission.overview()));
+  api.get('/mission', async (c) => c.json({ ...(await mission.overview()), settingsError, restart: restart() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
   api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
   // A space log view rides the hub text route, so both clients open it like any other log.
@@ -183,6 +242,12 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
     return reply(c, { status: 201, path: relative });
   });
   api.post('/mission/hub/decide', async (c) => reply(c, await hub.decide(await json(c))));
+  // Notes (threat model row 34): both listeners, the same gates; mission.mjs checks the root, path and kind.
+  api.get('/mission/notes', async (c) => reply(c, await mission.notesList(c.req.query('root'))));
+  api.get('/mission/notes/file', async (c) => reply(c, await mission.notesRead(c.req.query('root'), c.req.query('path'))));
+  api.post('/mission/notes/save', async (c) => reply(c, await mission.notesSave(await json(c))));
+  api.post('/mission/notes/create', async (c) => reply(c, await mission.notesCreate(await json(c))));
+  api.post('/mission/notes/rename', async (c) => reply(c, await mission.notesRename(await json(c))));
   api.post('/scripts/:id/run', async (c) => reply(c, await mission.run(c.req.param('id'), await json(c))));
   api.get('/runs/:id', (c) => reply(c, mission.output(c.req.param('id'), Number(c.req.query('from') ?? 0))));
   api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));
@@ -197,21 +262,32 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));
-  api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'))));
-  if (terminals) {
-    api.get('/terminals', async (c) => {
-      try { return c.json({ terminals: await terminals.list() }); }
-      catch (error) { if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503); throw error; }
-    });
-    api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
-    api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
-  }
+  api.post('/chat/:id/unhold', async (c) => reply(c, chat.unhold(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/stop', async (c) => reply(c, await chat.stop(c.req.param('id'), c.req.header('content-type') ? await json(c) : {})));
+  // Hand off (PH5): the chat stops; a new P9 terminal opens in its folder with the claude command typed in. The user
+  // presses Enter, so nothing reaches claude.ai before they do.
+  api.post('/chat/:id/handoff', async (c) => {
+    const { cwd, command, ...result } = await chat.handoff(c.req.param('id'));
+    if (result.status !== 200) return reply(c, result);
+    const made = await terminals.create({}, { cwd, typed: command });
+    return reply(c, made.terminal ? { ...result, terminal: made.terminal } : { ...made, command });
+  });
+  api.get('/chat/:id/images/:hash', (c) => reply(c, chat.image(c.req.param('id'), c.req.param('hash'))));
+  api.get('/terminals', async (c) => {
+    try { return c.json({ terminals: await terminals.list() }); } catch (error) {
+      if (error.message === 'tmux-not-found') return c.json({ error: 'tmux-not-found' }, 503);
+      if (error.message === 'terminal-unavailable') return c.json({ error: 'terminal-unavailable', reason: error.reason }, 503);
+      throw error;
+    }
+  });
+  api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
+  api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
   api.post('/stop-all', async (c) => {
     // Checked after the lifecycle wait for running starts, so a device revoked meanwhile stops nothing.
     // ponytail: a desktop Stop All that joins this one in that window gets its 401 too; pressing it again works.
     const results = await lifecycle.stopAll(() => {
       stillAuthorized();
-      return Promise.all([chat.stopAll(), mission.stopAll(), terminals?.stopAll() ?? 'stopped']);
+      return Promise.all([chat.stopAll(), mission.stopAll(), terminals.stopAll()]);
     });
     const result = results.some((value) => String(value).startsWith('cleanup-failed')) ? 'cleanup-failed' : 'stopped';
     return c.json({ result, components: { chat: results[0], scripts: results[1], terminals: results[2] } }, result === 'stopped' ? 200 : 500);
@@ -219,6 +295,20 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
 
   const app = new Hono();
   app.onError(onError);
+  // The P9 MCP server (mcp.mjs): a chat's relay over the desktop socket, with that chat's token instead of the desktop
+  // cookie, so it comes before the desktop check. A stopped chat's token stops working.
+  app.post('/mcp', hardening, limit, async (c) => {
+    const conversation = ['unix', 'pipe'].includes(transport) ? chat.mcpConversation(c.req.header('x-p9-mcp')) : null;
+    if (!conversation) return c.json({ error: 'login-required' }, 401);
+    let message;
+    try { message = await c.req.json(); } catch { return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+    // The relay exits when its agent is done with it, which closes this request and cancels an approval still waiting.
+    const ended = new AbortController();
+    c.env.outgoing.once('close', () => ended.abort());
+    await reloadSettings(); // as on every Mission request (M2), so an agent's settings.json edit counts at once
+    const answer = await mcp.handle(conversation, message, ended.signal);
+    return answer ? c.json(answer) : c.body(null, 204);
+  });
   app.use('*', async (c, next) => {
     const status = authorize(Object.fromEntries(c.req.raw.headers), c.req.method, transport, credentials);
     if (status) return c.json({ error: status === 401 ? 'login-required' : 'request-refused' }, status);
@@ -240,15 +330,28 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
   // New files from Dev Focus (threat model row 4): create-only through packages/files, so it never replaces a file.
   app.post('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
-    const input = await c.req.json();
+    const body = await c.req.json(), target = await devTarget(body), input = withoutRoot(body);
     if (!input || typeof input !== 'object' || Object.keys(input).sort().join() !== 'content,path' || typeof input.path !== 'string' || typeof input.content !== 'string') return c.json({ error: 'request-refused' }, 400);
-    if (readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
-    try { return c.json(await createFile(workspace, input.path, input.content), 201); }
+    if (target.error) return reply(c, target);
+    if (target.root === workspace && readOnly(input.path)) return c.json({ error: 'registry-read-only' }, 403);
+    try { return c.json(await createFile(target.root, input.path, input.content), 201); }
     catch (error) { if (error.code === 'EEXIST') return c.json({ error: 'file-exists' }, 409); throw error; }
+  });
+  // Dev Focus's Open Folder outside the workspace (threat model row 41): main sends it after the native picker and confirm;
+  // null goes back to the workspace. A refused folder leaves the root unset.
+  app.post('/dev/root', async (c) => {
+    const input = await json(c);
+    if (!input || typeof input !== 'object' || Object.keys(input).join() !== 'path' || (input.path !== null && (typeof input.path !== 'string' || !path.isAbsolute(input.path)))) return c.json({ error: 'request-refused' }, 400);
+    devRoot = null;
+    if (input.path === null) return c.json({ root: null });
+    const target = await devCheck(input.path);
+    if (target.error) return reply(c, target);
+    devRoot = target.root;
+    return c.json({ root: devRoot });
   });
   // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
   // Desktop only (F2): it names the workspace and settings file, which the phone never shows.
-  // ponytail: default credential paths only (no CLAUDE_CONFIG_DIR or CODEX_HOME); add them if someone moves theirs.
+  // The credential files are looked for where the agents keep them: CLAUDE_CONFIG_DIR and CODEX_HOME when set (BL10).
   // Every call re-reads the disk (the wizard stores no progress): the settings file as it is now, not as it was at start.
   const present = (file) => (file ? stat(file).then((s) => s.isFile(), () => false) : false);
   const settingsOnDisk = async () => {
@@ -257,48 +360,186 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
     try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
     try { return { text, parsed: parseSettings(text) }; } catch (error) { return { text, error: String(error.message).slice(0, 200) }; }
   };
+  // The old file is kept as settings.json.bak (an older .bak is replaced); the new one lands by rename, never half written.
+  const replaceSettings = async (old, next) => {
+    if (old !== undefined) await writeFile(settingsFile + '.bak', old, { mode: 0o600 });
+    const file = await open(settingsFile + '.tmp', 'w', 0o600);
+    try { await file.writeFile(JSON.stringify(next, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+    await rename(settingsFile + '.tmp', settingsFile);
+    await reloadSettings();
+  };
+  const isFolder = (relative) => stat(path.join(workspace, relative)).then((s) => s.isDirectory(), () => false);
+  // "Use what's here" (needs-done p9-wizard-respects-existing-workspace): with no settings in a folder that already has things
+  // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
+  // AGENTS.md at the top, a needs-you or waiting folder. Links are never followed; at most three folders deep.
+  const SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
+  const existing = async () => {
+    const found = {};
+    const agents = [];
+    const walk = async (relative, depth) => {
+      const entries = await readdir(path.join(workspace, relative), { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === 'AGENTS.md') agents.push(relative ? relative + '/AGENTS.md' : 'AGENTS.md');
+        if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
+        const child = relative ? relative + '/' + entry.name : entry.name;
+        if (entry.name === 'workspace-hub' && !found.hub && await present(path.join(workspace, child, 'registry.json'))) found.hub = child;
+        else if (depth < 3) await walk(child, depth + 1);
+      }
+    };
+    await walk('', 1);
+    if (found.hub) {
+      found.registry = found.hub + '/registry.json';
+      // Registry commands written relative to the folder above the workspace (the workspace is a folder inside a bigger one)
+      // only resolve with scripts_root set there.
+      const text = (await readAsset(path.join(workspace, found.registry), 'utf8').catch(() => '')).replace(/^﻿/, '');
+      const base = path.basename(workspace) + '/';
+      let records = [];
+      try { const reg = JSON.parse(text); records = [...(reg.scripts ?? []), ...(reg.apps ?? [])]; } catch {}
+      if (path.basename(workspace) && records.some((r) => [r?.cwd, ...(Array.isArray(r?.cmd) ? r.cmd : [])].some((v) => typeof v === 'string' && v.startsWith(base)))) {
+        found.scripts_root = path.dirname(workspace);
+      }
+    } else if (await present(path.join(workspace, STARTER_SETTINGS.registry))) found.registry = STARTER_SETTINGS.registry;
+    // primary: an AGENTS.md with the line Mission parses (**Main project: ...** (`path`)), else the top one.
+    const mainLine = async (file) => /\*\*Main project: [^*]+\*\* \(`[^`]+`/.test(await readAsset(path.join(workspace, file), 'utf8').catch(() => ''));
+    for (const file of agents.sort((a, b) => a.split('/').length - b.split('/').length)) if (!found.primary && await mainLine(file)) found.primary = file;
+    if (!found.primary && agents.includes('AGENTS.md')) found.primary = 'AGENTS.md';
+    for (const folder of ['needs-you', 'waiting']) if (!found.waiting && await isFolder(folder)) found.waiting = folder;
+    // waiting: no such folder, so one whose own AGENTS.md first heading says it holds what is waiting on the owner.
+    for (const file of agents.filter((name) => name !== 'AGENTS.md')) {
+      if (found.waiting) break;
+      const text = await readAsset(path.join(workspace, file), 'utf8').catch(() => '');
+      if (/waiting on/i.test(text.split('\n').find((line) => /^#+\s/.test(line)) ?? '')) found.waiting = path.posix.dirname(file);
+    }
+    return Object.fromEntries(Object.entries(found).filter(([, value]) => value));
+  };
+  // Exactly what a starter run with these paths makes: each of the three that is missing (a missing waiting folder gets its
+  // AGENTS.md; an existing one is left as it is), and _ideas/ only in an empty workspace.
+  const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'hub', 'scripts_root'];
+  const planFor = async (paths, empty) => [
+    ...(await present(path.join(workspace, paths.primary)) ? [] : [paths.primary]),
+    ...(await present(path.join(workspace, paths.registry)) ? [] : [paths.registry]),
+    ...(await isFolder(paths.waiting) ? [] : [paths.waiting + '/AGENTS.md']),
+    ...(empty && !(await isFolder('_ideas')) ? ['_ideas/'] : [])];
+  // The wizard's own paths, checked as settings.json would be: only the four keys, each workspace-relative.
+  const wizardPaths = (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.keys(input).every((key) => WIZARD_KEYS.includes(key))) return null;
+    try { return parseSettings(JSON.stringify(input)); } catch { return null; }
+  };
+  // Settings are per machine, not per workspace: after "Change workspace" they can name starter paths this folder lacks while
+  // the folder has its own layout. What it has that the settings do not name; non-empty means Create must not lay a starter.
+  const differing = async (loaded, empty) => {
+    if (!loaded) return empty ? {} : existing();
+    if (empty || !(await planFor(loaded, false)).length) return {};
+    const own = await existing();
+    return Object.fromEntries(Object.entries(own).filter(([key, value]) => loaded[key] !== value));
+  };
   app.get('/setup', async (c) => {
-    const disk = await settingsOnDisk(), paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
+    const disk = await settingsOnDisk(), empty = !(await readdir(workspace)).length;
+    // A settings file (loaded or on disk) decides the paths. Without one: an empty folder gets the starter paths, any other
+    // gets what it already has, filled in with the starter paths, which the wizard shows and lets the owner change.
+    const loaded = settings ?? disk.parsed;
+    const found = (settings || disk.text !== undefined || empty) && !loaded ? {} : await differing(loaded, empty);
+    const query = c.req.query(), asked = Object.keys(query).length ? wizardPaths(query) : null;
+    const proposed = loaded && Object.keys(found).length ? asked ?? { ...loaded, ...found } : settings ?? disk.parsed ?? asked ?? { ...STARTER_SETTINGS, ...found };
+    const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
     return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: disk.text !== undefined,
       settingsInvalid: Boolean(disk.error), settingsError: disk.error ?? null,
-      writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: !(await readdir(workspace)).length,
+      writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: empty,
+      found, conflict: Boolean(loaded && Object.keys(found).length), proposed,
+      creates: disk.error ? [] : await planFor(proposed, empty), ...(Object.keys(query).length && !asked ? { pathsInvalid: true } : {}),
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
-      // null off Linux: the dock's terminals are tmux sessions there only.
-      tmux: terminals ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
-      claude: await present(path.join(os.homedir(), '.claude', '.credentials.json')), codex: await present(path.join(os.homedir(), '.codex', 'auth.json')) });
+      // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
+      tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
+      claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')) });
   });
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.
   // The new settings load live: with no settings every Mission route answered 503, so no run exists to lose here.
+  // The body is {} (the settings file's paths, or the starter paths in an empty folder) or the wizard's chosen paths, which
+  // a folder with things in it always needs: the fixed starter paths never land there unshown.
   app.post('/setup/starter', async (c) => {
     const body = await json(c);
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return c.json({ error: 'request-refused' }, 400);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'request-refused' }, 400);
+    const chosen = Object.keys(body).length ? wizardPaths(body) : null;
+    if (Object.keys(body).length && !chosen) return c.json({ error: 'request-refused' }, 400);
     if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
     const disk = await settingsOnDisk();
     if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
-    const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
+    const old = disk.parsed ?? settings, empty = !(await readdir(workspace)).length;
+    // Settings are replaced only when the owner confirms other paths for a folder whose own layout they do not name.
+    const repoint = Boolean(chosen && old);
+    if (repoint && !Object.keys(await differing(old, empty)).length) return c.json({ error: 'settings-exist' }, 409);
+    if (!chosen && !settings && disk.text === undefined && !empty) return c.json({ error: 'paths-required' }, 409);
+    // The wizard's keys are the chosen ones; every other key of the old file (space, notes_roots, server_host ...) carries over.
+    const paths = repoint ? parseSettings(JSON.stringify({ ...Object.fromEntries(Object.entries(old).filter(([key]) => !WIZARD_KEYS.includes(key))), ...chosen }))
+      : settings ?? disk.parsed ?? chosen ?? STARTER_SETTINGS;
+    // The settings name starter paths this folder lacks, and it has its own: nothing is laid beside them unshown.
+    if (!repoint && (settings || disk.parsed) && Object.keys(await differing(paths, empty)).length) return c.json({ error: 'layout-differs' }, 409);
     const made = (promise) => promise.then(() => true, (error) => { if (error.code === 'EEXIST') return false; throw error; });
     const folders = async (relative) => { for (let i = 1; i < relative.length; i++) await made(createDirectory(workspace, relative.slice(0, i).join('/'))); };
-    const created = [];
+    const created = [], plan = await planFor(paths, empty);
+    // BL1: a file where a planned folder goes (waiting named a file) failed mid-create as ENOTDIR, a 400 request-refused.
+    // Checked before anything is made, so nothing is half laid.
+    for (const relative of plan) {
+      const parts = relative.replace(/\/$/, '').split('/');
+      for (let i = 1; i < parts.length; i++) {
+        const segment = parts.slice(0, i).join('/');
+        if (await stat(path.join(workspace, segment)).then((s) => !s.isDirectory(), () => false)) return c.json({ error: 'path-is-a-file', detail: segment }, 409);
+      }
+    }
     for (const [relative, content] of [[paths.primary, STARTER_AGENTS], [paths.registry, '{"scripts":[],"apps":[],"pages":[]}\n'], [paths.waiting + '/AGENTS.md', STARTER_WAITING]]) {
+      if (!plan.includes(relative)) continue;
       await folders(relative.split('/'));
       if (await made(createFile(workspace, relative, content))) created.push(relative);
     }
-    if (await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
-    if (disk.text === undefined) {
+    if (plan.includes('_ideas/') && await made(createDirectory(workspace, '_ideas'))) created.push('_ideas/');
+    if (repoint) {
+      await replaceSettings(disk.text, paths);
+      created.push(settingsFile);
+    } else if (disk.text === undefined) {
       await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 });
       const file = await open(settingsFile, 'wx', 0o600).catch((error) => { if (error.code === 'EEXIST') return null; throw error; });
       if (!file) return c.json({ error: 'settings-changed' }, 409); // written by someone else meanwhile: Retry re-reads it
-      try { await file.writeFile(JSON.stringify(STARTER_SETTINGS, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
+      try { await file.writeFile(JSON.stringify(paths, null, 2) + '\n'); await file.sync(); } finally { await file.close(); }
       created.push(settingsFile);
     }
     if (!settings) {
-      settings = disk.parsed ?? parseSettings(JSON.stringify(STARTER_SETTINGS));
+      settings = disk.parsed ?? paths;
       settingsInvalid = false;
       server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle });
       hub = createHub({ workspace, settings });
     }
     return c.json({ created, settings: true }, 201);
+  });
+  // ST1/ST2: Settings → Mission Control files edits the loaded settings.json, desktop only like the rest of /setup. The body
+  // names only settings.json keys (null removes one); the result is checked by parseSettings, the same rules as at start, so
+  // this route has none of its own. Notes folders keep their read-time refusals (home, workspace, recovery).
+  // ponytail: read-change-write with no lock; the one caller saves one row at a time.
+  app.get('/setup/settings', async (c) => {
+    const disk = await settingsOnDisk();
+    // remoteOrigin: this daemon's own phone address (--remote-origin), for "Continue on phone"; absent with remote logins off.
+    return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null, ...(remote ? { remoteOrigin: remote.origin } : {}) });
+  });
+  let settingsSaves = Promise.resolve();
+  app.post('/setup/settings', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length || !Object.keys(body).every((key) => Object.hasOwn(SETTINGS, key))) return c.json({ error: 'request-refused' }, 400);
+    if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
+    // One save at a time: each reads the file the one before it wrote, so quick saves of different keys all land.
+    const turn = settingsSaves.then(async () => {
+      await reloadSettings();
+      const disk = await settingsOnDisk();
+      if (disk.error) return c.json({ error: 'settings-invalid', detail: disk.error }, 409);
+      if (!disk.parsed || !settings) return c.json({ error: 'settings-missing' }, 409);
+      const next = { ...disk.parsed };
+      for (const [key, value] of Object.entries(body)) { if (value === null) delete next[key]; else next[key] = value; }
+      let parsed;
+      try { parsed = parseSettings(JSON.stringify(next)); } catch (error) { return c.json({ error: 'settings-refused', detail: error.detail ?? error.message }, 400); }
+      await replaceSettings(disk.text, parsed);
+      return c.json({ settings: parsed });
+    });
+    settingsSaves = turn.then(() => {}, () => {});
+    return turn;
   });
   // Wizard sign-in (threat model row 31), desktop only: main is the only caller, and opens the URL only after its origin check.
   app.get('/setup/login', (c) => reply(c, chat.login.state()));
@@ -313,12 +554,40 @@ export function createListener({ workspace, savedWorkspace, recovery, credential
     setProtection(body.on);
     return c.json({ on: protection() });
   });
+  // The Mission edit form (mission-editor.mjs), desktop only: names and icons of apps, links and sections, through the
+  // MCP tools' own update() with its guards. File protection asks first: the form sends confirm once the user agreed.
+  const editing = async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); };
+  app.get('/mission/edit', editing, async (c) => c.json(await mcp.editState()));
+  // Tile art (apps/server/icons.mjs): site icons fetched from the sites themselves, program icons, and the user's pictures,
+  // all as data: URIs for <img>. Desktop only; the phone lists links and shows no tiles.
+  const icons = createIcons({ dir: state, workspace, registry: () => settings.registry });
+  app.get('/mission/icons', editing, async (c) => c.json(await icons.collect(await mission.iconSources())));
+  app.post('/mission/edit', editing, async (c) => {
+    const { kind, confirm, ...rest } = (await json(c)) ?? {};
+    if (!['apps', 'pages', 'sections'].includes(kind) || (confirm !== undefined && typeof confirm !== 'boolean')
+      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'picture', 'hash'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+    // A picture is '' (back to the automatic icon) or {data: base64}. The file is stored only after File protection's confirm and a
+    // matching hash, so a refused save leaves nothing behind; the record then names it by the name P9 gave it.
+    const { picture } = rest;
+    if (picture !== undefined && picture !== '') {
+      if (!picture || typeof picture !== 'object' || Object.keys(picture).join() !== 'data' || typeof picture.data !== 'string' || picture.data.length > 400_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(picture.data)) return c.json({ error: 'request-refused' }, 400);
+      const now = await mcp.editState();
+      if (now.protection && confirm !== true) return c.json({ error: 'registry-read-only' }, 403);
+      const disk = kind === 'sections' ? now.space : now.registry;
+      if (rest.hash !== undefined && rest.hash !== disk) return c.json({ error: 'hash-conflict', diskHash: disk }, 409);
+      const stored = await icons.savePicture(Buffer.from(picture.data, 'base64'));
+      if (stored.error) return c.json(stored, 400);
+      rest.picture = stored.name;
+    }
+    const { error, ...result } = await mcp.update(kind, rest, { user: true, confirm });
+    return c.json(error ? { error, ...result } : result, !error ? 200 : error === 'hash-conflict' ? 409 : error === 'registry-read-only' ? 403 : 400);
+  });
   app.route('/', api);
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   const attachTerminal = (request, socket, head, route) => {
     const match = TERMINAL_SOCKET.exec(route);
-    if (!terminals || !match) return refuse(socket, 404);
+    if (!match) return refuse(socket, 404);
     wss.handleUpgrade(request, socket, head, (ws) => {
       // Before anything else: ws reports a protocol error (an over-limit frame, bad UTF-8) as an 'error' event, and an
       // unheard one would end the daemon. The socket is cut; attach's close handler stops its tmux client.

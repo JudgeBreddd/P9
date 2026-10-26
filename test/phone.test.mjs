@@ -394,7 +394,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
 
   await context.setOffline(true); await page.waitForSelector('#stale:not([hidden])');
   assert.equal(await page.locator('#save').isDisabled(), true);
-  assert.equal(await page.locator('#composer button').isDisabled(), true);
+  // Offline the Send button queues the message instead (PH2, phone-continue.test.mjs).
+  assert.equal(await page.locator('#composer button').textContent(), 'Queue message');
   await context.setOffline(false); await page.waitForFunction(() => document.getElementById('stale').hidden);
 
   await edit('retry once');
@@ -603,6 +604,25 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   await page.screenshot({ path: path.join(evidence, 'phone-terminal-closed.png') });
 });
 
+test('Issue #11: with no terminal backend the phone says so with the reason, never Not connected', async (t) => {
+  const server = await remoteDaemon(t, { setup, args: ['--terminal-platform', 'darwin'] });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page } = await signedInPage(browser, server);
+  const state = () => page.locator('#termState').textContent();
+  const want = "Terminal isn't available on this computer yet: P9 has no terminal for macOS yet.";
+  await page.click('[data-nav="terminal"]');
+  await page.waitForFunction((text) => document.querySelector('#termState').textContent === text, want, { timeout: 10000 });
+  // ponytail: the dev space runs tests with no network, so Chromium says navigator.onLine is false and phone.ts keeps
+  // New terminal disabled (Phase 11 and 17 time out on that too); say online here rather than change the sandbox.
+  await page.evaluate(() => { Object.defineProperty(navigator, 'onLine', { get: () => true }); dispatchEvent(new Event('online')); });
+  await page.click('#newTerminal');
+  await page.waitForTimeout(500);
+  assert.equal(await state(), want);
+  await page.screenshot({ path: path.join(evidence, 'phone-terminal-unavailable.png') });
+  console.log('PASS phone, no backend: Terminal tab and New terminal both say ' + JSON.stringify(want));
+});
+
 test('Phase 11: malformed and stale usage are explicit and never stop the daemon', async (t) => {
   const server = await remoteDaemon(t, { setup });
   const authBrowser = await chromium.launch(); t.after(() => authBrowser.close());
@@ -626,8 +646,9 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
-  // The wizard's writes and sign-in are desktop-only too (threat model rows 17, 31).
-  for (const route of ['/setup/starter', '/setup/login', '/setup/login/code', '/setup/login/stop']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
+  assert.equal((await server.remote('/setup/settings', { session: auth })).status, 404);
+  // The wizard's writes, sign-in and Settings → Mission Control files are desktop-only too (threat model rows 17, 31).
+  for (const route of ['/setup/starter', '/setup/settings', '/setup/login', '/setup/login/code', '/setup/login/stop']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {
     const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });

@@ -1,6 +1,7 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, md } from './helpers.mjs';
-import { createTerminal, TMUX_MISSING } from './terminal.mjs';
+import { pinned, applyCard } from './pinned.mjs';
+import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
 type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
@@ -8,7 +9,7 @@ type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | nul
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
-const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string }, conversations: [] as Json[] };
+const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping,
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
@@ -16,14 +17,15 @@ function online() {
   const value = navigator.onLine;
   one<HTMLElement>('#stale').hidden = value;
   one('#syncState').textContent = value ? 'Live' : 'Stale';
-  document.querySelectorAll<HTMLButtonElement>('#composer button, #save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !state.file); });
+  document.querySelectorAll<HTMLButtonElement>('#save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !state.file); });
+  label();
   return value;
 }
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
   if (response.status === 401) location.replace('/login');
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String(body.error ?? response.status));
+  if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
   return body;
 }
 // One ID per action, kept until the daemon answers it: another action in between must not cost a lost one its ID,
@@ -72,32 +74,103 @@ document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => {
 async function loadChat() {
   try {
     const list = await request('/chat'); state.conversations = list.conversations ?? [];
-    // Newest first, labelled with when it started and its state, so two "Claude" chats are told apart.
-    one<HTMLSelectElement>('#conversation').innerHTML = [...state.conversations].reverse().map((item) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`).join('') || '<option value="">No conversations yet</option>';
-    await fetchEvents(); render();
+    await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
+    fillPicker();
+    if (!linked && applyLink()) linked = true;
+    render();
   } catch { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
 }
+// Most recently used first, in the daemon's order (owner, 2026-10-25): the open chats, then History, the stopped ones a
+// message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
+// apart. The chat shown stays picked.
+function fillPicker() {
+  const select = one<HTMLSelectElement>('#conversation'), was = select.value;
+  const option = (item: Json) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`;
+  const group = (label: string, items: Json[]) => items.length ? `<optgroup label="${label}">${items.map(option).join('')}</optgroup>` : '';
+  select.innerHTML = group('Open', state.conversations.filter((item) => item.state !== 'stopped')) + group('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
+    || '<option value="">No conversations yet</option>';
+  if ([...select.options].some((option) => option.value === was)) select.value = was;
+}
+// PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
+// link changes on an open page).
+let linked = false;
+function applyLink() {
+  const id = new URLSearchParams(location.hash.slice(1)).get('chat'), select = one<HTMLSelectElement>('#conversation');
+  if (!id || ![...select.options].some((option) => option.value === id)) return false;
+  select.value = id;
+  return true;
+}
+addEventListener('hashchange', () => { if (applyLink()) { show('chat'); render(); } });
 // Reads every event after state.cursor into state.events (the daemon pages 500 at a time); wait > 0 long-polls for the
-// first. The page holds the whole history, so a reload or a second visit shows each chat in full.
-async function fetchEvents(wait = 0) {
+// first. `extra` narrows it to some chats (the first read, PH3). The page holds what it has read, so a reload or a second
+// visit shows each chat in full.
+async function pull(extra: string, wait = 0) {
   let batch: Json[];
   do {
-    const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait); wait = 0;
+    const result = await request('/chat/events?after=' + state.cursor + '&wait=' + wait + extra); wait = 0;
     batch = result.events as Json[] ?? [];
     // The live loop and a refresh can overlap; an event already held is skipped.
     for (const event of batch) if (Number(event.cursor) > state.cursor) { state.events.push(event); state.cursor = Number(event.cursor); }
+    // A narrowed read reports how far it scanned, matching or not.
+    if (extra && batch.length < 500) state.cursor = Math.max(state.cursor, Number(result.cursor));
   } while (batch.length === 500);
-  // A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
-  const next = state.events.find((event) => Number(event.cursor) > state.seen);
-  if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false;
+}
+// A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
+const gapAfter = (next?: Json) => { if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false; };
+// PH3: the first read replays only the chats that are not stopped, as the desktop does (E2); a stopped chat's history
+// loads when it is shown. Before this the phone read the whole ledger, stopped chats included, on every launch.
+// ponytail: over 100 such chats it replays everything, as the desktop does (their IDs go in the URL).
+async function replay() {
+  const ids = state.conversations.filter((item) => item.state !== 'stopped').map((item) => String(item.id));
+  let scoped = ids.length <= 100;
+  for (;;) {
+    try { await pull(scoped ? '&only=' + ids.map(encodeURIComponent).join(',') : ''); break; }
+    // A listed ID the daemon will not take (only a seeded test ledger has one) replays everything, as before.
+    catch (error) { if (!scoped || (error as Error).message !== 'request-refused') throw error; scoped = false; }
+  }
+  if (!scoped) return gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
+  // The narrowed events skip the other chats', so a gap is looked for in the whole feed: its first event after the saved cursor.
+  if (state.seen > 0) gapAfter(((await request('/chat/events?after=' + state.seen + '&wait=0')).events as Json[] | undefined)?.[0]);
+  // Listed again after the read: a chat made meanwhile has events below base this read did not take, so it is a stub too.
+  state.base = state.cursor;
+  state.conversations = (await request('/chat')).conversations ?? [];
+  state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
+}
+async function fetchEvents(wait = 0) {
+  if (!state.replayed) { await replay(); state.replayed = true; }
+  else { await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen)); }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
+}
+// A stub chat's events, up to where the first read stopped; live events for it come after, so none repeat.
+const loading = new Map<string, Promise<void>>();
+function history(id: string) {
+  if (!state.stubs.has(id)) return Promise.resolve();
+  if (!loading.has(id)) loading.set(id, (async () => {
+    try {
+      for (let after = 0; ;) {
+        const result = await request('/chat/events?after=' + after + '&only=' + encodeURIComponent(id) + '&until=' + state.base);
+        state.events.push(...result.events as Json[]); after = Number(result.cursor);
+        if ((result.events as Json[]).length < 500) break;
+      }
+    } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
+    state.stubs.delete(id);
+    state.events.sort((a, b) => Number(a.cursor) - Number(b.cursor));
+  })().finally(() => loading.delete(id)));
+  return loading.get(id)!;
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out.
 type Block = { label: string; text: string; tool?: boolean; id?: unknown; title?: string; request?: string; options?: Json[] };
 function render() {
   const picked = one<HTMLSelectElement>('#conversation').value;
+  if (state.stubs.has(picked)) {
+    one('#events').innerHTML = '<div class="empty">Loading…</div>';
+    history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
+    return;
+  }
   const blocks: Block[] = [];
+  // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
+  const strip: { events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> } = { events: [] };
   const add = (label: string, text: unknown, tool = false) => { blocks.push({ label, text: String(text ?? ''), tool }); };
   // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
   const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.tool = true; block.text += ' · not answered'; } });
@@ -110,12 +183,14 @@ function render() {
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
         const label = update === 'agent_message_chunk' ? 'Agent' : 'Thinking';
         if (last?.label === label) last.text += String(text); else add(label, text);
-      } else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId });
+      } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
+      else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId });
       else if (update === 'tool_call_update') {
         const tool = blocks.find((block) => block.label === 'Tool' && block.id === data.toolCallId);
         if (tool && typeof data.status === 'string') tool.text = String(data.title || tool.title) + ' · ' + data.status;
       }
     }
+    else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
     else if (kind === 'approval') blocks.push({ label: 'Approval needed', text: String((data.toolCall as Json | undefined)?.title || 'Tool call'), request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [] });
     else if (kind === 'answered') {
       const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
@@ -126,13 +201,15 @@ function render() {
     else if (kind === 'question') add('Question', data.message, true);
     else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('Turn ended', data.stopReason, true); }
     else if (kind === 'error') add('Error', data.message, true);
+    else if (kind === 'steer-lost') add('This message may not have reached the agent', data.text, true);
     else if (kind === 'interrupted') { settle(); add('Stopped', 'The P9 daemon restarted mid-turn. Send again to resume.', true); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('Stopped', 'Send again to resume.', true); }
   }
   one('#events').innerHTML = blocks.length ? blocks.slice(-30).map((block) =>
     `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${md.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
       `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`).join('') : '<div class="empty">No messages yet.</div>';
-  renderPicks(picked);
+  one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
+  renderPicks(picked); renderQueue(); label(); void drain();
 }
 // Mode and Model for the picked chat (Builder, 2026-10-18: the phone could change neither; threat model row 15). Mode
 // starts at "as set" and sends nothing until picked: the daemon does not report the mode, and a default would undo a
@@ -158,20 +235,92 @@ async function listen() {
   for (;;) {
     if (document.hidden || !navigator.onLine) { await pause(2000); continue; }
     const held = state.events.length;
-    try { await fetchEvents(8000); if (state.events.length !== held) render(); }
+    try {
+      await fetchEvents(8000);
+      if (state.events.length === held) continue;
+      // A chat made, used, stopped or closed anywhere moves in the picker.
+      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; fillPicker(); }
+      render();
+    }
     catch { await pause(3000); }
   }
 }
+// PH2: the phone keeps its queue. A message typed offline, or while the agent waits on a question or approval (sent then it
+// would decline it), is kept here, on this phone, and goes once it can, with `when: 'queue'` so it waits for the turn's
+// end. Each goes once: it keeps one operation ID until the daemon answers (mutate), so a lost reply or a reload re-sends
+// the same message under the same ID and the daemon replays it. ponytail: this phone's storage only, as the desktop's queue.
+type Queued = { qid: string; text: string; mode?: string; model?: string };
+const queueKey = (id: string) => 'p9-queue:' + id;
+function queued(id: string): Queued[] {
+  try { const all = JSON.parse(localStorage.getItem(queueKey(id)) ?? '[]'); return Array.isArray(all) ? all.filter((item) => typeof item?.text === 'string' && typeof item.qid === 'string') : []; } catch { return []; }
+}
+function keepQueue(id: string, items: Queued[]) { if (items.length) localStorage.setItem(queueKey(id), JSON.stringify(items)); else localStorage.removeItem(queueKey(id)); }
+// A question or approval still waiting for an answer in this chat.
+function asking(id: string) {
+  const open = new Set<string>();
+  for (const event of state.events) {
+    if (event.conversation !== id) continue;
+    const kind = String(event.type), request = String((event.data as Json | undefined)?.request);
+    if (kind === 'approval' || kind === 'question') open.add(request);
+    else if (kind === 'answered') open.delete(request);
+    else if (['turn-end', 'interrupted', 'exited', 'stopped'].includes(kind)) open.clear();
+  }
+  return open.size > 0;
+}
+function label() {
+  const id = one<HTMLSelectElement>('#conversation').value;
+  one('#composer button').textContent = !navigator.onLine || asking(id) || queued(id).length ? 'Queue message' : 'Send message';
+}
+function renderQueue() {
+  const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), box = one<HTMLElement>('#queued');
+  box.hidden = !items.length;
+  box.innerHTML = items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
+}
+let draining = false;
+async function drain() {
+  if (draining || !navigator.onLine) return;
+  draining = true;
+  let sent = false;
+  try {
+    for (const chat of state.conversations) {
+      const id = String(chat.id);
+      for (let next = queued(id)[0]; next && !asking(id); next = queued(id)[0]) {
+        const { qid, ...body } = next;
+        const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, when: 'queue' });
+        // Any answer is final for this message: it went, or the daemon refused it and says why (the text goes back in the box).
+        keepQueue(id, queued(id).filter((item) => item.qid !== qid));
+        if (result.status === 202) sent = true;
+        else {
+          const input = one<HTMLTextAreaElement>('#prompt');
+          if (id === one<HTMLSelectElement>('#conversation').value) input.value = next.text + (input.value ? '\n' + input.value : '');
+          one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not sent: ${escape(result.body.error ?? result.status)}</div>`);
+        }
+      }
+    }
+  } catch { /* a lost request keeps its message and its ID; the next drain sends it again */ }
+  finally { draining = false; }
+  if (sent) { await fetchEvents(); render(); } else renderQueue();
+}
+one<HTMLElement>('#queued').onclick = (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
+  const id = one<HTMLSelectElement>('#conversation').value, item = queued(id).find((entry) => entry.qid === button.dataset.unqueue); if (!item) return;
+  keepQueue(id, queued(id).filter((entry) => entry.qid !== item.qid));
+  const input = one<HTMLTextAreaElement>('#prompt'); input.value = item.text + (input.value ? '\n' + input.value : '');
+  renderQueue(); label();
+};
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
   if (!id || !input.value.trim()) return;
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }) });
+  const body = { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }) };
+  // Behind a queued message it queues too, so they go in the order typed.
+  if (!navigator.onLine || asking(id) || queued(id).length) { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return; }
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', body);
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { input.value = ''; await fetchEvents(); render(); }
   else one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not sent: ${escape(result.body.error ?? result.status)}</div>`);
 };
-one<HTMLSelectElement>('#conversation').onchange = render;
+one<HTMLSelectElement>('#conversation').onchange = render; // a stub's history loads from render
 // Phase 17 row 2: an approval answered from the phone, the same POST /chat/:id/answer the desktop uses.
 one<HTMLElement>('#events').onclick = async (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-request]'); if (!button) return;
@@ -208,13 +357,17 @@ async function loadTerminals() {
     select.innerHTML = running.map((item) => `<option value="${escape(item.id)}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
     if (running.some((item) => item.id === was)) select.value = was;
     attach();
-  } catch (error) { termState((error as Error).message === 'tmux-not-found' ? TMUX_MISSING : 'Terminals are unavailable'); }
+  } catch (error) {
+    const { message, body } = error as Error & { body?: Json };
+    termState(message === 'tmux-not-found' ? TMUX_MISSING : message === 'terminal-unavailable' ? unavailableText(body?.reason) : 'Terminals are unavailable');
+  }
 }
 one<HTMLSelectElement>('#terminal').onchange = attach;
 one<HTMLButtonElement>('#refreshTerminal').onclick = () => void loadTerminals();
 one<HTMLButtonElement>('#newTerminal').onclick = async () => {
   const result = await mutate('/terminals', {});
-  if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING : 'Not started: ' + String(result.body.error ?? result.status));
+  if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING
+    : result.body.error === 'terminal-unavailable' ? unavailableText(result.body.reason) : 'Not started: ' + String(result.body.error ?? result.status));
   one<HTMLSelectElement>('#terminal').value = ''; await loadTerminals();
   one<HTMLSelectElement>('#terminal').value = String(result.body.terminal); attach();
 };
@@ -227,7 +380,7 @@ one<HTMLButtonElement>('#stopTerminal').onclick = async () => {
 document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.onclick = () => { term.sendKeys(KEYS[button.dataset.key!]); term.focus(); }; });
 addEventListener('resize', term.fit);
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
-termState('Not connected');
+termState('No terminal open');
 one<HTMLButtonElement>('#refreshChat').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };
 
 // Mission: the same daemon routes the desktop uses. Native <details> rows open in place; scripts stream output from
@@ -269,7 +422,9 @@ async function loadMission() {
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
     const groups = new Map<string, string[]>();
     (data.scripts as Item[]).forEach((item, index) => {
-      const inputs = item.args.map((label) => `<label>${escape(label)}<input maxlength="1000" autocomplete="off" /></label>`).join('');
+      const inputs = (item.args as unknown as (string | { label: string; choices?: string[] })[]).map((arg) => typeof arg === 'string'
+        ? `<label>${escape(arg)}<input maxlength="8000" autocomplete="off" /></label>`
+        : `<label>${escape(arg.label)}<select><option value="">(none)</option>${(arg.choices ?? []).map((choice) => `<option>${escape(choice)}</option>`).join('')}</select></label>`).join('');
       const body = `${item.desc ? `<p>${escape(item.desc)}</p>` : ''}` + (item.terminal
         ? '<p class="muted">Laptop only: this script opens a terminal window.</p>'
         : `<form data-run="${index}">${inputs}<button type="submit">${item.confirm ? 'Run (asks first)' : 'Run'}</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`);
@@ -277,14 +432,19 @@ async function loadMission() {
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[] }[]) {
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
+      // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
+      const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
     }
-    const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`).join('');
+    const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
+      ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
+      // M6: another program's link opens on the laptop only after the full link was shown and confirmed.
+      : `<li><button type="button" class="link" data-open-page="${escape(item.id)}" data-url="${escape(item.url)}">${escape(item.title)} (opens on the laptop)</button></li>`)).join('');
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
-    keepOpen(() => { one('#mission').innerHTML = (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
+    keepOpen(() => { one('#mission').innerHTML = (data.restart?.needed ? `<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
       + '<div class="tiles">'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
@@ -332,6 +492,16 @@ one('#mission').addEventListener('click', (event) => {
 // Close button or Escape; a dialog removed by a reload is outside #mission by then, so it never clears this.
 one('#mission').addEventListener('close', () => { openWindow = ''; expanded = new Set(); }, true);
 one('#mission').addEventListener('toggle', async (event) => {
+  const list = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-notes]');
+  if (list && !list.dataset.loaded) {
+    list.dataset.loaded = '1';
+    const root = list.dataset.notes!;
+    try {
+      const { files, total, partial } = await request('/mission/notes?' + new URLSearchParams({ root })) as { files: { path: string; modified: number }[]; total: number; partial: boolean };
+      list.innerHTML = `<p class="muted">${files.length < total ? `Showing the newest ${files.length} of ${total} notes` : `${total} notes`}${partial ? ' · a very big folder: some subfolders were not read' : ''}</p>`
+        + `<ul class="list">${files.map((f) => `<li><button type="button" class="quiet" data-note-root="${escape(root)}" data-note="${escape(f.path)}">${escape(f.path)} <small class="muted">${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small></button></li>`).join('')}</ul>`;
+    } catch (error) { list.innerHTML = `<p class="muted">Could not list the notes (${escape((error as Error).message)})</p>`; }
+  }
   const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > pre[data-text]');
   if (!pre || pre.dataset.loaded) return;
   pre.dataset.loaded = '1';
@@ -356,10 +526,10 @@ one('#mission').addEventListener('submit', async (event) => {
     // Copy (Builder, 2026-10-18: "Yes" to phone Copy): a plain-text write from this tap only; the page never reads the clipboard (threat model row 19).
     const copy = output.nextElementSibling as HTMLButtonElement; copy.hidden = false; copy.textContent = 'Copy';
     copy.onclick = () => navigator.clipboard.writeText(output.textContent ?? '').then(() => 'Copied', () => 'Copy failed').then((said) => { copy.textContent = said; });
-    const args = [...form.querySelectorAll('input')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
+    const args = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')].map((input) => input.value).filter((_, index, all) => all.slice(index).some(Boolean));
     const result = await mutate(`/scripts/${encodeURIComponent(item.id)}/run`, { args, ...(item.confirm && { confirm: true }) });
     if (result.status === 202) await follow(String(result.body.run), output).catch(() => { output.textContent += '\n[lost the run output]'; });
-    else output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.error ?? result.status}`;
+    else output.textContent = result.body.launched ? 'Started.' : `Could not run: ${result.body.reason ?? result.body.error ?? result.status}`;
   } else if (form.dataset.idea !== undefined) {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
@@ -376,6 +546,12 @@ one('#mission').addEventListener('submit', async (event) => {
     if (result.status === 200) { note.textContent = 'Answer saved.'; setTimeout(() => void loadMission(), 900); }
     else note.textContent = result.status === 409 ? 'The file changed since it loaded. Refresh and answer again.' : `Not saved: ${result.body.error ?? result.status}`;
   }
+});
+one('#mission').addEventListener('click', async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-open-page]');
+  if (!button || !confirm(`Open this link on the laptop?\n\n${button.dataset.url}`)) return;
+  const result = await mutate(`/pages/${encodeURIComponent(button.dataset.openPage!)}/launch`, { confirm: true });
+  button.textContent = result.status === 200 ? 'Opened on the laptop' : `Not opened: ${result.body.reason ?? result.body.error ?? result.status}`;
 });
 one<HTMLButtonElement>('#refreshMission').onclick = () => void loadMission();
 
@@ -414,28 +590,60 @@ one('#fileList').addEventListener('click', (event) => {
   void (button.dataset.dir ? loadFolder(path) : openFile(path));
 });
 one<HTMLButtonElement>('#up').onclick = () => void loadFolder(folder.split('/').slice(0, -1).join('/'));
-one<HTMLButtonElement>('#closeFile').onclick = () => { state.file = null; one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); void loadFolder(); };
-async function openFile(path: string) {
+one('#mission').addEventListener('click', (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('button[data-note]');
+  if (!button) return;
+  // opened first, so show() finds state.file set and does not load the workspace list over it; a note that cannot be
+  // read says why on its own row
+  void openFile(button.dataset.note!, button.dataset.noteRoot).then((opened) => {
+    if (opened) { button.closest('dialog')?.close(); show('files'); } else button.lastElementChild!.textContent = one('#fileState').textContent;
+  });
+});
+one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
+// A .md file can be read rendered: md shows raw HTML as text and links and images as plain text (threat model row 18).
+const preview = (on: boolean) => {
+  one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on; one('#preview').textContent = on ? 'Edit' : 'Preview';
+  if (on) one('#rendered').innerHTML = md.parse(editor.state.doc.toString()) as string;
+};
+one<HTMLButtonElement>('#preview').onclick = () => preview(one<HTMLElement>('#rendered').hidden);
+async function openFile(path: string, root?: string) {
   try {
-    const file = await request('/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content };
+    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
     one('#openPath').textContent = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
+    one<HTMLElement>('#preview').hidden = !/\.md$/i.test(path); preview(!!root);
     one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     one<HTMLButtonElement>('#discard').disabled = false; online();
+    return true;
   } catch (error) {
     // Binary, oversize, symlinked or locked files are refused by the daemon (request-refused); say so instead of "Unavailable".
     one('#fileState').textContent = (error as Error).message === 'request-refused' ? 'Cannot open this file here' : 'File unavailable';
+    return false;
   }
 }
 one<HTMLButtonElement>('#discard').onclick = () => { if (state.file) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: state.file.content } }); };
-one<HTMLButtonElement>('#save').onclick = async () => {
+async function saveFile(hash: string) {
   if (!state.file) return;
-  const result = await mutate('/files', { path: state.file.path, hash: state.file.hash, content: editor.state.doc.toString() });
-  if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content: editor.state.doc.toString() }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; }
-  else if (result.status === 409) { one('#fileState').textContent = 'Conflict'; one<HTMLElement>('#conflict').hidden = false; }
+  const { path, root } = state.file, content = editor.state.doc.toString();
+  const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content });
+  if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; }
+  else if (result.status === 409) {
+    // the disk version, when the file is still there, so the draft can be kept or the disk loaded (as on the desktop)
+    state.file.disk = typeof result.body.diskHash === 'string' ? { content: String(result.body.diskContent), hash: result.body.diskHash } : undefined;
+    one<HTMLElement>('#loadDisk').hidden = one<HTMLElement>('#saveMine').hidden = !state.file.disk;
+    one('#fileState').textContent = 'Conflict'; one<HTMLElement>('#conflict').hidden = false;
+  }
+}
+one<HTMLButtonElement>('#save').onclick = () => void saveFile(state.file?.hash ?? '');
+one<HTMLButtonElement>('#saveMine').onclick = () => { if (state.file?.disk) void saveFile(state.file.disk.hash); };
+one<HTMLButtonElement>('#loadDisk').onclick = () => {
+  const disk = state.file?.disk; if (!state.file || !disk) return;
+  state.file = { ...state.file, hash: disk.hash, content: disk.content, disk: undefined };
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: disk.content } });
+  one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true; if (!one<HTMLElement>('#rendered').hidden) preview(true);
 };
 
 addEventListener('offline', online);
-addEventListener('online', () => { online(); void loadChat(); });
+addEventListener('online', () => { online(); void loadChat().then(drain); });
 online(); void loadChat().then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');

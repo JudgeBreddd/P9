@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { request } from 'node:http';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { formSpec } from '../apps/server/chat.mjs';
@@ -82,10 +82,12 @@ test('approvals and questions are answered only with options and fields the agen
   assert.equal((await call(instance, `/chat/${id}/answer`, 'POST', { request: question.data.request, answer: { action: 'accept', content: { colour: 'red' } } })).status, 200);
   const answered = await until(instance, (event) => event.type === 'turn-end', asked);
   assert.ok(answered.seen.some(said(id, 'ask:{"action":"accept","content":{"colour":"red"}}')));
-  // One turn at a time; cancel ends it with the adapter's own stop reason.
+  // One turn at a time: a prompt mid-turn goes into it (steered, like Claude Code); cancel ends it with the adapter's own stop reason.
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'slow' });
   await until(instance, said(id, 'working'), answered.cursor);
-  assert.equal((await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'second' }))).body.error, 'turn-running');
+  const steered = await json(call(instance, `/chat/${id}/prompt`, 'POST', { text: 'second' }));
+  assert.deepEqual([steered.status, steered.body.steered], [202, true]);
+  await until(instance, said(id, 'got:second'), answered.cursor);
   assert.equal((await call(instance, `/chat/${id}/cancel`, 'POST')).status, 200);
   const cancelled = await until(instance, (event) => event.type === 'turn-end', answered.cursor);
   assert.equal(cancelled.hit.data.stopReason, 'cancelled');
@@ -306,11 +308,23 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'look', images: [{ mimeType: 'image/png', data: png }] })).status, 202);
   const { hit, seen } = await until(instance, said(id, 'echo:'));
   assert.equal(hit.data.content.text, `echo:look[image image/png ${bytes}]`);
-  assert.deepEqual(seen.find((event) => event.type === 'user').data, { text: 'look', images: 1 }, 'the event keeps the count, not the image');
+  const hash = createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex'), images = path.join(instance.state, 'images');
+  assert.deepEqual(seen.find((event) => event.type === 'user').data, { text: 'look', images: [{ hash, type: 'image/png' }] }, 'the event keeps the hash and type, not the image');
+  // CP3 (threat model row 43): kept by hash in the state folder, and served only to the chat whose message names it.
+  assert.deepEqual(await readdir(images), [hash + '.png']);
+  const back = await json(call(instance, `/chat/${id}/images/${hash}`));
+  assert.deepEqual([back.status, back.body.mimeType, Buffer.from(back.body.data, 'base64').equals(Buffer.from(png, 'base64'))], [200, 'image/png', true]);
+  const other = await create(instance);
+  for (const [why, route] of [['another chat', `/chat/${other}/images/${hash}`], ['not hex', `/chat/${id}/images/${'g'.repeat(64)}`],
+    ['a path', `/chat/${id}/images/..%2F..%2Fdesktop.json`], ['not in the chat', `/chat/${id}/images/${'0'.repeat(64)}`], ['not a chat', `/chat/../images/${hash}`]])
+    assert.equal((await call(instance, route)).status, 404, why);
   let at = (await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, hit.cursor - 1)).cursor;
+  // Over 200 MB the oldest go first (a sparse 201 MB file stands in for months of photos).
+  await writeFile(path.join(images, 'old.png'), ''); await truncate(path.join(images, 'old.png'), 201 * 1024 * 1024); await utimes(path.join(images, 'old.png'), 0, 0);
   // A photo alone is a message too.
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: '', images: [{ mimeType: 'image/png', data: png }] })).status, 202);
   assert.equal((await until(instance, said(id, 'echo:'), at)).hit.data.content.text, `echo:[image image/png ${bytes}]`);
+  assert.deepEqual(await readdir(images), [hash + '.png'], 'the oldest went, the newest stayed');
   at = (await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, at)).cursor;
   const image = { mimeType: 'image/png', data: png };
   for (const [why, images] of [['svg', [{ mimeType: 'image/svg+xml', data: png }]], ['not base64', [{ mimeType: 'image/png', data: '<script>' }]], ['five', Array(5).fill(image)],
@@ -322,7 +336,7 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   const refused = await json(call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'look', images: [image] }));
   assert.deepEqual([refused.status, refused.body.error], [400, 'images-unsupported']);
   assert.equal((await call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'words' })).status, 202, 'the conversation still takes text');
-  console.log('PASS images: PNG delivered as an image block, photo-only message, 7 bad requests 400, image-free agent refused');
+  console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused');
 });
 
 test('operation IDs: required, replayed once finished, refused when reused, outcome unknown after a crash', async (t) => {
@@ -349,7 +363,7 @@ test('operation IDs: required, replayed once finished, refused when reused, outc
   assert.equal(retried.status, 201);
   assert.equal(retried.headers['x-p9-replayed'], '1');
   const titles = (await json(call(instance, '/chat'))).body.conversations.map((conversation) => conversation.title);
-  assert.deepEqual(titles, ['Claude', 'lost']);
+  assert.deepEqual(titles, ['lost', 'Claude']);
   // The daemon dies mid-operation: the retry is told the outcome is unknown, never re-run; the turn is interrupted.
   await writeFile(path.join(instance.workspace, 'slow-init'), '');
   const crashed = randomUUID();
@@ -682,3 +696,35 @@ test('an adapter that never answers the handshake fails its start and cannot hol
   assert.ok(Date.now() - began < 55_000, 'start held the barrier past its limit');
   console.log('PASS hung adapter handshake: start refused 502 after the limit, Stop All finished');
 });
+
+// Chats are listed most recently used first, and the tab's x stops a chat, idle too, in every window.
+for (const provider of ['claude', 'codex']) {
+  test(`chat list (${provider}): most recently used first, with sent; a close stops an idle chat, is logged and does not move it`, async (t) => {
+    const instance = await start(t);
+    const older = await create(instance, provider);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const unsent = await create(instance, provider);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = await create(instance, provider);
+    assert.equal((await call(instance, `/chat/${older}/prompt`, 'POST', { text: 'hello' })).status, 202);
+    const { cursor } = await until(instance, (event) => event.conversation === older && event.type === 'turn-end');
+    const list = async () => (await json(call(instance, '/chat'))).body.conversations;
+    let chats = await list();
+    assert.deepEqual(chats.map((c) => c.id), [older, newer, unsent]);
+    assert.deepEqual(chats.map((c) => c.sent), [true, false, false]);
+    assert.equal(chats[2].used, chats[2].created);
+    assert.ok(chats[0].used > chats[1].used);
+    // close is true or absent; the x stops an idle chat and a used one, and the log says it was closed.
+    assert.equal((await call(instance, `/chat/${unsent}/stop`, 'POST', { close: 'yes' })).status, 400);
+    assert.equal((await call(instance, `/chat/${unsent}/stop`, 'POST', { close: true })).status, 200);
+    assert.equal((await call(instance, `/chat/${older}/stop`, 'POST', { close: true })).status, 200);
+    await until(instance, (event) => event.conversation === older && event.type === 'closed', cursor);
+    // The in-chat Stop sends no body and writes no closed event.
+    assert.equal((await call(instance, `/chat/${newer}/stop`, 'POST')).status, 200);
+    const events = (await json(call(instance, `/chat/events?after=${cursor}`))).body.events;
+    assert.deepEqual(events.filter((event) => event.type === 'closed').map((event) => event.conversation).sort(), [older, unsent].sort());
+    chats = await list();
+    assert.deepEqual(chats.map((c) => [c.id, c.state]), [[older, 'stopped'], [newer, 'stopped'], [unsent, 'stopped']]);
+    console.log(`PASS chat list ${provider}: used first, sent flagged, close stops idle and used chats without moving them`);
+  });
+}

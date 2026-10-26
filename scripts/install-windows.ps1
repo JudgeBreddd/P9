@@ -2,7 +2,8 @@ param(
   [string]$Workspace,
   [string]$Settings = (Join-Path $env:APPDATA 'P9\settings.json'),
   [string]$Node,
-  [string]$Server
+  [string]$Server,
+  [string]$Installer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,6 +83,75 @@ Say ('owner-only ' + $root)
 
 $hostScript = Full (Join-Path $PSScriptRoot 'windows-host.ps1') 'host'
 if (-not (Test-Path -LiteralPath $hostScript -PathType Leaf)) { throw 'host-not-found' }
+$hostArguments = @('-Mode', 'Daemon')
+
+# Every caller (the installer, the app's repair, Setup's Change the folder, a hand run) stops the running daemon here, as
+# installer.nsh customInit does: Register -Force leaves it running, and Start-ScheduledTask on a running task is refused
+# (v0.1.3 review finding 1). Stop-ScheduledTask ends only conhost.exe, so the bundled node.exe is ended too; its host exits.
+# It runs from daemon\<version> now (below), or from the install folder (v0.1.4 and before).
+# ponytail: a daemon on a node from PATH (a source run) is not ended, so it keeps the lock and the new one exits.
+Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
+$bundled = Full $bundledNode 'node'
+$daemons = Join-Path $root 'daemon'
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -eq $bundled -or $_.ExecutablePath -like ($daemons + '\*\node.exe') } | ForEach-Object {
+  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+  Say ('stopped the daemon ' + $_.ProcessId) }
+
+# AU4: the installed app's daemon runs from a copy in daemon\<version>, through the fixed launcher\p9-launch.ps1, which
+# starts the version daemon\current names. An update then replaces no file the daemon holds, and the version before
+# stays for a rollback: only current and the one it replaced are kept. A source run (node from PATH) runs as before.
+if ($Node -eq $bundled) {
+  $source = Split-Path $bundled
+  $version = (Get-Content -LiteralPath (Join-Path $source 'package.json') -Raw | ConvertFrom-Json).version
+  if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw 'version-unreadable' }
+  $target = Join-Path $daemons $version
+  # .complete is written last: a copy cut short is made again.
+  if (-not (Test-Path -LiteralPath (Join-Path $target '.complete') -PathType Leaf)) {
+    Remove-Item -LiteralPath ($target + '.tmp'), $target -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $daemons | Out-Null
+    Copy-Item -LiteralPath $source -Destination ($target + '.tmp') -Recurse
+    New-Item -ItemType File -Path (Join-Path ($target + '.tmp') '.complete') | Out-Null
+    Rename-Item -LiteralPath ($target + '.tmp') -NewName $version
+    Say ('copied the daemon to ' + $target)
+  }
+  $launcher = Join-Path $root 'launcher\p9-launch.ps1'
+  New-Item -ItemType Directory -Force -Path (Split-Path $launcher) | Out-Null
+  # AU5: only the first install writes the launcher itself. After that this version's goes to p9-launch.ps1.next, which
+  # the app renames over it after a healthy start (apps/desktop/rollback.mjs), so a broken update cannot break it.
+  $launcherCopy = if (Test-Path -LiteralPath $launcher -PathType Leaf) { $launcher + '.next' } else { $launcher }
+  Copy-Item -LiteralPath (Join-Path $target 'scripts\launcher\p9-launch.ps1') -Destination $launcherCopy -Force
+  $current = Join-Path $daemons 'current'
+  $previous = if (Test-Path -LiteralPath $current -PathType Leaf) { [IO.File]::ReadAllText($current).Trim() } else { '' }
+  [IO.File]::WriteAllText($current, $version)
+  # AU5: the installer that installed this version (installer.nsh passes $EXEPATH) is kept as installers\<version>.exe,
+  # with the one before it, for a rollback (p9-launch.ps1 -Rollback). Not kept costs the rollback a download, nothing more.
+  if ($Installer) {
+    try {
+      $installers = Join-Path $root 'installers'
+      $keep = Join-Path $installers ($version + '.exe')
+      New-Item -ItemType Directory -Force -Path $installers | Out-Null
+      if ((Full $Installer 'installer') -ne $keep) {
+        Copy-Item -LiteralPath $Installer -Destination ($keep + '.tmp') -Force
+        Move-Item -LiteralPath ($keep + '.tmp') -Destination $keep -Force
+        Say ('kept the installer as ' + $keep)
+      }
+      if ($previous -ne $version) {
+        Get-ChildItem -LiteralPath $installers -File | Where-Object { $_.Name -ne ($version + '.exe') -and $_.Name -ne ($previous + '.exe') } | ForEach-Object {
+          Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; Say ('removed ' + $_.FullName) }
+      }
+    } catch { Say ('the installer was not kept: ' + $_) }
+  }
+  # Only when current changes: a second install of the same version keeps the one before it.
+  if ($previous -ne $version) {
+    Get-ChildItem -LiteralPath $daemons -Directory | Where-Object { $_.Name -ne $version -and $_.Name -ne $previous } | ForEach-Object {
+      Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; Say ('removed ' + $_.FullName) }
+  }
+  Say ('daemon ' + $version + ', before it ' + $(if ($previous) { $previous } else { 'none' }))
+  $Node = Join-Path $target 'node.exe'
+  $Server = Join-Path $target 'apps\server\main.mjs'
+  $hostScript = $launcher
+  $hostArguments = @()
+}
 $allow = @('HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LANGUAGE', 'TZ', 'TERM', 'COLORTERM', 'TMPDIR',
   'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'USERPROFILE', 'USERNAME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'ProgramData')
 $environment = @{}
@@ -91,8 +161,8 @@ $payloadJson = @{ argv = @($Node, $Server, '--workspace', $Workspace, '--state',
 $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson))
 # The daemon's output goes to daemon.log, which inherits the root's owner-only ACL; teh doctor reads it (issue #6 B4).
 $log = Full (Join-Path $root 'daemon.log') 'log'
-$arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $hostScript + '"'),
-  '-Mode', 'Daemon', '-Log', ('"' + $log + '"'), '-Payload', $payload) -join ' '
+$arguments = (@('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $hostScript + '"')) +
+  $hostArguments + @('-Log', ('"' + $log + '"'), '-Payload', $payload)) -join ' '
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 # conhost --headless: the host gets a console with no window. Plain powershell.exe opened one at every logon, and closing it
 # killed the daemon (GitHub issue #4; on Windows 11, Terminal ignores -WindowStyle Hidden).
@@ -100,15 +170,6 @@ $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ('--headless 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
 $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-# Every caller (the installer, the app's repair, Setup's Change the folder, a hand run) stops the running daemon here, as
-# installer.nsh customInit does: Register -Force leaves it running, and Start-ScheduledTask on a running task is refused
-# (v0.1.3 review finding 1). Stop-ScheduledTask ends only conhost.exe, so the bundled node.exe is ended too; its host exits.
-# ponytail: a daemon on a node from PATH (a source run) is not ended, so it keeps the lock and the new one exits.
-Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
-$bundled = Full $bundledNode 'node'
-Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -eq $bundled } | ForEach-Object {
-  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
-  Say ('stopped the daemon ' + $_.ProcessId) }
 Register-ScheduledTask -TaskName 'P9 Foundation' -Action $action -Trigger $trigger -Principal $principal -Settings $taskSettings -Force | Out-Null
 Say 'task registered'
 Start-ScheduledTask -TaskName 'P9 Foundation'

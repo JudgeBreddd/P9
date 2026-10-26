@@ -24,8 +24,13 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'agentLogin', 'workspaceChange', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
+    // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
+    const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
+    assert.deepEqual(await page.evaluate(() => window.p9.updates()), off);
+    assert.deepEqual(await page.evaluate(() => window.p9.updates({ check: true })), off);
+    for (const ask of [{ check: 'yes' }, { install: true, check: true }, 'check', null]) await assert.rejects(page.evaluate(ask => window.p9.updates(ask), ask), /ipc-sender-refused/);
     const csp = await page.evaluate(async () => (await fetch('/')).headers.get('content-security-policy'));
     assert.match(csp, /default-src 'none'/); assert.match(csp, /script-src 'self' 'sha256-/); assert.ok(!csp.includes('unsafe-eval'));
     assert.deepEqual(await page.evaluate(async () => {

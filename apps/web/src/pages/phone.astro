@@ -21,13 +21,15 @@ import '../styles/phone.css';
         <div class="heading"><div><p class="eyebrow">Agent workspace</p><h1 id="chatTitle">Chat</h1></div><button id="refreshChat" class="quiet">Refresh</button></div>
         <label>Conversation<select id="conversation"></select></label>
         <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button></div>
+        <div id="pinned" aria-live="polite"></div>
         <div id="events" class="feed" aria-live="polite"></div>
+        <div id="queued" class="stack" aria-live="polite" hidden></div>
         <form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select></div><label for="prompt">Message</label><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><button type="submit">Send message</button></form>
       </section>
       <section data-view="terminal" aria-labelledby="terminalTitle" hidden>
         <div class="heading"><div><p class="eyebrow">P9 tmux sessions</p><h1 id="terminalTitle">Terminal</h1></div><button id="refreshTerminal" class="quiet">Refresh</button></div>
         <label>Terminal<select id="terminal"></select></label>
-        <div class="actions start"><button class="quiet" id="newTerminal">New terminal</button><button class="quiet" id="stopTerminal">Stop</button><span id="termState" role="status">Not connected</span></div>
+        <div class="actions start"><button class="quiet" id="newTerminal">New terminal</button><button class="quiet" id="stopTerminal">Stop</button><span id="termState" role="status">No terminal open</span></div>
         <div id="screen" aria-label="Terminal"></div>
         <div id="keys" class="actions start keys"><button class="quiet" data-key="esc">Esc</button><button class="quiet" data-key="tab">Tab</button><button class="quiet" data-key="ctrlc">Ctrl+C</button><button class="quiet" data-key="up" aria-label="Up arrow">↑</button><button class="quiet" data-key="down" aria-label="Down arrow">↓</button></div>
       </section>
@@ -43,9 +45,10 @@ import '../styles/phone.css';
         <div class="heading"><div><p class="eyebrow">Guarded save</p><h1 id="filesTitle">File editor</h1></div><span id="fileState">Not loaded</span></div>
         <div id="browser"><div class="crumbs"><button id="up" class="quiet" disabled>Up</button><span id="dirPath">Workspace</span></div><ul id="fileList" class="list"></ul></div>
         <div id="fileView" hidden>
-          <div class="crumbs"><button id="closeFile" class="quiet">Back</button><span id="openPath"></span></div>
+          <div class="crumbs"><button id="closeFile" class="quiet">Back</button><span id="openPath"></span><button id="preview" class="quiet" hidden>Preview</button></div>
+          <div id="rendered" class="md card" hidden></div>
           <div id="editor" aria-label="File contents"></div>
-          <div id="conflict" class="conflict" role="alert" hidden>The file changed after you opened it. Your draft was not saved.</div>
+          <div id="conflict" class="conflict" role="alert" hidden>The file changed on disk after you opened it. Your draft is still here and was not saved.<div class="actions"><button id="loadDisk" class="quiet">Load disk version</button><button id="saveMine">Save mine over it</button></div></div>
           <div class="actions"><button id="discard" class="quiet" disabled>Discard</button><button id="save" disabled>Save</button></div>
         </div>
       </section>

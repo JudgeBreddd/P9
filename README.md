@@ -31,7 +31,7 @@ machine), need a sandbox for your agents (the workspace bounds P9's own file rou
 and buttons run as you), or need a signed, audited installer (v1 is an unsigned beta for testers).
 
 **You need:** Linux with a graphical session and systemd user services (or Windows, per-user install, no
-admin), the Claude and/or Codex CLI already signed in, and access to this private repo. Dev Focus also needs
+admin), and the Claude and/or Codex CLI already signed in. Dev Focus also needs
 VSCodium's remote server at one pinned release. Full list: [Requirements](#requirements).
 
 **Real cost:** P9 itself is free under PolyForm Shield (see [Licenses](#licenses)); you pay for your own
@@ -40,17 +40,27 @@ missing); install time was not measured.
 
 ## Install
 
-The repository is private: you need a GitHub account with access to `JudgeBreddd/p9`.
+The repository is public: downloading and updating need no GitHub account.
 
 **Windows**
 
-1. Signed in to GitHub, open [the releases page](https://github.com/JudgeBreddd/p9/releases) and download
+1. Open [the releases page](https://github.com/JudgeBreddd/p9/releases) and download
    `p9-event-horizon-<version>-windows-x64.exe` from the newest release, or `...-windows-arm64.exe` on an ARM
    laptop (Snapdragon; Settings > System > About says "ARM-based processor").
 2. Double-click it. The installer is unsigned, so SmartScreen says "Windows protected your PC": click
    **More info**, then **Run anyway**, and click through the installer. Checking the download first is
    recommended (next section).
-3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows).
+3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows). From then on it updates
+   itself: [Update, roll back, uninstall](#update-roll-back-uninstall).
+
+**Linux AppImage** (x64, from the release after v0.1.4)
+
+Install `tmux`, download `p9-event-horizon-<version>-linux-x64.AppImage` from the same page, then
+`chmod +x` it and run it. On its first start it copies its daemon to `~/.local/share/p9/daemon` and installs the
+`p9-foundation` user service with `~/P9` as the workspace; without tmux it installs nothing and says
+`tmux-required`. If it already finds a `p9-foundation` service from a source install, it leaves that alone. On
+Ubuntu 23.10 and newer, AppArmor can stop an AppImage's sandbox from starting: allow it with an AppArmor
+profile for the file, never with `--no-sandbox`. Like the Windows app, it updates itself.
 
 **Linux**
 
@@ -222,10 +232,20 @@ Each `cmd` is an argv list run without a shell. **The registry is executable con
 button runs that command as you. Read it before you use it. P9's own routes never write it, but any
 program running as your user (an agent, a terminal, an extension) can edit the file, so treat changes to
 it like changes to a script. Optional `scripts_root` (absolute) is where button
-scripts run from; it defaults to the workspace and may point outside it. A button run is bounded: at most
+scripts run from; it defaults to the workspace and may point outside it. Settings, registry and space
+changes show in Mission within one refresh, with no restart. Optional `page_schemes` (a list such as
+`["obsidian", "ms-settings"]`) lets registry pages use those link types; P9 shows the full link and asks first,
+and `javascript:`, `file:` and `data:` are never allowed. Button arguments may be any text except control
+characters; for batch (.cmd/.bat) and ssh targets only, shell characters are refused and the message names
+the character. An argument entry with `choices: [...]` shows a dropdown and the server accepts only those
+values; `choices: "plans"` fills the dropdown with every `plan.md` under the scripts root (re-read at most once a
+minute). A button run is bounded: at most
 4 at once, 1 MiB of output kept, 15 minutes, and it is tracked in memory only (a daemon restart or update stops
 it; after a crash the next start does). Without the file, Mission Control says
-`settings-missing` and the other focus modes work normally. P9 never writes the registry.
+`settings-missing` and the other focus modes work normally. The setup wizard's Mission step can write it: in a
+folder that already has files it pre-fills the paths it finds (a workspace-hub with its registry, a root
+`AGENTS.md`, a `needs-you` or `waiting` folder), lets you change them, lists exactly what it will create, and
+creates only the settings file plus whatever is missing; only an empty folder gets the whole starter set. P9 never writes the registry.
 
 Optional keys, each off when left out:
 
@@ -235,7 +255,8 @@ Optional keys, each off when left out:
 - `hub`: the workspace-relative folder of a workspace-hub checkout. Turns on the hub sections (notifications,
   Wiki inbox, weekly audit, logs, incidents, work in flight, last solo run); they expect the ICM workspace
   layout the hub was built for. The Wiki inbox also needs `MC_VAULT` set to your vault in the service's
-  environment.
+  environment. Left out, those sections say how to turn them on; on Windows, or with no heartbeats folder, the
+  scheduled-job notices say the jobs are not checked instead of reporting them missing.
 - `server_host`: an ssh host name whose logs and incidents the hub sections also list, over
   `ssh -o BatchMode=yes` (a key login must already work). No default, so nothing is ever ssh'd unasked.
 
@@ -247,7 +268,9 @@ user only and registers a per-user Scheduled Task, `P9 Foundation`, for the daem
 On the first install its workspace is a new, empty `%USERPROFILE%\P9`, and an update keeps the folder the task
 already has. To use another folder, run `resources\daemon\scripts\install-windows.ps1 -Workspace
 <folder>` from the install folder in PowerShell (it replaces the task). Without `%APPDATA%\P9\settings.json` the daemon still starts and Mission Control says
-`settings-missing`. Uninstalling stops and removes the task; your state in `%LOCALAPPDATA%\P9` stays. Building the installer needs Windows:
+`settings-missing`. The task runs a small launcher from `%LOCALAPPDATA%\P9\launcher`, which starts the daemon
+copy in `%LOCALAPPDATA%\P9\daemon\<version>` (the newest two are kept). Uninstalling stops and removes the task,
+the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` stays. Building the installer needs Windows:
 `pnpm package:win` there writes the installer for that machine's architecture and its `SHA256SUMS-<arch>` to
 `dist/windows/`.
 
@@ -309,7 +332,7 @@ already has. To use another folder, run `resources\daemon\scripts\install-window
   nothing else. What is sent: your note, its kind (as the issue label) and the name of the focus mode you
   were in, as an issue on `JudgeBreddd/p9`, visible to everyone who can see that repo. Without a token the
   whole note goes into the new-issue URL, so it also lands in your browser history. Never paste secrets
-  into a note. Notes are capped at 2000 characters and 10 per 10 minutes.
+  into a note. Notes are capped at 50,000 characters (the box shows a live count and keeps your text if you go over) and 10 per 10 minutes. Without a token, GitHub's link limit cuts the prefilled text at 7,000 characters and the box says so.
   To remove the token: delete both `anymouse.*` files in that folder, then run
   `systemctl --user daemon-reload && systemctl --user restart p9-foundation`.
 - **Phone** (optional, needs Tailscale on both devices). **An enrolled phone can do what you can do in
@@ -345,6 +368,15 @@ already has. To use another folder, run `resources\daemon\scripts\install-window
      Every limit is in `SECURITY.md` under "Phase 10 remote access".
 
 ## Update, roll back, uninstall
+
+- **Installed app (Windows, AppImage):** it checks P9's GitHub releases shortly after it starts and every 4
+  hours, takes only releases that are not pre-releases, downloads a newer one in the background and installs it
+  when you quit, or at once from Settings > Maintenance > Updates. Installing restarts the daemon on the new
+  version, which ends a chat turn in progress (reopen it to resume). What it downloads and how that is checked:
+  `SECURITY.md` § Auto-update. Remove the AppImage's service with
+  `node ~/.local/share/p9/daemon/<version>/scripts/uninstall-service.mjs`, then delete the AppImage.
+
+A source checkout never updates itself:
 
 - **Update:** `git pull && pnpm install --frozen-lockfile && pnpm build`, then
   `systemctl --user restart p9-foundation`. Before a new build changes the state database, it copies
@@ -398,13 +430,14 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Status and known gaps
 
-**Version 0.1.4, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.5, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
   daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
-  branch other than `main`; the Windows installer is built, installed, restarted and uninstalled on GitHub's
-  Windows runner when asked (Actions, Windows installer, Run workflow; a runner session, not a real desktop).
+  branch other than `main`; on the same pushes the Windows installers (x64 and arm64) are built, installed,
+  updated, restarted and uninstalled on GitHub's Windows runners, and the AppImage is built and checked on
+  Ubuntu (Actions, Installers; a runner session, not a real desktop).
 - **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
   that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`).
 - **Not supported:** macOS.

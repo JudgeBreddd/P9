@@ -6,8 +6,26 @@ export const REPO = 'JudgeBreddd/p9';
 export const NEW_ISSUE = 'https://github.com/' + REPO + '/issues/new?';
 const KINDS = { idea: 'Idea', bug: 'Bug', gripe: 'Gripe' };
 const WINDOW = 10 * 60_000;
+// M4: GitHub keeps an issue body to 65,536 characters; 50,000 plus the footer fits.
+export const MAX_NOTE = 50_000;
+// GitHub refuses a new-issue link much past 8 KB (and a browser hand-off is no safer), so the tokenless link carries the start
+// of a long note and the desktop keeps the full text in its box to copy.
+const LINK_MAX = 7000;
 // A note saying @someone pings no one (DUWOP's allowed_mentions, in Markdown).
 const quiet = (text) => text.replaceAll('@', '@​');
+
+// GitHub's prefilled new-issue page for params (title, body, labels, or an issue form's template and field ids), with
+// params[field] cut to fit the link; cut says whether it was. Anymouse and the rollback report (desktop) both use it.
+export function issueLink(params, field, more = '[cut to fit a link; the full note is in P9]') {
+  const full = params[field];
+  let cut = full, link = NEW_ISSUE + new URLSearchParams(params);
+  // ponytail: shrinks by a tenth until the link fits; at most a few dozen passes for a 50,000-character note.
+  while (link.length > LINK_MAX && cut.length > 200) {
+    cut = full.slice(0, Math.floor(cut.length * 0.9));
+    link = NEW_ISSUE + new URLSearchParams({ ...params, [field]: cut + '\n\n' + more });
+  }
+  return { link, cut: cut !== full };
+}
 
 export function createAnymouse({ token, api = 'https://api.github.com', limit = 10 } = {}) {
   const recent = [];
@@ -17,11 +35,15 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
     const text = typeof b.text === 'string' ? b.text.trim() : '';
     const page = typeof b.page === 'string' ? b.page.slice(0, 200) : '';
     if (!text) return { status: 400, error: 'write something first' };
-    if (text.length > 2000) return { status: 400, error: 'keep it under 2000 characters' };
+    if (text.length > MAX_NOTE) return { status: 400, error: 'keep it under 50,000 characters (it is ' + text.length.toLocaleString('en-US') + ')' };
     const first = text.split('\n')[0];
     const title = quiet(KINDS[kind] + ': ' + (first.length > 80 ? first.slice(0, 79) + '…' : first));
     const body = quiet(text) + '\n\n---\nSent with Anymouse from P9' + (page ? ' (' + quiet(page) + ')' : '') + '.';
-    if (!token) return { status: 200, open: NEW_ISSUE + new URLSearchParams({ title, body, labels: kind }) };
+    // browser: the box's "Open on GitHub" after a refused token sends the same note the tokenless way.
+    if (!token || b.browser === true) {
+      const { link, cut } = issueLink({ title, body, labels: kind }, 'body');
+      return { status: 200, open: link, ...(cut ? { cut: true } : {}) };
+    }
 
     const now = Date.now();
     while (recent.length && recent[0] < now - WINDOW) recent.shift();
@@ -36,6 +58,11 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
       });
       if (!res.ok) {
         console.error(JSON.stringify({ event: 'P9_ANYMOUSE_REFUSED', status: res.status }));
+        // 401/403: the token itself was refused (wrong or expired, or without Issues write); the box then offers GitHub's own page.
+        if (res.status === 401 || res.status === 403) return { status: 502, refused: true, error: 'GitHub refused the token P9 files notes with ('
+          + res.status + (res.status === 401 ? ': wrong or expired' : ': it lacks Issues write on ' + REPO)
+          + '). Fix: on GitHub, give the token Repository permissions, Issues: Read and write, for ' + REPO
+          + ' (README, Anymouse). Your note is still here: Open on GitHub files it under your own login.' };
         return { status: 502, error: 'GitHub refused it (' + res.status + ')' };
       }
       const issue = await res.json();

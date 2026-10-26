@@ -15,8 +15,10 @@ async function canonicalFixture() {
   const { workspace, recovery } = await fixture();
   return { workspace: await realpath(workspace), recovery: await realpath(recovery) };
 }
-const userSid = () => execFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'],
-  { encoding: 'utf8' }).trim().split(',').at(-1).replaceAll('"', '');
+// The token user as SDDL text writes it: the SID, or an alias such as LA for the built-in Administrator (RID 500, the
+// GitHub Windows runner's account), which a whoami SID never matched.
+const userSid = () => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+  "(New-Object Security.AccessControl.RawSecurityDescriptor('O:' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)).GetSddlForm('Owner').Substring(2)"], { encoding: 'utf8' }).trim();
 const fullSddl = (file) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
   `(Get-Acl -LiteralPath '${file}').Sddl`], { encoding: 'utf8' }).trim();
 const refused = (promise, check) => assert.rejects(promise, (error) =>

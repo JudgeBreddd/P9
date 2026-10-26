@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { missingWindowsBinaries } from '../apps/server/windows.mjs';
+import { REPO } from '../apps/server/anymouse.mjs';
 import { bundleDaemon } from './bundle-daemon.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -63,8 +64,9 @@ if (missing.length) throw new Error(`windows-platform-binaries-not-installed:${m
 // The daemon's copies of teh.mjs (doctor) and package.json come from .build: electron-builder leaves any file an
 // extraResources entry names out of app.asar, and the app needs both (CI 2026-10-22: "package.json" not found in app.asar).
 const daemonExtra = path.join(build, 'daemon-extra');
-await mkdir(path.join(daemonExtra, 'scripts'), { recursive: true });
-for (const file of ['package.json', 'scripts/teh.mjs']) await copyFile(path.join(root, file), path.join(daemonExtra, file));
+await mkdir(path.join(daemonExtra, 'scripts', 'launcher'), { recursive: true });
+// The launcher the task runs (AU4): install-windows.ps1 copies it out of here to %LOCALAPPDATA%\P9\launcher.
+for (const file of ['package.json', 'scripts/teh.mjs', 'scripts/launcher/p9-launch.ps1']) await copyFile(path.join(root, file), path.join(daemonExtra, file));
 // B10: the daemon and its agents ship as bundles plus their native packages (bundle-daemon.mjs), not a node_modules install.
 await writeFile(path.join(licenses, 'daemon-NOTICES.md'), await bundleDaemon(root, daemonExtra, 'win32-' + arch));
 // E4: the host's C# compiled once here, so an installed host loads it instead of compiling (1-3 s) on every start.
@@ -73,11 +75,13 @@ run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPo
 // NSIS 3.0.4 cannot open a path over 260 characters, and pnpm's default dlx cache put electron-builder's StdUtils.nsh at
 // 276 (the Windows desktop 2026-10-17, GitHub's Windows runner 2026-10-20), and D:\p9-cache still gave 263. A 2-letter cache
 // root on the same drive plus 40-character pnpm package folders (Windows default 60) leave about 20 to spare; a cache folder
-// you set yourself wins. --publish never: on a CI machine electron-builder otherwise uploads by itself.
+// you set yourself wins. --publish never: on a CI machine electron-builder otherwise uploads by itself. The publish
+// settings still go into the app (resources/app-update.yml, the feed updater.mjs reads) and latest.yml beside the installer.
 // arm64: 7za packs the 45 ARM64 .exe and .dll files with its ARM64 filter (method 0A); the installer exited 0 with no
 // node.exe on disk (job 119734051928), the NSIS 7z plugin skipping it. BCJ2 is the filter x64 installs extract.
 const cacheDir = process.env.npm_config_cache_dir || (process.platform === 'win32' ? path.join(path.parse(root).root, 'p9') : undefined);
-run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', `--${arch}`, '--publish', 'never'],
+run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', `--${arch}`, '--publish', 'never',
+  '-c.publish.provider=github', '-c.publish.owner=' + REPO.split('/')[0], '-c.publish.repo=' + REPO.split('/')[1]],
   { env: { ...process.env, ...(cacheDir ? { npm_config_cache_dir: cacheDir, npm_config_virtual_store_dir_max_length: '40' } : {}),
     ...(arch === 'arm64' ? { ELECTRON_BUILDER_7Z_FILTER: 'BCJ2' } : {}) } });
 // v1 installers are unsigned (README): SHA256SUMS beside them is how a download is checked.

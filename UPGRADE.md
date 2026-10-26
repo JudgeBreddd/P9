@@ -1,5 +1,87 @@
 # Upgrading P9
 
+## To 0.1.5 (beta)
+
+The installed app now updates itself. From 0.1.5 on, the Windows app and the new Linux AppImage check P9's public
+GitHub releases shortly after they start and every 4 hours, take only releases that are not pre-releases, download a
+newer one in the background and install it when you quit, or at once from Settings > Maintenance > Updates.
+Installing restarts the background service on the new version, which ends a chat turn in progress. 0.1.4 cannot
+update itself, so this one move to 0.1.5 is still a manual install (below). A source checkout never updates itself;
+there, Check now opens P9's newest release in your browser, as the old update button did. What is downloaded and how it
+is checked: `SECURITY.md` § Auto-update.
+
+If an update will not start twice, P9 goes back to the version you had on its own, says so once, and offers a
+prefilled GitHub bug report with the log (home folder, user and host names, tokens and IP addresses removed) that you
+read and send yourself. The version it came back from is not offered again; the next newer release is. This protects
+updates from 0.1.5 on; on Linux it needs the AppImage that P9 keeps of the version you had.
+
+The background service now runs from its own copy for each version, and the one before is kept, so an update never
+changes the files of the service that is running. The installers are smaller. The Windows ARM64 installer ships the
+ARM64 Node. GitHub has forms for bug reports and feature requests.
+
+Settings has a Maintenance group: Reload window, Refresh Mission, Restart daemon, Repair daemon service, and Rebuild +
+reload in a source checkout, each also in Ctrl K. Restart daemon waits until the new service answers. Updates is a row
+there. Every setting has an "i": hover it to see what the setting does, click it to open that part of the guide.
+
+Settings also has a Mission Control files group: your setup paths, the space file, the server host name, link schemes
+(`page_schemes`) and notes folders (`notes_roots`). Each saves at once and keeps the old file as `settings.json.bak`;
+a value P9 refuses says why under its box. Setup says when a file is where a folder should be, and when you picked the
+workspace folder itself. Its Mission Control step explains what each file is for and links to how to add buttons. It
+checks every 10 s instead of every 2 s and stops once done, and it accepts a scripts folder.
+
+Dev Focus has a working terminal on Windows. On Windows, apps and pages a Mission button opens keep running after a
+service restart, a script whose record says `"detach": true` leaves the apps it opens running when it ends, and
+stopping the `P9 Foundation` task now stops everything under it. Setup leaves an existing workspace's layout alone: it finds the AGENTS.md naming your main project and your
+"waiting on" folder, and creates only what is missing.
+
+After Change workspace, settings left from another workspace no longer make setup add a starter registry and waiting
+folder beside the folder's own. It shows the paths it found, you can change them, and Use these rewrites `settings.json`
+(the old file is kept as `settings.json.bak`). If the folder's registry runs commands from the folder above the
+workspace, setup offers that folder as `scripts_root`, used only after you confirm.
+
+Dev Focus can open any folder with File > Open Folder: one inside the workspace opens at once, one outside it after one
+question naming it. Saves there get the same conflict check as the workspace. Your home folder, a drive root and P9's
+own folders are refused, and the phone cannot write there. Changing workspace, or `p9 edit` on a workspace file, takes
+Dev Focus back to the workspace.
+
+Chat: while the agent works, Enter steers your message in after the current step, Tab queues it for after the turn,
+and Esc cancels. Sending while a question or approval is open declines it. A queued message is kept across a window
+restart. Photos you send are kept and show again as thumbnails (the oldest are deleted past 200 MB; the phone does not
+show them), and a click on a picture shows it large (Esc or a click closes it). Edits show as real line diffs that
+wrap, code blocks have a Copy button, the message box grows to twice its height, and a restart request from an agent
+has a Restart button. A chat no longer freezes after you answer a question with Enter.
+
+The agent's plan is pinned above the message box, and agents can pin cards there (Markdown, a checklist or a table).
+Claude chats have a Hand off button: it stops the chat and opens a terminal with
+`claude --resume <session> --remote-control` typed in; nothing runs until you press Enter, and Remote Control needs a
+claude.ai subscription.
+
+The phone: a Phone button in a desktop chat shows a QR code that opens that chat on the phone (set the server host name
+first). The phone keeps a message typed offline, or while an approval waits, and sends it once it can ("Queue message",
+with Take back). It opens faster, because it loads only the chats that are running, and it shows the plan and the
+pinned cards.
+
+Meters: every bar fills and turns amber from 75%; Claude and Codex limits update as you work, the cache timer counts
+down on its own, and P9 finds your Claude and Codex folders when you have moved them with `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME`. The halo ring turns more smoothly and uses much less CPU.
+
+Mission Control picks up `settings.json`, registry and space edits within one refresh, with no restart, and accepts
+files saved with a UTF-8 BOM. A space section can show a notes folder (`notes_roots` in settings), even one outside the
+workspace. Registry pages may use the extra schemes you list in `page_schemes`, after a confirm showing the full link.
+Edit names and icons changes a tile's name and icon, and saving several Mission Control file rows quickly keeps every
+one. Link tiles show the site's own icon and app tiles the program's own icon; the Picture button sets your own image
+(Remove goes back to automatic). A tile uses your picture, then your emoji or text icon, then the automatic icon, then
+its letters.
+
+Anymouse takes up to 50,000 characters and no longer says P9's repository is private. The agents in P9's chats get a
+`p9` MCP server to read and change Mission Control, including tile names and icons (not pictures); running a script
+or answering a needs-you item through it asks you first.
+
+- **Linux:** a source checkout updates as `README.md` § Update, roll back, uninstall says; then reopen the window (the
+  desktop main process changed). To use the AppImage instead, see `README.md` § Install; it needs `tmux`.
+- **Windows:** run the 0.1.5 installer over the old one: `windows-arm64` on an ARM laptop, `windows-x64` otherwise.
+  Your workspace and the `P9 Foundation` task are kept. Later versions install themselves.
+
 ## To 0.1.4 (beta)
 
 The Windows installer unpacks far fewer files: the background service now ships as two bundled files plus the agents'

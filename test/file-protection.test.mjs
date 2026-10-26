@@ -9,6 +9,7 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { hash } from '../packages/files/index.mjs';
+import { REPO } from '../apps/server/anymouse.mjs';
 
 const LOCKED = ['.env', '_' + 'private/key.txt', 'secrets/token.txt', '.git/config', '.p9-mine.txt', 'registry.json'];
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -79,7 +80,7 @@ test('File protection: refused while on, a native warning before off, kept acros
   await page.click('#setProtect');
   await page.locator('#setProtect:not(:checked)').waitFor();
   assert.equal((await asked()).length, 2);
-  assert.equal((await readFile(opened, 'utf8')).trim(), 'https://github.com/JudgeBreddd/p9/blob/main/SECURITY.md#file-protection');
+  assert.equal((await readFile(opened, 'utf8')).trim(), 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection');
   assert.deepEqual((await call(instance, '/file-protection')).body, { on: false });
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'file-protection-off.png') }); }
 

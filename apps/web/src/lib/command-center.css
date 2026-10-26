@@ -187,7 +187,8 @@
   backdrop-filter: blur(16px) saturate(1.4);
   box-shadow: var(--lift);
 }
-[data-theme="event-horizon-prime"] .mdl { background-color: color-mix(in oklch, var(--popover) 82%, transparent); }
+/* panels that hold text to read (Settings, pickers, cards, popups): a little glass, mostly solid */
+[data-theme="event-horizon-prime"] :is(.card, .mdl, .pop, .toast) { background-color: color-mix(in oklch, var(--popover) 94%, transparent); }
 [data-theme="event-horizon-prime"] :is(.tile.bad, .toast.bad) {
   background-color: color-mix(in oklch, var(--destructive) 18%, var(--glass));
   border-color: color-mix(in oklch, var(--destructive) 55%, transparent);
@@ -195,9 +196,9 @@
 }
 
 /* ---- The halo orbits: a blue, amber and violet light circling the edge until it's handled ---- */
-[data-theme="event-horizon-prime"] .fx-halo::after {
-  background: conic-gradient(from var(--eh-halo-a), transparent 0 40%, var(--primary) 62%, oklch(0.95 0.1 75) 75%, var(--glow2) 86%, transparent 100%);
-  padding: 1.5px;
+[data-theme="event-horizon-prime"] .fx-halo > .halo { padding: 1.5px; }
+[data-theme="event-horizon-prime"] .fx-halo > .halo > i {
+  background: conic-gradient(transparent 0 40%, var(--primary) 62%, oklch(0.95 0.1 75) 75%, var(--glow2) 86%, transparent 100%);
   animation-duration: 3.6s;
 }
 

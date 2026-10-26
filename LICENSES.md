@@ -11,6 +11,7 @@ the handlers and security boundary here are new code.
 |---|---|---|
 | hono | 4.13.13 | MIT |
 | marked | 14.0.0 | MIT |
+| qrcode-generator (build time, bundled into the phone page) | 2.0.4 | MIT |
 | @hono/node-server | 2.1.4 | MIT |
 | astro | 7.4.0 | MIT |
 | @astrojs/react | 7.1.0 | MIT |

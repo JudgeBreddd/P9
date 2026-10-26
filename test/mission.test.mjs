@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile, readdir, access, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, access, chmod, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { daemon, http, authenticated, root } from './helpers.mjs';
@@ -146,12 +146,29 @@ test('Stop All ends an active registry script tree', async (t) => {
   console.log(`PASS Stop All: active registry script tree ${pid} ended`);
 });
 
+test('a "detach": true run is done when its script exits, though a child it left holds the output pipe (v0.1.5 W1)', async (t) => {
+  const instance = await start(t, BUILDER, [{ id: 'leave', title: 'Leave', detach: true, cmd: [node, '-e',
+    'const c = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit" }); c.unref(); console.log("left:" + c.pid)'] }]);
+  const run = JSON.parse((await call(instance, '/scripts/leave/run', 'POST', {})).text).run;
+  let body;
+  for (let i = 0; i < 50 && !body?.done; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    body = JSON.parse((await call(instance, `/runs/${run}`)).text);
+  }
+  const left = Number(body.output.match(/left:(\d+)/)?.[1]);
+  t.after(() => { try { process.kill(left); } catch {} });
+  assert.ok(left, body.output);
+  assert.ok(body.done, 'the run waited for the child holding its pipe');
+  assert.match(body.output, /\[exit 0 in/);
+});
+
 // Children of the daemon, polled every millisecond while the hostile requests run.
 function watch(pid) {
   const seen = new Set();
   let running = true;
+  const end = Date.now() + 60000; // a test that throws before stopping the watch must not keep the runner alive
   const loop = (async () => {
-    while (running) {
+    while (running && Date.now() < end) {
       for (const task of await readdir(`/proc/${pid}/task`).catch(() => [])) {
         for (const child of (await readFile(`/proc/${pid}/task/${task}/children`, 'utf8').catch(() => '')).split(' ').filter(Boolean)) seen.add(child);
       }
@@ -175,6 +192,7 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
     { id: 'nul', title: 'Malformed', cmd: [node, '-e\0', 'x'] },
     { id: 'confirm', title: 'Confirm', cmd: pwn('confirm'), confirm: true },
     { id: 'remote', title: 'Remote', cmd: ['ssh', '-o', 'BatchMode=yes', 'p9-no-such-host.invalid', 'true'], args: ['label (one word)'] },
+    { id: 'detach-text', title: 'Malformed', cmd: pwn('detach-text'), detach: 'yes' },
   ];
   const instance = await daemon(t, undefined, false, async (paths) => {
     sentinel = path.join(paths.directory, 'pwned');
@@ -184,20 +202,20 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
   });
   const overview = JSON.parse((await call(instance, '/mission')).text);
   assert.deepEqual(overview.scripts.map((s) => s.id), ['echo', 'confirm', 'remote']);
-  assert.deepEqual(overview.invalid.map((x) => x.reason), ['duplicate-id', 'duplicate-id', 'malformed-record', 'malformed-record', 'malformed-record', 'malformed-record']);
+  assert.deepEqual(overview.invalid.map((x) => x.reason), ['duplicate-id', 'duplicate-id', 'malformed-record', 'malformed-record', 'malformed-record', 'malformed-record', 'malformed-record']);
 
   const stop = watch(instance.child.pid);
   const refused = [
     ['/scripts/echo/run', { cmd: ['touch', sentinel] }], ['/scripts/echo/run', { command: `touch ${sentinel}` }],
     ['/scripts/echo/run', { args: ['a'], argv: ['touch', sentinel] }], ['/scripts/run', { id: 'echo', cmd: ['touch', sentinel] }],
-    ['/scripts/nope/run', {}], ['/scripts/dup/run', {}], ['/scripts/string-cmd/run', {}], ['/scripts/bad%20id/run', {}], ['/scripts/nul/run', {}],
+    ['/scripts/nope/run', {}], ['/scripts/dup/run', {}], ['/scripts/detach-text/run', {}], ['/scripts/string-cmd/run', {}], ['/scripts/bad%20id/run', {}], ['/scripts/nul/run', {}],
     ['/scripts/echo/run', { args: ['a', 'extra'] }], ['/scripts/echo/run', { args: [['nested']] }], ['/scripts/echo/run', { args: 'a' }],
     ['/scripts/echo%2F..%2F..%2Fx/run', {}], ['/scripts/..%2Fecho/run', {}], ['/scripts/echo%3Btouch/run', {}], ['/scripts/echo%00/run', {}],
     ['/scripts/%2e%2e/run', {}], ['/scripts/echo%0Atouch/run', {}],
-    ['/scripts/echo;touch/run', {}], ['/scripts/$(touch)/run', {}], ['/scripts/echo/run', { args: [`x; touch ${sentinel}`] }],
-    ['/scripts/echo/run', { args: [`$(touch ${sentinel})`] }], ['/scripts/echo/run', { args: [`\`touch ${sentinel}\``] }],
-    ['/scripts/echo/run', { args: [`a | touch ${sentinel}`] }], ['/scripts/echo/run', { args: [`a && touch ${sentinel}`] }],
-    ['/scripts/echo/run', { args: [`a\ntouch ${sentinel}`] }], ['/scripts/echo/run', { args: [`> ${sentinel}`] }],
+    ['/scripts/echo;touch/run', {}], ['/scripts/$(touch)/run', {}],
+    ['/scripts/echo/run', { args: [`a\ntouch ${sentinel}`] }], ['/scripts/echo/run', { args: ['a\u0007b'] }],
+    // M5: shell syntax is refused only where something parses it again (ssh, .cmd); a plain target takes it as one literal argv word (checked below).
+    ['/scripts/remote/run', { args: [`x; touch ${sentinel}`] }], ['/scripts/remote/run', { args: ['a&b'] }],
     ['/scripts/confirm/run', {}], ['/scripts/confirm/run', { confirm: 'yes' }],
     // A remote shell would split or glob these (cold-read M1); argv-only buttons still take free text.
     ...['*', 'a b', "'q'", '"q"', '[x]', '?', '~', '{a,b}', '#x', '!x', 'a\tb'].map((arg) => ['/scripts/remote/run', { args: [arg] }]),
@@ -222,6 +240,10 @@ test('threat surface 8: command text, unknown and duplicate IDs, extra args, enc
   const result = await finished(instance, started.run);
   assert.equal((await control()).size, 1);
   assert.ok(result.output.includes('ok'));
+  // The shell-syntax text a plain target now takes is one argv word: echoed back as text, nothing run, sentinel never written.
+  const literal = `x; touch ${sentinel} && $(touch ${sentinel}) | \`touch ${sentinel}\``;
+  const word = await finished(instance, JSON.parse((await call(instance, '/scripts/echo/run', 'POST', { args: [literal] })).text).run);
+  assert.ok(word.output.includes(literal), word.output);
   await assert.rejects(access(sentinel));
   console.log(`PASS phase5 surface 8: ${refused.length + 5} hostile requests refused, process watcher saw 0 children (control run: 1), sentinel never written`);
 });
@@ -236,8 +258,8 @@ test('every workspace-hub registry record parses, and the module never uses a sh
   }
   const source = (await Promise.all(['mission.mjs', 'process-tree.mjs'].map((name) => readFile(path.join(root, 'apps/server', name), 'utf8')))).join('\n');
   assert.equal(/shell:\s*true|\bexec(?:Sync)?\(/.test(source), false);
-  assert.equal((source.match(/spawn\(/g) ?? []).length, 4);
-  assert.equal((source.match(/shell: false/g) ?? []).length, 4);
+  assert.equal((source.match(/spawn\(/g) ?? []).length, 5);
+  assert.equal((source.match(/shell: false/g) ?? []).length, 5);
   console.log(`PASS phase5 registry: ${real ? 'every live workspace-hub record valid' : 'live registry absent (publish checkout)'}; spawn only with shell:false`);
 });
 
@@ -316,6 +338,43 @@ test('the registry is read-only through the file API, and print_url apps open th
   console.log('PASS phase5 registry lock + print_url: PUT /files on the registry refused (any case), swapped ID never runs; printed URL opened, no URL = 502');
 });
 
+test('Linux window apps and links start through systemd-run --user without the daemon\'s environment; a refusal falls back to the plain spawn', {
+  skip: process.platform !== 'linux' && 'systemd-run is the Linux launcher; Windows launching is covered by windows-process-tree.test.mjs', timeout: 60_000,
+}, async (t) => {
+  let bin;
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    bin = path.join(paths.directory, 'bin');
+    await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify(BUILDER));
+    return { ...await layout(paths.workspace, { ...BUILDER, scripts: [] }), path: `${bin}:${process.env.PATH}`, env: { ANTHROPIC_API_KEY: 'sk-sentinel' } };
+  });
+  const log = (name) => path.join(instance.directory, name + '.log');
+  const lines = async (name) => {
+    for (let i = 0; i < 100 && !(await access(log(name)).then(() => true, () => false)); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+    return (await readFile(log(name), 'utf8')).trim().split('\n');
+  };
+  await mkdir(bin);
+  // The stand-in records what it was asked and the environment it got, and refuses while the fail file exists.
+  const stub = (name, tail = '') => writeFile(path.join(bin, name), `#!/bin/sh\n{ printf '%s\\n' "$@"; echo "key=\${ANTHROPIC_API_KEY:-absent}"; } > '${log(name)}'\n${tail}`, { mode: 0o755 });
+  await stub('systemd-run', `[ -e '${path.join(instance.directory, 'fail')}' ] && exit 1\nexit 0\n`);
+  await stub('p9-app');
+  const registry = path.join(instance.workspace, BUILDER.registry);
+  await writeFile(registry, JSON.stringify({ scripts: [], apps: [{ id: 'win', title: 'Win', cmd: [path.join(bin, 'p9-app'), 'one'] }],
+    pages: [{ id: 'dash', title: 'Dashboard', url: 'http://127.0.0.1:5000/' }] }));
+  const unit = ['--user', '--collect', '--quiet', '--service-type=exec', '-p', 'ExitType=cgroup', `--working-directory=${instance.workspace}`, '--'];
+
+  assert.equal((await call(instance, '/apps/win/launch', 'POST', {})).status, 200);
+  assert.deepEqual(await lines('systemd-run'), [...unit, path.join(bin, 'p9-app'), 'one', 'key=absent']);
+  assert.equal(await access(log('p9-app')).then(() => true, () => false), false, 'the app is the unit\'s, not the daemon\'s child');
+  await unlink(log('systemd-run'));
+  assert.equal((await call(instance, '/pages/dash/launch', 'POST', {})).status, 200);
+  assert.deepEqual((await lines('systemd-run')).slice(-3), ['xdg-open', 'http://127.0.0.1:5000/', 'key=absent']);
+
+  await writeFile(path.join(instance.directory, 'fail'), '');
+  assert.equal((await call(instance, '/apps/win/launch', 'POST', {})).status, 200);
+  assert.deepEqual(await lines('p9-app'), ['one', 'key=absent']);
+  console.log('PASS launcher: app and link go to systemd-run --user (exec type, cgroup exit, workdir), no daemon secret reaches it; refused = plain spawn');
+});
+
 test('an "A:" line holding only an italic placeholder is answerable like an empty A. line', async (t) => {
   const instance = await start(t, BUILDER);
   const text = '# Which NAS?\n\nAlso: replace or add?\n\nA: _hardware, location, replace or add_\n';
@@ -380,4 +439,110 @@ test('release r2 R2-7: hub decide is revocable, atomic, and refuses a changed fi
   assert.notEqual(statSync(file).ino, inode, 'landed by rename, not rewritten in place');
   assert.deepEqual(readdirSync(branch), ['_decision.md'], 'no temp file left');
   console.log('PASS R2-7: revoked = session-ended, nothing written; changed after read = 409, change kept; save lands by rename');
+});
+
+// ---- v0.1.5 chunk 3: Mission live (M1, M2/M3, M5, M6) ----
+import { parseSettings, parseSpace, argRefusal } from '../apps/server/mission.mjs';
+
+test('M1: one leading U+FEFF is dropped from settings, registry and space', () => {
+  const bom = (value) => '\uFEFF' + JSON.stringify(value);
+  assert.equal(parseSettings(bom(BUILDER)).waiting, BUILDER.waiting);
+  assert.deepEqual(parseRegistry(bom({ scripts: [{ id: 'a', title: 'A', cmd: ['true'] }] })).scripts.map((s) => s.id), ['a']);
+  assert.deepEqual(parseSpace(bom({ sections: [] })).sections ?? [], []);
+  assert.throws(() => parseSettings('\uFEFF\uFEFF' + JSON.stringify(BUILDER)), 'only one is dropped');
+});
+
+test('M2/M3: a settings change shows in the next /mission with no restart; a broken one keeps the last good settings', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, BUILDER);
+  const settingsFile = path.join(instance.directory, 'settings.json');
+  const pagesOf = async () => JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual((await pagesOf()).pages.map((p) => p.id), ['dash']);
+  const file = path.join(instance.workspace, BUILDER.registry);
+  const registry = JSON.parse(await readFile(file, 'utf8'));
+  registry.pages.push({ id: 'notes', title: 'Notes', url: 'obsidian://open?vault=x' });
+  await writeFile(file, JSON.stringify(registry));
+  assert.deepEqual((await pagesOf()).pages.map((p) => p.id), ['dash'], 'obsidian is not allowed yet');
+  await writeFile(settingsFile, JSON.stringify({ ...BUILDER, page_schemes: ['obsidian'] }));
+  const live = await pagesOf();
+  assert.deepEqual(live.pages.map((p) => p.id), ['dash', 'notes']);
+  assert.equal(live.settingsError, null);
+  await writeFile(settingsFile, '{ "primary": ');
+  const broken = await pagesOf();
+  assert.deepEqual(broken.pages.map((p) => p.id), ['dash', 'notes'], 'last good settings kept');
+  assert.ok(broken.settingsError);
+  assert.equal(broken.restart.needed, false);
+});
+
+test('M5: argRefusal names the character, only for batch files and ssh; choices bind', () => {
+  const cmd = { cmd: ['C:\\tools\\run.cmd'] }, ssh = { cmd: ['ssh', 'server'] }, plain = { cmd: ['/usr/bin/tool'] };
+  assert.match(argRefusal(cmd, 'a&b', 0), /argument 1 contains "&"/);
+  assert.match(argRefusal(ssh, 'a&b', 0), /argument 1 contains "&"/);
+  assert.equal(argRefusal(plain, 'a&b "quoted" $(x)', 0), undefined, 'a plain target takes any printable text');
+  assert.match(argRefusal(plain, 'a\u0007b', 0), /control character U\+0007/);
+  assert.equal(argRefusal(plain, 'x'.repeat(8000), 0), undefined);
+  assert.match(argRefusal(plain, 'x'.repeat(8001), 0), /limit is 8000/);
+  assert.match(argRefusal(cmd, 'x'.repeat(1001), 0), /limit is 1000/);
+  const pick = { cmd: ['/usr/bin/tool'], args: [{ label: 'Mode', choices: ['fast', 'slow'] }] };
+  assert.equal(argRefusal(pick, 'fast', 0), undefined);
+  assert.match(argRefusal(pick, 'turbo', 0), /one of the listed choices/);
+  assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: ['a'] }] }] })).scripts.length, 1);
+  assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: [] }] }] })).invalid.length, 1);
+});
+
+// Release review finding 3: ssh.exe, any case or full path, is held to bare ssh's rules; a batch file in any case stays strict.
+test('M5: ssh.exe and a full Windows path to it refuse exactly what bare ssh refuses; .CMD and .Bat stay strict', () => {
+  const ssh = { cmd: ['ssh', 'server'] };
+  const variants = ['ssh.exe', 'SSH.EXE', 'C:\\Windows\\System32\\OpenSSH\\ssh.exe'].map((exe) => ({ cmd: [exe, 'server'] }));
+  for (const arg of [...';&|`$<>\\'].map((c) => 'x' + c + 'y').concat('x y', 'x"y', 'x; rm -rf ~')) {
+    assert.ok(argRefusal(ssh, arg, 0), arg);
+    for (const item of variants) assert.equal(argRefusal(item, arg, 0), argRefusal(ssh, arg, 0), item.cmd[0] + ' ' + arg);
+  }
+  for (const item of variants) assert.equal(argRefusal(item, 'user@host:22', 0), undefined);
+  for (const exe of ['C:\\x\\RUN.CMD', 'C:\\x\\go.Bat']) assert.match(argRefusal({ cmd: [exe] }, 'a&b', 0), /contains "&", which cmd.exe/);
+});
+
+test('M5: the daemon refuses with the reason and starts nothing; choices come back in the overview', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, BUILDER, [{ id: 'pick', title: 'Pick', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Mode', choices: ['fast', 'slow'] }] },
+    { id: 'batch', title: 'Batch', cmd: ['C:\\x\\run.cmd'], args: ['Name'] }]);
+  const overview = JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual(overview.scripts[0].args, [{ label: 'Mode', choices: ['fast', 'slow'] }]);
+  const bad = await call(instance, '/scripts/pick/run', 'POST', { args: ['turbo'] });
+  assert.equal(bad.status, 400);
+  assert.match(JSON.parse(bad.text).reason, /listed choices/);
+  const amp = await call(instance, '/scripts/batch/run', 'POST', { args: ['a&b'] });
+  assert.equal(amp.status, 400);
+  assert.match(JSON.parse(amp.text).reason, /"&"/);
+});
+
+// workspace-hub's "Gate check a plan" button: choices "plans" is every plan.md under the scripts root, still strict.
+test('choices "plans": every plan.md outside skipped folders, and nothing else is accepted', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, TEAMMATE, [{ id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }]);
+  for (const dir of ['a', 'b/c', 'node_modules/x', '_archive', '.git', 'agent_skills/s', '_private']) {
+    await mkdir(path.join(instance.workspace, dir), { recursive: true });
+    await writeFile(path.join(instance.workspace, dir, 'plan.md'), '# plan');
+  }
+  const overview = JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual(overview.scripts[0].args, [{ label: 'Plan', choices: ['a/plan.md', 'b/c/plan.md'] }]);
+  const bad = await call(instance, '/scripts/gate/run', 'POST', { args: ['_archive/plan.md'] });
+  assert.equal(bad.status, 400);
+  assert.match(JSON.parse(bad.text).reason, /listed choices/);
+  assert.equal(parseRegistry(JSON.stringify({ scripts: [{ id: 'p', title: 'P', cmd: ['true'], args: [{ label: 'M', choices: 'other' }] }] })).invalid.length, 1);
+});
+
+test('M6: page_schemes pages need confirm; javascript, file and data are refused even when listed', { timeout: 30000 }, async (t) => {
+  const instance = await start(t, { ...BUILDER, page_schemes: ['obsidian', 'javascript', 'file', 'data'] });
+  const file = path.join(instance.workspace, BUILDER.registry);
+  const registry = JSON.parse(await readFile(file, 'utf8'));
+  registry.pages.push({ id: 'notes', title: 'Notes', url: 'obsidian://open?vault=x' }, { id: 'js', title: 'J', url: 'javascript:alert(1)' },
+    { id: 'fl', title: 'F', url: 'file:///etc/passwd' }, { id: 'dt', title: 'D', url: 'data:text/html,x' });
+  await writeFile(file, JSON.stringify(registry));
+  const overview = JSON.parse((await call(instance, '/mission')).text);
+  assert.deepEqual(overview.pages.map((p) => p.id), ['dash', 'notes']);
+  assert.equal(overview.invalid.length, 3);
+  const unconfirmed = await call(instance, '/pages/notes/launch', 'POST', {});
+  assert.equal(unconfirmed.status, 409);
+  assert.deepEqual(JSON.parse(unconfirmed.text), { error: 'confirm-required', url: 'obsidian://open?vault=x' });
+  assert.equal((await call(instance, '/pages/js/launch', 'POST', { confirm: true })).status, 404);
+  assert.equal(parseRegistry(JSON.stringify({ pages: [{ id: 'x', title: 'X', url: 'javascript:1' }] }), ['javascript']).pages.length, 0);
+  assert.throws(() => parseSettings(JSON.stringify({ ...BUILDER, page_schemes: ['x'] })), 'a one-letter scheme (a Windows drive) is not a scheme');
 });

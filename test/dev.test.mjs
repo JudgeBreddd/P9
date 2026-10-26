@@ -16,7 +16,8 @@ const skip = !['linux', 'win32'].includes(process.platform) || !existsSync(host)
 const uriPath = file => (win ? '/' + file.replaceAll('\\', '/') : file);
 const folderLink = (target, link) => symlink(target, link, win ? 'junction' : undefined);
 const sddl = file => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Acl -LiteralPath '${file}').Sddl`], { encoding: 'utf8' }).stdout.trim();
-const userSid = () => /"(S-1-[\d-]+)"/.exec(spawnSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).stdout)[1];
+// The token user as SDDL text writes it: the SID, or LA for the built-in Administrator (RID 500, the GitHub Windows runner).
+const userSid = () => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(New-Object Security.AccessControl.RawSecurityDescriptor('O:' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)).GetSddlForm('Owner').Substring(2)"], { encoding: 'utf8' }).stdout.trim();
 // A stand-in Windows host: the layout editor-host.mjs runs (node.exe, out\server-main.js), with a script that records its
 // pid and args and never prints the listening line.
 async function fakeWindowsHost(prefix) {
@@ -213,7 +214,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   await shell.keyboard.press('Control+2');
   stage('const dev = await devWindow;'); const dev = await devWindow;
-  const errors = []; dev.on('pageerror', error => errors.push(error.message));
+  const errors = []; dev.on('pageerror', error => errors.push(error.stack ?? error.message)); // the stack names where it came from
   await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
   assert.equal(await dev.locator('#status').textContent(), '');
   stage('const config = await dev.evalu'); // The view sits exactly over the shell's Dev pane (Playwright screenshots one WebContents, so this is the overlay's proof).
@@ -274,13 +275,13 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   const refused = await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, frame = { sender, senderFrame: sender.mainFrame };
     const results = [];
-    for (const channel of ['p9dev:config', 'p9dev:save', 'p9dev:open-in-code', 'p9dev:host-path']) {
+    for (const channel of ['p9dev:config', 'p9dev:save', 'p9dev:open-in-code', 'p9dev:host-path', 'p9dev:open-folder']) {
       try { await ipcMain._invokeHandlers.get(channel)(frame, { path: 'race.txt', hash: '0'.repeat(64), content: 'x' }); results.push(false); }
       catch (error) { results.push(error.message === 'ipc-sender-refused'); }
     }
     return results;
   });
-  assert.deepEqual(refused, [true, true, true, true]);
+  assert.deepEqual(refused, [true, true, true, true, true]);
   assert.deepEqual(await shell.evaluate(() => typeof window.p9dev), 'undefined');
 
   stage('// A normal save'); // A normal save reaches disk through the daemon.
@@ -560,4 +561,85 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
   // A normal quit stops the editor host: its port no longer answers.
   await app.close();
   await assert.rejects(fetch(origin + '/version'), /fetch failed/);
+});
+
+// Open Folder (threat model row 41): inside the workspace opens at once; outside asks once, then saves go to that folder through
+// the daemon's guarded save; a folder that holds the workspace is refused; p9 edit goes back to the workspace.
+test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout: 180000 }, async t => {
+  const instance = await daemon(t);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-')), outside = path.join(instance.directory, 'outside');
+  await mkdir(outside);
+  await mkdir(path.join(instance.workspace, 'src'));
+  await writeFile(path.join(outside, 'a.txt'), 'outside before\n');
+  await writeFile(path.join(instance.workspace, 'src', 'b.txt'), 'inside before\n');
+  const env = { ...process.env, ...(win ? { LOCALAPPDATA: home } : { HOME: home }), P9_EDITOR_HOST: host }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
+  // The native picker answers with the next folder in line; the confirm says yes and is counted.
+  await app.evaluate(({ dialog }) => {
+    globalThis.picks = []; globalThis.asked = [];
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [globalThis.picks.shift()] });
+    dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.message); return { response: 1 }; };
+  });
+  const pick = folder => app.evaluate((_electron, folder) => { globalThis.picks.push(folder); }, folder);
+  const asked = () => app.evaluate(() => globalThis.asked);
+  const nextPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+  const ready = async page => { await page.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
+    assert.equal(await page.locator('#status').textContent(), ''); return page; };
+  const shell = await app.firstWindow();
+  await shell.locator('#cards .card').first().waitFor();
+  let page = nextPage();
+  await shell.keyboard.press('Control+2');
+  let dev = await ready(await page);
+  const save = (name, text) => dev.evaluate(async ([name, text]) => {
+    const { v, open } = window.devFocus, editor = await open(name);
+    await editor.edit(edit => edit.replace(new v.Range(0, 0, editor.document.lineCount, 0), text));
+    return editor.document.save();
+  }, [name, text]);
+
+  // Inside the workspace: File > Open Folder (the workbench's own command) opens it at once, with no question.
+  await pick(path.join(instance.workspace, 'src'));
+  page = nextPage();
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'));
+  dev = await ready(await page);
+  assert.deepEqual(await asked(), []);
+  let config = await dev.evaluate(() => window.p9dev.config());
+  assert.deepEqual([config.workspace, config.folder], [instance.workspace, path.join(instance.workspace, 'src')]);
+  assert.equal(await dev.evaluate(() => window.devFocus.root.path), uriPath(path.join(instance.workspace, 'src')));
+  assert.equal(await save('src/b.txt', 'inside after\n'), true);
+  assert.equal(await readFile(path.join(instance.workspace, 'src', 'b.txt'), 'utf8'), 'inside after\n');
+  if (evidence) { await mkdir(evidence, { recursive: true }); await dev.screenshot({ path: path.join(evidence, 'dev-open-folder-inside.png') }); }
+
+  // Outside: one question naming the folder, then the editor shows it and saves land there, not in the workspace.
+  await pick(outside);
+  page = nextPage();
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.openFolder'));
+  dev = await ready(await page);
+  assert.deepEqual(await asked(), ['Open ' + outside + ' in Dev Focus?']);
+  config = await dev.evaluate(() => window.p9dev.config());
+  assert.deepEqual([config.workspace, config.folder], [outside, outside]);
+  assert.equal(await save('a.txt', 'outside after\n'), true);
+  assert.equal(await readFile(path.join(outside, 'a.txt'), 'utf8'), 'outside after\n');
+  assert.equal(existsSync(path.join(instance.workspace, 'a.txt')), false);
+  if (evidence) { await mkdir(evidence, { recursive: true }); await dev.screenshot({ path: path.join(evidence, 'dev-open-folder-outside.png') }); }
+  // A change on disk is still a conflict there; the disk keeps the other change.
+  await writeFile(path.join(outside, 'a.txt'), 'changed on disk\n');
+  assert.equal(await dev.evaluate(async () => { const { v, open } = window.devFocus, editor = await open('a.txt');
+    await editor.edit(edit => edit.insert(new v.Position(0, 0), 'mine ')); return editor.document.save().then(ok => (ok ? 'saved' : 'refused'), error => error.message); }) !== 'saved', true, 'a stale save is refused');
+  assert.equal(await readFile(path.join(outside, 'a.txt'), 'utf8'), 'changed on disk\n');
+
+  // A folder that holds the workspace is refused, and the open folder stays.
+  await pick(instance.directory);
+  assert.deepEqual(await dev.evaluate(() => window.p9dev.openFolder()), { error: 'root-refused' });
+  assert.equal((await dev.evaluate(() => window.p9dev.config())).folder, outside);
+
+  // p9 edit names a workspace file: Dev Focus goes back to the workspace and opens it there.
+  page = nextPage();
+  await app.evaluate(({ app }, file) => app.emit('second-instance', {}, [], '', { open: 'edit', path: file, line: 1 }), path.join(instance.workspace, 'note.txt'));
+  dev = await ready(await page);
+  config = await dev.evaluate(() => window.p9dev.config());
+  assert.deepEqual([config.workspace, config.folder], [instance.workspace, null]);
+  await dev.waitForFunction(() => window.devFocus.v.window.activeTextEditor?.document.uri.path.endsWith('/note.txt'), null, { timeout: 30000 });
+  console.log('PASS Open Folder: inside at once, outside after one question, saves there guarded, a folder holding the workspace refused, p9 edit back to the workspace');
 });

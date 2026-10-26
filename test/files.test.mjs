@@ -4,7 +4,7 @@ import { writeFile, readFile as diskRead, symlink, link, mkdir, chmod, unlink, r
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { readFile, guardedSave, createFile, hash } from '../packages/files/index.mjs';
+import { readFile, guardedSave, createFile, hash, quietFfi } from '../packages/files/index.mjs';
 import { open } from 'node:fs/promises';
 import { fixture, externalEdit, daemon, authenticated, http } from './helpers.mjs';
 
@@ -294,4 +294,20 @@ test('a recovery folder whose parent became a link elsewhere is refused, not wri
   await assert.rejects(guardedSave(workspace, 'note.txt', hash('original'), 'draft', recovery), /unsafe-recovery-directory/);
   assert.deepEqual(await readdir(elsewhere), []);
   assert.equal(await diskRead(path.join(workspace, 'note.txt'), 'utf8'), 'original');
+});
+
+test('W4: loading the Windows file guard drops only the FFI experimental warning, and only while it loads', async () => {
+  const seen = [];
+  const listener = (warning) => seen.push(warning.message);
+  process.on('warning', listener);
+  try {
+    assert.equal(await quietFfi(async () => {
+      process.emitWarning('FFI is an experimental feature and might change at any time', 'ExperimentalWarning');
+      process.emitWarning('another warning', 'ExperimentalWarning');
+      return 'loaded';
+    }), 'loaded');
+    process.emitWarning('FFI is an experimental feature (after loading)', 'ExperimentalWarning');
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally { process.off('warning', listener); }
+  assert.deepEqual(seen, ['another warning', 'FFI is an experimental feature (after loading)']);
 });

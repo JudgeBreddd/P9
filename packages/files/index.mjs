@@ -5,7 +5,16 @@ import path from 'node:path';
 import { MAX_BYTES } from '../protocol/index.mjs';
 
 // Windows has no /proc/self/fd or O_NOFOLLOW; win32.mjs gives the same walk on NT handles. Linux never loads it.
-const win = process.platform === 'win32' ? await import('./win32.mjs') : null;
+// Loading node:ffi warns "FFI is an experimental feature" on every daemon start (W4); only that warning is dropped.
+const win = process.platform === 'win32' ? await quietFfi(() => import('./win32.mjs')) : null;
+
+export async function quietFfi(load) {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function (warning, ...rest) {
+    if (!/^FFI is an experimental feature/.test(warning?.message ?? warning)) return emitWarning.call(this, warning, ...rest);
+  };
+  try { return await load(); } finally { process.emitWarning = emitWarning; }
+}
 
 export const hash = (content) => createHash('sha256').update(content).digest('hex');
 
@@ -209,6 +218,25 @@ export async function createDirectory(root, relative) {
     await mkdir(`/proc/self/fd/${parent.fd}/${parts.at(-1)}`, 0o755);
     await parent.sync();
   } finally { await Promise.all(handles.map((handle) => handle.close())); }
+}
+
+// A new name for a file in the same folder (Mission notes, threat model row 34), never over a name that exists: Linux
+// link()s the new name (EEXIST if taken) then unlinks the old one; Windows renames without REPLACE_IF_EXISTS.
+export async function renameFile(root, relative, name) {
+  const parts = partsFor(relative);
+  if (partsFor(name).length !== 1) throw new Error('unsafe-path');
+  if (win) return win.renameNamed(root, parts, name);
+  const safe = await resolveSafe(root, relative);
+  try {
+    const target = `/proc/self/fd/${safe.parent.fd}/${name}`;
+    // ponytail: a same-user process can swap the old name between these checks and the link or unlink, as it can race
+    // guardedSave's final check; no rename-by-handle syscall exists. Each step checks the inode it opened.
+    if ((await lstat(safe.anchored)).ino !== safe.stat.ino) throw new Error('path-changed');
+    await link(safe.anchored, target);
+    if ((await lstat(target)).ino !== safe.stat.ino) throw new Error('path-changed');
+    await unlink(safe.anchored);
+    await safe.parent.sync();
+  } finally { await safe.close(); }
 }
 
 const pending = new Map();

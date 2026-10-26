@@ -33,9 +33,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.8.0
         version: 1.8.0(zod@4.6.7)
-      '@astrojs/react':
-        specifier: 7.1.0
-        version: 7.1.0(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(yaml@2.9.1)
       '@codingame/monaco-vscode-explorer-service-override':
         specifier: 33.0.9
         version: 33.0.9
@@ -45,27 +42,12 @@ importers:
       '@simplewebauthn/server':
         specifier: 14.0.3
         version: 14.0.3
-      '@xterm/xterm':
-        specifier: 6.1.0-beta.219
-        version: 6.1.0-beta.219
-      astro:
-        specifier: 7.4.0
-        version: 7.4.0(@types/node@24.19.2)(yaml@2.9.1)
-      codemirror:
-        specifier: 6.0.2
-        version: 6.0.2
+      electron-updater:
+        specifier: 6.8.9
+        version: 6.8.9
       hono:
         specifier: 4.13.13
         version: 4.13.13
-      marked:
-        specifier: 14.0.0
-        version: 14.0.0
-      react:
-        specifier: 19.3.1
-        version: 19.3.1
-      react-dom:
-        specifier: 19.3.1
-        version: 19.3.1(react@19.3.1)
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -73,6 +55,9 @@ importers:
       '@astrojs/check':
         specifier: 0.9.10
         version: 0.9.10(@emnapi/runtime@1.11.3)(prettier@3.9.10)(typescript@6.0.3)
+      '@astrojs/react':
+        specifier: 7.1.0
+        version: 7.1.0(@types/node@24.19.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(yaml@2.9.1)
       '@codingame/monaco-vscode-api':
         specifier: 33.0.9
         version: 33.0.9
@@ -199,9 +184,30 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      '@xterm/xterm':
+        specifier: 6.1.0-beta.219
+        version: 6.1.0-beta.219
+      astro:
+        specifier: 7.4.0
+        version: 7.4.0(@types/node@24.19.2)(yaml@2.9.1)
+      codemirror:
+        specifier: 6.0.2
+        version: 6.0.2
       electron:
         specifier: 44.7.2
         version: 44.7.2
+      marked:
+        specifier: 14.0.0
+        version: 14.0.0
+      qrcode-generator:
+        specifier: 2.0.4
+        version: 2.0.4
+      react:
+        specifier: 19.3.1
+        version: 19.3.1
+      react-dom:
+        specifier: 19.3.1
+        version: 19.3.1(react@19.3.1)
       rolldown:
         specifier: 1.2.14
         version: 1.2.14
@@ -1368,6 +1374,9 @@ packages:
     resolution: {integrity: sha512-KMReFUr0B4t+D+OBkjR3KYqvocp2XaSzO55UcB6mgQMd3KbcE+mWTyvVV7D/zsdEbNnV6acZUutkiHQXvTr1Rw==}
     engines: {node: '>= 8'}
 
+  argparse@2.0.1:
+    resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
+
   aria-query@5.3.2:
     resolution: {integrity: sha512-COROpnaoap1E2F000S62r6A60uHZnmlvomhfyT2DlTcrY1OrBKn2UhH7qn5wTC9zMvD0AY7csdPSNwKP+7WiQw==}
     engines: {node: '>= 0.4'}
@@ -1399,6 +1408,10 @@ packages:
 
   boolbase@1.0.0:
     resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
+
+  builder-util-runtime@9.7.0:
+    resolution: {integrity: sha512-g/kR520giAFYkSXTzcmF3kqQq7wi8F6N6SzeDgZrqTBN+VHdmgWOyTdD1yD7AATDId/yXLvuP34CxW46/BwCdw==}
+    engines: {node: '>=12.0.0'}
 
   bundle-name@4.1.1:
     resolution: {integrity: sha512-DdH81/zPLVS11EUgWq3tEu/xn+EzljlMYooDNdzWEnFha3R3NBMpMV1UqYIpjYHV/SgpFKMIX1Oh7o06SjM/oA==}
@@ -1599,6 +1612,9 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
+  electron-updater@6.8.9:
+    resolution: {integrity: sha512-ZhVxM9iGONUpZGI1FxdMRgJjUFXi7AYGVa5PwKlO1tV1/4zDxQmfKpXOHVztKrd6L9rLcFjERvi1Mf2vxyTkig==}
+
   electron@44.7.2:
     resolution: {integrity: sha512-u3Pbz0Hi1sSSwBMz2v8LiagsfUG4QURPUe/qphM+g4THKP8o4BYdnuboyhlLO8HIC/KfV5rvltyacbP4jEq9yw==}
     engines: {node: '>= 22.12.0'}
@@ -1724,6 +1740,10 @@ packages:
   fresh@2.0.0:
     resolution: {integrity: sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A==}
     engines: {node: '>= 0.8'}
+
+  fs-extra@10.1.0:
+    resolution: {integrity: sha512-oRXApq54ETRj4eMiFzGnHWGy+zo5raudjuxN0b8H7s/RU2oW0Wvsx9O0ACRN/kRq9E8Vu/ReskGB5o3ji+FzHQ==}
+    engines: {node: '>=12'}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -1851,6 +1871,10 @@ packages:
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
+  js-yaml@4.3.2:
+    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
+    hasBin: true
+
   jschardet@3.1.4:
     resolution: {integrity: sha512-/kmVISmrwVwtyYU40iQUOp3SUPk2dhNCMsZBQX0R1/jZ8maaXJ/oZIzUOiyOqcgtLnETFKYChbJ5iDC/eWmFHg==}
     engines: {node: '>=0.1.90'}
@@ -1871,9 +1895,15 @@ packages:
   jsonc-parser@3.3.1:
     resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
 
+  jsonfile@6.2.1:
+    resolution: {integrity: sha512-zwOTdL3rFQ/lRdBnntKVOX6k5cKJwEc1HdilT71BWEu7J41gXIB2MRp+vxduPSwZJPWBxEzv4yH1wYLJGUHX4Q==}
+
   kleur@4.1.5:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
+
+  lazy-val@1.0.5:
+    resolution: {integrity: sha512-0/BnGCCfyUMkBpeDgWihanIAF9JmZhHBgUhEqzvf+adhNGLoP6TaiI5oF8oyb3I45P+PcnrqihSf01M0l0G5+Q==}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -1948,6 +1978,13 @@ packages:
   lightningcss@1.33.0:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
+
+  lodash.escaperegexp@4.1.2:
+    resolution: {integrity: sha512-TM9YBvyC84ZxE3rgfefxUWiQKLilstD6k7PTGt6wfbtXF8ixIJLOL3VYyV/z+ZiPLsVxAsKAFVwWlWeb2Y8Yyw==}
+
+  lodash.isequal@4.5.0:
+    resolution: {integrity: sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==}
+    deprecated: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
 
   lru-cache@11.5.3:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
@@ -2183,6 +2220,9 @@ packages:
     resolution: {integrity: sha512-BbubeCEyTuQjVMakvJQ/Sxbc93F2pwmbsxONT/ZRrwU7Ua38d8unYTwXpTVLAKJ4BDuH9IGztCjQcd/N/39Dvg==}
     engines: {node: '>=16.0.0'}
 
+  qrcode-generator@2.0.4:
+    resolution: {integrity: sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==}
+
   qs@6.16.1:
     resolution: {integrity: sha512-5Px6J7rfHBAGUhNQ3es4YzcOdBBw0SDcVtThJml4RdnKw4tKs2epA0kPZ+K8X+WiHktT93RHVcQ/3ym5aTCgtg==}
     engines: {node: '>=0.6'}
@@ -2268,6 +2308,11 @@ packages:
 
   scheduler@0.28.0:
     resolution: {integrity: sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==}
+
+  semver@7.7.4:
+    resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
+    engines: {node: '>=10'}
+    hasBin: true
 
   semver@7.8.5:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
@@ -2376,6 +2421,9 @@ packages:
   tiny-inflate@1.0.3:
     resolution: {integrity: sha512-pkY1fj1cKHb2seWDy0B16HeWyczlJA9/WW3u3c4z/NiWDsO3DOU5D7nhTLE9CF0yXv/QZFY7sEJmj24dK+Rrqw==}
 
+  tiny-typed-emitter@2.1.0:
+    resolution: {integrity: sha512-qVtvMxeXbVej0cQWKqVSSAHmKZEHAvxdF8HEUBFWts8h+xEo5m/lEiPakuyZ3BnCBjOD8i24kzNOiOLLgsSxhA==}
+
   tinyclip@1.0.3:
     resolution: {integrity: sha512-nTv2raKFMzGG6JJp0lpNDsRPdfFE6UHlu2rVEjXo8vkx1ZS3LW2CVXqIaLu8xZlu+6tbFs9V58Qc/Jmk/Ii7wA==}
     engines: {node: ^16.14.0 || >= 17.3.0}
@@ -2469,6 +2517,10 @@ packages:
 
   unist-util-visit@5.1.0:
     resolution: {integrity: sha512-m+vIdyeCOpdr/QeQCu2EzxX/ohgS8KbnPDgFni4dQsfSCtpz8UqDyY5GjRru8PDKuYn7Fq19j1CQ+nJSsGKOzg==}
+
+  universalify@2.0.1:
+    resolution: {integrity: sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw==}
+    engines: {node: '>= 10.0.0'}
 
   unpipe@1.0.0:
     resolution: {integrity: sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==}
@@ -4030,6 +4082,8 @@ snapshots:
       normalize-path: 3.0.0
       picomatch: 2.3.2
 
+  argparse@2.0.1: {}
+
   aria-query@5.3.2: {}
 
   asn1js@3.1.0:
@@ -4146,6 +4200,13 @@ snapshots:
       - supports-color
 
   boolbase@1.0.0: {}
+
+  builder-util-runtime@9.7.0:
+    dependencies:
+      debug: 4.4.3
+      sax: 1.6.1
+    transitivePeerDependencies:
+      - supports-color
 
   bundle-name@4.1.1:
     dependencies:
@@ -4323,6 +4384,19 @@ snapshots:
 
   ee-first@1.1.1: {}
 
+  electron-updater@6.8.9:
+    dependencies:
+      builder-util-runtime: 9.7.0
+      fs-extra: 10.1.0
+      js-yaml: 4.3.2
+      lazy-val: 1.0.5
+      lodash.escaperegexp: 4.1.2
+      lodash.isequal: 4.5.0
+      semver: 7.7.4
+      tiny-typed-emitter: 2.1.0
+    transitivePeerDependencies:
+      - supports-color
+
   electron@44.7.2:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
@@ -4458,6 +4532,12 @@ snapshots:
 
   fresh@2.0.0: {}
 
+  fs-extra@10.1.0:
+    dependencies:
+      graceful-fs: 4.2.11
+      jsonfile: 6.2.1
+      universalify: 2.0.1
+
   fsevents@2.3.3:
     optional: true
 
@@ -4581,6 +4661,10 @@ snapshots:
 
   jose@6.2.12: {}
 
+  js-yaml@4.3.2:
+    dependencies:
+      argparse: 2.0.1
+
   jschardet@3.1.4: {}
 
   json-schema-to-ts@3.1.1:
@@ -4596,7 +4680,15 @@ snapshots:
 
   jsonc-parser@3.3.1: {}
 
+  jsonfile@6.2.1:
+    dependencies:
+      universalify: 2.0.1
+    optionalDependencies:
+      graceful-fs: 4.2.11
+
   kleur@4.1.5: {}
+
+  lazy-val@1.0.5: {}
 
   lightningcss-android-arm64@1.33.0:
     optional: true
@@ -4646,6 +4738,10 @@ snapshots:
       lightningcss-linux-x64-musl: 1.33.0
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
+
+  lodash.escaperegexp@4.1.2: {}
+
+  lodash.isequal@4.5.0: {}
 
   lru-cache@11.5.3: {}
 
@@ -4845,6 +4941,8 @@ snapshots:
 
   pvutils@1.2.0: {}
 
+  qrcode-generator@2.0.4: {}
+
   qs@6.16.1:
     dependencies:
       es-define-property: 1.0.1
@@ -4953,6 +5051,8 @@ snapshots:
   sax@1.6.1: {}
 
   scheduler@0.28.0: {}
+
+  semver@7.7.4: {}
 
   semver@7.8.5: {}
 
@@ -5119,6 +5219,8 @@ snapshots:
 
   tiny-inflate@1.0.3: {}
 
+  tiny-typed-emitter@2.1.0: {}
+
   tinyclip@1.0.3: {}
 
   tinyexec@1.3.1: {}
@@ -5212,6 +5314,8 @@ snapshots:
       '@types/unist': 3.0.3
       unist-util-is: 6.0.1
       unist-util-visit-parents: 6.0.2
+
+  universalify@2.0.1: {}
 
   unpipe@1.0.0: {}
 

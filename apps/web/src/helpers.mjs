@@ -35,6 +35,8 @@ export const svg = {
   bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
 };
 export const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// HI1: the hover "i" beside a Settings row (T-tracer's .info). Its tip says what the row does; a click opens that guide section.
+export const info = (tip, section) => `<button class="info" type="button" data-docs="${esc(section)}" aria-label="${esc(tip)}" title="${esc(tip)}">i</button>`;
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed
 // shows "new window": the old figure expired and the new one is not known until the tool records it again.

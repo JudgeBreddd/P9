@@ -17,6 +17,10 @@ function quote(value) {
   if (/[\r\n\x00]/.test(value)) throw new Error('invalid-unit-argument');
   return '"' + value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%').replaceAll('$', '$$') + '"';
 }
+// AU4: a daemon the AppImage copied to ~/.local/share/p9/daemon/<version> (teh.mjs stageDaemon) runs through the fixed
+// launcher, which starts the version daemon/current names; a source checkout's runs as before.
+const share = path.join(os.homedir(), '.local', 'share', 'p9');
+const launcher = main.startsWith(path.join(share, 'daemon') + path.sep) ? quote(path.join(share, 'launcher', 'p9-launch.sh')) + ' ' : '';
 const directory = path.join(os.homedir(), '.config', 'systemd', 'user');
 const recovery = path.join(os.homedir(), '.local', 'state', 'p9-foundation', 'conflicts');
 await mkdir(directory, { recursive: true });
@@ -29,7 +33,7 @@ RuntimeDirectoryMode=0700
 UMask=0077
 # The installer's PATH, so the service finds the same tmux and agent CLIs it did (release r1 R1-10).
 Environment=${quote('PATH=' + process.env.PATH)}
-ExecStart=${quote(process.execPath)} ${quote(main)} --workspace ${quote(workspace)} --state %t/p9-foundation --recovery ${quote(recovery)}
+ExecStart=${launcher}${quote(process.execPath)} ${quote(main)} --workspace ${quote(workspace)} --state %t/p9-foundation --recovery ${quote(recovery)}
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes

@@ -62,7 +62,7 @@ Mission Control reads `~/.config/p9/settings.json`. Paths are relative to your w
 | `scripts_root` (optional, absolute) | where buttons run from; defaults to the workspace |
 | `space` (optional) | a JSON file of your own sections (below) |
 
-P9 reads the file when the daemon starts, so restart P9 after changing it.
+P9 re-reads the file every time Mission refreshes, so changes show within one refresh with no restart. If the file is broken, Mission keeps the last good settings and says so. The one case that asks you to restart is a saved workspace folder that was missing at start; the notice has a **Restart P9 to apply** button.
 
 ### Buttons, apps and pages
 
@@ -117,14 +117,58 @@ Each focus mode has its own pet settings: on or off, size, and a pet for System,
 
 An optional phone view on your Tailscale network, signed in with a passkey that you approve from the computer. The README has the setup steps. The phone has Chat (with Mode and Model), Terminal, Mission Control, Usage and Files. An approved phone can do what you can do in P9, so approve only your own devices.
 
+A chat's **Phone** button shows a QR code and a link that open that chat on the phone, at this computer's remote login address. If sign-in comes first, the phone still opens that chat after it. With remote logins off, the button says how to turn them on.
+
 ## Notifications
 
 Cards show what needs you, such as an agent waiting for your answer or items waiting on you. Click a card to open its chat or item. The bell (Notification Center) keeps the cards you set aside, older items and system notices until you dismiss them.
 
 ## Anymouse
 
-The Anymouse button sends P9's makers an idea, a bug report or a gripe. Without a GitHub token it opens a prefilled GitHub issue page in your browser. The README shows how to send notes straight from the app.
+The Anymouse button sends P9's makers an idea, a bug report or a gripe. Without a GitHub token it opens a prefilled GitHub issue page in your browser. The README shows how to send notes straight from the app. If GitHub refuses that token, the box says why and how to fix it, keeps your note, and offers **Open on GitHub** to file it on GitHub's own page instead.
 
 ## Persistence and Stop All
 
 Closing the window keeps chats and terminals running. The red session button switches P9 to "dies with the app", or runs **Stop All**, which stops every chat, button run and P9 terminal. The README has a table of what stops what.
+
+## Settings
+
+The gear opens Settings. Each row has an **i**: hover it for what the row does, click it to open its part of this guide.
+
+- **P9 docs on GitHub**, **Anymouse** and **Setup**, at the top: this guide, [Anymouse](#anymouse) and the [first-start](#first-start) window again.
+- **Zoom** makes everything in the window bigger or smaller, in every focus mode. Ctrl = and Ctrl - do the same; Ctrl 0 resets.
+- **Your name** is what the landing page greets you with.
+- **Start in my last focus mode** opens P9 straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.
+- **Close the chat window on send** closes a chat window opened from a Chat Focus card or the Notification Center once your message is sent.
+- **Focus modes**, **Pets**, **Agent lock** and **File protection**: see [Focus modes](#focus-modes), [Pets](#pets), [Agent lock](#agent-lock) and [File protection](#file-protection).
+
+### Mission Control files
+
+Once Mission Control's settings file is loaded, Settings shows its paths, so you can change them after setup without a text editor. Each row saves when you leave it; P9 checks it as it checks the file at start, and a value it refuses stays in the box with the reason. The old file is kept as `settings.json.bak`.
+
+A path box shows the end of the path (the file name); hover it for the full path.
+
+- **Main project file** (`primary`): the file that names your main project, the bold "Main project: Name" line with its folder (for the Mission Control Main Project card and the Chat Focus Files pane's Current project).
+- **Buttons, apps and pages file** (`registry`): the JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card).
+- **Folder of items waiting on you** (`waiting`): a folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane's Needs you view).
+- **workspace-hub folder** (`hub`, optional): the folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it).
+- These four are the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
+- **Folder your buttons run in** (`scripts_root`, optional): a full path where your buttons and apps run, and the one ~/workspace stands for. Empty: the workspace.
+- **Extra sections file** (`space`, optional): the JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page). Empty: no extra sections.
+- **Server host name** (`server_host`, optional): the network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh).
+- **Extra link types for pages** (`page_schemes`, optional): link types besides http and https that a Mission Control page may open, separated by commas (for example `obsidian`). A page link of that type asks before it opens.
+- **Notes folders** (`notes_roots`, optional): one `name = /full/path` per line (for the notes an extra Mission Control section shows, by that name). Your home folder, a folder holding the workspace and P9's recovery folder are refused.
+
+### Updates
+
+The Updates row sits in the Maintenance group. In the installed app, **Check now** asks GitHub for a newer P9, and **Restart to update** installs one that has downloaded. Where automatic updates are off (a source checkout), **Check now** opens the newest P9 release on GitHub instead; if its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.
+
+### Maintenance
+
+For when P9 misbehaves. Each button is also in the command palette (Ctrl K).
+
+- **Reload window** loads the window again. Chats keep running in the background service; text you have not sent is lost.
+- **Refresh Mission** reads your Mission Control files again now, instead of at the next check (for every Mission Control card and button).
+- **Restart daemon** restarts P9's background service (the daemon that runs your chats, scripts and terminals) and waits until the new one answers. Running chats, scripts and terminals stop.
+- **Repair daemon service** sets P9's background service (the daemon that runs your chats, scripts and terminals) up again and starts it. On Windows it runs the installer's own setup step: use it when P9 says its task is missing or out of date. On Linux it enables the `p9-foundation` unit again. Running chats, scripts and terminals stop.
+- **Rebuild + reload** shows only when P9 runs from a source checkout. It runs `pnpm build`, then reloads the window with the new build.

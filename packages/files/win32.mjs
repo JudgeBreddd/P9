@@ -3,9 +3,12 @@
 // (a junction or symlink opens as itself and is refused), and the opened handle's final path must be the expected one
 // (this also refuses case and 8.3 short-name variants). Reads, writes, renames and deletes go through the same handles.
 // ponytail: node:ffi is experimental in Node 26.10 and these calls are synchronous; files are capped at MAX_BYTES (2 MiB).
-import ffi from 'node:ffi';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+
+// Loaded here, not imported: the installed daemon is one bundle (bundle-daemon.mjs), which hoists a static import to its top,
+// before index.mjs's quietFfi could drop the experimental warning (W4).
+const ffi = process.getBuiltinModule('node:ffi');
 
 const kernel32 = ffi.dlopen('kernel32.dll', {
   CreateFileW: { return: 'pointer', arguments: ['buffer', 'uint32', 'uint32', 'pointer', 'uint32', 'uint32', 'pointer'] },
@@ -431,6 +434,29 @@ export async function renameAt(parent, from, to) {
     ok = true;
     if (parent.keep && source.release) { staged.set(stagedKey(parent, to), source); return; }
   } finally { if (!(ok && parent.keep && source.release)) await done(parent, from, source, ok); }
+}
+
+// Linux: renameFile's link then unlink. Without REPLACE_IF_EXISTS a name already there fails with
+// STATUS_OBJECT_NAME_COLLISION (EEXIST), so a rename never replaces a file; RootDirectory keeps it in the same folder.
+export async function renameNamed(root, parts, to) {
+  const handles = [];
+  try {
+    let parent = openRoot(root);
+    handles.push(parent);
+    for (const part of parts.slice(0, -1)) { parent = openDirectory(parent, part); handles.push(parent); }
+    const source = openRelative(parent, parts.at(-1), { access: DELETE, options: FILE_NON_DIRECTORY_FILE });
+    handles.push(source);
+    const stat = information(source.handle);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error('unsafe-file');
+    if (finalPath(source.handle) !== path.join(root, ...parts)) throw new Error('path-changed');
+    const name = Buffer.from(to, 'utf16le'), info = Buffer.alloc(24 + name.length);
+    info.writeUInt32LE(0x2 /* POSIX_SEMANTICS */, 0);
+    info.writeBigUInt64LE(BigInt(parent.handle), 8);
+    info.writeUInt32LE(name.length, 16);
+    name.copy(info, 20);
+    setInformation(source, FileRenameInformationEx, info, `rename(${parts.at(-1)})`);
+    await parent.sync();
+  } finally { await Promise.all(handles.map((handle) => handle.close())); }
 }
 
 // Linux: unlink(`/proc/self/fd/N/name`).

@@ -1,17 +1,34 @@
-# Builds the Windows installers, x64 and ARM64, each on a GitHub Windows machine of that architecture (B9).
-# Run it: GitHub (web or app) -> p9 -> Actions -> Windows installer -> Run workflow, and give the release tag: it builds that
-# tag and attaches both .exe files and SHA256SUMS-x64 and SHA256SUMS-arm64 to the release (which must already exist). Tags before v0.1.2 lack the
-# packaging fix and fail on this machine (the NSIS 260-character path).
-# Leave the tag empty and pick a branch instead to run the check: it builds that branch's installer (a run artifact,
-# attached nowhere) and runs the Windows tests and install steps below. Pushes never start it: each run costs money on
-# the private repo (about $0.75, Windows and ARM64 minutes count double), so it runs only when someone asks.
-name: Windows installer
+# Builds the installers: Windows x64 and ARM64, each on a GitHub Windows machine of that architecture (B9), and the Linux
+# AppImage (x64) on Ubuntu. Every push to a branch other than main runs the check (AU7): it builds each installer as a
+# run artifact, attached nowhere, then runs the Windows tests and the install, update and uninstall steps below. The
+# repo is public, so the runs cost nothing.
+# A release (AU3): create the GitHub release first (a draft is fine, and keeps it from apps until every file is there),
+# then push its v* tag, or run this by hand (Actions -> Installers -> Run workflow) with the tag. It builds that tag,
+# attaches the installers, their .blockmap and SHA256SUMS-x64, -arm64 and -linux-x64, and only then the update feeds
+# (latest.yml, latest-linux.yml), so an app is never offered a version whose files are not all there. One installer
+# failing attaches no feed. Installed apps take only a published release that is not a pre-release (Stable channel).
+# Tags before v0.1.2 lack the packaging fix and fail on this machine (the NSIS 260-character path).
+# A candidate (Run workflow with a version, e.g. 0.1.5-rc.1, and no tag): the check build with that version, set here for
+# this run only and never committed; it attaches nothing. Installed, it is offered the release it leads to.
+# only=rollback (Run workflow, no tag): the x64 build, the local-feed update and the rollback check, nothing else.
+name: Installers
 
 on:
+  push:
+    branches-ignore: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build and attach the installer to (the release must exist). Empty runs the check on the chosen branch
+        description: Release tag to build and attach the installers to (the release must exist). Empty runs the check on the chosen branch
+        required: false
+        default: ''
+      version:
+        description: A candidate's version, <package.json version>-rc.<n> (e.g. 0.1.5-rc.1), for this build only. Leave the tag empty
+        required: false
+        default: ''
+      only:
+        description: rollback runs only the x64 build and the steps the rollback check needs (no arm64, no AppImage). Leave the tag empty
         required: false
         default: ''
 
@@ -24,12 +41,8 @@ jobs:
       # One architecture failing still finishes the other's installer.
       fail-fast: false
       matrix:
-        include:
-          - arch: x64
-            os: windows-latest
-          - arch: arm64
-            os: windows-11-arm
-    runs-on: ${{ matrix.os }}
+        arch: ${{ fromJSON(inputs.only == 'rollback' && '["x64"]' || '["x64", "arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
     # One run per branch and architecture at a time; a newer push waits and replaces any run still waiting. Not
     # cancel-in-progress: four chunks pushing release/v0.1.3 cancelled the 35-minute job before it ever finished
     # (2026-10-22, run 39724311084).
@@ -38,36 +51,60 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 90
     env:
-      TAG: ${{ inputs.tag }}
+      TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
       P9_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.sha }}
+      - name: The release exists
+        if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --json tagName > /dev/null || { echo "::error::Create the GitHub release for $TAG first (a draft is fine), then run this again"; exit 1; }
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
           node-version: 26.10.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Candidate version
+        if: inputs.version != ''
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test -z "$TAG" || { echo "::error::A candidate attaches nothing to a release: leave the tag empty"; exit 1; }
+          version=$(node scripts/candidate-version.mjs "$VERSION")
+          npm pkg set "version=$version"
       - run: pnpm package:win
       - name: Attach to the release
-        if: inputs.tag != ''
+        if: env.TAG != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat dist/windows/SHA256SUMS-$P9_ARCH
-          gh release upload "$TAG" dist/windows/*-$P9_ARCH.exe dist/windows/SHA256SUMS-$P9_ARCH --clobber
+          gh release upload "$TAG" dist/windows/*-$P9_ARCH.exe dist/windows/*-$P9_ARCH.exe.blockmap dist/windows/SHA256SUMS-$P9_ARCH --clobber
+      # This runner's latest.yml names only its own installer: the feed job merges both and attaches it last.
+      - uses: actions/upload-artifact@v4
+        if: env.TAG != ''
+        with:
+          name: feed-windows-${{ matrix.arch }}
+          path: dist/windows/latest.yml
+          retention-days: 1
       - name: Show the check build
-        if: inputs.tag == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: bash
         run: |
           cat dist/windows/SHA256SUMS-$P9_ARCH
           ls -l dist/windows/*.exe
+          # BL11: the web-only packages are devDependencies, so app.asar carries only what the desktop loads.
+          ls -l dist/windows/*-unpacked/resources/app.asar
       # The check build, to download from the run's page and install by hand (a tester's laptop).
       - uses: actions/upload-artifact@v4
-        if: inputs.tag == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         with:
           name: windows-installer-${{ matrix.arch }}
           path: |
@@ -77,13 +114,41 @@ jobs:
       # The Windows-only tests on a real Windows machine of each architecture: the host (.cmd through cmd.exe, a new
       # console, the folder ACL check, the prebuilt DLL) and Job Object stop. After the upload, so a failure keeps the installer.
       - name: Windows host and process-tree tests
-        if: inputs.tag == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         run: node --test test/windows-process-tree.test.mjs
+      # GitHub issue #11: the dock's terminal on Windows (ConPTY), through the real routes and the daemon's pipe.
+      - name: Windows terminal test
+        if: env.TAG == '' && inputs.only != 'rollback'
+        run: node --test test/windows-terminal.test.mjs
+      # GitHub issue #11 (v0.1.5 N1): Mission notes in a folder outside the workspace, through win.canonical and the new
+      # renameNamed (no replace): links out, locked names, the 409 conflict and rename onto an existing name.
+      - name: Windows notes test
+        if: env.TAG == '' && inputs.only != 'rollback'
+        run: node --test test/mission-notes.test.mjs
+      # BL9: the file guard's and the editor host's owner-only checks compare SDDL text. The runner's account is the
+      # built-in Administrator (RID 500), which SDDL writes as LA, so the tests now ask Windows for that form.
+      # Their powershell.exe (5.1) would inherit this pwsh 7 step's module folders and fail to load Get-Acl's module
+      # (run 40139947301): keep only its own folders, as install-windows.ps1 does.
+      - name: Windows file guard test
+        if: env.TAG == '' && inputs.only != 'rollback'
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          node --test test/files-windows.test.mjs
+      - name: Windows editor host test
+        if: env.TAG == '' && inputs.only != 'rollback'
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs
+      # v0.1.5 DV2: Dev Focus's folder outside the workspace, on Windows paths: %LOCALAPPDATA%\P9 and the drive root refused,
+      # saves there through the guarded save, a junction out refused.
+      - name: Windows Dev folder test
+        if: env.TAG == '' && inputs.only != 'rollback'
+        run: node --test test/dev-root.test.mjs
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.
       - name: Install it here and start the daemon
-        if: inputs.tag == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: pwsh
         timeout-minutes: 28
         run: |
@@ -125,6 +190,19 @@ jobs:
             if (-not (Test-Path -LiteralPath (Join-Path $app $f))) { throw "the installer left out $f" }
           }
           if (-not (Get-ChildItem (Join-Path $app ($daemon + '@openai\codex-win32-' + $env:P9_ARCH)) -Recurse -Filter codex.exe -ErrorAction SilentlyContinue)) { throw 'the installer left out codex.exe' }
+          # AU2: the app and the daemon's node.exe are this runner's architecture (the PE header's machine field), not an
+          # x64 file running under ARM64 emulation.
+          $machine = @{ x64 = 0x8664; arm64 = 0xAA64 }[$env:P9_ARCH]
+          foreach ($f in 'P9 Event Horizon.exe', 'resources\daemon\node.exe') {
+            $bytes = New-Object byte[] 4096; $stream = [IO.File]::OpenRead((Join-Path $app $f)); $null = $stream.Read($bytes, 0, 4096); $stream.Close()
+            $found = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+            Write-Output ('{0}: machine 0x{1:X4}' -f $f, $found)
+            if ($found -ne $machine) { throw "$f is not $env:P9_ARCH" }
+          }
+          # AU2: the update feed the installed app reads.
+          $feed = Get-Content -Raw (Join-Path $app 'resources\app-update.yml')
+          Write-Output ('app-update.yml: ' + ($feed -replace '\s+', ' '))
+          if ($feed -notmatch 'provider: github') { throw 'app-update.yml does not name the GitHub feed' }
           $script = Join-Path $app 'resources\daemon\scripts\install-windows.ps1'
           # This step's shell is PowerShell 7, so the installer inherits 7's module path: the case run 39535290300 failed on.
           if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the installer registered no task (hook: lines above)' }
@@ -141,9 +219,19 @@ jobs:
           Wait-Daemon ([datetime]::MinValue)
           Write-Output 'daemon up after install'
           Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | ForEach-Object { 'node: ' + $_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length)) }
-          function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' }) }
+          function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' -or $_.ExecutablePath -like "$env:LOCALAPPDATA\P9\daemon\*\node.exe" }) }
           # arm64 job 119704715150: the task ran the runner's node from PATH, so nothing here matched and /Run was refused.
           if ((Get-Daemon).Count -lt 1) { throw 'the daemon is not the bundled node.exe (node: and hook: lines above)' }
+          # AU4: the task runs the fixed launcher, which starts the copy daemon\current names, so an update replaces no file
+          # the daemon holds and the version before stays for a rollback.
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $current = [IO.File]::ReadAllText("$env:LOCALAPPDATA\P9\daemon\current")
+          Write-Output ('daemon\current: ' + $current + '; launcher: ' + (Test-Path "$env:LOCALAPPDATA\P9\launcher\p9-launch.ps1"))
+          if ($current -ne $version) { throw ('daemon\current is ' + $current + ', not ' + $version) }
+          if (-not (Test-Path "$env:LOCALAPPDATA\P9\daemon\$version\.complete")) { throw 'the daemon copy has no .complete' }
+          if (-not (Test-Path "$env:LOCALAPPDATA\P9\launcher\p9-launch.ps1")) { throw 'no launcher\p9-launch.ps1' }
+          if ((Get-ScheduledTask -TaskName 'P9 Foundation').Actions[0].Arguments -notlike '*\P9\launcher\p9-launch.ps1*') { throw 'the task does not run the launcher' }
+          if (@(Get-Daemon | Where-Object { $_.ExecutablePath -like "$env:LOCALAPPDATA\P9\daemon\$version\node.exe" }).Count -ne 1) { throw ('the daemon is not daemon\' + $version + '\node.exe') }
           # A daemon that died on its own (issue #4 item 7) is the case the app restarts with schtasks /Run (main.mjs).
           $before = Get-Date
           Get-Daemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
@@ -226,6 +314,51 @@ jobs:
           if (Test-Path $marked.FullName) { throw "P9's marked ns*.tmp was kept" }
           if (-not (Test-Path $other.FullName)) { throw "another app's ns*.tmp was removed" }
           Write-Output "temp cleanup: P9's marked folder removed, another app's kept"
+          # v0.1.5 W4 (issue #12 item 1): every daemon start above loaded the file guard's node:ffi; no warning line for it.
+          $daemonLog = Join-Path $env:LOCALAPPDATA 'P9\daemon.log'
+          Write-Output ('daemon.log: {0} lines, {1} host starts' -f @(Get-Content $daemonLog).Count, @(Select-String -LiteralPath $daemonLog -Pattern 'host started' -SimpleMatch).Count)
+          if (Select-String -LiteralPath $daemonLog -Pattern 'FFI is an experimental' -SimpleMatch -Quiet) { throw 'daemon.log has the FFI experimental warning' }
+          # v0.1.5 W3 (issue #11 bug 8): schtasks /end stops conhost only; the host must see it go and end node with its job.
+          function Get-DaemonHost { @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { ($_.CommandLine -like '*windows-host.ps1*-Mode Daemon*' -or $_.CommandLine -like '*\launcher\p9-launch.ps1*') }) }
+          Write-Output ('before /End: {0} daemon, {1} host' -f (Get-Daemon).Count, (Get-DaemonHost).Count)
+          schtasks.exe /End /TN 'P9 Foundation'
+          $end = (Get-Date).AddSeconds(15)
+          while (((Get-Daemon).Count -gt 0 -or (Get-DaemonHost).Count -gt 0) -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          Write-Output ('after /End: {0} daemon, {1} host' -f (Get-Daemon).Count, (Get-DaemonHost).Count)
+          if ((Get-Daemon).Count -gt 0 -or (Get-DaemonHost).Count -gt 0) { throw 'schtasks /End left the daemon or its host running' }
+          # v0.1.5 W1 and W2 (issue #11 bug 2): an app and a "detach": true script's child outlive a daemon restart, made by
+          # teh.mjs restartWindowsTask, the function the desktop's restart button calls.
+          $keep = Join-Path $env:RUNNER_TEMP 'p9-keep.js'
+          Set-Content -LiteralPath $keep -Value "const fs = require('fs'); const [file, role] = process.argv.slice(2); if (role === 'child') { fs.writeFileSync(file + '.t', String(process.pid)); fs.renameSync(file + '.t', file); } else require('child_process').spawn(process.execPath, [__filename, file, 'child'], { detached: true, stdio: 'ignore' }).unref(); setInterval(() => {}, 1e9);"
+          $node = (Get-Command node).Source
+          $appPid = Join-Path $env:RUNNER_TEMP 'p9-app.pid'; $childPid = Join-Path $env:RUNNER_TEMP 'p9-child.pid'
+          $ws = (Get-Item (Join-Path $env:USERPROFILE 'P9')).FullName
+          New-Item -ItemType Directory -Force (Join-Path $ws 'waiting') | Out-Null
+          @{ scripts = @(@{ id = 'keep'; title = 'Keep'; detach = $true; cmd = @($node, $keep, $childPid) }); apps = @(@{ id = 'keep'; title = 'Keep'; cmd = @($node, $keep, $appPid, 'child') }); pages = @() } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ws 'registry.json')
+          $settingsFile = Join-Path $env:APPDATA 'P9\settings.json'
+          New-Item -ItemType Directory -Force (Split-Path $settingsFile) | Out-Null
+          @{ primary = 'primary.md'; registry = 'registry.json'; waiting = 'waiting' } | ConvertTo-Json | Set-Content -LiteralPath $settingsFile
+          $before = Get-Date
+          schtasks.exe /Run /TN 'P9 Foundation'
+          Wait-Daemon $before
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { daemonRequest } = await import(pathToFileURL(process.argv[2]).href); const app = await daemonRequest(process.argv[1], 'POST', '/apps/keep/launch', {}); const run = await daemonRequest(process.argv[1], 'POST', '/scripts/keep/run', {}); console.log('launch: ' + app.status + ' run: ' + run.status); process.exit(app.status === 200 && run.status === 202 ? 0 : 1)" $state $teh
+          if ($LASTEXITCODE -ne 0) { throw 'the app or the detach script did not start' }
+          $end = (Get-Date).AddSeconds(15)
+          while (-not ((Test-Path $appPid) -and (Test-Path $childPid)) -and (Get-Date) -lt $end) { Start-Sleep 1 }
+          if (-not ((Test-Path $appPid) -and (Test-Path $childPid))) { throw 'the app or the detach script''s child wrote no pid in 15 s' }
+          $kept = @((Get-Content $appPid), (Get-Content $childPid)) | ForEach-Object { [int]$_ }
+          $old = (Get-Daemon).ProcessId
+          $before = Get-Date
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { restartWindowsTask } = await import(pathToFileURL(process.argv[2]).href); const r = await restartWindowsTask(process.argv[1]); console.log('restart: ' + JSON.stringify(r)); process.exit(r.restarted ? 0 : 1)" $state $teh
+          if ($LASTEXITCODE -ne 0) { throw 'restartWindowsTask failed (restart: line above)' }
+          Wait-Daemon $before
+          Write-Output ('after restart: daemons {0} (old {1}), hosts {2}' -f ((Get-Daemon).ProcessId -join ','), ($old -join ','), (Get-DaemonHost).Count)
+          if ((Get-Daemon).Count -ne 1 -or (Get-DaemonHost).Count -ne 1 -or ((Get-Daemon).ProcessId | Where-Object { $old -contains $_ })) { throw 'the restart did not leave exactly one new daemon and host' }
+          $alive = @($kept | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+          Write-Output ('kept across the restart: app {0}, detach script child {1}: {2} alive' -f $kept[0], $kept[1], $alive.Count)
+          $kept | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+          Remove-Item -LiteralPath $settingsFile
+          if ($alive.Count -ne 2) { throw 'a daemon restart ended the app or the detach script''s child' }
           # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
           # alone left the daemon running (run 39540753837), which an update over this version would hit too.
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName
@@ -238,27 +371,32 @@ jobs:
           Write-Output ('daemon processes left after uninstall: ' + $left.Count)
           if ($left.Count -gt 0) { throw 'the uninstaller left the daemon running' }
           if (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue) { throw 'the uninstaller left the task' }
-          Write-Output 'uninstall: no daemon, no task'
-      # v0.1.4 review finding 2: B10 is proven above for a fresh install only. An update runs 0.1.3's uninstaller, which must
-      # remove its 26,028-file daemon node_modules; one open handle there aborts the update. Install v0.1.3 from its release,
-      # wait for its daemon, install this build over it, then count. Uninstalls at the end, so the next step starts clean.
-      - name: Update over v0.1.3
-        if: inputs.tag == ''
+          foreach ($d in 'daemon', 'launcher') { if (Test-Path "$env:LOCALAPPDATA\P9\$d") { throw ('the uninstaller left %LOCALAPPDATA%\P9\' + $d) } }
+          Write-Output 'uninstall: no daemon, no task, no daemon copies'
+      # BL12: an update over the newest published release, which is what a tester's laptop has. v0.1.4 review finding 2
+      # (v0.1.3's 26,028-file daemon node_modules; one open handle there aborts the update) passed over v0.1.3 here, and
+      # every later release ships the bundled daemon. Install that release, wait for its daemon, install this build over
+      # it, then count. Uninstalls at the end, so the next step starts clean.
+      - name: Update over the newest release
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: pwsh
         timeout-minutes: 40
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $old = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'p9-v013')).FullName
-          gh release download v0.1.3 -R $env:GITHUB_REPOSITORY -D $old -p "p9-event-horizon-0.1.3-windows-$env:P9_ARCH.exe" -p "SHA256SUMS-$env:P9_ARCH" --clobber
-          if ($LASTEXITCODE -ne 0) { throw 'gh release download v0.1.3 failed' }
-          $oldExe = Join-Path $old "p9-event-horizon-0.1.3-windows-$env:P9_ARCH.exe"
+          # Pre-releases count: every P9 release so far is one.
+          $tag = gh release list -R $env:GITHUB_REPOSITORY --exclude-drafts --limit 1 --json tagName -q '.[0].tagName'
+          if ($LASTEXITCODE -ne 0 -or -not $tag) { throw 'gh release list found no release' }
+          $old = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'p9-newest')).FullName
+          gh release download $tag -R $env:GITHUB_REPOSITORY -D $old -p "*-windows-$env:P9_ARCH.exe" -p "SHA256SUMS-$env:P9_ARCH" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release download $tag failed" }
+          $oldExe = (Get-ChildItem $old -Filter "*-windows-$env:P9_ARCH.exe" | Select-Object -First 1).FullName
           # @(): the file is one line, and -match on a lone string returns $true, not the line (run 39826320042).
           $want = (@(Get-Content (Join-Path $old "SHA256SUMS-$env:P9_ARCH")) -match [regex]::Escape((Split-Path $oldExe -Leaf)) -split '\s+')[0]
-          if ((Get-FileHash $oldExe -Algorithm SHA256).Hash -ne $want) { throw 'the v0.1.3 installer does not match its SHA256SUMS' }
+          if ((Get-FileHash $oldExe -Algorithm SHA256).Hash -ne $want) { throw "the $tag installer does not match its SHA256SUMS" }
           $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
           $file = Join-Path $env:LOCALAPPDATA 'P9\runtime\desktop.json'
-          function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' }) }
+          function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like '*\P9 Event Horizon\resources\daemon\node.exe' -or $_.ExecutablePath -like "$env:LOCALAPPDATA\P9\daemon\*\node.exe" }) }
           function Install-Setup([string]$Exe, [string]$Name) {
             $began = Get-Date
             $setup = Start-Process -FilePath $Exe -ArgumentList '/S' -PassThru
@@ -272,21 +410,16 @@ jobs:
             if ((Get-Daemon).Count -lt 1 -or (Get-Item $file -ErrorAction SilentlyContinue).LastWriteTime -le $began) { throw "the $Name daemon did not start in 90 s" }
             Write-Output "$Name daemon up"
           }
-          $tree = Join-Path $app 'resources\daemon\node_modules'
-          Install-Setup $oldExe 'v0.1.3'
-          $oldCount = @(Get-ChildItem $tree -Recurse -File -Force).Count
-          Write-Output ('v0.1.3 daemon node_modules: {0:n0} files' -f $oldCount)
-          if ($oldCount -lt 20000) { throw 'v0.1.3 did not install its node_modules tree, so this proves nothing' }
+          Install-Setup $oldExe $tag
           Install-Setup (Get-ChildItem dist/windows/*.exe | Select-Object -First 1).FullName 'this build'
           $installed = @(Get-ChildItem $app -Recurse -File -Force)
-          $daemonCount = @(Get-ChildItem $tree -Recurse -File -Force).Count
-          Write-Output ('B10 update over v0.1.3: {0:n0} files installed, {1} of them in the daemon node_modules' -f $installed.Count, $daemonCount)
+          Write-Output ('B10 update over {0}: {1:n0} files installed' -f $tag, $installed.Count)
           if ($installed.Count -ge 2000) { throw ('the update left ' + $installed.Count + ' files; B10 keeps it under 2,000') }
-          # astro and hono came only from 0.1.3's hoisted install; the bundle inlines hono and never ships astro.
-          foreach ($p in 'astro', 'hono', '@codingame') { if (Test-Path -LiteralPath (Join-Path $tree $p)) { throw "v0.1.3's node_modules\$p is still there" } }
           if (-not (Test-Path -LiteralPath (Join-Path $app 'resources\daemon\apps\server\main.mjs'))) { throw 'the update left out main.mjs' }
           if ((Get-Daemon).Count -ne 1) { throw ('daemons after the update: ' + (Get-Daemon).Count) }
-          Write-Output 'update over v0.1.3: old tree gone, one daemon up'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if (@(Get-Daemon | Where-Object { $_.ExecutablePath -like "$env:LOCALAPPDATA\P9\daemon\$version\node.exe" }).Count -ne 1) { throw ('after the update the daemon is not daemon\' + $version + '\node.exe') }
+          Write-Output "update over ${tag}: one daemon up"
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName
           $un = Start-Process -FilePath $uninstaller -ArgumentList '/S', ('_?=' + $app) -PassThru
           if (-not $un.WaitForExit(600000)) { throw 'the uninstaller did not finish in 10 min' }
@@ -298,7 +431,7 @@ jobs:
       # again, then runs teh doctor. p9user's files are owner-only, so every check runs as p9user, through a Scheduled Task
       # with its password (a batch logon); the scripts and their output go through C:\p9ci, which p9user may write.
       - name: Install twice as a standard user
-        if: inputs.tag == ''
+        if: env.TAG == '' && inputs.only != 'rollback'
         shell: pwsh
         timeout-minutes: 40
         run: |
@@ -410,3 +543,376 @@ jobs:
           if (-not ($bundle.logs | Where-Object event -eq 'P9_READY')) { throw 'teh doctor: no P9_READY from daemon.log' }
           if ($bundle.unit.SubState -ne 'conhost') { throw 'teh doctor: the task is not this version''s' }
           Write-Output 'standard user: installed over v0.1.1''s task, installed again, daemon answered teh doctor with P9_READY in daemon.log'
+      # AU1 + AU4 end to end, x64 only (the same code on arm64): this build (N) installed, its feed pointed at a local
+      # server holding a build one patch version newer (N+1), then the app started. It downloads N+1 on its own, installs it
+      # when the window closes, and N+1's daemon runs from daemon\N+1 with daemon\N kept. A generic feed stands in for
+      # GitHub's: the real feed can only be checked once two public releases that are not pre-releases exist. Last in the
+      # job: the N+1 build replaces the files in dist/windows.
+      - name: Update itself from a local feed
+        if: env.TAG == '' && matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 50
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
+          $p9 = Join-Path $env:LOCALAPPDATA 'P9'
+          function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like "$p9\daemon\*\node.exe" }) }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $v = [version]($version -replace '-.*$')
+          $next = '{0}.{1}.{2}' -f $v.Major, $v.Minor, ($v.Build + 1)
+          $setup = Start-Process -FilePath (Resolve-Path "dist/windows/p9-event-horizon-$version-windows-x64.exe") -ArgumentList '/S' -PassThru
+          $null = $setup.Handle
+          if (-not $setup.WaitForExit(900000) -or $setup.ExitCode -ne 0) { throw "the $version installer failed: $($setup.ExitCode)" }
+          npm pkg set "version=$next"
+          if ($LASTEXITCODE -ne 0) { throw 'npm pkg set failed' }
+          pnpm package:win
+          if ($LASTEXITCODE -ne 0) { throw "the $next build failed" }
+          $feed = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'p9-feed')).FullName
+          Copy-Item "dist/windows/p9-event-horizon-$next-windows-x64.exe", "dist/windows/p9-event-horizon-$next-windows-x64.exe.blockmap", 'dist/windows/latest.yml' $feed
+          Get-Content (Join-Path $feed 'latest.yml')
+          $yml = Join-Path $app 'resources\app-update.yml'
+          @(Get-Content $yml | Where-Object { $_ -notmatch '^(provider|owner|repo|url):' }) + 'provider: generic' + 'url: http://127.0.0.1:8123/' | Set-Content $yml
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8123', '--bind', '127.0.0.1', '--directory', $feed -PassThru
+          try {
+            $began = Get-Date
+            Start-Process (Join-Path $app 'P9 Event Horizon.exe')
+            $end = $began.AddMinutes(10)
+            do { Start-Sleep 5; $log = Get-ChildItem $env:APPDATA -Directory | ForEach-Object { Get-Item (Join-Path $_.FullName 'p9-update.log') -ErrorAction SilentlyContinue } | Select-Object -First 1 }
+            while ((Get-Date) -lt $end -and -not ($log -and (Select-String -LiteralPath $log.FullName "state ready $next" -SimpleMatch -Quiet)))
+            if ($log) { Get-Content $log.FullName | ForEach-Object { 'p9-update.log: ' + $_ } }
+            if (-not ($log -and (Select-String -LiteralPath $log.FullName "state ready $next" -SimpleMatch -Quiet))) { throw "the app did not download $next in 10 min" }
+            # Closing the window quits the app, and electron-updater runs the downloaded installer silently on the way out.
+            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
+            $end = (Get-Date).AddMinutes(15)
+            $installed = Join-Path $app 'resources\daemon\package.json'
+            # The installer rewrites these files while this polls: a missing or half-written one reads as not yet.
+            function Test-Updated {
+              try {
+                (Get-Content $installed -Raw | ConvertFrom-Json).version -eq $next -and
+                  "$(Get-Content (Join-Path $p9 'daemon\current') -Raw)".Trim() -eq $next -and
+                  @(Get-Daemon | Where-Object { $_.ExecutablePath -like "$p9\daemon\$next\node.exe" }).Count -eq 1
+              } catch { $false }
+            }
+            while ((Get-Date) -lt $end -and -not (Test-Updated)) { Start-Sleep 5 }
+          } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
+          Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object { 'hook: ' + $_ }
+          $now = (Get-Content $installed -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).version
+          if ($now -ne $next) { throw "after closing the app the installed version is $now, not $next" }
+          if ((Get-Content (Join-Path $p9 'daemon\current') -Raw).Trim() -ne $next) { throw "daemon\current is not $next" }
+          if (@(Get-Daemon).Count -ne 1 -or @(Get-Daemon | Where-Object { $_.ExecutablePath -like "$p9\daemon\$next\node.exe" }).Count -ne 1) { throw "the daemon is not one daemon\$next\node.exe" }
+          if (-not (Test-Path (Join-Path $p9 "daemon\$version\.complete"))) { throw "the update did not keep daemon\$version" }
+          Write-Output "installed $version updated itself to $next from the feed; daemon runs from daemon\$next, daemon\$version kept"
+      # AU5 (threat model row 40): the installed version (the step above's) starts healthy and updates itself to a build
+      # whose window is never ready to show. That one fails 2 starts, goes back on its own (its kept installer, run by the
+      # launcher), and the restored version shows the notice. Its screenshot goes to the rollback-evidence artifact.
+      - name: Roll back an update that does not start
+        if: env.TAG == '' && matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 60
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
+          $p9 = Join-Path $env:LOCALAPPDATA 'P9'
+          $exe = Join-Path $app 'P9 Event Horizon.exe'
+          $installed = Join-Path $app 'resources\daemon\package.json'
+          $good = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $v = [version]($good -replace '-.*$')
+          $bad = '{0}.{1}.{2}' -f $v.Major, $v.Minor, ($v.Build + 1)
+          $evidence = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'rollback-evidence')).FullName
+          $main = 'apps/desktop/main.mjs'
+          $source = Get-Content $main -Raw
+          if ([regex]::Matches($source, 'ready-to-show').Count -ne 1) { throw "$main names ready-to-show other than once: the broken build would not be the one meant" }
+          Set-Content $main ($source -replace 'ready-to-show', 'p9-never-ready') -NoNewline
+          npm pkg set "version=$bad"
+          if ($LASTEXITCODE -ne 0) { throw 'npm pkg set failed' }
+          pnpm package:win
+          if ($LASTEXITCODE -ne 0) { throw "the $bad build failed" }
+          $feed = Join-Path $env:RUNNER_TEMP 'p9-feed'
+          Get-ChildItem $feed | Remove-Item -Force
+          Copy-Item "dist/windows/p9-event-horizon-$bad-windows-x64.exe", "dist/windows/p9-event-horizon-$bad-windows-x64.exe.blockmap", 'dist/windows/latest.yml' $feed
+          # The update to the step above's version rewrote app-update.yml.
+          $yml = Join-Path $app 'resources\app-update.yml'
+          @(Get-Content $yml | Where-Object { $_ -notmatch '^(provider|owner|repo|url):' }) + 'provider: generic' + 'url: http://127.0.0.1:8123/' | Set-Content $yml
+          function Wait-For([string]$What, [int]$Minutes, [scriptblock]$Done) {
+            $end = (Get-Date).AddMinutes($Minutes)
+            while ((Get-Date) -lt $end) { try { if (& $Done) { return } } catch {}; Start-Sleep 5 }
+            throw "$What, not in $Minutes min"
+          }
+          # The app's profile folder, the one with p9-update.log in it.
+          function UserData { Get-ChildItem $env:APPDATA -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'p9-update.log') } | Select-Object -First 1 -ExpandProperty FullName }
+          function Log-Has([string]$Text) { $dir = UserData; $dir -and (Select-String -LiteralPath (Join-Path $dir 'p9-update.log') $Text -SimpleMatch -Quiet) }
+          function State { Get-Content (Join-Path (UserData) 'update-state.json') -Raw | ConvertFrom-Json }
+          function Show-Logs {
+            $dir = UserData
+            if ($dir) { Get-Content (Join-Path $dir 'p9-update.log') | Select-Object -Last 30 | ForEach-Object { 'p9-update.log: ' + $_ }
+              Get-Content (Join-Path $dir 'update-state.json') -ErrorAction SilentlyContinue | ForEach-Object { 'update-state.json: ' + $_ } }
+            Get-Content (Join-Path $p9 'rollback.log') -ErrorAction SilentlyContinue | ForEach-Object { 'rollback.log: ' + $_ }
+            # The launcher's own output: what PowerShell said if it stopped before its first rollback.log line.
+            Get-Content (Join-Path $p9 'rollback-launch.log') -ErrorAction SilentlyContinue | ForEach-Object { 'rollback-launch.log: ' + $_ }
+            Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object CommandLine -like '*p9-launch.ps1*-Rollback*' | ForEach-Object { 'launcher still running: ' + $_.ProcessId }
+            Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object { 'hook: ' + $_ }
+          }
+          function Save-Evidence {
+            $dir = UserData
+            $files = @('rollback.json', 'rollback.log', 'rollback-launch.log' | ForEach-Object { Join-Path $p9 $_ })
+            if ($dir) { $files += 'p9-update.log', 'update-state.json' | ForEach-Object { Join-Path $dir $_ } }
+            $files | Where-Object { Test-Path $_ } | Copy-Item -Destination $evidence
+          }
+          # Bisecting a launcher that wrote nothing (run 40167272465: started, pid 5168, then no output and no
+          # rollback.log). Windows' process creation and exit events, with command lines and exit codes, say what became
+          # of it; the probes replay main's exact command outside the app.
+          auditpol /set /subcategory:"Process Creation" /success:enable | Out-Null
+          auditpol /set /subcategory:"Process Termination" /success:enable | Out-Null
+          $audit = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
+          if (-not (Test-Path $audit)) { New-Item $audit | Out-Null }
+          New-ItemProperty -Force -Path $audit -Name ProcessCreationIncludeCmdLine_Enabled -Value 1 -PropertyType DWord | Out-Null
+          $since = Get-Date
+          function Show-Launch {
+            Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | ForEach-Object { 'powershell.exe ' + $_.ProcessId + ' (parent ' + $_.ParentProcessId + '): ' + $_.CommandLine }
+            $launcher = Join-Path $p9 'launcher\p9-launch.ps1'
+            'launcher exists: ' + (Test-Path $launcher)
+            Get-Content $launcher -TotalCount 12 -ErrorAction SilentlyContinue | ForEach-Object { 'launcher: ' + $_ }
+          }
+          function Show-Events {
+            Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688, 4689; StartTime = $since } -ErrorAction SilentlyContinue |
+              Where-Object { $_.Message -match 'powershell\.exe' } | Sort-Object TimeCreated | ForEach-Object {
+                'event ' + $_.Id + ' ' + $_.TimeCreated.ToString('o') + ': ' + ((($_.Message -split '\r?\n') | Where-Object { $_ -match 'Process ID|Process Name|Exit Status|Command Line' } | ForEach-Object { $_.Trim() }) -join '; ') }
+          }
+          # main's logged command with -AppPid 0, which the launcher refuses after its first checks with one rollback.log
+          # line, so a probe never rolls back. A: node, attached, output piped, powershell.exe without conhost (the control:
+          # run 40170347685 ran it). B: node, detached, output to a file, exiting at once as main does. C: B in the installed
+          # app's own binary as node (ELECTRON_RUN_AS_NODE). B and C run the logged launcher command detached (now plain
+          # powershell.exe, as in run 40170347685; with conhost --headless in front, run 40172084661, its powershell.exe
+          # exited 0xC000013A in 40 ms). main now runs hop-nowindow. held: B with stdin a pipe node keeps open 15 s (does
+          # headless conhost close at stdin's EOF?). The candidates, each from the installed app's binary, which exits once
+          # its child does: a hop powershell.exe, not detached (so in libuv's job, which allows silent breakaway, and with
+          # no fd in its stdio, so CREATE_NO_WINDOW), starts the launcher and exits. hop-nowindow: Process.Start with
+          # CreateNoWindow. hop-hidden: Start-Process -WindowStyle Hidden. hop-conhost: Start-Process conhost --headless (no
+          # std handles, as Task Scheduler starts it). task: a one-shot task like P9 Foundation's, conhost --headless.
+          function Probe {
+            $line = Get-Content (Join-Path (UserData) 'p9-update.log') | Where-Object { $_ -like '* rollback launcher command: *' } | Select-Object -Last 1
+            if (-not $line) { 'probe: no launcher command in p9-update.log'; return }
+            $cmd = @(($line -replace '^.*? rollback launcher command: ', '') | ConvertFrom-Json)
+            $cmd[-1] = '0'
+            $env:P9_PROBE = ConvertTo-Json -Compress $cmd
+            'probe command: ' + $env:P9_PROBE
+            $script = Join-Path $env:RUNNER_TEMP 'probe.cjs'
+            Set-Content $script @'
+          const { spawn, spawnSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const [file, ...args] = JSON.parse(process.env.P9_PROBE);
+          // The command without conhost --headless: powershell.exe and its arguments.
+          const plain = /conhost\.exe$/i.test(file) ? args.slice(1) : [file, ...args];
+          if (process.argv[2] === 'attached') {
+            const run = spawnSync(plain[0], plain.slice(1), { encoding: 'utf8', timeout: 120000, windowsHide: true });
+            console.log('exit ' + run.status + ', signal ' + run.signal + (run.error ? ', error ' + run.error.message : ''));
+            console.log(run.stdout + run.stderr);
+          } else if (process.argv[2] === 'B' || process.argv[2] === 'C' || process.argv[2] === 'held') {
+            const out = fs.openSync(process.argv[3], 'a');
+            const held = process.argv[2] === 'held';
+            const child = spawn(file, args, { detached: true, stdio: [held ? 'pipe' : 'ignore', out, out], windowsHide: true });
+            child.on('spawn', () => { console.log('detached pid ' + child.pid); child.unref(); setTimeout(() => process.exit(0), held ? 15000 : 0); });
+            child.on('error', (error) => { console.log('error ' + error.message); process.exit(1); });
+          } else {
+            const q = (arg) => /[\s"]/.test(arg) ? '"' + arg.replace(/"/g, '\\"') + '"' : arg;
+            const conhost = /conhost\.exe$/i.test(file) ? file : require('node:path').join(process.env.SystemRoot, 'System32', 'conhost.exe');
+            const hops = {
+              'hop-nowindow': "$p = New-Object Diagnostics.ProcessStartInfo $env:P9_FILE, $env:P9_ARGS; $p.UseShellExecute = $false; $p.CreateNoWindow = $true; 'launcher pid ' + [Diagnostics.Process]::Start($p).Id",
+              'hop-hidden': "'launcher pid ' + (Start-Process -FilePath $env:P9_FILE -ArgumentList $env:P9_ARGS -WindowStyle Hidden -PassThru).Id",
+              'hop-conhost': "'conhost pid ' + (Start-Process -FilePath $env:P9_CONHOST -ArgumentList ('--headless ' + $env:P9_LINE) -PassThru).Id",
+              task: "$action = New-ScheduledTaskAction -Execute $env:P9_CONHOST -Argument ('--headless ' + $env:P9_LINE); " +
+                "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited; " +
+                "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; " +
+                "Register-ScheduledTask -TaskName 'P9 Rollback probe' -Action $action -Principal $principal -Settings $settings -Force | Out-Null; " +
+                "Start-ScheduledTask -TaskName 'P9 Rollback probe'; 'task started'",
+            };
+            const { ELECTRON_RUN_AS_NODE, ...env } = process.env;
+            Object.assign(env, { P9_FILE: plain[0], P9_ARGS: plain.slice(1).map(q).join(' '), P9_LINE: plain.map(q).join(' '), P9_CONHOST: conhost });
+            const hop = spawn(plain[0], ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand',
+              Buffer.from(hops[process.argv[2]], 'utf16le').toString('base64')], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+            hop.stdout.on('data', (data) => fs.appendFileSync(process.argv[3], data));
+            hop.stderr.on('data', (data) => fs.appendFileSync(process.argv[3], data));
+            hop.on('exit', (code) => { console.log('hop exit ' + code); process.exit(0); });
+            hop.on('error', (error) => { console.log('error ' + error.message); process.exit(1); });
+            setTimeout(() => { console.log('hop still running at 60 s'); process.exit(1); }, 60000);
+          }
+          '@
+            $log = Join-Path $p9 'rollback.log'
+            foreach ($probe in 'A', 'B', 'C', 'held', 'hop-nowindow', 'hop-hidden', 'hop-conhost', 'task') {
+              $out = Join-Path $evidence "probe-$probe.out"
+              if ($probe -eq 'A') { node $script attached 2>&1 | ForEach-Object { "probe A: $_" } }
+              else {
+                if ($probe -in 'B', 'held') { node $script $probe $out 2>&1 | ForEach-Object { "probe ${probe}: $_" } }
+                else { $env:ELECTRON_RUN_AS_NODE = '1'; & $exe $script $probe $out 2>&1 | ForEach-Object { "probe ${probe}: $_" }; Remove-Item Env:ELECTRON_RUN_AS_NODE }
+                Start-Sleep 20
+              }
+              if ($probe -eq 'task') {
+                Get-ScheduledTaskInfo -TaskName 'P9 Rollback probe' -ErrorAction SilentlyContinue | ForEach-Object { 'probe task: last result ' + $_.LastTaskResult }
+                Unregister-ScheduledTask -TaskName 'P9 Rollback probe' -Confirm:$false -ErrorAction SilentlyContinue
+              }
+              Get-Content $out -ErrorAction SilentlyContinue | ForEach-Object { "probe $probe output: $_" }
+              if (Test-Path $log) { Get-Content $log | ForEach-Object { "probe $probe rollback.log: $_" }; Move-Item $log (Join-Path $evidence "probe-$probe-rollback.log") -Force }
+              else { "probe ${probe}: no rollback.log" }
+            }
+          }
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8123', '--bind', '127.0.0.1', '--directory', $feed -PassThru
+          try {
+            Start-Process $exe
+            Wait-For "$good did not start healthy" 5 { Log-Has "healthy start $good" }
+            Wait-For "$good did not download $bad" 10 { Log-Has "state ready $bad" }
+            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
+            Wait-For "$bad was not installed on quit" 15 { (Get-Content $installed -Raw | ConvertFrom-Json).version -eq $bad -and "$(Get-Content (Join-Path $p9 'daemon\current') -Raw)".Trim() -eq $bad }
+            Wait-For "the $bad installer did not finish" 5 { -not (Get-Process | Where-Object { $_.Path -like '*p9-event-horizon*' }) }
+          } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
+          try {
+            # Closing the window before the start is healthy is the user's choice, not a failed start.
+            Start-Process $exe
+            Wait-For "$bad's window did not open" 2 { Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 }
+            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
+            Wait-For "closing $bad's window was counted" 2 { Log-Has "quit before a healthy start of ${bad}: not counted" }
+            Wait-For "$bad did not quit" 2 { -not (Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue) }
+            if ((State).failed.$bad) { throw "update-state.json counts the closed window as a failed start of $bad" }
+            # A failed start (180 s with no window ready), and a second one: the second goes back by itself.
+            Start-Process $exe
+            Wait-For "$bad's first failed start was not counted" 6 { Log-Has "start of $bad not healthy in 180 s (1 of 2)" }
+            Stop-Process -Name 'P9 Event Horizon' -Force -ErrorAction SilentlyContinue
+            Start-Sleep 5
+            Start-Process $exe
+            Wait-For "$bad did not go back to $good" 6 { Log-Has "rollback: $bad failed 2 starts, going back to $good" }
+            Show-Launch
+            # The launcher's first act is a rollback.log line (its trap writes one too): none in 3 min means it never ran.
+            Wait-For "the launcher wrote no rollback.log" 3 { Test-Path (Join-Path $p9 'rollback.log') }
+            Wait-For "the launcher did not put $good back" 15 { Test-Path (Join-Path $p9 'rollback.json') }
+            Wait-For "$good did not show the notice" 5 { Log-Has 'rollback notice shown' }
+          } catch {
+            $failed = $_
+            Show-Logs
+            if (-not (Test-Path (Join-Path $p9 'rollback.log'))) { try { Probe } catch { "probe failed: $_" } }
+            Show-Events
+            Save-Evidence
+            throw $failed
+          }
+          Start-Sleep 5
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $shot.Save((Join-Path $evidence 'rollback-notice.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+          } catch { Write-Output "no screenshot: $_" }
+          Show-Logs
+          Save-Evidence
+          $record = Get-Content (Join-Path $p9 'rollback.json') -Raw | ConvertFrom-Json
+          if ($record.from -ne $bad -or $record.to -ne $good -or $record.installer -ne 'kept') { throw "rollback.json is not $bad to $good with the kept installer" }
+          if (-not $record.shown) { throw 'rollback.json does not say the notice was shown' }
+          if ((Get-Content $installed -Raw | ConvertFrom-Json).version -ne $good) { throw "the installed version is not $good again" }
+          if ((Get-Content (Join-Path $p9 'daemon\current') -Raw).Trim() -ne $good) { throw "daemon\current is not $good again" }
+          if ((State).skip -ne $bad) { throw "update-state.json does not skip $bad" }
+          if (-not (Test-Path (Join-Path $p9 "installers\$good.exe"))) { throw "the $good installer is not kept" }
+          Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Output "$good updated itself to $bad, which failed 2 starts and went back to $good on its own; the notice showed"
+      - uses: actions/upload-artifact@v4
+        if: always() && env.TAG == '' && matrix.arch == 'x64'
+        with:
+          name: rollback-evidence
+          path: ${{ runner.temp }}/rollback-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # AU2: the Linux AppImage, x64 only (no arm64 Linux build yet). Its daemon cannot run from the AppImage's mount, which
+  # goes away when the app quits: AU4 copies it to ~/.local/share/p9/daemon first.
+  appimage:
+    if: inputs.only != 'rollback'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-appimage
+      cancel-in-progress: false
+    timeout-minutes: 45
+    env:
+      TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - name: The release exists
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --json tagName > /dev/null || { echo "::error::Create the GitHub release for $TAG first (a draft is fine), then run this again"; exit 1; }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.10.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Candidate version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          test -z "$TAG" || { echo "::error::A candidate attaches nothing to a release: leave the tag empty"; exit 1; }
+          version=$(node scripts/candidate-version.mjs "$VERSION")
+          npm pkg set "version=$version"
+      - run: pnpm package:linux
+      # What the AppImage holds, unpacked without FUSE: the feed, the daemon's own Linux node, the bundled daemon.
+      - name: Check the AppImage
+        run: |
+          cat dist/linux/SHA256SUMS-linux-x64
+          image=$(realpath dist/linux/*.AppImage)
+          ls -l "$image"
+          ls -l dist/linux/*-unpacked/resources/app.asar
+          chmod +x "$image"
+          (cd "$RUNNER_TEMP" && "$image" --appimage-extract > /dev/null)
+          root="$RUNNER_TEMP/squashfs-root/resources"
+          cat "$root/app-update.yml"
+          grep -q 'provider: github' "$root/app-update.yml"
+          file "$root/daemon/node" | tee /dev/stderr | grep -q 'x86-64, .*, stripped'
+          test "$("$root/daemon/node" --version)" = v26.10.0
+          test -f "$root/daemon/apps/server/main.mjs"
+          test ! -e "$root/daemon/node.exe"
+      - name: Attach to the release
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/linux/*.AppImage dist/linux/SHA256SUMS-linux-x64 --clobber
+      - uses: actions/upload-artifact@v4
+        if: env.TAG != ''
+        with:
+          name: feed-linux-x64
+          path: dist/linux/latest-linux.yml
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: env.TAG == ''
+        with:
+          name: linux-appimage-x64
+          path: |
+            dist/linux/*.AppImage
+            dist/linux/SHA256SUMS-linux-x64
+          retention-days: 14
+
+  # AU3: the update feeds, attached last and only when every installer is on the release (a failed job skips this one).
+  feed:
+    needs: [installer, appimage]
+    if: inputs.tag != '' || github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.10.0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: feed-*
+          path: feed
+      - name: Attach the update feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p out
+          node scripts/merge-latest.mjs out/latest.yml feed/feed-windows-x64/latest.yml feed/feed-windows-arm64/latest.yml
+          cp feed/feed-linux-x64/latest-linux.yml out/
+          cat out/latest.yml out/latest-linux.yml
+          gh release upload "$TAG" out/latest.yml out/latest-linux.yml --clobber

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,7 +19,16 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
   // 0.1.3 shipped 26,028 files in daemon/node_modules; codex's binary package alone is about 46 of these.
   assert.ok(files.length < 100, files.length + ' files in the bundled daemon');
 
-  await daemon(t, path.join(out, 'apps', 'server', 'main.mjs'));
+  const instance = await daemon(t, path.join(out, 'apps', 'server', 'main.mjs'));
+  assert.ok(files.some((entry) => entry.name === 'mcp-relay.mjs'), 'the MCP relay is beside main.mjs');
+  // The installed daemon folder also holds package.json, scripts/teh.mjs (package-windows.mjs, package-linux.mjs) and
+  // packages/ (package.json extraResources); teh doctor run from there must load and reach the bundled daemon.
+  await cp(path.join(root, 'package.json'), path.join(out, 'package.json'));
+  await cp(path.join(root, 'scripts', 'teh.mjs'), path.join(out, 'scripts', 'teh.mjs'));
+  await cp(path.join(root, 'packages'), path.join(out, 'packages'), { recursive: true });
+  const doctor = spawnSync(process.execPath, [path.join(out, 'scripts', 'teh.mjs'), 'doctor', '--state', instance.state], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(doctor.status, 0, 'teh doctor from the daemon folder: ' + doctor.stderr.slice(-1000));
+  assert.equal(JSON.parse(doctor.stdout).daemon.status, 'ok');
   for (const name of ['hono', 'ws', '@simplewebauthn/server', '@agentclientprotocol/sdk', 'zod']) assert.match(notices, new RegExp('\n## ' + name + '@'), name + ' notice');
   for (const section of notices.split('\n## ').slice(1)) assert.match(section, /\n### /, section.split('\n')[0] + ' has no licence text');
 

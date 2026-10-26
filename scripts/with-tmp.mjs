@@ -15,4 +15,5 @@ process.on('SIGINT', () => {}); // Ctrl+C stops the child; we stay to clean up.
 const [command, ...args] = process.argv.slice(2);
 const result = spawnSync(command, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir, P9_LANDING: process.env.P9_LANDING ?? 'off' } });
 rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+if (result.status === null) console.error(`with-tmp: ${command} ended by ${result.signal ?? result.error?.message}, no exit code`);
 process.exit(result.status ?? 1);

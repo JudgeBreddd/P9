@@ -3,7 +3,7 @@
 // the new settings without a daemon restart.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,18 +40,23 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   assert.deepEqual([s.settings, s.settingsPresent, s.settingsInvalid, s.settingsError, s.writable, s.workspaceEmpty, s.agentsFile, s.registryFile],
     [false, false, false, null, true, false, true, false]);
   assert.equal(s.tmux === null, process.platform !== 'linux');
+  // A folder with things in it: what is there is found, and the plan lists only what is missing (no _ideas/).
+  assert.deepEqual([s.found, s.proposed, s.creates], [{ primary: 'AGENTS.md' }, STARTER, ['mission/registry.json', 'needs-you/AGENTS.md']]);
   assert.equal((await call(instance, '/mission')).body.error, 'settings-missing');
 
-  // Exactly {} as JSON, nothing else.
-  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain']]) assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
+  // {} or the wizard's four keys as JSON, nothing else; paths are checked as settings.json's are.
+  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: 'relative' }], [{ ...STARTER, waiting: '../out' }], [{ primary: 'A.md' }]])
+    assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
+  // The fixed starter paths never land in a folder with things in it unshown: {} there needs the paths.
+  assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', {})), [409, { error: 'paths-required' }]);
   await assert.rejects(stat(file));
 
-  const made = await call(instance, '/setup/starter', 'POST', {});
+  const made = await call(instance, '/setup/starter', 'POST', s.proposed);
   assert.equal(made.status, 201, JSON.stringify(made.body));
-  assert.deepEqual(made.body.created, ['mission/registry.json', 'needs-you/AGENTS.md', '_ideas/', file]);
+  assert.deepEqual(made.body.created, ['mission/registry.json', 'needs-you/AGENTS.md', file]);
   assert.equal(await readFile(path.join(instance.workspace, 'AGENTS.md'), 'utf8'), 'mine');
   assert.deepEqual(JSON.parse(await readFile(path.join(instance.workspace, 'mission/registry.json'), 'utf8')), { scripts: [], apps: [], pages: [] });
-  assert.deepEqual(await readdir(path.join(instance.workspace, '_ideas')), []);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', 'mission', 'needs-you', 'note.txt']);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), STARTER);
   if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
 
@@ -68,6 +73,9 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   const again = await call(instance, '/setup/starter', 'POST', {});
   assert.deepEqual([again.status, again.body.created], [201, []]);
   assert.equal(await readFile(path.join(instance.workspace, 'needs-you/AGENTS.md'), 'utf8'), 'edited');
+  // Paths while settings exist are refused: the settings file is never replaced from here.
+  assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', { ...STARTER, registry: 'other.json' })), [409, { error: 'settings-exist' }]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), STARTER);
   console.log('PASS starter: create-only, settings 0600, Mission live without a restart, registry read-only, second run makes nothing');
 });
 
@@ -91,9 +99,219 @@ test('Setup wizard: an invalid settings file is shown, never overwritten; a vali
   // Fixed by hand (or by an agent): the starter follows its paths and loads it, no restart.
   await writeFile(file, JSON.stringify({ primary: 'docs/ME.md', registry: 'r.json', waiting: 'inbox' }));
   const made = await call(instance, '/setup/starter', 'POST', {});
-  assert.deepEqual([made.status, made.body.created], [201, ['docs/ME.md', 'r.json', 'inbox/AGENTS.md', '_ideas/']]);
+  assert.deepEqual([made.status, made.body.created], [201, ['docs/ME.md', 'r.json', 'inbox/AGENTS.md']]);
   assert.equal((await call(instance, '/mission')).status, 200);
   console.log('PASS starter: invalid settings refused with the parse error and left byte-identical; a fixed file loads live');
+});
+
+test('Setup wizard: an empty workspace gets the whole starter set, _ideas/ included', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => { await rm(path.join(workspace, 'note.txt')); return {}; });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.workspaceEmpty, s.found, s.proposed, s.creates], [true, {}, STARTER, ['AGENTS.md', 'mission/registry.json', 'needs-you/AGENTS.md', '_ideas/']]);
+  const made = await call(instance, '/setup/starter', 'POST', {});
+  assert.deepEqual([made.status, made.body.created], [201, ['AGENTS.md', 'mission/registry.json', 'needs-you/AGENTS.md', '_ideas/', settingsPath(instance.directory)]]);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', '_ideas', 'mission', 'needs-you']);
+  console.log('PASS starter: an empty folder gets AGENTS.md, the registry, needs-you/, _ideas/ and the settings file');
+});
+test('Setup wizard: a path naming a file where a folder goes is a 409 path-is-a-file, and nothing is made (BL1)', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const made = await call(instance, '/setup/starter', 'POST', { ...STARTER, waiting: 'note.txt' });
+  assert.deepEqual([made.status, made.body], [409, { error: 'path-is-a-file', detail: 'note.txt' }]);
+  assert.deepEqual(await readdir(instance.workspace), ['note.txt']);
+  await assert.rejects(stat(settingsPath(instance.directory)));
+  console.log('PASS starter: waiting naming a file is path-is-a-file before anything is made');
+});
+test('Setup settings (ST1): only settings.json keys, checked as the file is; the old file kept as .bak; Mission reads the change live', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const file = settingsPath(instance.directory);
+  assert.deepEqual(Object.values(await call(instance, '/setup/settings')), [200, { settings: null, error: null }]);
+  assert.deepEqual(Object.values(await call(instance, '/setup/settings', 'POST', { server_host: 'box' })), [409, { error: 'settings-missing' }]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', STARTER)).status, 201);
+  const old = await readFile(file, 'utf8');
+  assert.deepEqual((await call(instance, '/setup/settings')).body, { settings: STARTER, error: null });
+  // Refused: no key, an unknown key, not an object, and anything parseSettings refuses (a required key removed too). The file stays.
+  for (const [body, type] of [[{}], [{ x: 1 }], [[]], ['null'], [{ server_host: 'box' }, 'text/plain']])
+    assert.deepEqual(Object.values(await call(instance, '/setup/settings', 'POST', body, type)), [400, { error: 'request-refused' }], JSON.stringify(body));
+  for (const [body, word] of [[{ server_host: 'bad host!' }, 'server_host'], [{ waiting: '../out' }, 'waiting'], [{ primary: null }, 'primary is required'],
+    [{ scripts_root: 'relative' }, 'scripts_root'], [{ page_schemes: ['javascript:'] }, 'page_schemes'], [{ notes_roots: { vault: 'rel' } }, 'notes_roots']]) {
+    const r = await call(instance, '/setup/settings', 'POST', body);
+    assert.deepEqual([r.status, r.body.error], [400, 'settings-refused'], JSON.stringify(body));
+    assert.match(r.body.detail, new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.equal(await readFile(file, 'utf8'), old);
+  await assert.rejects(stat(file + '.bak'));
+  // Accepted: merged into the file, the old text kept as .bak, and Mission's waiting folder follows at once.
+  await mkdir(path.join(instance.workspace, 'inbox'));
+  const saved = await call(instance, '/setup/settings', 'POST', { server_host: 'box-1', page_schemes: ['obsidian'], waiting: 'inbox' });
+  const want = { ...STARTER, waiting: 'inbox', server_host: 'box-1', page_schemes: ['obsidian'] };
+  assert.deepEqual([saved.status, saved.body], [200, { settings: want }]);
+  assert.deepEqual([JSON.parse(await readFile(file, 'utf8')), await readFile(file + '.bak', 'utf8')], [want, old]);
+  if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.equal((await call(instance, '/mission')).body.waiting, 'inbox');
+  // null removes a key.
+  assert.deepEqual((await call(instance, '/setup/settings', 'POST', { server_host: null })).body.settings, { ...STARTER, waiting: 'inbox', page_schemes: ['obsidian'] });
+  // Three saves of different keys sent at once all land (each used to read the same old file, and the last write dropped the others).
+  const together = await Promise.all([{ server_host: 'box-2' }, { page_schemes: ['obsidian', 'notion'] }, { waiting: 'needs-you' }].map((body) => call(instance, '/setup/settings', 'POST', body)));
+  assert.deepEqual(together.map((r) => r.status), [200, 200, 200]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { ...STARTER, server_host: 'box-2', page_schemes: ['obsidian', 'notion'] });
+  // A file made invalid by hand is shown, never overwritten from here.
+  await writeFile(file, '{"primary": 1}');
+  const bad = await call(instance, '/setup/settings', 'POST', { server_host: 'box' });
+  assert.deepEqual([bad.status, bad.body.error], [409, 'settings-invalid']);
+  assert.equal(await readFile(file, 'utf8'), '{"primary": 1}');
+  assert.match((await call(instance, '/setup/settings')).body.error, /invalid-settings/);
+  console.log('PASS setup settings: keys only, parseSettings rules, .bak kept, 0600, Mission live, null removes, an invalid file is left alone');
+});
+
+test('Setup wizard: an existing workspace-hub is used as it is; only the settings file is written', { timeout: 60000 }, async (t) => {
+  const hub = 'work/projects/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), 'mine');
+    await mkdir(path.join(workspace, 'waiting'));
+    // Not walked into: a dot folder, node_modules, and links.
+    await mkdir(path.join(workspace, 'node_modules/workspace-hub'), { recursive: true });
+    await writeFile(path.join(workspace, 'node_modules/workspace-hub/registry.json'), '{}');
+    return {};
+  });
+  const before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  const found = { hub, registry: hub + '/registry.json', primary: 'AGENTS.md', waiting: 'waiting' };
+  assert.deepEqual([s.found, s.proposed, s.creates], [found, found, []]);
+  // Edited paths are planned again; a path settings.json would refuse is flagged, not planned.
+  const edited = (await call(instance, '/setup?primary=docs/ME.md&registry=' + encodeURIComponent(hub + '/registry.json') + '&waiting=inbox')).body;
+  assert.deepEqual([edited.proposed.primary, edited.creates, edited.pathsInvalid], ['docs/ME.md', ['docs/ME.md', 'inbox/AGENTS.md'], undefined]);
+  assert.equal((await call(instance, '/setup?primary=../x.md&registry=r.json&waiting=w')).body.pathsInvalid, true);
+
+  const made = await call(instance, '/setup/starter', 'POST', s.proposed);
+  assert.deepEqual([made.status, made.body.created], [201, [settingsPath(instance.directory)]]);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath(instance.directory), 'utf8')), found);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'no new file or folder in the workspace');
+  assert.equal((await call(instance, '/mission')).status, 200);
+  // Valid settings: nothing more to make.
+  assert.deepEqual((await call(instance, '/setup')).body.creates, []);
+  assert.deepEqual((await call(instance, '/setup/starter', 'POST', {})).body.created, []);
+
+  // A file the settings name goes missing: Mission names the setting and its path, nothing more.
+  await writeFile(settingsPath(instance.directory), JSON.stringify({ ...found, registry: 'gone/registry.json' }));
+  const missing = await call(instance, '/mission');
+  assert.deepEqual([missing.status, missing.body], [404, { error: 'file-not-found', setting: 'registry', file: 'gone/registry.json' }]);
+  console.log('PASS starter: a found workspace-hub, AGENTS.md and waiting/ are used; only settings.json is written; a missing file is named');
+});
+
+test('Setup wizard: an ICM-shaped workspace proposes its own primary AGENTS.md and its waiting-on folder; Create writes only the settings file', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/apps'), { recursive: true });
+    await writeFile(path.join(workspace, 'work/AGENTS.md'), '# Work\n**Main project: Apps** (`apps/`)\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Items Waiting On Me\n');
+    return {};
+  });
+  const before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  const found = { hub, registry: hub + '/registry.json', primary: 'work/AGENTS.md', waiting: 'work/_owner' };
+  assert.deepEqual([s.found, s.proposed, s.creates], [found, found, []]);
+  const made = await call(instance, '/setup/starter', 'POST', s.proposed);
+  assert.deepEqual([made.status, made.body.created], [201, [settingsPath(instance.directory)]]);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before);
+  assert.equal((await call(instance, '/mission')).status, 200);
+  console.log('PASS starter: the Main project AGENTS.md and the waiting-on folder are proposed; only settings.json is written');
+});
+
+test('Setup wizard: starter settings left from another workspace never lay a starter beside this workspace\'s own layout', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    await mkdir(path.dirname(settingsPath(directory)), { recursive: true });
+    await writeFile(settingsPath(directory), JSON.stringify(STARTER));
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
+    return {};
+  });
+  const before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.settings, s.conflict, s.creates, s.found], [true, true, [],
+    { hub, registry: hub + '/registry.json', waiting: 'work/_owner' }]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', {})).status, 409);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'nothing created');
+  console.log('PASS starter: loaded starter settings on a folder with its own layout create nothing');
+});
+
+test('Setup wizard: confirming the found paths repoints loaded settings; the old file is kept, other keys carry over, nothing else is made (threat model row 38)', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    await mkdir(path.dirname(settingsPath(directory)), { recursive: true });
+    await writeFile(settingsPath(directory), JSON.stringify({ ...STARTER, page_schemes: ['obsidian'] }));
+    await writeFile(settingsPath(directory) + '.bak', 'older backup');
+    await mkdir(path.join(workspace, hub), { recursive: true });
+    await writeFile(path.join(workspace, hub, 'registry.json'),
+      JSON.stringify({ scripts: [{ id: 'hubdoc', title: 'Hub doc', cmd: ['bash', path.basename(workspace) + '/doc.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'work/_owner'));
+    await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
+    return {};
+  });
+  const file = settingsPath(instance.directory), old = await readFile(file, 'utf8'), before = (await readdir(instance.workspace)).sort();
+  const s = (await call(instance, '/setup')).body;
+  // The workspace sits inside a bigger folder the registry's commands are written from: proposed, editable.
+  const found = { hub, registry: hub + '/registry.json', waiting: 'work/_owner', scripts_root: path.dirname(instance.workspace) };
+  assert.deepEqual([s.conflict, s.found, s.proposed, s.creates], [true, found, { ...STARTER, page_schemes: ['obsidian'], ...found }, []]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', {})).status, 409, 'no paths: still refused');
+  assert.equal((await call(instance, '/setup/starter', 'POST', { ...STARTER, scripts_root: 'relative' })).status, 400, 'validated like first run');
+  assert.equal(await readFile(file, 'utf8'), old);
+  const chosen = { primary: 'AGENTS.md', registry: found.registry, waiting: found.waiting, hub, scripts_root: found.scripts_root };
+  const made = await call(instance, '/setup/starter', 'POST', chosen);
+  assert.deepEqual([made.status, made.body.created], [201, [file]]);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { ...chosen, page_schemes: ['obsidian'] });
+  assert.equal(await readFile(file + '.bak', 'utf8'), old);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'no mission/ or needs-you/');
+  const mission = await call(instance, '/mission');
+  assert.deepEqual([mission.status, mission.body.scripts.map((x) => x.id)], [200, ['hubdoc']]);
+  assert.equal((await call(instance, '/setup/starter', 'POST', chosen)).status, 409, 'settings now fit: no second overwrite');
+  console.log('PASS starter: confirmed paths replace the settings, keep a .bak and other keys, create nothing else, and Mission lists the hub');
+});
+
+test('Setup wizard: scripts_root is proposed only when the hub registry commands start with the workspace folder name', { timeout: 60000 }, async (t) => {
+  const hub = 'work/workspace-hub';
+  for (const [commands, expected] of [['ICMX', true], ['elsewhere', false]]) {
+    const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+      await mkdir(path.join(workspace, hub), { recursive: true });
+      const start = commands === 'ICMX' ? path.basename(workspace) : 'elsewhere';
+      await writeFile(path.join(workspace, hub, 'registry.json'),
+        JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', start + '/a.sh'] }], apps: [], pages: [] }));
+      await writeFile(path.join(workspace, 'AGENTS.md'), 'mine');
+      return {};
+    });
+    const s = (await call(instance, '/setup')).body;
+    assert.equal(s.found.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
+    assert.equal(s.proposed.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
+    if (expected) {
+      const made = await call(instance, '/setup/starter', 'POST', s.proposed);
+      assert.equal(made.status, 201);
+      assert.equal(JSON.parse(await readFile(settingsPath(instance.directory), 'utf8')).scripts_root, path.dirname(instance.workspace));
+    }
+  }
+  console.log('PASS starter: scripts_root is proposed for a registry written from the workspace parent, and not otherwise');
+});
+
+test('Setup wizard: a top-level waiting-on folder is found; with no Main project line the top AGENTS.md is primary', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
+    await mkdir(path.join(workspace, 'sub'));
+    await writeFile(path.join(workspace, 'sub/AGENTS.md'), '# Sub\n');
+    await mkdir(path.join(workspace, '_owner'));
+    await writeFile(path.join(workspace, '_owner/AGENTS.md'), '# What is waiting on the owner\n');
+    return {};
+  });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.found.primary, s.found.waiting], ['AGENTS.md', '_owner']);
 });
 
 test('Setup wizard: the starter never follows a link out of the workspace (threat model row 17)', { skip: process.platform === 'win32' && 'Linux links; files-windows.test.mjs covers reparse points', timeout: 60000 }, async (t) => {
