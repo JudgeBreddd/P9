@@ -134,22 +134,28 @@ Closing the window keeps chats and terminals running. The red session button swi
 The gear opens Settings. Each row has an **i**: hover it for what the row does, click it to open its part of this guide.
 
 - **P9 docs on GitHub**, **Anymouse** and **Setup**, at the top: this guide, [Anymouse](#anymouse) and the [first-start](#first-start) window again.
-- **Zoom** makes everything in the window bigger or smaller. Ctrl = and Ctrl - do the same; Ctrl 0 resets.
+- **Zoom** makes everything in the window bigger or smaller, in every focus mode. Ctrl = and Ctrl - do the same; Ctrl 0 resets.
 - **Your name** is what the landing page greets you with.
-- **Start in my last focus mode** skips the landing page when P9 opens.
-- **Close the chat window on send** closes a chat opened from a card once your message is sent.
+- **Start in my last focus mode** opens P9 straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.
+- **Close the chat window on send** closes a chat window opened from a Chat Focus card or the Notification Center once your message is sent.
 - **Focus modes**, **Pets**, **Agent lock** and **File protection**: see [Focus modes](#focus-modes), [Pets](#pets), [Agent lock](#agent-lock) and [File protection](#file-protection).
 
 ### Mission Control files
 
 Once Mission Control's settings file is loaded, Settings shows its paths, so you can change them after setup without a text editor. Each row saves when you leave it; P9 checks it as it checks the file at start, and a value it refuses stays in the box with the reason. The old file is kept as `settings.json.bak`.
 
-- **Main AGENTS file**, **Mission Control registry**, **Waiting-on-you folder** and **workspace-hub folder**: the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
-- **Folder the registry commands run from**: a full path. Empty: the workspace.
-- **Space file**: the JSON file with your own sections, buttons and log views. Empty: no space.
-- **Server host name**: your second machine's name, for workspace-hub's view of it.
-- **Page link schemes**: extra link schemes pages may open, separated by commas (for example `obsidian`).
-- **Notes folders**: one `name = /full/path` per line. A space section shows a folder by its name. Your home folder, a folder holding the workspace and P9's recovery folder are refused.
+A path box shows the end of the path (the file name); hover it for the full path.
+
+- **Main project file** (`primary`): the file that names your main project, the bold "Main project: Name" line with its folder (for the Mission Control Main Project card and the Chat Focus Files pane's Current project).
+- **Buttons, apps and pages file** (`registry`): the JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card).
+- **Folder of items waiting on you** (`waiting`): a folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane's Needs you view).
+- **workspace-hub folder** (`hub`, optional): the folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it).
+- These four are the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
+- **Folder your buttons run in** (`scripts_root`, optional): a full path where your buttons and apps run, and the one ~/workspace stands for. Empty: the workspace.
+- **Extra sections file** (`space`, optional): the JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page). Empty: no extra sections.
+- **Server host name** (`server_host`, optional): the network name of your server, the machine your phone reaches P9 on (for the Chat Focus Phone button's link, and the Mission Control Logs and incidents card, which also reads that server's logs over ssh).
+- **Extra link types for pages** (`page_schemes`, optional): link types besides http and https that a Mission Control page may open, separated by commas (for example `obsidian`). A page link of that type asks before it opens.
+- **Notes folders** (`notes_roots`, optional): one `name = /full/path` per line (for the notes an extra Mission Control section shows, by that name). Your home folder, a folder holding the workspace and P9's recovery folder are refused.
 
 ### Updates
 
@@ -160,7 +166,7 @@ The Updates row sits in the Maintenance group. In the installed app, **Check now
 For when P9 misbehaves. Each button is also in the command palette (Ctrl K).
 
 - **Reload window** loads the window again. Chats keep running in the background service; text you have not sent is lost.
-- **Refresh Mission** reads Mission Control's settings, buttons and space again now, instead of at the next check.
-- **Restart daemon** restarts P9's background service and waits until the new one answers. Running chats, scripts and terminals stop.
-- **Repair daemon service** sets the background service up again and starts it. On Windows it runs the installer's own setup step: use it when P9 says its task is missing or out of date. On Linux it enables the `p9-foundation` unit again. Running chats, scripts and terminals stop.
+- **Refresh Mission** reads your Mission Control files again now, instead of at the next check (for every Mission Control card and button).
+- **Restart daemon** restarts P9's background service (the daemon that runs your chats, scripts and terminals) and waits until the new one answers. Running chats, scripts and terminals stop.
+- **Repair daemon service** sets P9's background service (the daemon that runs your chats, scripts and terminals) up again and starts it. On Windows it runs the installer's own setup step: use it when P9 says its task is missing or out of date. On Linux it enables the `p9-foundation` unit again. Running chats, scripts and terminals stop.
 - **Rebuild + reload** shows only when P9 runs from a source checkout. It runs `pnpm build`, then reloads the window with the new build.

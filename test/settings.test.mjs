@@ -774,7 +774,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
   // RH2: the first sentence names Mission Control; with none of the files yet, the step says what each is and opens the guide.
   assert.match(await body(), /Mission Control's buttons, apps and pages come from files in your workspace\./);
-  assert.match(await page.locator('#welBody [data-setup-help]').innerText(), /None of these is here yet[\s\S]*Main AGENTS file[\s\S]*Mission Control registry[\s\S]*Waiting-on-you folder/);
+  assert.match(await page.locator('#welBody [data-setup-help]').innerText(), /None of these is here yet[\s\S]*Main project file[\s\S]*Buttons, apps and pages file[\s\S]*Folder of items waiting on you/);
   await page.waitForTimeout(400);
   // The path rows share one label column and one box column, as in Settings: every box at the same x and width.
   const wizEdges = await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
@@ -1849,7 +1849,23 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   assert.deepEqual(JSON.parse(await readFile(file + '.bak', 'utf8')), { ...want, waiting: 'inbox' }, 'the file before the last save');
   await page.locator('#setMission').scrollIntoViewIfNeeded();
   await page.waitForTimeout(300);
+  // Plain-words tips: the owner's sentence for primary, and a long path shows its end with the whole path on hover.
+  const primaryTip = await page.locator('#setMission [data-mission="primary"] ~ .info').getAttribute('title');
+  assert.equal(primaryTip, 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)');
+  const long = 'personal-projects/workspace-hub/some/long/folder/that/shares/its/start/with/the/rest/registry.json';
+  const end = await page.locator('#setMission [data-mission="registry"]').evaluate((box, value) => {
+    box.value = value; box.dispatchEvent(new Event('blur'));
+    return [box.title, box.scrollLeft > 0, box.scrollLeft + box.clientWidth >= box.scrollWidth - 1];
+  }, long);
+  assert.deepEqual(end, [long, true, true], 'the box shows the end of the path, the hover shows all of it');
+  // A native hover tip is not in a page screenshot: draw the primary tip next to its i for the shot.
+  await page.locator('#setMission [data-mission="primary"] ~ .info').evaluate((i) => {
+    const t = document.createElement('div'); t.textContent = i.title; const r = i.getBoundingClientRect();
+    t.style.cssText = `position:fixed;z-index:99;max-width:260px;padding:6px 8px;background:#222;color:#fff;border:1px solid #888;font:12px sans-serif;left:${Math.max(8, r.left - 270)}px;top:${r.bottom + 4}px`;
+    t.dataset.tipShot = ''; i.closest('dialog, #setDlg').append(t);
+  });
   const png = await page.locator('#setDlg').screenshot({ type: 'png' });
+  await page.locator('[data-tip-shot]').evaluate((t) => t.remove());
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await writeFile(path.join(process.env.P9_EVIDENCE, 'settings-mission-files.png'), png); }
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-mission-files ' + png.toString('base64'));
   // One label column and one input column: every box starts at the same x and is as wide as the others.

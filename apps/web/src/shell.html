@@ -13,10 +13,10 @@
     <button data-slot="button" data-variant="ghost" id="histBtn" data-in="chat" aria-expanded="false">History</button>
     <div class="pop" id="histPop" hidden style="top:44px;right:140px;width:380px"></div>
     <button data-slot="button" data-variant="ghost" data-size="icon" id="setBtn" title="Settings"></button>
-    <button data-slot="button" data-variant="ghost" id="amBtn" title="Anymouse: an idea, a bug or a gripe">Anymouse</button>
-    <button data-slot="button" data-variant="ghost" data-size="icon" id="themeBtn" title="Look" aria-expanded="false"></button>
+    <button data-slot="button" data-variant="ghost" id="amBtn" title="Anymouse: a note to P9's makers (an idea, a bug or a gripe)">Anymouse</button>
+    <button data-slot="button" data-variant="ghost" data-size="icon" id="themeBtn" title="Look: the theme of this focus mode" aria-expanded="false"></button>
     <div class="pop" id="themePop" hidden style="top:44px;right:52px;width:min(620px,calc(100vw - 64px));max-height:calc(100vh - 56px)"></div>
-    <button data-slot="button" data-variant="destructive" data-size="icon" id="stopAll" title="Session controls"></button>
+    <button data-slot="button" data-variant="destructive" data-size="icon" id="stopAll" title="Session controls: stop one chat or everything P9 runs"></button>
   </header>
   <div class="body">
     <nav class="rail" aria-label="Workspace">
@@ -24,13 +24,13 @@
       <button data-slot="button" data-variant="ghost" data-size="icon" id="rDev" data-focus-btn="dev" title="Dev Focus (Ctrl 2)"></button>
       <button data-slot="button" data-variant="ghost" data-size="icon" id="rMission" data-focus-btn="mission" title="Mission Control (Ctrl 3)"></button>
       <hr>
-      <button data-slot="button" data-variant="ghost" data-size="icon" id="rSearch" title="Search files" data-in="chat"></button>
-      <button data-slot="button" data-variant="ghost" data-size="icon" id="rFiles" title="Toggle files pane" aria-pressed="false" data-in="chat"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rSearch" title="Search files (in the Chat Focus Files pane)" data-in="chat"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rFiles" title="Files pane: shows or hides the file tree beside the chat" aria-pressed="false" data-in="chat"></button>
       <button data-slot="button" data-variant="ghost" data-size="icon" id="rSplit" title="Split chats side by side" aria-pressed="false" data-in="chat"></button>
       <button data-slot="button" data-variant="ghost" data-size="icon" id="rTerm" title="Terminal (Ctrl &#96;)" aria-pressed="false"></button>
       <div class="bots" id="rBots" role="group" aria-label="Running chats"></div>
       <span class="grow"></span>
-      <button data-slot="button" data-variant="ghost" data-size="icon" id="rBell" class="bell" title="Notification Center"></button>
+      <button data-slot="button" data-variant="ghost" data-size="icon" id="rBell" class="bell" title="Notification Center: cards you set aside, older items and system notices"></button>
       <button data-slot="button" data-variant="ghost" data-size="icon" id="rCmd" title="Command palette (Ctrl K)"></button>
     </nav>
     <div class="stage">
@@ -51,7 +51,7 @@
       <div class="cards" id="cards" aria-label="Needs you and active sessions"></div>
       <section class="dock float" id="dock" aria-label="Terminal" hidden>
         <div class="grip" id="grip" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="Resize terminal (arrow keys)"></div>
-        <div class="tb"><span>Shell</span><span data-slot="badge" data-variant="ok" id="dBadge">running</span><span class="muted" id="dState"></span><span class="spacer" style="flex:1"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="dRefresh" hidden>Refresh</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="dFloat" title="Float / dock"></button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="dHide" title="Hide"></button></div>
+        <div class="tb"><span>Shell</span><span data-slot="badge" data-variant="ok" id="dBadge">running</span><span class="muted" id="dState"></span><span class="spacer" style="flex:1"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="dRefresh" hidden>Refresh</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="dFloat" title="Float the terminal as a window, or dock it back at the bottom"></button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="dHide" title="Hide the terminal (it keeps running)"></button></div>
         <pre id="term"></pre>
         <div id="termView" hidden></div>
       </section>
@@ -106,7 +106,7 @@
   <div class="dlg-foot"><button data-slot="button" data-variant="outline" id="sessionMode">Persistent: on</button><span class="muted sm">One click switches to dies-with-the-app.</span></div>
 </dialog>
 <dialog id="mdl" class="mdl" aria-labelledby="mdlT">
-  <div class="mdl-head"><button data-slot="button" data-variant="ghost" data-size="sm" id="mdlBack" hidden>&larr; Back</button><h2 id="mdlT"></h2><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" id="mdlPrimary" title="Move this into the main workspace" hidden>Make Primary</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="mdlX" title="Close (Esc). Nothing you typed is lost">&times;</button></div>
+  <div class="mdl-head"><button data-slot="button" data-variant="ghost" data-size="sm" id="mdlBack" hidden>&larr; Back</button><h2 id="mdlT"></h2><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" id="mdlPrimary" title="Move this out of the pop-up: a chat into Chat Focus, a file into Dev Focus" hidden>Make Primary</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" id="mdlX" title="Close (Esc). Nothing you typed is lost">&times;</button></div>
   <div class="mdl-body" id="mdlBody"></div>
   <div class="mdl-foot" id="mdlFoot"></div>
 </dialog>

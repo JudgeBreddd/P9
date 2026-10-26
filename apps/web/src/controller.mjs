@@ -454,10 +454,10 @@ function meters(s) {
   const bar = (label, w) => meterBar(label, w, line, now);
   const cache = cacheOf(s);
   return `<div class="meters">
-    <div class="meter" title="${esc(ctx == null ? 'No usage_update from this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
+    <div class="meter" title="${esc(ctx == null ? 'No context size reported by this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
     ${bar('5 h', lim?.fiveHour)}
     ${bar('7 d', lim?.sevenDay)}
-    <div class="cache" data-s="${cache[1]}" title="1-hour prompt cache, timed from the last turn end">${svg.clock}${cache[0]}</div>
+    <div class="cache" data-s="${cache[1]}" title="How long the agent still has this chat saved for a cheaper next message (the 1-hour prompt cache, counted from its last output)">${svg.clock}${cache[0]}</div>
   </div>`;
 }
 // CP3: a sent photo comes back from the daemon by hash, once; until then (or once pruned) its tile stays blank.
@@ -503,7 +503,7 @@ function pane(s, i, bare) {
       <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
       <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
       ${pickerSelects(s)}
-      <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Tool calls and thinking">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
+      <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
@@ -1481,7 +1481,7 @@ function applySettings() {
 const PET_WHY = { name: 'its folder name must be lowercase letters, digits and dashes', invalid: 'it is not a petdex pet (pet.json and a sheet)', exists: 'a pet with that name is already in P9', command: 'paste the install command from petdex.dev', unknown: 'petdex.dev has no pet by that name', offline: 'petdex.dev could not be reached' };
 function petSettings() {
   const mode = petMode ||= S.focus, f = settings.pet[mode], pick = (role, label, none) => `<label class="set-row"><span><strong>${label}</strong></span><span class="spacer"></span><select data-slot="input" id="setPet-${role}" data-pet-role="${role}"><option value="">${none}</option>${pets.pets.map(p => `<option value="${esc(p.name)}" ${f[role] === p.name ? 'selected' : ''}>${esc(p.displayName)}</option>`).join('')}</select>${info('The pet shown while ' + (role === 'system' ? 'P9 itself' : label) + ' is working.', 'pets')}</label>`;
-  return `<fieldset class="set-group"><legend>Pets ${info('A petdex pet stands in for the "agent is working" spinner.', 'pets')}</legend>`
+  return `<fieldset class="set-group"><legend>Pets ${info('A small animated character (a petdex pet) that shows while an agent works, in place of the spinner (in Chat Focus chats and the top bar).', 'pets')}</legend>`
     + `<p class="muted sm">Find a pet at <a id="petdexLink" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, copy its install command and paste it below.</p>`
     + (window.p9?.installPets ? `<form class="set-row" id="petInstallForm"><input data-slot="input" id="petInstall" placeholder="npx petdex@latest install boba" autocomplete="off" spellcheck="false" style="flex:1"><button data-slot="button" data-variant="default" id="petInstallGo">Install</button></form>` : '')
     + `<div class="pet-lib">${pets.pets.map(p => `<figure><canvas data-thumb="${esc(p.name)}" width="192" height="208"></canvas><figcaption>${esc(p.displayName)}</figcaption><button data-slot="button" data-variant="ghost" data-size="icon-sm" data-pet-remove="${esc(p.name)}" title="Remove ${esc(p.displayName)}">×</button></figure>`).join('') || '<p class="muted sm">No pets yet.</p>'}</div>`
@@ -1533,14 +1533,17 @@ function wirePetSettings() {
 // editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
-const MISSION_TIPS = { primary: 'The workspace file naming your main project. Mission Control reads it.', registry: "The JSON file listing Mission Control's scripts, apps and pages.",
-  waiting: 'The folder of .md items waiting on you.', hub: 'Your workspace-hub folder, if you have one.', scripts_root: 'A full path where registry commands run. Empty: the workspace.' };
+const MISSION_TIPS = { primary: 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)',
+  registry: "JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card)",
+  waiting: 'Folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane\'s Needs you view)',
+  hub: "Folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it)",
+  scripts_root: 'Full path of the folder your buttons and apps run in, and the one ~/workspace stands for (for the Mission Control buttons). Empty: the workspace' };
 // A function: PATH_KEYS is declared further down, with the wizard.
 const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
-  ['space', 'Space file (optional)', 'setup-file', 'The JSON file with your own sections, buttons and log views.'],
-  ['server_host', 'Server host name (optional)', '', "Your second machine's name, for workspace-hub's view of it."],
-  ['page_schemes', 'Page link schemes (optional, comma-separated)', '', 'Extra link schemes pages may open, for example obsidian.'],
-  ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Notes folders a space section may show, by name.']];
+  ['space', 'Extra sections file (optional)', 'setup-file', 'JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page)'],
+  ['server_host', 'Server host name (optional)', '', "Network name of your server, the machine your phone reaches P9 on (for the Chat Focus Phone button's link, and the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
+  ['page_schemes', 'Extra link types for pages (optional, comma-separated)', '', 'Link types besides http and https that a Mission Control page may open, for example obsidian (a page link of that type asks before it opens)'],
+  ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Named folders of .md notes (for the notes an extra Mission Control section shows, by that name)']];
 const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;
 // The box's text as the settings value; empty removes the key. No checks here: the daemon's are the rules.
 const missionValue = (k, text) => {
@@ -1552,10 +1555,10 @@ const missionValue = (k, text) => {
 };
 function missionGroup() {
   const s = missionFiles.settings;
-  return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The paths and options in Mission Control\'s settings file. Each row saves when you leave it.', 'mission-control-files')}</legend>`
+  return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The files and folders Mission Control reads, from its settings file (for the Mission Control focus). Each row saves when you leave it.', 'mission-control-files')}</legend>`
     + missionKeys().map(([k, name, kind, tip]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span>`
       + (k === 'notes_roots' ? `<textarea data-slot="input" class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${esc(missionShown(k, s[k]))}</textarea>`
-        : `<input data-slot="input" class="mono" data-mission="${k}" value="${esc(missionShown(k, s[k]))}" maxlength="400" autocomplete="off" spellcheck="false">`)
+        : `<input data-slot="input" class="mono" data-mission="${k}" value="${esc(missionShown(k, s[k]))}" title="${esc(missionShown(k, s[k]))}" maxlength="400" autocomplete="off" spellcheck="false">`)
       + (window.p9.pickFolder && kind ? `<button data-slot="button" data-variant="outline" data-size="sm" data-mission-pick="${k}:${kind}">Pick</button>` : '')
       + info(tip, 'mission-control-files') + '</label>').join('')
     + '<p class="muted sm">The old file is kept as settings.json.bak.</p></fieldset>';
@@ -1570,7 +1573,10 @@ async function saveMission(change) {
   box.setAttribute('aria-invalid', 'true');
   row.insertAdjacentHTML('beforeend', `<small class="field-err" data-mission-err role="alert">${esc(why)}</small>`);
 }
+// A narrow box shows the end of a long path (the file name), not the start every path shares; the full path is the hover.
+const showEnd = box => { box.title = box.value; box.scrollLeft = box.scrollWidth; };
 function wireMission() {
+  $('#setBody').querySelectorAll('input[data-mission]').forEach(box => { showEnd(box); box.onblur = () => showEnd(box); });
   $('#setBody').querySelectorAll('[data-mission]').forEach(box => { box.onchange = () => saveMission({ [box.dataset.mission]: missionValue(box.dataset.mission, box.value) }); });
   $('#setBody').querySelectorAll('[data-mission-pick]').forEach(b => { b.onclick = async e => {
     e.preventDefault();
@@ -1585,15 +1591,15 @@ function wireMission() {
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
-  $('#setBody').innerHTML = `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}<span class="spacer"></span>${info('The P9 guide, a note to P9\'s makers, and the first-start setup window.', 'settings')}</div>`
-    + (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button>${info('Makes everything in this window bigger or smaller.', 'settings')}</div>` : '')
+  $('#setBody').innerHTML = `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}<span class="spacer"></span>${info('The P9 guide (opens on GitHub), Anymouse (a note to P9\'s makers: an idea, a bug or a gripe) and Setup (the first-start window again).', 'settings')}</div>`
+    + (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button>${info('Makes everything in this window bigger or smaller, in every focus mode.', 'settings')}</div>` : '')
     + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
-    + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last.')
-    + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a card closes once you send.')
-    + `<fieldset class="set-group"><legend>Focus modes ${info('Turn off the modes you do not use. At least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
+    + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
+    + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
+    + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
-    + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents can read and answer but cannot change anything.', 'agent-lock') : '')
-    + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
+    + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents in every chat can read and answer but cannot edit files or run anything that asks permission.', 'agent-lock') : '')
+    + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor (Dev Focus, here and on your phone) cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
     + (missionFiles?.settings ? missionGroup() : '')
     + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
@@ -1806,7 +1812,7 @@ async function firstRun() {
 const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out; hub is optional.
-const PATH_KEYS = [['primary', 'Main AGENTS file', 'setup-file'], ['registry', 'Mission Control registry', 'setup-file'], ['waiting', 'Waiting-on-you folder', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder the registry commands run from (optional, full path)', '']];
+const PATH_KEYS = [['primary', 'Main project file', 'setup-file'], ['registry', 'Buttons, apps and pages file', 'setup-file'], ['waiting', 'Folder of items waiting on you', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder your buttons run in (optional, full path)', '']];
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
 const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
@@ -1896,9 +1902,9 @@ function wizRender() {
     const none = choosing && !found && !s.settingsPresent;
     body = `<p class="muted sm">Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
       + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create these makes a starter set you can change any time:</p><ul>'
-        + '<li><strong>Main AGENTS file</strong>: what you are working on, in plain words. Your agents read it; Mission shows it as the Main Project card.</li>'
-        + '<li><strong>Mission Control registry</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
-        + '<li><strong>Waiting-on-you folder</strong>: one .md file for each thing waiting on you.</li></ul>'
+        + '<li><strong>Main project file</strong>: names your main project, in plain words. Your agents read it; Mission Control shows it as the Main Project card.</li>'
+        + '<li><strong>Buttons, apps and pages file</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
+        + '<li><strong>Folder of items waiting on you</strong>: one .md file for each thing waiting on you.</li></ul>'
         + (window.p9.openDocs ? `<div class="set-row">${btn('docs', 'How to add buttons')}</div>` : '') + '</div>' : '')
       + (choosing ? '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
         + (s.pathsInvalid ? fail('paths-invalid') : '') : '')

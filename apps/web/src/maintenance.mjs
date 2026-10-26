@@ -4,10 +4,10 @@ import { esc, info } from './helpers.mjs';
 // says whether this window offers it (the desktop's window.p9; Rebuild only in a source checkout).
 export const MAINTENANCE = [
   { id: 'mtReload', label: 'Reload window', tip: 'Loads this window again. Chats keep running; text you have not sent is lost.', when: () => true },
-  { id: 'mtMission', label: 'Refresh Mission', tip: "Reads Mission Control's settings, buttons and space again now.", when: () => !!window.p9?.mission },
-  { id: 'mtRestart', label: 'Restart daemon', tip: "Restarts P9's background service and waits until the new one answers. Running chats, scripts and terminals stop.", when: () => !!window.p9?.restartService },
-  { id: 'mtRepair', label: 'Repair daemon service', tip: 'Sets the background service up again and starts it, for a service that is missing or out of date. Running chats, scripts and terminals stop.', when: () => !!window.p9?.repairService },
-  { id: 'mtRebuild', label: 'Rebuild + reload', tip: 'Source checkouts only: runs pnpm build, then reloads this window with the new build.', when: () => !!window.p9?.source },
+  { id: 'mtMission', label: 'Refresh Mission', tip: "Reads your Mission Control files again now, instead of at the next check (for every Mission Control card and button).", when: () => !!window.p9?.mission },
+  { id: 'mtRestart', label: 'Restart daemon', tip: "Restarts P9's background service (the daemon that runs your chats, scripts and terminals) and waits until the new one answers. Running chats, scripts and terminals stop.", when: () => !!window.p9?.restartService },
+  { id: 'mtRepair', label: 'Repair daemon service', tip: "Sets P9's background service (the daemon that runs your chats, scripts and terminals) up again and starts it, for one that is missing or out of date. Running chats, scripts and terminals stop.", when: () => !!window.p9?.repairService },
+  { id: 'mtRebuild', label: 'Rebuild + reload', tip: "Source checkouts only: rebuilds P9's window from its code (pnpm build), then reloads this window with the new build.", when: () => !!window.p9?.source },
 ];
 
 // The Updates row (A ↔ B1 contract, window.p9.updates): what the updater says, and the one button that fits its state.
@@ -28,7 +28,7 @@ const updatesRow = u => `<div class="set-row"><span><strong>Updates</strong><spa
   + (u.state === 'ready' ? '<button data-slot="button" data-variant="default" id="mtUpdInstall">Restart to update</button>'
     : opens(u) ? '<button data-slot="button" data-variant="outline" id="mtUpdOpen">Check now</button>'
     : `<button data-slot="button" data-variant="outline" id="mtUpdCheck" ${['off', 'checking', 'downloading'].includes(u.state) ? 'disabled' : ''}>Check now</button>`)
-  + info(opens(u) ? 'Opens the newest P9 release on GitHub.' : 'Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>';
+  + info(opens(u) ? 'Opens the newest P9 release page on GitHub in your browser.' : 'Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>';
 
 // updates: the last answer from window.p9.updates(), or null when this build has no updater (then the off row, if this
 // window can open the releases page).
