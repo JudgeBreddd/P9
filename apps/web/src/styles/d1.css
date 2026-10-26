@@ -81,6 +81,7 @@ dialog[open]{animation:pop .18s ease}
 .dlg-head p{margin:4px 0 0;color:var(--muted-foreground);font-size:13px}
 .dlg-body{padding:14px 18px}
 .dlg-foot{display:flex;justify-content:flex-end;gap:8px;padding:0 18px 16px}
+.dlg-foot [hidden]{display:none}
 .pop{position:absolute;z-index:40;min-width:220px;background:var(--popover);border:1px solid color-mix(in oklch,var(--primary) 25%,var(--border));border-radius:var(--radius);box-shadow:0 20px 40px -18px color-mix(in oklch,var(--glow) 45%,transparent);padding:6px;animation:pop .15s ease}
 .pop[hidden]{display:none}
 .pop .item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 9px;border-radius:calc(var(--radius) - 4px);font-size:13px}

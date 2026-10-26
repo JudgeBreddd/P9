@@ -39,7 +39,8 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
     const first = text.split('\n')[0];
     const title = quiet(KINDS[kind] + ': ' + (first.length > 80 ? first.slice(0, 79) + '…' : first));
     const body = quiet(text) + '\n\n---\nSent with Anymouse from P9' + (page ? ' (' + quiet(page) + ')' : '') + '.';
-    if (!token) {
+    // browser: the box's "Open on GitHub" after a refused token sends the same note the tokenless way.
+    if (!token || b.browser === true) {
       const { link, cut } = issueLink({ title, body, labels: kind }, 'body');
       return { status: 200, open: link, ...(cut ? { cut: true } : {}) };
     }
@@ -57,6 +58,11 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
       });
       if (!res.ok) {
         console.error(JSON.stringify({ event: 'P9_ANYMOUSE_REFUSED', status: res.status }));
+        // 401/403: the token itself was refused (wrong or expired, or without Issues write); the box then offers GitHub's own page.
+        if (res.status === 401 || res.status === 403) return { status: 502, refused: true, error: 'GitHub refused the token P9 files notes with ('
+          + res.status + (res.status === 401 ? ': wrong or expired' : ': it lacks Issues write on ' + REPO)
+          + '). Fix: on GitHub, give the token Repository permissions, Issues: Read and write, for ' + REPO
+          + ' (README, Anymouse). Your note is still here: Open on GitHub files it under your own login.' };
         return { status: 502, error: 'GitHub refused it (' + res.status + ')' };
       }
       const issue = await res.json();

@@ -1541,7 +1541,7 @@ const MISSION_TIPS = { primary: 'File that names your main project (for the Miss
 // A function: PATH_KEYS is declared further down, with the wizard.
 const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
   ['space', 'Extra sections file (optional)', 'setup-file', 'JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page)'],
-  ['server_host', 'Server host name (optional)', '', "Network name of your server, the machine your phone reaches P9 on (for the Chat Focus Phone button's link, and the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
+  ['server_host', 'Server host name (optional)', '', "Network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
   ['page_schemes', 'Extra link types for pages (optional, comma-separated)', '', 'Link types besides http and https that a Mission Control page may open, for example obsidian (a page link of that type asks before it opens)'],
   ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Named folders of .md notes (for the notes an extra Mission Control section shows, by that name)']];
 const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;
@@ -2030,10 +2030,10 @@ const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
 const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
 const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
-// PH1: the phone link for this chat. server_host is the daemon's settings.json value, read the way Settings reads it.
+// PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
   const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
-  $('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.settings?.server_host : '', s.id);
+  $('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
   $('#phoneDlg').showModal();
 }
 // A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
@@ -2179,10 +2179,10 @@ if (!window.p9?.mission) M.notifications.forEach((n, i) => setTimeout(() => toas
 
 // Anymouse: DUWOP's idea / bug / gripe box. The desktop main process sends it; the daemon files it or main opens
 // GitHub's prefilled page. Only textContent here: nothing the note or GitHub returns becomes markup.
-const amDlg = $('#amDlg'), amText = $('#amText'), amNote = $('#amNote'), amSend = $('#amSend'), amCount = $('#amCount');
+const amDlg = $('#amDlg'), amText = $('#amText'), amNote = $('#amNote'), amSend = $('#amSend'), amCount = $('#amCount'), amWeb = $('#amWeb');
 const AM_MAX = 50000; // the daemon's limit (anymouse.mjs MAX_NOTE); a longer note stays in the box, marked, and does not send
 let amKind = 'idea';
-$('#amBtn').onclick = () => { amNote.textContent = ''; amCheck(); amDlg.showModal(); amText.focus(); };
+$('#amBtn').onclick = () => { amNote.textContent = ''; amWeb.hidden = true; amCheck(); amDlg.showModal(); amText.focus(); };
 $('#amClose').onclick = () => amDlg.close();
 amDlg.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
   amKind = b.dataset.kind;
@@ -2196,11 +2196,13 @@ const amCheck = () => {
   amSend.disabled = !n || over;
 };
 amText.oninput = amCheck;
-$('#amForm').onsubmit = async (e) => {
-  e.preventDefault(); amSend.disabled = true; amNote.textContent = '';
+// browser: send it the tokenless way (GitHub's prefilled page), offered when GitHub refused the daemon's token.
+const amSendNote = async (browser) => {
+  amSend.disabled = true; amNote.textContent = '';
   try {
     if (!window.p9?.anymouse) throw new Error('Anymouse needs the desktop app');
-    const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus });
+    const r = await window.p9.anymouse({ kind: amKind, text: amText.value.trim(), page: S.focus, ...(browser ? { browser } : {}) });
+    amWeb.hidden = r.body?.refused !== true;
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
     // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
     if (!r.body.opened) amText.value = '';
@@ -2208,6 +2210,8 @@ $('#amForm').onsubmit = async (e) => {
   } catch (err) { amNote.textContent = err.message; }
   finally { amCheck(); }
 };
+$('#amForm').onsubmit = (e) => { e.preventDefault(); amSendNote(false); };
+amWeb.onclick = () => amSendNote(true);
 
 return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };
 }

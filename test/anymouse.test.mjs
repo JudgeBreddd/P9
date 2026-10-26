@@ -65,8 +65,60 @@ test('Anymouse limits: an unknown kind is an idea, the rate limit holds, a GitHu
   assert.equal((await send({ text: 'b' })).status, 200);
   assert.equal((await send({ text: 'c' })).status, 429);
   assert.equal(gh.seen.length, 2);
-  const refusing = await fakeGitHub(t, 403);
-  assert.deepEqual(await createAnymouse({ token: TOKEN, api: refusing.api })({ text: 'd' }), { status: 502, error: 'GitHub refused it (403)' });
+  const failing = await fakeGitHub(t, 500);
+  assert.deepEqual(await createAnymouse({ token: TOKEN, api: failing.api })({ text: 'd' }), { status: 502, error: 'GitHub refused it (500)' });
+});
+
+// Correction 13: a refused token (401, 403) says why and what to do, and the same note can go the tokenless way instead.
+test('Anymouse on a refused token: the reply says why and the fix, and browser: true returns the prefilled page', async (t) => {
+  for (const status of [401, 403]) {
+    const gh = await fakeGitHub(t, status);
+    const send = createAnymouse({ token: TOKEN, api: gh.api });
+    const refused = await send({ kind: 'bug', text: 'the save button' });
+    assert.equal(refused.status, 502);
+    assert.equal(refused.refused, true);
+    assert.match(refused.error, new RegExp('^GitHub refused the token P9 files notes with \\(' + status + ': ' + (status === 401 ? 'wrong or expired' : 'it lacks Issues write on ' + REPO) + '\\)'));
+    assert.match(refused.error, /Issues: Read and write/);
+    assert.match(refused.error, /Open on GitHub/);
+    assert.equal(refused.error.includes(TOKEN), false);
+    const web = await send({ kind: 'bug', text: 'the save button', browser: true });
+    assert.equal(web.status, 200);
+    assert.ok(web.open.startsWith(NEW_ISSUE));
+    assert.deepEqual([new URL(web.open).searchParams.get('title'), new URL(web.open).searchParams.get('labels')], ['Bug: the save button', 'bug']);
+    assert.equal(gh.seen.length, 1, 'the browser path never calls GitHub with the token');
+  }
+});
+
+test('Anymouse in the desktop on a refused token: the box explains, keeps the note, and Open on GitHub opens the prefilled page', { timeout: 90000 }, async (t) => {
+  const gh = await fakeGitHub(t, 403);
+  const instance = await daemon(t, undefined, false, () => ({ env: { P9_GITHUB_TOKEN: TOKEN, P9_GITHUB_API: gh.api } }));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-anymouse-403-')), opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" > ' + opened + '\n');
+  await chmod(browser, 0o755);
+  const env = { ...process.env, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#amBtn').click();
+  assert.equal(await page.locator('#amWeb').isHidden(), true);
+  await page.locator('#amText').fill('the save button eats my edits');
+  await page.locator('#amSend').click();
+  await page.locator('#amNote', { hasText: 'GitHub refused the token' }).waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#amNote').innerText(), /Issues: Read and write/);
+  assert.equal(await page.locator('#amText').inputValue(), 'the save button eats my edits');
+  await page.locator('#amWeb:visible').waitFor({ timeout: 5000 });
+  const png = await page.locator('#amDlg').screenshot();
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT anymouse-refused-token ' + png.toString('base64'));
+  await page.locator('#amWeb').click();
+  await page.locator('#amNote', { hasText: 'Opened GitHub' }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#amText').inputValue(), 'the save button eats my edits');
+  assert.equal(await page.locator('#amWeb').isHidden(), true);
+  let url = '';
+  for (let i = 0; i < 50 && !url; i++) { url = await readFile(opened, 'utf8').catch(() => ''); if (!url) await new Promise((r) => setTimeout(r, 100)); }
+  assert.ok(url.startsWith(NEW_ISSUE), url);
+  assert.equal(new URL(url.trim()).searchParams.get('title'), 'Idea: the save button eats my edits');
+  assert.equal(gh.seen.length, 1, 'only the first Send reached GitHub');
 });
 
 test('Anymouse in the desktop: the box sends, and with no token main opens only the prefilled GitHub page', { timeout: 90000 }, async (t) => {

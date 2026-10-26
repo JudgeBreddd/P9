@@ -517,7 +517,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // ponytail: read-change-write with no lock; the one caller saves one row at a time.
   app.get('/setup/settings', async (c) => {
     const disk = await settingsOnDisk();
-    return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null });
+    // remoteOrigin: this daemon's own phone address (--remote-origin), for "Continue on phone"; absent with remote logins off.
+    return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null, ...(remote ? { remoteOrigin: remote.origin } : {}) });
   });
   let settingsSaves = Promise.resolve();
   app.post('/setup/settings', async (c) => {

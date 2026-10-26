@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, remoteDaemon, http, authenticated, root } from './helpers.mjs';
 
 // The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
 const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
@@ -15,17 +15,19 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: path.
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
   body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => ({ status: result.status, ...JSON.parse(result.text) }));
 
-// A window on one chat with `provider`; `host` is the settings.json server_host ('' leaves it unset).
-async function window(t, provider, host) {
-  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+// A window on one chat with `provider`; `remote` turns remote logins on (--remote-origin). settings.json names a
+// server_host either way: it is the hub's second machine and never the phone link (correction 7).
+async function window(t, provider, remote) {
+  const setup = async ({ directory, workspace }) => {
     const file = path.join(directory, '.config', 'p9', 'settings.json');
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you', ...(host && { server_host: host }) }));
+    await writeFile(file, JSON.stringify({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you', server_host: 'test-server' }));
     await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
     await mkdir(path.join(workspace, 'mission')); await mkdir(path.join(workspace, 'needs-you'));
     await writeFile(path.join(workspace, 'mission/registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
     return { args: ['--acp-override', fake] };
-  });
+  };
+  const instance = remote ? await remoteDaemon(t, { setup }) : await daemon(t, undefined, false, setup);
   const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
   // The window lists a chat once it has said something.
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
@@ -38,15 +40,16 @@ async function window(t, provider, host) {
   const page = await app.firstWindow();
   await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
   await page.locator('#tabs .tab[data-id="' + id + '"]').click();
-  return { id, page, pane: page.locator('.pane[data-id="' + id + '"]') };
+  return { id, page, instance, pane: page.locator('.pane[data-id="' + id + '"]') };
 }
 
 for (const provider of ['claude', 'codex']) {
   test(`PH1 (${provider}): the Phone button shows a QR and a link that carry this chat's id`, { timeout: 90000 }, async (t) => {
-    const { id, page, pane } = await window(t, provider, 'test-server');
+    const { id, page, pane, instance } = await window(t, provider, true);
     await pane.locator('[data-phone]').click();
     await page.locator('#phoneDlg[open]').waitFor({ timeout: 10000 });
-    assert.equal(await page.inputValue('#phoneDlg [data-phone-link]'), `https://test-server/phone#chat=${id}`);
+    // This daemon's own remote address, not the hub's server_host.
+    assert.equal(await page.inputValue('#phoneDlg [data-phone-link]'), `${instance.origin}/phone#chat=${id}`);
     // Drawn here: an inline SVG of the code, and no picture fetched from anywhere.
     assert.equal(await page.locator('#phoneDlg .qr svg').count(), 1);
     assert.equal(await page.locator('#phoneDlg img, #phoneDlg iframe').count(), 0);
@@ -57,10 +60,13 @@ for (const provider of ['claude', 'codex']) {
   });
 }
 
-test('PH1: with no server host set the dialog says where to set it and offers no link', { timeout: 90000 }, async (t) => {
-  const { page, pane } = await window(t, 'claude', '');
+test('PH1: with remote logins off the dialog says how to turn them on and offers no link', { timeout: 90000 }, async (t) => {
+  const { page, pane } = await window(t, 'claude', false);
   await pane.locator('[data-phone]').click();
   await page.locator('#phoneDlg[open]').waitFor({ timeout: 10000 });
-  assert.match(await page.locator('#phoneBody').innerText(), /Server host name/);
+  assert.match(await page.locator('#phoneBody').innerText(), /Remote logins are off on this computer\..*--remote-origin.*tailscale serve/s);
+  assert.doesNotMatch(await page.locator('#phoneBody').innerText(), /test-server/);
   assert.equal(await page.locator('#phoneDlg [data-phone-link], #phoneDlg .qr').count(), 0);
+  await page.waitForTimeout(600); // the dialog fades in
+  await shot(page, 'desktop-phone-remote-off');
 });

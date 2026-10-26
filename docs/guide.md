@@ -117,13 +117,15 @@ Each focus mode has its own pet settings: on or off, size, and a pet for System,
 
 An optional phone view on your Tailscale network, signed in with a passkey that you approve from the computer. The README has the setup steps. The phone has Chat (with Mode and Model), Terminal, Mission Control, Usage and Files. An approved phone can do what you can do in P9, so approve only your own devices.
 
+A chat's **Phone** button shows a QR code and a link that open that chat on the phone, at this computer's remote login address. If sign-in comes first, the phone still opens that chat after it. With remote logins off, the button says how to turn them on.
+
 ## Notifications
 
 Cards show what needs you, such as an agent waiting for your answer or items waiting on you. Click a card to open its chat or item. The bell (Notification Center) keeps the cards you set aside, older items and system notices until you dismiss them.
 
 ## Anymouse
 
-The Anymouse button sends P9's makers an idea, a bug report or a gripe. Without a GitHub token it opens a prefilled GitHub issue page in your browser. The README shows how to send notes straight from the app.
+The Anymouse button sends P9's makers an idea, a bug report or a gripe. Without a GitHub token it opens a prefilled GitHub issue page in your browser. The README shows how to send notes straight from the app. If GitHub refuses that token, the box says why and how to fix it, keeps your note, and offers **Open on GitHub** to file it on GitHub's own page instead.
 
 ## Persistence and Stop All
 
@@ -153,7 +155,7 @@ A path box shows the end of the path (the file name); hover it for the full path
 - These four are the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
 - **Folder your buttons run in** (`scripts_root`, optional): a full path where your buttons and apps run, and the one ~/workspace stands for. Empty: the workspace.
 - **Extra sections file** (`space`, optional): the JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page). Empty: no extra sections.
-- **Server host name** (`server_host`, optional): the network name of your server, the machine your phone reaches P9 on (for the Chat Focus Phone button's link, and the Mission Control Logs and incidents card, which also reads that server's logs over ssh).
+- **Server host name** (`server_host`, optional): the network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh).
 - **Extra link types for pages** (`page_schemes`, optional): link types besides http and https that a Mission Control page may open, separated by commas (for example `obsidian`). A page link of that type asks before it opens.
 - **Notes folders** (`notes_roots`, optional): one `name = /full/path` per line (for the notes an extra Mission Control section shows, by that name). Your home folder, a folder holding the workspace and P9's recovery folder are refused.
 

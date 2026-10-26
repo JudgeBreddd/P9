@@ -52,11 +52,12 @@ async function newChat(page, agent) {
 const youCount = (page, text) => page.locator('#events article', { has: page.locator('b', { hasText: /^You$/ }) }).filter({ hasText: text }).count();
 
 test('PH1: the link carries the chat id, the QR is drawn in the window, and the phone opens that chat', { timeout: 120000 }, async (t) => {
-  assert.equal(phoneLink('my-box', 'abc-123'), 'https://my-box/phone#chat=abc-123');
-  assert.match(qrSvg(phoneLink('my-box', 'abc-123')), /^<svg[^>]*viewBox/);
-  assert.equal(phoneDialogBody('my-box', 'abc-123').includes('value="https://my-box/phone#chat=abc-123"'), true);
-  assert.equal(/https?:\/\/[^"' ]*(qr|chart)/i.test(phoneDialogBody('my-box', 'abc-123')), false, 'no QR service');
-  assert.match(phoneDialogBody('', 'abc-123'), /Server host name/);
+  const box = 'https://my-box.tail1.ts.net';
+  assert.equal(phoneLink(box, 'abc-123'), 'https://my-box.tail1.ts.net/phone#chat=abc-123');
+  assert.match(qrSvg(phoneLink(box, 'abc-123')), /^<svg[^>]*viewBox/);
+  assert.equal(phoneDialogBody(box, 'abc-123').includes('value="https://my-box.tail1.ts.net/phone#chat=abc-123"'), true);
+  assert.equal(/https?:\/\/[^"' ]*(qr|chart)/i.test(phoneDialogBody(box, 'abc-123')), false, 'no QR service');
+  assert.match(phoneDialogBody('', 'abc-123'), /Remote logins are off/);
 
   const { page, server } = await phoneOn(t);
   for (const agent of ['claude', 'codex']) {
@@ -64,7 +65,7 @@ test('PH1: the link carries the chat id, the QR is drawn in the window, and the 
     const other = await newChat(page, agent === 'claude' ? 'codex' : 'claude'); // the newest chat is the default pick
     assert.notEqual(other, id);
     // The path and hash of the link the window shows, on this daemon's own origin (the dev space has no https host).
-    const url = new URL(phoneLink('test-server', id));
+    const url = new URL(phoneLink('https://test-server', id));
     await page.goto(server.origin + url.pathname + url.hash);
     await page.waitForSelector('#conversation option', { state: 'attached' });
     await until(async () => (await page.inputValue('#conversation')) === id, 'the linked chat is picked');
@@ -73,6 +74,31 @@ test('PH1: the link carries the chat id, the QR is drawn in the window, and the 
     await page.goto(server.origin + '/phone#chat=no-such-chat');
     await page.waitForSelector('#conversation option', { state: 'attached' });
     assert.equal(await page.inputValue('#conversation'), other);
+  }
+});
+
+// Correction 7: a link that meets sign-in still opens its chat. The server's redirect to /login keeps the fragment (the
+// browser carries it), and the login page passes on only an exact #chat=<uuid>: any other fragment is dropped.
+test('PH1: sign-in keeps the linked chat, and drops any fragment that is not #chat=<uuid>', { timeout: 120000 }, async (t) => {
+  const { page, context, server } = await phoneOn(t);
+  const signIn = async (where, landing) => {
+    await context.clearCookies();
+    await page.goto(server.origin + where);
+    await page.waitForURL(server.origin + '/login' + where.slice(where.indexOf('#')), { timeout: 10000 });
+    await page.click('#login');
+    await page.waitForURL(server.origin + landing, { timeout: 15000 });
+    await page.waitForSelector('#conversation option', { state: 'attached' });
+  };
+  const ids = {};
+  for (const agent of ['claude', 'codex']) ids[agent] = await newChat(page, agent);
+  await newChat(page, 'claude'); // the default pick, so the linked chat shows only through the link
+  for (const agent of ['claude', 'codex']) {
+    await signIn('/phone#chat=' + ids[agent], '/phone/#chat=' + ids[agent]);
+    await until(async () => (await page.inputValue('#conversation')) === ids[agent], `the linked ${agent} chat is picked after sign-in`);
+  }
+  for (const hash of ['#chat=' + ids.claude + '&next=https://evil.example', '#https://evil.example/', '#chat=../../x']) {
+    await signIn('/phone' + hash, '/phone/');
+    assert.equal(new URL(page.url()).hash, '');
   }
 });
 
