@@ -37,6 +37,11 @@ html,body{height:100%;overflow:hidden}
 .mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
 .mpanel[data-panel=mlogs]{flex:1}.mpanel[data-panel=musage],.mcol>.wins,.mcol>[data-card]{flex-shrink:0}.mpanel[data-panel=mlaunch]{flex:0 1 auto;min-height:120px}.pscroll{overflow:auto;min-height:0}
 .phead{display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11px;cursor:pointer}.phead h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.phead:hover{color:var(--foreground)}
+.uring{display:flex;flex-direction:column-reverse;align-items:center;gap:4px}.uring[data-stale]{opacity:.55}
+.ring{--ring-c:var(--primary);position:relative;display:grid;place-items:center;width:54px;height:54px;color:var(--foreground)}
+.ring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--ring-c) calc(var(--p) * 1%),color-mix(in oklch,var(--border) 70%,transparent) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px));mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px))}
+.ring[data-hot]{--ring-c:var(--warn)}
+.ring b{position:relative;font-size:12px;font-weight:500}
 .uagent{display:grid;grid-template-columns:56px 1fr 1fr;gap:12px;align-items:center;margin:4px 0 10px;font-size:11px;color:var(--muted-foreground)}.uagent>b{color:var(--foreground);font-size:13px;font-weight:500}
 .launch{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}.ltile{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 4px;border:1px solid transparent;border-radius:10px;background:none;color:var(--foreground);font:inherit;font-size:11px;cursor:pointer}.ltile:hover{border-color:var(--border);background:color-mix(in oklch,var(--card) 70%,transparent)}
 .ltile img,.mono-ico{width:40px;height:40px;border-radius:10px}.mono-ico{display:grid;place-items:center;font-weight:600;font-size:15px;color:var(--tint);background:color-mix(in oklch,var(--tint) 18%,transparent);border:1px solid color-mix(in oklch,var(--tint) 40%,transparent)}.ltile .nm{text-align:center;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -127,7 +132,7 @@ html,body{height:100%;overflow:hidden}
 .cards>*{pointer-events:auto}
 #chats[data-split="false"] .col{max-width:min(760px,100% - 2 * (var(--card-w) + var(--card-gap)))}
 .stage:has(.card) #chats[data-split="true"]{margin-right:calc(var(--card-w) + var(--card-gap))}
-.card{position:relative;border-radius:11px;background:color-mix(in oklch,var(--popover) 88%,transparent);border:1px solid var(--border);backdrop-filter:blur(8px)}
+.card{position:relative;border-radius:11px;background:color-mix(in oklch,var(--popover) 95%,transparent);border:1px solid var(--border);backdrop-filter:blur(8px)}
 .card .open{display:grid;grid-template-columns:auto 1fr;gap:3px 9px;align-items:center;width:100%;padding:7px 28px 7px 10px;border:0;background:none;color:var(--foreground);font:inherit;font-size:12px;text-align:left;cursor:pointer;border-radius:inherit}
 .card .open:focus-visible{outline:2px solid var(--ring)}
 .card .sub{grid-column:2;font-size:10.5px;color:var(--muted-foreground)}

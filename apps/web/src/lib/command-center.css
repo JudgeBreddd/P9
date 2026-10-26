@@ -187,7 +187,8 @@
   backdrop-filter: blur(16px) saturate(1.4);
   box-shadow: var(--lift);
 }
-[data-theme="event-horizon-prime"] .mdl { background-color: color-mix(in oklch, var(--popover) 82%, transparent); }
+/* panels that hold text to read (Settings, pickers, cards, popups): a little glass, mostly solid */
+[data-theme="event-horizon-prime"] :is(.card, .mdl, .pop, .toast) { background-color: color-mix(in oklch, var(--popover) 94%, transparent); }
 [data-theme="event-horizon-prime"] :is(.tile.bad, .toast.bad) {
   background-color: color-mix(in oklch, var(--destructive) 18%, var(--glass));
   border-color: color-mix(in oklch, var(--destructive) 55%, transparent);

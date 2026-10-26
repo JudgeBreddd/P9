@@ -438,6 +438,9 @@ const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll
 // Amber from 75% on every bar (MR1).
 const HOT = 75;
 const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
+// The same reading as a ring (Mission's Usage card and dialog); the label comes first in the markup and is drawn under the ring.
+const ringMeter = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="uring" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><span class="lbl">${label}</span><div class="ring" role="img" aria-label="${esc(label)} ${p == null ? 'no reading' : p + '%'}" style="--p:${Math.min(p || 0, 100)}" ${p >= HOT ? 'data-hot' : ''}><b>${p == null ? '—' : p + '%'}</b></div></div>`; };
+const usageRings = () => { const now = Date.now(); return Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now); return `<div class="uagent"><b>${names[a]}</b>${ringMeter('5 h', lim.fiveHour, line, now)}${ringMeter('Week', lim.sevenDay, line, now)}</div>`; }).join(''); };
 // The cache clock: text and state, so the 15 s tick can move it without rebuilding the pane.
 const cacheOf = s => {
   const cacheMin = !s.live ? s.cacheMin : s.agent === 'claude' && s.lastEnd ? Math.floor((Date.now() - s.lastEnd) / 60000) : null;
@@ -953,7 +956,7 @@ async function runLive(m, id) {
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
 const allNotes = () => [...(H.notices || []), ...S.alerts];
-const usageBody = () => (usage.limits ? `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex)].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
+const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex)].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`);
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
@@ -971,10 +974,9 @@ const wins = {
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
     body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
   musage: { title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
-    // On the page: each agent's 5 h and week bars, the same bars as the chat's meters
-    inline: () => { const now = Date.now(), rows = Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now);
-      return `<div class="uagent"><b>${names[a]}</b>${meterBar('5 h', lim.fiveHour, line, now)}${meterBar('Week', lim.sevenDay, line, now)}</div>`; }).join('');
-      return (rows || '<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
+    // On the page: each agent's 5 h and week as rings
+    inline: () => { const rows = usageRings();
+      return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
 };
 // Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
 // shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
@@ -1379,7 +1381,7 @@ if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TM
 let dragY = null; const dock = $('#dock');
 $('#grip').onpointerdown = e => { dragY = e.clientY; const h0 = dock.offsetHeight; const mv = ev => { dock.style.height = Math.max(120, Math.min(innerHeight * .7, h0 + (dragY - ev.clientY))) + 'px'; }; const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); }; addEventListener('pointermove', mv); addEventListener('pointerup', up); };
 $('#grip').onkeydown = e => { if (e.key === 'ArrowUp') dock.style.height = dock.offsetHeight + 24 + 'px'; if (e.key === 'ArrowDown') dock.style.height = Math.max(120, dock.offsetHeight - 24) + 'px'; };
-$('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
+$('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
 // Floating terminal (Builder, 2026-10-17: "wigs out on click and drag to move, highlights all the stuff below it, and wont resize").
 // left/top are relative to the dock's parent, not the viewport (the jump); pointer capture and preventDefault stop the selection;
 // CSS resize: both gives the corner handle.

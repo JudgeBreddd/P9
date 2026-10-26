@@ -105,5 +105,52 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
         await screenshot('round1-literal-label');
       } finally { await answer(JSON.parse(original)); }
     });
+    // Look fixes (rc.2): panels readable over the backdrop, usage rings, the docked terminal back to full width.
+    // The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
+    const look = async name => { if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + (await page.screenshot({ animations: 'disabled' })).toString('base64')); };
+    const alpha = el => el.evaluate(e => { const m = /\/ ([\d.]+)\)/.exec(getComputedStyle(e).backgroundColor); return m ? Number(m[1]) : 1; });
+    await t.test('dropdown panels and cards are mostly solid so the text reads', async () => {
+      await reset();
+      await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.waitForTimeout(400);
+      assert.ok(await alpha(page.locator('#setDlg')) >= 0.9, 'Settings background');
+      await look('look-settings');
+      await page.keyboard.press('Escape');
+      await page.click('#newBtn'); await page.locator('#newPop:not([hidden])').waitFor(); await page.waitForTimeout(300);
+      assert.ok(await alpha(page.locator('#newPop')) >= 0.9, 'new chat picker background');
+      await look('look-new-chat');
+      await page.keyboard.press('Escape');
+      assert.ok(await alpha(page.locator('#cards .card').first()) >= 0.9, 'card background');
+    });
+    await t.test('Usage shows one ring per meter on the Mission page and in its dialog, amber from 75%', async () => {
+      await app.evaluate(({ ipcMain }, now) => {
+        ipcMain.removeHandler('p9:usage');
+        ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'ok', samples: 3, discarded: 0, totals: { inputTokens: 100, outputTokens: 50, costUsd: 0.5 }, limits: {
+          claude: { fiveHour: { usedPercent: 80, resetsAt: now + 3600000 }, sevenDay: { usedPercent: 30, resetsAt: now + 86400000 }, asOf: now },
+          codex: { fiveHour: { usedPercent: 6, resetsAt: now + 3600000 }, sevenDay: { usedPercent: 52, resetsAt: now + 86400000 }, asOf: now } } } }));
+      }, Date.now());
+      await reset(); await page.click('#rMission');
+      const rings = page.locator('#fMission [data-panel="musage"] .ring');
+      await rings.first().waitFor();
+      assert.deepEqual(await rings.locator('b').allInnerTexts(), ['80%', '30%', '6%', '52%']);
+      assert.deepEqual(await rings.evaluateAll(r => r.map(x => x.hasAttribute('data-hot'))), [true, false, false, false]);
+      assert.equal(await rings.first().evaluate(e => getComputedStyle(e, '::before').backgroundImage.includes('conic-gradient')), true);
+      await look('look-usage-card');
+      await page.click('#fMission [data-win="musage"]'); await page.locator('#mdl[open] #musage .ring').first().waitFor();
+      assert.equal(await page.locator('#mdl #musage .ring').count(), 4);
+      await page.waitForTimeout(400); await look('look-usage-dialog');
+      await page.click('#mdlX');
+    });
+    await t.test('docking the terminal clears the width a popout resize left behind', async () => {
+      await reset(); await page.click('#rTerm');
+      const dock = page.locator('#dock'); await dock.waitFor();
+      const stage = await page.locator('#dock').evaluate(e => e.parentElement.getBoundingClientRect().width);
+      if (!(await dock.evaluate(e => e.classList.contains('float')))) await page.click('#dFloat');
+      await dock.evaluate(e => { e.style.width = '420px'; e.style.height = '240px'; }); // what CSS resize: both writes
+      await look('look-terminal-popout');
+      await page.click('#dFloat');
+      assert.equal(await dock.evaluate(e => e.style.width), '');
+      assert.ok(await dock.evaluate(e => e.getBoundingClientRect().width) >= stage - 2, 'docked panel spans the page');
+      await look('look-terminal-docked');
+    });
   } finally { await app.close(); await rm(profile, { recursive: true, force: true }); }
 });
