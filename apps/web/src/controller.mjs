@@ -475,7 +475,7 @@ function event(e, s) {
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
     case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${agentImgs(e.images, names[s.agent])}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
-    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}</div>`;
+    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/^(Claude Code|Codex) is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
   }
   return '';
 }
@@ -590,10 +590,10 @@ function paint(root, ss, only) {
       b.disabled = true;
       const r = await liveChat.call('handoff', { id: s.id });
       if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
-      const shown = dockTerm?.open;
-      S.termOpen[S.focus] = true; showTerm();
-      if (shown) { dockTerm.attach(r.body.terminal); dockTerm.focus(); }
+      showTerminal(r.body.terminal);
     });
+    // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
+    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome(2));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
@@ -1277,6 +1277,12 @@ function showTerm() {
   $('#rTerm').setAttribute('aria-pressed', open);
   if (open && dockTerm && !dockTerm.open) openDock();
 }
+// A terminal the daemon just made (Hand off, the wizard's agent commands): the dock opens on it.
+function showTerminal(id) {
+  const shown = dockTerm?.open;
+  S.termOpen[S.focus] = true; showTerm();
+  if (shown) { dockTerm.attach(id); dockTerm.focus(); }
+}
 function toggleTerm() { S.termOpen[S.focus] = !S.termOpen[S.focus]; showTerm(); }
 $('#dHide').onclick = toggleTerm;
 
@@ -1864,6 +1870,9 @@ const WIZ_ERR = {
   'stop-all-failed': ['Something running would not stop, so the folder stayed the same.', 'Stop it in Chat or the terminal dock, then Change the folder again.'],
   'workspace-not-started': ['P9 could not start in that folder, so it went back to the one it was on.', 'Pick another folder.'],
   'workspace-unwritable': ['P9 cannot write to this folder.', 'Change the folder, or give your user write access to this one, then Retry.'],
+  'terminal-start-failed': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
+  'terminal-unavailable': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
+  'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
   'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
@@ -1903,14 +1912,18 @@ function wizRender() {
       + (note?.error ? fail(note.error, note.detail) : '');
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
-    body = '<p class="muted sm">Chats run on Claude Code or Codex; at least one has to be signed in. Sign in opens your browser at its sign-in page.</p>'
+    body = '<p class="muted sm">Chats run on Claude Code or Codex; at least one has to be signed in. Sign in opens your browser at its sign-in page; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
       + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].map(([a, name, sub]) => {
         const l = W.login[a] || {}, ended = !s[a] && !l.running && l.exit !== null && l.exit !== undefined;
         return row(name, sub, s[a] ? yes(true, 'Signed in') : l.running ? '<span class="muted sm">Waiting for the browser…</span>' : yes(false, '', 'Not signed in'),
           s[a] ? '' : l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : 'Sign in', 'default'))
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
           + (ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
-          + (W.note[a]?.error ? fail(W.note[a].error) : '');
+          // D8: the agent's own CLI (a terminal and Hand off use it; chats use the one P9 ships). Missing: its official install
+          // command, typed into a P9 terminal; there: its own sign-in command, the same way. Nothing runs before Enter.
+          + (s[a + 'Cli'] === false ? row(`${name} command line`, `Not found on this computer. Install types ${a === 'claude' ? "Claude Code's" : "Codex's"} official install command into a P9 terminal; press Enter there to run it.`, yes(false, '', 'Not installed'), btn('term:' + a + ':install', 'Install in a terminal'))
+            : s[a + 'Cli'] && !s[a] && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
+          + (W.note[a]?.error ? fail(W.note[a].error, W.note[a].detail) : '');
       }).join('');
     if (!d.agents) next = `<span class="muted sm">Sign in to one to go on, or Skip.</span>` + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
@@ -1990,6 +2003,11 @@ $('#welDlg').addEventListener('click', async e => {
     const r = await run(() => liveChat.call('starter', body).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
+  }
+  if (act === 'term') {
+    const r = await run(() => liveChat.call('agentTerminal', { agent, action: kind }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    if (r.body?.terminal) { W.then = () => showTerminal(r.body.terminal); return $('#welDlg').close(); }
+    W.note[agent] = { error: r.body?.error || String(r.status), detail: r.body?.command ? 'Run it yourself in a terminal: ' + r.body.command : '' };
   }
   if (['start', 'open', 'code', 'stop'].includes(act)) {
     const r = await run(() => (act === 'code' ? window.p9.agentLogin('code', agent, W.code.trim()) : window.p9.agentLogin(act, agent)).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
@@ -2237,7 +2255,7 @@ const amSendNote = async (browser) => {
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
     // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
     if (!r.body.opened) amText.value = '';
-    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
+    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start' + (r.body.kept ? ' (the first ' + r.body.kept.toLocaleString('en-US') + ' of ' + r.body.total.toLocaleString('en-US') + ' characters)' : '') + '; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
   } catch (err) { amNote.textContent = err.message; }
   finally { amCheck(); }
 };

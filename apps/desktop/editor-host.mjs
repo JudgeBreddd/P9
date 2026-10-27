@@ -1,9 +1,11 @@
 // Dev Focus editor host: VSCodium's remote extension host (REH), started by the desktop on loopback only.
 // It runs extensions, terminals and language servers as you; their direct disk writes are "runs as you, not guarded" (SECURITY.md surface 5).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFile, chmod, lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { childEnv } from '../server/child-env.mjs';
@@ -14,6 +16,13 @@ const home = homedir(), win = process.platform === 'win32';
 export const EDITOR_DIR = win ? path.join(process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local'), 'P9') : path.join(home, '.local', 'share', 'p9');
 // The one VSCodium REH P9 is tested with (1.121.03429, README has the download and its SHA-256).
 export const EDITOR_COMMIT = '824c4c46a288b839f13b24022655329c2aeb9f81';
+// D5 (threat model row 52): the REH download for each Linux processor, with the SHA-256 VSCodium publishes beside it (x64's
+// is the README's). P9_EDITOR_SERVER_URL/_SHA256 are for tests only; they give no more than P9_EDITOR_HOST already does.
+const REH = 'https://github.com/VSCodium/vscodium/releases/download/1.121.03429/vscodium-reh-linux-';
+export const EDITOR_DOWNLOADS = {
+  x64: [REH + 'x64-1.121.03429.tar.gz', '9b27e6957f7cca9b52686eb9866db131e75d37d180ea5ba0f6cdf44b799f75d9'],
+  arm64: [REH + 'arm64-1.121.03429.tar.gz', '30713cc768ac2727731484d6fcc93b56a1cc0a102dc4c9bc92eff1d7c4d37282'],
+};
 export const OPEN_LOG = win ? path.join(EDITOR_DIR, 'state', 'open-in-vscode.jsonl') : path.join(home, '.local', 'state', 'p9', 'open-in-vscode.jsonl');
 const LOOPBACK = '127.0.0.1';
 
@@ -124,6 +133,52 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
   child.stdout.resume();
   child.stderr.resume();
   return { port, token, commit, unit, data, stop: () => stopEditorHost(unit) };
+}
+
+// Why Dev Focus did not start, as the page names it: the editor server is missing, is another release, or (anything else)
+// failed to start. Only the first two can be fixed with the install button.
+export const editorProblem = error => error?.code === 'ENOENT' && /product\.json/.test(error.message) ? 'missing'
+  : error?.message === 'editor-host-commit-mismatch' ? 'other-release' : 'failed';
+export const editorDownload = (platform = process.platform, arch = process.arch) => {
+  if (process.env.P9_EDITOR_SERVER_URL) return [process.env.P9_EDITOR_SERVER_URL, process.env.P9_EDITOR_SERVER_SHA256];
+  return platform === 'linux' ? EDITOR_DOWNLOADS[arch] ?? null : null;
+};
+
+// Installs the pinned REH into dir/codium-server: download to a temp folder inside dir, check the SHA-256 while writing,
+// unpack with tar (no shell), check product.json's commit, then move any old folder aside (kept) and rename the new one in.
+// Any failure leaves the existing install as it was and no temp folder behind.
+export async function installEditorHost({ dir = EDITOR_DIR, download = editorDownload(), max = 200 * 1024 * 1024, timeout = 600000 } = {}) {
+  if (!download) throw new Error('editor-download-unavailable');
+  const [url, sha256] = download;
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const temp = await mkdtemp(path.join(dir, '.editor-download-'));
+  try {
+    const file = path.join(temp, 'reh.tar.gz'), hash = createHash('sha256');
+    const response = await fetch(url, { signal: AbortSignal.timeout(timeout) }).catch(() => null);
+    if (!response?.ok || !response.body) throw new Error('editor-download-failed');
+    let size = 0;
+    await pipeline(Readable.fromWeb(response.body), async function* (chunks) {
+      for await (const chunk of chunks) {
+        if ((size += chunk.length) > max) throw new Error('editor-download-too-big');
+        hash.update(chunk);
+        yield chunk;
+      }
+    }, createWriteStream(file, { mode: 0o600 })).catch(error => { throw new Error(error.message === 'editor-download-too-big' ? error.message : 'editor-download-failed'); });
+    if (hash.digest('hex') !== sha256) throw new Error('editor-download-mismatch');
+    const target = path.join(temp, 'codium-server');
+    await mkdir(target);
+    const code = await new Promise(resolve => spawn('tar', ['-xzf', file, '-C', target], { shell: false, stdio: 'ignore' })
+      .once('error', () => resolve(-1)).once('exit', resolve));
+    if (code !== 0) throw new Error('editor-unpack-failed');
+    const commit = await readFile(path.join(target, 'product.json'), 'utf8').then(text => JSON.parse(text).commit, () => null);
+    if (commit !== EDITOR_COMMIT) throw new Error('editor-host-commit-mismatch');
+    const final = path.join(dir, 'codium-server');
+    if (existsSync(final)) await rename(final, final + '.replaced-' + Date.now());
+    await rename(target, final);
+    return { installed: final };
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 }
 
 // Windows' 0o700 and 0o600 do nothing: replace the ACL with one full-control entry for the current user, inherited by
