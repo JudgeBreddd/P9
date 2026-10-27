@@ -30,6 +30,8 @@ function encode(credential) {
 function done(result) {
   if (result.status >= 300) return status('Refused (' + (result.body.error ?? result.status) + ')');
   sessionStorage.setItem('p9-csrf', result.body.csrf);
+  // The phone keeps it for the session's 12 hours, so a reopened app is still signed in (phone.ts csrfToken).
+  localStorage.setItem('p9-csrf', JSON.stringify({ token: result.body.csrf, at: Date.now() }));
   status('Logged in.');
   // A "Continue on phone" link that met sign-in keeps its chat; only an exact #chat=<uuid>, so the page bounces nowhere else.
   const chat = /^#chat=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(location.hash) ? location.hash : '';

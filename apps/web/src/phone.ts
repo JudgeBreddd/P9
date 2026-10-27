@@ -9,6 +9,11 @@ type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | nul
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+// L1: the message in the box is kept in this phone's storage (label() runs on every change of it), so a reload or a sign-in
+// does not eat it. "restored" is the one kept from before this page loaded, waiting for its chat to open (route()).
+let restored: { id: string; text: string } | null = (() => {
+  try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
+})();
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
@@ -68,9 +73,27 @@ function fit() {
 }
 window.visualViewport?.addEventListener('resize', fit); window.visualViewport?.addEventListener('scroll', fit); addEventListener('resize', fit); addEventListener('orientationchange', () => { tallest = 0; fit(); });
 fit();
+// L1: sign-in is the one place this page is thrown away, so what is unsent goes to storage first (the draft: label()) and
+// the chat is named in the address, which the login page hands back (an exact #chat=<uuid>).
+function toLogin() {
+  forgetMission(); localStorage.removeItem('p9-csrf');
+  location.replace('/login' + (openId ? '#chat=' + encodeURIComponent(openId) : ''));
+}
+// L1: the CSRF token outlives a closed or discarded tab (sessionStorage does not, and a phone drops it when the app is
+// swiped away while the 12-hour cookie lives on), so a reopened app does not sign in again. It is kept no longer than the
+// session itself (auth.mjs SESSION_MS), and a 401 or a login drops it.
+const CSRF_MS = 12 * 3600 * 1000;
+function csrfToken() {
+  const tab = sessionStorage.getItem('p9-csrf'); if (tab) return tab;
+  try {
+    const kept = JSON.parse(localStorage.getItem('p9-csrf') ?? 'null');
+    if (typeof kept?.token === 'string' && Date.now() - Number(kept.at) < CSRF_MS) { sessionStorage.setItem('p9-csrf', kept.token); return kept.token; }
+  } catch {}
+  return null;
+}
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
-  if (response.status === 401) { forgetMission(); location.replace('/login'); }
+  if (response.status === 401) toLogin();
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
   return body;
@@ -93,12 +116,11 @@ async function mutate(path: string, body: Json) {
   keepPending(key, pending);
   const relogin = () => {
     keepPending(key, { ...pending, used: true });
-    forgetMission();
-    location.replace('/login');
+    toLogin();
     return new Error('login-required');
   };
   // A reopened app keeps its cookie but not sessionStorage's CSRF token: log in again for a fresh one (release r1 R1-4).
-  const csrf = sessionStorage.getItem('p9-csrf');
+  const csrf = csrfToken();
   if (!csrf) throw relogin();
   let response: Response;
   try { response = await fetch(path, { method: path.startsWith('/files') ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
@@ -414,6 +436,9 @@ function route(id: string) {
   if (!id) { pushed = false; mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] }); online(); renderList(); return; }
   if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one<HTMLElement>('#jump').hidden = true; }
   render();
+  // L1: the unsent message from before the page was last thrown away (a sign-in, a reload) goes back in its own chat's box.
+  const box = one<HTMLTextAreaElement>('#prompt');
+  if (restored?.id === id && !box.value) { box.value = restored.text; label(); }
 }
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
 function back() { if (pushed) window.history.back(); else { window.history.replaceState(null, '', location.pathname + location.search); route(''); } }
@@ -566,6 +591,10 @@ function label() {
   const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
   const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
   const box = one<HTMLTextAreaElement>('#prompt');
+  if (!restored || box.value) {
+    restored = null;
+    try { if (box.value.trim()) localStorage.setItem('p9-draft', JSON.stringify({ id, text: box.value })); else localStorage.removeItem('p9-draft'); } catch {}
+  }
   box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
   // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
   // here. ponytail: by hand, as iOS Safari has no field-sizing.
@@ -647,7 +676,7 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { input.value = ''; note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
+  if (result.status === 202) { input.value = ''; label(); note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
   else note(`Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
