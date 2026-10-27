@@ -437,7 +437,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // primary: an AGENTS.md with the line Mission parses (**Main project: ...** (`path`)), else the top one.
     const mainLine = async (file) => /\*\*Main project: [^*]+\*\* \(`[^`]+`/.test(await readAsset(path.join(workspace, file), 'utf8').catch(() => ''));
     for (const file of agents.sort((a, b) => a.split('/').length - b.split('/').length)) if (!found.primary && await mainLine(file)) found.primary = file;
-    // D6: no top AGENTS.md (the workspace's own sits in a folder such as ICM/): the shallowest one.
+    // D6: no top AGENTS.md (the workspace's own sits in a folder such as Work/): the shallowest one.
     if (!found.primary && agents.length) found.primary = agents.includes('AGENTS.md') ? 'AGENTS.md' : agents.sort(byDepth)[0];
     for (const folder of ['needs-you', 'waiting']) if (!found.waiting && await isFolder(folder)) found.waiting = folder;
     if (!found.waiting && waits.length) found.waiting = waits.sort(byDepth)[0];
