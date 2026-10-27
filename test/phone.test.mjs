@@ -257,7 +257,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     'Last solo run', 'Workspace', 'Logs', 'Health', 'Backups', 'Notes', 'Pages']);
   for (const [id, title] of phoneWins) {
     await page.click(`#mission [data-open="${id}"]`);
-    assert.equal(await page.locator(`#w-${id}[open] > header h2`).innerText(), title);
+    assert.equal(await page.locator(`#w-${id}[open] > header .title h1`).innerText(), title);
     await page.click(`#w-${id} [data-close]`);
     await page.waitForSelector(`#w-${id}[open]`, { state: 'detached' });
   }
@@ -330,7 +330,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.waitForSelector('#mission pre:has-text("backup line 2")');
   await page.screenshot({ path: path.join(evidence, 'phone-mission-window.png') });
   await closeWindow();
-  assert.equal(await page.locator('#mission dialog:has(h2:text-is("Notes")) [data-space-text]').textContent(), 'An empty section.');
+  assert.equal(await page.locator('#mission dialog:has(h1:text-is("Notes")) [data-space-text]').textContent(), 'An empty section.');
   assert.equal(await page.locator('#mission .tile:has(span:text-is("Backups")) b').innerText(), '2'); // a button and a log; the text is not counted
   await page.screenshot({ path: path.join(evidence, 'phone-mission-hub.png'), fullPage: true });
   // Phone: the same New idea box, in the Workspace window; this one is a fix, so it lands in _ideas/needs-done/.
