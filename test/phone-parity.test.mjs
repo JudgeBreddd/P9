@@ -185,6 +185,15 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   assert.equal(await page.evaluate(() => document.querySelector('#looseDlg').open), false);
 });
 
+// The phone's picked chat (the hidden #conversation select the composer, queue and Mode read) follows the chat on screen.
+test('P6: the composer stays on the chat on screen when that chat leaves the list (stopped unused on the desktop)', { timeout: 60000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const other = await newChat(page, 'claude'), id = await newChat(page, 'codex');
+  assert.equal((await server.desk('/chat/' + id + '/stop', 'POST')).status, 200);
+  await page.waitForFunction((id) => ![...document.querySelectorAll('#conversation option')].some((option) => option.value === id), id, { timeout: 10000 });
+  assert.notEqual(await page.inputValue('#conversation'), other, 'the composer on the stopped chat now sends to another chat');
+});
+
 test('P10: an agent\'s question is answered or declined on the phone', { timeout: 90000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');

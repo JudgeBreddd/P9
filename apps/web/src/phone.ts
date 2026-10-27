@@ -138,12 +138,15 @@ async function readChat() {
 // message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
 // apart. The chat shown stays picked.
 function fillPicker() {
-  const select = one<HTMLSelectElement>('#conversation'), was = select.value;
+  const select = one<HTMLSelectElement>('#conversation');
   const option = (item: Json) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`;
   const group = (label: string, items: Json[]) => items.length ? `<optgroup label="${label}">${items.map(option).join('')}</optgroup>` : '';
   select.innerHTML = group('Open', state.conversations.filter((item) => item.state !== 'stopped')) + group('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
     || '<option value="">No conversations yet</option>';
-  if ([...select.options].some((option) => option.value === was)) select.value = was;
+  // The chat on screen, not the select's fallback to its first (newest) option: with that, a chat that left the list
+  // (stopped before its first message, or closed) had its composer send to another chat, and a chat being made read
+  // as open before it was drawn.
+  select.value = openId;
 }
 // P10: a new chat can start in a folder a recent chat used (the daemon's list is newest first); the desktop's
 // folder dialog has no phone form, so a new folder is picked there once. Shown in the New chat sheet.
