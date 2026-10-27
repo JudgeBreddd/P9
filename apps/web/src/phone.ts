@@ -1241,5 +1241,7 @@ one<HTMLButtonElement>('#loadDisk').onclick = () => {
 
 addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
-online(); void loadChat().then(listen); void loadUsage();
+// L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
+online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+void first.then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');
