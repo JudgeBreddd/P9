@@ -392,11 +392,11 @@ const body = one<HTMLElement>('#chatBody');
 function route(id: string) {
   const changed = id !== openId; openId = id;
   const select = one<HTMLSelectElement>('#conversation'); if (id) select.value = id;
-  one('#chatList').hidden = !!id; one('#chatArea').hidden = !id; one('#composerSlot').hidden = !id;
+  one<HTMLElement>('#chatList').hidden = !!id; one<HTMLElement>('#chatArea').hidden = !id; one<HTMLElement>('#composerSlot').hidden = !id;
   document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
   barSig = '';
   if (!id) { pushed = false; mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] }); online(); renderList(); return; }
-  if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one('#jump').hidden = true; }
+  if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one<HTMLElement>('#jump').hidden = true; }
   render();
 }
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
@@ -409,7 +409,7 @@ function render() {
     history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
     return;
   }
-  const { blocks, strip } = build(picked), all = itemsOf(blocks), events = one('#events');
+  const { blocks, strip } = build(picked), all = itemsOf(blocks), events = one<HTMLElement>('#events');
   if (!stuck && seenItems) windowSize += Math.max(0, all.length - seenItems); // a reader part way up keeps their top; the window slides only at the bottom
   seenItems = all.length;
   const shown = all.slice(-windowSize);
@@ -419,7 +419,7 @@ function render() {
   if (!blocks.length) events.insertAdjacentHTML('beforeend', '<div class="empty">No messages yet.</div>');
   if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
   anchored = false;
-  const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one('#chips');
+  const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
   chips.hidden = !plan.length && !cards;
   chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (cards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button>` : '');
@@ -427,15 +427,15 @@ function render() {
   renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
 body.addEventListener('scroll', () => {
-  stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 80; one('#jump').hidden = stuck;
+  stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 80; one<HTMLElement>('#jump').hidden = stuck;
   if (body.scrollTop < 60 && hiddenBlocks > 0) { windowSize += 60; anchored = true; render(); } // older history loads when the reader reaches the top
 }, { passive: true });
 new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(body);
 new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(one('#events'));
 one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
 one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-one('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
-one('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
+one<HTMLElement>('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
+one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
 one('[data-bar="chat"]').addEventListener('click', (event) => {
   const button = (event.target as Element).closest('button'); if (!button) return;
   if (button.dataset.back !== undefined) back();
@@ -662,14 +662,14 @@ const picker = one<HTMLInputElement>('#attachInput');
 const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');
 // P4: + and the mode pill open the shared sheet. The phone's own pickers: the photo library, the camera, or its files
 // (the same image types the daemon takes); the chooser opens in the same tap, so the browser lets it.
-one('#attach').onclick = () => openSheet('Attach', opts([['pick', 'library', 'Photo library'], ['pick', 'camera', 'Take photo'], ['pick', 'file', 'File']]));
+one<HTMLElement>('#attach').onclick = () => openSheet('Attach', opts([['pick', 'library', 'Photo library'], ['pick', 'camera', 'Take photo'], ['pick', 'file', 'File']]));
 // The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's effort, fast mode and plan
 // (the model is the top bar's Model sheet), which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
 function pill() {
   const name = (one<HTMLSelectElement>('#mode').selectedOptions[0]?.text ?? '').replace(/^Mode: /, ''), button = one('#modePill');
   button.textContent = (name === 'as set' ? 'Mode' : name) + ' ▾'; button.setAttribute('aria-label', 'Mode: ' + (name || 'as set'));
 }
-one('#modePill').onclick = () => {
+one<HTMLElement>('#modePill').onclick = () => {
   const mode = one<HTMLSelectElement>('#mode');
   // The first row sends no mode: the chat stays in the one it is set to.
   const name = (o: HTMLOptionElement) => o.value ? o.value : 'As set' + (o.text === 'Mode: as set' ? '' : ': ' + o.text.replace(/^Mode: /, ''));

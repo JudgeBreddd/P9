@@ -364,7 +364,8 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   const [slot, box, text, plus, pillBox, send] = [await rect('#composerSlot'), await rect('#box'), await rect('#prompt'), await rect('#attach'), await rect('#modePill'), await rect('#send')];
   assert.deepEqual(await page.$eval('#box', (el) => [getComputedStyle(el).borderTopLeftRadius, el.parentElement.id]), ['22px', 'composerSlot']);
   assert.ok(box.x >= 8 && box.x + box.width <= 382 && box.y + box.height <= slot.y + slot.height, 'the box sits 8 px in from each side, inside the slot');
-  assert.ok(slot.y + slot.height <= (await rect('nav')).y + 0.5, 'the slot sits on the tab bar');
+  // A chat hides the tab bar (c1's chat screen), so the slot is the foot of the screen.
+  assert.ok(!await page.isVisible('nav') && Math.abs(slot.y + slot.height - 844) <= 1, 'the slot sits at the foot of the screen: ' + (slot.y + slot.height));
   // Line 2 under the message: + at the left, then the pill, the send at the right, all on one row inside the box.
   for (const [name, r] of [['+', plus], ['pill', pillBox], ['send', send]]) assert.ok(r.y >= text.y + text.height - 0.5 && r.y + r.height <= box.y + box.height + 0.5, name + ' sits under the message, inside the box');
   assert.ok(plus.x < pillBox.x && pillBox.x + pillBox.width < send.x && send.x + send.width >= box.x + box.width - 12, 'the row reads +, pill, then send at the right');
