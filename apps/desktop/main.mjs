@@ -2,17 +2,19 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, We
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { appendFileSync, constants, openSync, watch } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { sendToServer } from './move.mjs';
+import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer } from './xfer.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
-import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR } from './editor-host.mjs';
+import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR, EDITOR_COMMIT, EDITOR_DOWNLOADS } from './editor-host.mjs';
 import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
@@ -42,8 +44,11 @@ export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here an
 // Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
 const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
 // name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
+// xfer: Send files' limits (apps/desktop/xfer.mjs), each a whole number from 1 to its ceiling.
+const XFER_DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(XFER_LIMITS).map(([key, limit]) => [key, limit.default])));
+const checkXfer = x => exactly(x, 'fileMiB,files,sendGiB') && Object.entries(XFER_LIMITS).every(([key, limit]) => Number.isInteger(x[key]) && x[key] >= 1 && x[key] <= limit.max);
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
-  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false });
+  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false, xfer: XFER_DEFAULTS });
 const NAME = /^[^\p{Cc}\p{Cf}]{0,40}$/u;
 const PET_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/, PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const exactly = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === keys;
@@ -53,13 +58,14 @@ const checkPet = p => exactly(p, 'claude,codex,on,pane,size,system,top') && type
   && [p.claude, p.codex, p.system].every(petName) && spot(p.top) && spot(p.pane)
   && { on: p.on, size: p.size, claude: p.claude, codex: p.codex, system: p.system, top: p.top && [...p.top], pane: p.pane && [...p.pane] };
 export function checkSettings(value) {
-  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,zoom') || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
+  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,xfer,zoom') || !checkXfer(value.xfer) || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
       || typeof value.name !== 'string' || !NAME.test(value.name) || typeof value.startLast !== 'boolean'
       || value.zoom < 0.5 || value.zoom > 3 || !exactly(value.focus, 'chat,dev,mission') || !exactly(value.pet, 'chat,dev,mission')) return null;
   const focus = value.focus, pet = { chat: checkPet(value.pet.chat), dev: checkPet(value.pet.dev), mission: checkPet(value.pet.mission) };
   if (![focus.chat, focus.dev, focus.mission].every(on => typeof on === 'boolean') || !(focus.chat || focus.dev || focus.mission)) return null;
   if (!pet.chat || !pet.dev || !pet.mission) return null;
-  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast };
+  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast,
+    xfer: { fileMiB: value.xfer.fileMiB, files: value.xfer.files, sendGiB: value.xfer.sendGiB } };
 }
 // Older files: no pet, one pet name, or one pet per agent ({ claude, codex, system }) become every focus's pets, shown in Chat only.
 // Files from before the landing page get its name (the account's, below) and startLast off.
@@ -69,7 +75,7 @@ export function upgradeSettings(file, name = '') {
     const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old; // an older file keeps its own (no) pet
     file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
   }
-  return { name, startLast: false, ...file };
+  return { name, startLast: false, xfer: XFER_DEFAULTS, ...file };
 }
 // Windows keeps the full name in the output of "net user <login>"; the label is localized, so another language falls back to the login name.
 // ponytail: local accounts only (a work-domain full name needs "net user /domain"); a Microsoft account with no full name set also falls back.
@@ -131,24 +137,38 @@ const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
 // gets one button, Install, which asks main (p9dev:install-editor, no arguments) for the pinned download (threat model row 52).
 const html = text => String(text).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 const INSTALL_SCRIPT = "const b = document.getElementById('install'), n = document.getElementById('note');\n"
-  + "b.onclick = async () => { b.disabled = true; n.textContent = 'Downloading and checking it. This takes a minute or two.';\n"
+  + "b.onclick = async () => { b.disabled = true; n.textContent = 'Installing and checking it. This takes a minute or two.';\n"
   + "  const r = await window.p9dev.installEditor().catch(() => ({ error: 'The install did not answer. Try again.' }));\n"
   + "  if (r.error) { n.textContent = r.error; b.disabled = false; } else n.textContent = 'Installed. Starting Dev Focus.'; };";
+// Issue #14: a start that failed says what is missing and what to do, for the causes seen on real installs.
+const AGAIN = ' Switch to another focus and back to Dev Focus to try again.';
+const failedText = (message, where) => /spawn systemd-run ENOENT/.test(message)
+  ? 'Dev Focus is unavailable: ' + where + ' has no systemd-run. P9 runs the editor server in a systemd user scope (part of systemd), so it needs a Linux with systemd.'
+  : /Failed to connect to .*bus|Failed to create bus connection/i.test(message)
+    ? 'Dev Focus is unavailable: ' + where + ' has no systemd user session for the editor server (systemd-run --user could not reach the user bus). Log in there normally (not with su or sudo); on a server, run "loginctl enable-linger" as you once, then restart P9.' + AGAIN
+    : message === 'editor-host-timeout' ? 'Dev Focus is unavailable: the editor server on ' + where + ' did not say it was ready within 30 seconds.' + AGAIN
+      : 'Dev Focus is unavailable: the editor server on ' + where + ' did not start (' + message.slice(0, 300) + '). Installing it again replaces a damaged copy.';
 function devErrorPage(error, download = editorDownload()) {
-  const problem = error.message === 'server-mode' || error.message === 'daemon-unavailable' ? error.message : editorProblem(error);
-  const host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
+  const plain = ['daemon-unavailable', 'server-old'].includes(error.message);
+  const problem = plain ? error.message : error.problem ?? editorProblem(error);
+  // error.server: Server mode, where the daemon there answered (POST /dev/editor) with the cause, its folder and its download.
+  const remote = typeof error.server === 'string', where = remote ? 'the server ' + error.server : 'this computer';
+  const host = remote ? error.place : process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
+  if (remote) download = error.download;
   const text = {
-    'server-mode': 'Dev Focus works on this computer\'s files only for now. Switch to Local in Settings to use it.',
-    'daemon-unavailable': 'Dev Focus is unavailable: P9\'s background service is not answering. It restarts on its own; open Dev Focus again in a few seconds.',
-    missing: 'Dev Focus needs VSCodium\'s editor server (release 1.121.03429), and it is not installed on this computer. It belongs in ' + host + '.',
-    'other-release': 'Dev Focus needs VSCodium\'s editor server release 1.121.03429; ' + host + ' holds a different release.',
-    failed: 'Dev Focus is unavailable: the editor server did not start (' + String(error.message).slice(0, 300) + ').',
+    'daemon-unavailable': remote ? 'Dev Focus is unavailable: the server ' + error.server + ' is not answering through the tunnel. P9 reconnects on its own; open Dev Focus again in a few seconds.'
+      : 'Dev Focus is unavailable: P9\'s background service is not answering. It restarts on its own; open Dev Focus again in a few seconds.',
+    'server-old': 'Dev Focus is unavailable: the P9 on the server ' + error.server + ' is older than 0.1.6 and cannot run the editor for this window. Update P9 on the server, then open Dev Focus again.',
+    missing: 'Dev Focus needs VSCodium\'s editor server (release 1.121.03429), and it is not installed on ' + where + '. It belongs in ' + host + '.',
+    'other-release': 'Dev Focus needs VSCodium\'s editor server release 1.121.03429; ' + host + ' on ' + where + ' holds a different release.',
+    failed: failedText(String(error.message), where),
   }[problem];
-  const fixable = problem === 'missing' || problem === 'other-release';
-  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server</button></p>'
-      + '<p id="note" style="color:#8b97ad">Downloads about 83 MB from VSCodium\'s GitHub releases, checks its SHA-256 against the one P9 pins, and installs it there.'
-      + (problem === 'other-release' ? ' The release there now is kept beside it.' : '') + '</p><script>' + INSTALL_SCRIPT + '</script>'
-    : '<p style="color:#8b97ad">P9 has no download of it for this computer (' + html(process.platform + '-' + process.arch) + '). The README\'s Requirements say how to install it by hand.</p>';
+  const fixable = problem === 'missing' || problem === 'other-release' || (problem === 'failed' && / did not start \(/.test(text));
+  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server' + (remote ? ' on the server' : '') + '</button></p>'
+      + '<p id="note" style="color:#8b97ad">' + (!remote && path.isAbsolute(download[0]) ? 'Takes the copy this AppImage carries' : 'Downloads about 83 MB from VSCodium\'s GitHub releases' + (remote ? ' onto ' + html(error.server) : ''))
+      + ', checks its SHA-256 against the one P9 pins, and installs it there.'
+      + (problem !== 'missing' ? ' The copy there now is kept beside it.' : '') + '</p><script>' + INSTALL_SCRIPT + '</script>'
+    : '<p style="color:#8b97ad">P9 has no download of it for ' + html(remote ? 'that server' : 'this computer (' + process.platform + '-' + process.arch + ')') + '. The README\'s Requirements say how to install it by hand.</p>';
   const page = '<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px"><p id="cause">' + html(text) + '</p>' + fix + '</body>';
   return { files: new Map([['/index.html', Buffer.from(page)]]), csp: "default-src 'none'; style-src 'unsafe-inline'; script-src " + (inlineHashes(page).join(' ') || "'none'") };
 }
@@ -197,7 +217,17 @@ export async function createDesktop({ state, open } = {}) {
   };
   // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
   // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
-  if (process.platform === 'linux' && app.isPackaged && process.env.APPIMAGE) appImageService(process.resourcesPath);
+  const appImage = process.platform === 'linux' && app.isPackaged && Boolean(process.env.APPIMAGE);
+  if (appImage) appImageService(process.resourcesPath);
+  // Item 16 (threat model row 52): the AppImage carries the pinned editor server (package-linux.mjs) and installs it from that
+  // copy, checked against the same SHA-256 as the download, when ~/.local/share/p9's is missing or another release (a first
+  // start, or an update that moved the pin). Dev Focus's Install uses the copy too, so no network is needed. Logs, never throws.
+  const editorCopy = appImage ? [path.join(process.resourcesPath, 'editor', 'reh.tar.gz'), EDITOR_DOWNLOADS.x64[1]] : undefined;
+  let editorInstall = null;
+  const installEditor = () => editorInstall ??= installEditorHost({ download: editorCopy }).finally(() => { editorInstall = null; });
+  if (editorCopy) readFile(path.join(EDITOR_DIR, 'codium-server', 'product.json'), 'utf8').then(text => JSON.parse(text).commit, () => null)
+    .then(commit => commit === EDITOR_COMMIT || installEditor().then(() => console.log('P9: editor server installed from the AppImage'),
+      error => console.error('P9: the editor server was not installed from the AppImage: ' + error.message)));
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
@@ -630,6 +660,9 @@ export async function createDesktop({ state, open } = {}) {
     if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts() };
     endDock();
     await useServer(args[0]);
+    // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
+    devFolder = null; devServing = null;
+    if (devView) reopenDev();
     setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
     return { ok: true };
   });
@@ -645,6 +678,46 @@ export async function createDesktop({ state, open } = {}) {
     try { return await sendToServer({ local: localState, id: args[0], host: serverLast, ssh: sshCommand }); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
     finally { sending.delete(args[0]); }
+  });
+  // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
+  // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
+  // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
+  let xferPlan = null, xferBusy = false;
+  const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
+  ipcMain.handle('p9:xfer', async (event, ...args) => {
+    const [action, a, b, c] = args;
+    const ok = action === 'plan' ? args.length === 2 && typeof a === 'string' && a.length <= 4096 && XFER_FOLDER.test(a) && !a.split('/').some(p => p === '.' || p === '..')
+      : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
+    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Server to Local first: Send files copies this computer\'s files to the server.' };
+    if (!serverLast) return { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' };
+    if (!localState) return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' };
+    if (xferBusy) return { error: 'busy', message: 'A send is running already.' };
+    xferBusy = true;
+    try {
+      if (action === 'plan') {
+        const got = await planFolder({ local: localState, host: serverLast, folder: a, userData: app.getPath('userData'), ssh: sshCommand });
+        if (got.error) return got;
+        const p = got.plan, record = !p.first.length; // first: nothing sent to this folder yet
+        xferPlan = { id: randomUUID(), host: serverLast, plan: p };
+        const asked = [...p.conflicts, ...p.first];
+        return { id: xferPlan.id, host: serverLast, folder: a, send: p.send.length, same: p.same.length, sendBytes: p.send.reduce((n, i) => n + i.laptop.size, 0),
+          kind: p.first.length ? 'first' : p.conflicts.length ? 'conflict' : null, summary: p.summary, asked: asked.length,
+          list: asked.slice(0, SHOWN).map(item => ({ path: item.path, text: describeXfer(item, record) })),
+          deletes: p.deletes.length, deleteList: p.deletes.slice(0, SHOWN).map(item => item.path), skipped: p.skipped, syncthing: p.syncthing };
+      }
+      if (xferPlan?.id !== a) return { error: 'stale', message: 'That plan is gone: press Send files again.' };
+      const { host, plan: p } = xferPlan, work = resolveXfer(p, b, c);
+      if (!work) return { error: 'choice', message: 'Pick how to settle the files that differ.' };
+      const limit = overLimit(work, settings.xfer, p.truncated);
+      if (limit) return limit;
+      xferPlan = null; // used once: sending again plans again (Builder, 2026-10-27: that is the resync)
+      const r = await runPlan({ local: localState, host, userData: app.getPath('userData'), plan: p, work, ssh: sshCommand,
+        onProgress: progress => { if (!window.isDestroyed()) window.webContents.send('p9:xfer', { id: a, ...progress }); } });
+      return { ...r, sent: r.sent?.length ?? 0, received: r.received?.length ?? 0, deletedOnServer: r.deletedOnServer?.length ?? 0, deletedHere: r.deletedHere?.length ?? 0,
+        kept: (r.recovery?.server.length ?? 0) + (r.recovery?.laptop.length ?? 0), recovery: undefined, changed: r.changed?.length ?? 0 };
+    } catch { return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' }; }
+    finally { xferBusy = false; }
   });
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
@@ -684,8 +757,33 @@ export async function createDesktop({ state, open } = {}) {
     // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
     const unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), quit = new AbortController();
     app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
+    // An install in progress (the AppImage's first start) finishes first, so Dev Focus opens instead of saying missing.
+    await editorInstall?.catch(() => {});
     return startEditorHost({ unit, signal: quit.signal, spell: process.env.P9_SPELL_CHECK !== 'off' });
   })().catch(error => { editorHost = null; throw error; });
+  // Server mode (threat model row 50): the server's daemon runs the editor (POST /dev/editor) and the tunnel forwards its socket to
+  // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the
+  // token check are the same as with a local editor host, which listens on 127.0.0.1 too. One relay, for the current server.
+  let relay = null;
+  const serverEditor = async () => {
+    const asked = await daemonRequest(state, 'POST', '/dev/editor', {}, undefined, 60000).catch(error => error);
+    if (asked instanceof Error || asked.status === 404) throw new Error(asked.message === 'bad-response' || asked.status === 404 ? 'server-old' : 'daemon-unavailable');
+    const { body } = asked;
+    if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: serverHost });
+    const socket = path.join(state, 'editor.sock');
+    if (relay?.socket !== socket) {
+      relay?.server.close();
+      const listener = net.createServer(client => {
+        const far = net.connect(socket);
+        client.pipe(far).pipe(client);
+        far.on('error', () => client.destroy());
+        client.on('error', () => far.destroy());
+      });
+      await new Promise((resolve, reject) => listener.once('error', reject).listen(0, '127.0.0.1', resolve));
+      relay = { socket, server: listener, port: listener.address().port };
+    }
+    return { port: relay.port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
+  };
   const openDev = () => dev ??= (async () => {
     const devSession = session.fromPartition('persist:p9-dev');
     if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview'));
@@ -718,9 +816,11 @@ export async function createDesktop({ state, open } = {}) {
     let config;
     try {
       if (!state) throw new Error('daemon-unavailable');
-      if (serverHost) throw new Error('server-mode');
-      const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state)]);
-      const host = await startHost();
+      // Just after a switch to a server the tunnel is still coming up: wait for it as long as connectServer does (15 s).
+      for (let i = 0; i < 60 && serverHost && !server && !serverError; i++) await new Promise(resolve => setTimeout(resolve, 250));
+      const unanswered = () => { throw Object.assign(new Error('daemon-unavailable'), { server: serverHost ?? undefined }); };
+      const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state).catch(unanswered)]);
+      const host = serverHost ? await serverEditor() : await startHost();
       const origin = 'http://127.0.0.1:' + host.port;
       // Extension pages (webviews: a README, an image preview) get their own origin, p9://webview, so their scripts can't reach
       // window.p9dev (threat model row 5; Builder, 2026-10-19: "photos ... blocked"). VS Code injects an inline script into each
@@ -740,9 +840,10 @@ export async function createDesktop({ state, open } = {}) {
       // workspace is the guard root (the folder saves are relative to); folder is the one the editor shows.
       if (devFolder?.outside && (await daemonRequest(state, 'POST', '/dev/root', { path: devFolder.path }).catch(() => null))?.status !== 200) devFolder = null;
       devServing = devFolder;
-      config = { port: host.port, token: host.token, commit: host.commit, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
+      config = { port: host.port, token: host.token, commit: host.commit, server: host.server, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
     } catch (error) {
-      sites.dev = devErrorPage(error);
+      if (serverHost && error.server === undefined) error.server = serverHost;
+      sites.dev = devErrorPage(error, editorCopy ?? editorDownload());
       config = { error: error.message };
     }
     await devView.webContents.loadURL(DEV_URL);
@@ -763,7 +864,6 @@ export async function createDesktop({ state, open } = {}) {
   const devToWorkspace = () => { devFolder = null; reopenDev(); };
   // D5 (threat model row 52): Install on Dev Focus's error page. No arguments: main installs only the pinned download, one
   // install at a time, never over an editor server that is running; then Dev Focus opens again.
-  let editorInstall = null;
   const INSTALL_ERRORS = {
     'editor-download-unavailable': 'P9 has no download of the editor server for this computer.',
     'editor-download-failed': 'The download did not finish. Check the internet connection, then press Install again.',
@@ -774,8 +874,17 @@ export async function createDesktop({ state, open } = {}) {
   };
   ipcMain.handle('p9dev:install-editor', async (event, ...args) => {
     if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
+    if (serverHost) {
+      // On the server, by its daemon (POST /dev/editor/install): the same pinned download, checked there.
+      const done = await daemonRequest(state, 'POST', '/dev/editor/install', {}, undefined, 660000).catch(() => null);
+      if (!done) return { error: 'The server did not answer. Check the connection in Settings > Server, then press Install again.' };
+      if (done.status === 409) return { error: 'The editor server is already running on the server.' };
+      if (done.status !== 200) return { error: INSTALL_ERRORS[done.body?.error] ?? 'The install on the server failed (' + String(done.body?.error).slice(0, 200) + ').' };
+      setTimeout(reopenDev);
+      return { ok: true };
+    }
     if (await editorHost?.catch(() => null)) return { error: 'The editor server is already running.' };
-    try { await (editorInstall ??= installEditorHost().finally(() => { editorInstall = null; })); }
+    try { await installEditor(); }
     catch (error) { return { error: INSTALL_ERRORS[error.message] ?? 'The install failed (' + String(error.message).slice(0, 200) + ').' }; }
     setTimeout(reopenDev);
     return { ok: true };
@@ -1163,6 +1272,11 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9dev:host-path', async (event, ...args) => {
     if (!fromDev(event) || args.length !== 2 || typeof args[0] !== 'string' || !['write', 'name'].includes(args[1])) throw new Error('ipc-sender-refused');
+    if (serverHost) {
+      // The editor's data folder is on the server: its daemon checks the path there.
+      const answer = await daemonRequest(state, 'POST', '/dev/editor/writable', { path: args[0], kind: args[1] }).catch(() => null);
+      return answer?.status === 200 && answer.body?.ok === true;
+    }
     const host = await editorHost?.catch(() => null);
     return Boolean(host) && hostWritable(host.data, args[0], args[1]);
   });
@@ -1171,6 +1285,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromDev(event) || args.length !== 1 || !input) throw new Error('ipc-sender-refused');
     const config = await openDev();
     if (config.error) return { ok: false, error: config.error };
+    if (config.server) return { ok: false, error: 'server-mode' };
     return openInCode({ workspace: config.workspace, name: input.name, line: input.line, reason: input.reason });
   });
   // p9 edit / p9 diff (threat model row 14). Anything running as Builder can start a second instance, so this is the boundary:
