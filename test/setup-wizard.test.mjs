@@ -379,7 +379,7 @@ test('Setup wizard sign-in: the daemon runs only the fixed login of the bundled 
   await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code: 'done' });
   assert.equal(await until(async () => { const s = (await call(instance, '/setup/login')).body.claude; return s.exit !== null && String(s.exit); }, 'the exit'), '0');
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
-  await until(async () => JSON.parse(await readFile(at('fake-login-argv'), 'utf8'))[0] === 'codex', 'the codex start');
+  await until(() => readFile(at('fake-login-argv'), 'utf8').then((text) => JSON.parse(text)[0] === 'codex').catch(() => false), 'the codex start'); // the fake's writeFileSync can be read mid-write
   assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['codex', 'cli', 'login']);
 });
 
