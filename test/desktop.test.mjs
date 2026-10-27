@@ -238,8 +238,8 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.deepEqual(navigation.committed, []);
     assert.ok(navigation.started.every(url => url === 'https://example.com/'));
     assert.equal(navigation.before, 'p9://app/'); assert.equal(navigation.after, navigation.before);
-    // The popup was refused: the only pages are the shell and (since Phase 8) the Dev Focus view.
-    assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/')), ['p9://app/']);
+    // The popup was refused: the only pages are the shell, (since Phase 8) the Dev Focus view and the cards overlay.
+    assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/') && !url.startsWith('p9://cards/')), ['p9://app/']);
     if (process.env.P9_SCREENSHOTS) await writeFile(path.join(process.env.P9_SCREENSHOTS, 'navigation-check.json'), JSON.stringify(navigation, null, 2));
   } finally { await application.close(); await rm(profile, { recursive: true, force: true }); }
 });
