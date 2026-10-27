@@ -27,7 +27,8 @@ const sha256 = (file) => new Promise((resolve, reject) => {
 });
 const fileHash = async (file) => (await stat(file).catch(() => null))?.isFile() ? sha256(file) : null;
 // Claude Code's own folder (claude-agent-acp's claudeConfigDir). Agents get no CLAUDE_CONFIG_DIR (child-env.mjs), so it is HOME's.
-const projects = () => path.join(os.homedir(), '.claude', 'projects');
+// Under the test home (test/helpers.mjs sets P9_TEST_HOME) it is that home's, so a test never writes a real ~/.claude.
+const projects = () => path.join(process.env.P9_TEST_HOME || os.homedir(), '.claude', 'projects');
 // The folder Claude Code keeps a working directory's sessions in: every non-alphanumeric made '-' (the Agent SDK's rule).
 // ponytail: past 200 characters the SDK adds a hash; claude-agent-acp's resume searches every project folder, so it still resumes.
 const projectFolder = (cwd) => cwd.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
