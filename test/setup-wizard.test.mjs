@@ -306,18 +306,18 @@ test('Setup wizard: scripts_root is proposed only when a local hub registry comm
 
 test('Setup wizard: a workspace with nested AGENTS.md, a registry.json and a _waiting folder but no workspace-hub is found as it is (D6, threat model row 55)', { timeout: 60000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {
-    await mkdir(path.join(workspace, 'ICM/_waiting'), { recursive: true });
-    await mkdir(path.join(workspace, 'ICM/tools'), { recursive: true });
-    await writeFile(path.join(workspace, 'ICM/AGENTS.md'), '# Workspace\n');
-    await writeFile(path.join(workspace, 'ICM/tools/registry.json'), JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', 'a.sh'] }], apps: [], pages: [] }));
-    await writeFile(path.join(workspace, 'ICM/tools/other.json'), '{}');
-    await mkdir(path.join(workspace, 'ICM/deep/er/est/registry'), { recursive: true });
+    await mkdir(path.join(workspace, 'Work/_waiting'), { recursive: true });
+    await mkdir(path.join(workspace, 'Work/tools'), { recursive: true });
+    await writeFile(path.join(workspace, 'Work/AGENTS.md'), '# Workspace\n');
+    await writeFile(path.join(workspace, 'Work/tools/registry.json'), JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', 'a.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'Work/tools/other.json'), '{}');
+    await mkdir(path.join(workspace, 'Work/deep/er/est/registry'), { recursive: true });
     await writeFile(path.join(workspace, 'notes.txt'), 'x');
     return {};
   });
   const s = (await call(instance, '/setup')).body;
-  assert.deepEqual([s.found.primary, s.found.registry, s.found.waiting], ['ICM/AGENTS.md', 'ICM/tools/registry.json', 'ICM/_waiting']);
-  assert.deepEqual([s.proposed.primary, s.proposed.registry, s.proposed.waiting], ['ICM/AGENTS.md', 'ICM/tools/registry.json', 'ICM/_waiting']);
+  assert.deepEqual([s.found.primary, s.found.registry, s.found.waiting], ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.deepEqual([s.proposed.primary, s.proposed.registry, s.proposed.waiting], ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
   assert.deepEqual(s.creates, [], 'nothing to create: it uses what is there');
   // A registry.json that is not a registry (no scripts, apps or pages list) is not taken.
   const other = await daemon(t, undefined, false, async ({ workspace }) => {

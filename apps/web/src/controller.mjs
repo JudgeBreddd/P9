@@ -499,7 +499,9 @@ function shown(s) {
 }
 function pane(s, i, bare) {
   const working = busy(s);
-  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…' }[s.state];
+  // D14: a chat on its way to the server, or gone there, takes no messages here.
+  const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away;
+  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to server…', moved: 'Moved to ' + (s.movedTo || 'the server') }[s.state];
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
@@ -512,12 +514,15 @@ function pane(s, i, bare) {
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
-      ${s.live && s.agent === 'claude' && s.session ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
+      ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
+      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host ? (s.agent === 'claude'
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>`
+        : `<button data-slot="button" data-variant="ghost" data-size="sm" disabled title="Codex chats cannot move to the server yet: their history lives in Codex's own files. Claude chats can.">Send to server</button>`) : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !s.readonly ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the server') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' ? 'Moving to the server…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
@@ -572,7 +577,7 @@ function paint(root, ss, only) {
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
-    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
+    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved') return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
     const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
@@ -592,6 +597,13 @@ function paint(root, ss, only) {
       const r = await liveChat.call('handoff', { id: s.id });
       if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
       showTerminal(r.body.terminal);
+    });
+    // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
+    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const r = await window.p9.sendToServer(s.id).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+      if (r.status !== 200 && r.body?.error !== 'move-failed') { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
+      b.disabled = false;
     });
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
     p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome(2));
@@ -2147,6 +2159,10 @@ function applyChat(ev) {
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
+    case 'moving': settle(); s.state = 'moving'; notice('Moving to the server: this chat is paused here.'); break;
+    case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Server mode (the title-bar badge) and open it.'); break;
+    case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;
+    case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
     case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
@@ -2202,7 +2218,7 @@ async function loadChat() {
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
   while (!lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
     const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
@@ -2232,7 +2248,7 @@ async function loadChat() {
       S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
       // running (the phone may have resumed it) and gets its tab back.
-      for (const s of S.sessions) { s.hidden = s.state === 'stopped'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
+      for (const s of S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
       closedChats.clear(); localStorage.removeItem('eh-closed-chats');
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
@@ -2245,6 +2261,8 @@ async function loadChat() {
 }
 
 addEventListener('focus', () => renderChats());
+// Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); }, () => {});
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the

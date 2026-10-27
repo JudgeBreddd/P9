@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'sendToServer', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -317,14 +317,14 @@ test('First launch D3: the Mission step says what is created, what is not, and w
   await shot('wizard-mission-step', page.locator('#welDlg'));
 });
 
-// A workspace that keeps its own layout: AGENTS.md in ICM/, a registry in ICM/tools, waiting items in ICM/_waiting.
+// A workspace that keeps its own layout: AGENTS.md in Work/, a registry in Work/tools, waiting items in Work/_waiting.
 const layout = async ({ workspace }) => {
-  await mkdir(path.join(workspace, 'ICM/_waiting'), { recursive: true });
-  await mkdir(path.join(workspace, 'ICM/tools'), { recursive: true });
-  await writeFile(path.join(workspace, 'ICM/AGENTS.md'), '# Workspace\n');
-  await writeFile(path.join(workspace, 'ICM/tools/registry.json'), JSON.stringify({
+  await mkdir(path.join(workspace, 'Work/_waiting'), { recursive: true });
+  await mkdir(path.join(workspace, 'Work/tools'), { recursive: true });
+  await writeFile(path.join(workspace, 'Work/AGENTS.md'), '# Workspace\n');
+  await writeFile(path.join(workspace, 'Work/tools/registry.json'), JSON.stringify({
     scripts: [{ id: 'backup', title: 'Back up', group: 'Maintenance', cmd: ['true'] }], apps: [], pages: [] }));
-  await writeFile(path.join(workspace, 'ICM/_waiting/alpha-question.md'), '# Which colour?\n\nA.\n');
+  await writeFile(path.join(workspace, 'Work/_waiting/alpha-question.md'), '# Which colour?\n\nA.\n');
 };
 
 test('First launch D6: the wizard finds the workspace\'s own layout and attaches it', { timeout: 90000 }, async (t) => {
@@ -336,7 +336,7 @@ test('First launch D6: the wizard finds the workspace\'s own layout and attaches
   await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
   await page.locator('#welBody [data-path]').first().waitFor({ timeout: 10000 });
   // The nested main file, the registry and the _waiting folder are proposed, not the empty starter paths.
-  assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['ICM/AGENTS.md', 'ICM/tools/registry.json', 'ICM/_waiting']);
+  assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
   assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
   assert.match(await page.locator('#welBody [data-creates]').innerText(), /^[^,]*settings\.json$/, 'only the settings file is written, no project files');
   await shot('wizard-mission-existing', page.locator('#welDlg'));
@@ -354,7 +354,7 @@ test('First launch D4: a waiting item says who it waits on, from the owner\'s ow
     await layout(where);
     const file = path.join(where.directory, '.config', 'p9', 'settings.json');
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify({ primary: 'ICM/AGENTS.md', registry: 'ICM/tools/registry.json', waiting: 'ICM/_waiting' }));
+    await writeFile(file, JSON.stringify({ primary: 'Work/AGENTS.md', registry: 'Work/tools/registry.json', waiting: 'Work/_waiting' }));
     return { args: ['--acp-override', fake] };
   });
   const { page } = await openFirst(t, instance);

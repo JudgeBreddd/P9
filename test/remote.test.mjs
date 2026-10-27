@@ -139,3 +139,42 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.ok(await gone(forward));
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host' });
 });
+
+// Send to server (D14) in the window: the button beside Hand off, then the pane frozen as moved. Screenshots go to the log (P9_SHOT).
+test('Send to server in the window: the button, then Moved to the server', { skip, timeout: 60000 }, async (t) => {
+  const markers = async ({ workspace }) => {
+    for (const marker of ['uuid-sessions', 'claude-home']) await writeFile(path.join(workspace, marker), '');
+    return { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] };
+  };
+  const local = await daemon(t, undefined, false, markers), remote = await daemon(t, undefined, false, markers), s = await stage(remote);
+  const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+    headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body) }).then(result => JSON.parse(result.text));
+  const id = (await call(local, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(local, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
+  for (const end = Date.now() + 15000; !(await call(local, '/chat/events?after=0&only=' + id)).events.some(e => e.type === 'turn-end'); await new Promise(resolve => setTimeout(resolve, 100)))
+    assert.ok(Date.now() < end, 'the first turn ended');
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const shot = async name => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
+  const pane = page.locator('.pane[data-id="' + id + '"]');
+  const button = pane.locator('[data-send-away]');
+  await button.waitFor({ timeout: 20000 });
+  assert.match(await button.getAttribute('title'), /test-host/);
+  await button.hover();
+  await shot('send-to-server-button');
+  await button.click();
+  await pane.getByText('Moved to test-host').first().waitFor({ timeout: 30000 });
+  assert.equal(await pane.locator('textarea').isDisabled(), true);
+  assert.equal(await pane.locator('[data-send]').isDisabled(), true);
+  assert.equal(await pane.locator('[data-send-away]').count(), 0);
+  await shot('send-to-server-moved');
+  assert.equal((await call(remote, '/chat')).conversations.find(c => c.id === id)?.state, 'stopped');
+});

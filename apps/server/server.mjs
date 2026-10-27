@@ -109,7 +109,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
-  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state });
+  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
@@ -338,6 +338,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     app.post('/devices/:id/lock', (c) => reply(c, auth.lock(c.req.param('id'), 'desktop')));
     app.post('/devices/:id/revoke', (c) => reply(c, auth.revoke(c.req.param('id'))));
   }
+  // Send to server (D14, threat model row 51, move.mjs): the desktop moves a chat; the phone never sees these routes.
+  app.post('/chat/:id/send-away', async (c) => reply(c, await chat.sendAway(c.req.param('id'))));
+  app.get('/chat/:id/move-part', async (c) => reply(c, await chat.part(c.req.param('id'), c.req.query('kind'), Number(c.req.query('offset')))));
+  app.post('/chat/:id/moved', async (c) => reply(c, await chat.moved(c.req.param('id'), await json(c))));
+  app.post('/chat-import/:id/part', async (c) => reply(c, await chat.take(c.req.param('id'), await json(c))));
+  app.post('/chat-import/:id', async (c) => reply(c, await chat.land(c.req.param('id'), await json(c))));
   // Threat model row 15: only the desktop turns the agent lock on or off; reading it is on the shared api.
   app.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   // Threat model row 4: file protection is read and changed by the desktop only; the phone just lives with it.
@@ -431,7 +437,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // primary: an AGENTS.md with the line Mission parses (**Main project: ...** (`path`)), else the top one.
     const mainLine = async (file) => /\*\*Main project: [^*]+\*\* \(`[^`]+`/.test(await readAsset(path.join(workspace, file), 'utf8').catch(() => ''));
     for (const file of agents.sort((a, b) => a.split('/').length - b.split('/').length)) if (!found.primary && await mainLine(file)) found.primary = file;
-    // D6: no top AGENTS.md (the workspace's own sits in a folder such as ICM/): the shallowest one.
+    // D6: no top AGENTS.md (the workspace's own sits in a folder such as Work/): the shallowest one.
     if (!found.primary && agents.length) found.primary = agents.includes('AGENTS.md') ? 'AGENTS.md' : agents.sort(byDepth)[0];
     for (const folder of ['needs-you', 'waiting']) if (!found.waiting && await isFolder(folder)) found.waiting = folder;
     if (!found.waiting && waits.length) found.waiting = waits.sort(byDepth)[0];
