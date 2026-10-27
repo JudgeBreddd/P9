@@ -28,7 +28,7 @@ import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
 import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
-import { AGENTS, adminCommand, dependencies, found, placeAgents } from './deps.mjs';
+import { AGENTS, adminCommand, dependencies, found as onPath, placeAgents } from './deps.mjs';
 import pkg from '../../package.json' with { type: 'json' };
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
@@ -528,7 +528,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
       claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')),
       // D8: each agent's own CLI, for a terminal and Hand off (chats use the CLI the adapter ships, so they work without it).
-      claudeCli: await found('claude'), codexCli: await found('codex'),
+      claudeCli: await onPath('claude'), codexCli: await onPath('codex'),
       // Item 15: every dependency, its reason and, for a system package, the admin command (deps.mjs).
       dependencies: await dependencies() });
   });
