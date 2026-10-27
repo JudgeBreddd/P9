@@ -681,7 +681,7 @@ export async function createDesktop({ state, open } = {}) {
     // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
     const unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), quit = new AbortController();
     app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
-    return startEditorHost({ unit, signal: quit.signal });
+    return startEditorHost({ unit, signal: quit.signal, spell: process.env.P9_SPELL_CHECK !== 'off' });
   })().catch(error => { editorHost = null; throw error; });
   const openDev = () => dev ??= (async () => {
     const devSession = session.fromPartition('persist:p9-dev');

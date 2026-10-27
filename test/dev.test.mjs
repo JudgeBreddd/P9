@@ -205,7 +205,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
     '--extensions-dir', path.join(hostData, 'extensions')], { encoding: 'utf8', env: { ...process.env, ...homeEnv }, timeout: 120000 });
   assert.match(installed.stdout, /'ms-python\.debugpy' v2026\.6\.0 was successfully installed/, installed.stderr);
   const hostsBefore = new Set(win ? [] : editorScopes());
-  const env = { ...process.env, ...homeEnv, P9_EDITOR_HOST: host, P9_CODE: fakeCode }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ...homeEnv, P9_EDITOR_HOST: host, P9_SPELL_CHECK: 'off', P9_CODE: fakeCode }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -572,7 +572,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   await mkdir(path.join(instance.workspace, 'src'));
   await writeFile(path.join(outside, 'a.txt'), 'outside before\n');
   await writeFile(path.join(instance.workspace, 'src', 'b.txt'), 'inside before\n');
-  const env = { ...process.env, ...(win ? { LOCALAPPDATA: home } : { HOME: home }), P9_EDITOR_HOST: host }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ...(win ? { LOCALAPPDATA: home } : { HOME: home }), P9_EDITOR_HOST: host, P9_SPELL_CHECK: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -642,4 +642,161 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   assert.deepEqual([config.workspace, config.folder], [instance.workspace, null]);
   await dev.waitForFunction(() => window.devFocus.v.window.activeTextEditor?.document.uri.path.endsWith('/note.txt'), null, { timeout: 30000 });
   console.log('PASS Open Folder: inside at once, outside after one question, saves there guarded, a folder holding the workspace refused, p9 edit back to the workspace');
+});
+
+// ---- Chunk 5: D11 (save only on Ctrl+S / Save, white dot while unsaved) and D12 (spell check) ----
+// The dev space has no editor server and no systemd user bus. There, the pinned release is unpacked from the private fixtures folder
+// (untracked: the sprint put it there) and started through a stand-in systemd-run that only runs the command; on a machine
+// with the editor server and a user bus (the server itself, CI) the real ones are used.
+const fixtures = path.join(root, '_private', 'fixtures');
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+let preparedEditor;
+const editorFor = () => preparedEditor ??= (async () => {
+  if (process.platform !== 'linux') return null;
+  const bus = spawnSync('systemd-run', ['--user', '--scope', '--quiet', 'true'], { timeout: 10000 }).status === 0;
+  if (existsSync(host) && bus) return { host, path: process.env.PATH };
+  if (!existsSync(path.join(fixtures, 'reh.tar.gz'))) return null;
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-reh-')), unpacked = path.join(dir, 'codium-server'), shims = path.join(dir, 'shims');
+  await mkdir(unpacked); await mkdir(shims);
+  assert.equal(spawnSync('tar', ['-xzf', path.join(fixtures, 'reh.tar.gz'), '-C', unpacked]).status, 0);
+  // Stand-ins for the user manager: systemd-run records which process is the scope's, and systemctl stop/kill ends it and its children.
+  const pids = path.join(dir, 'pids'); await mkdir(pids);
+  await writeFile(path.join(shims, 'systemd-run'), [`#!${process.execPath}`,
+    "const fs = require('fs'), { spawn } = require('child_process');",
+    "const args = process.argv.slice(2), unit = (args.find(a => a.startsWith('--unit=')) ?? '').slice(7), at = args.findIndex(a => !a.startsWith('--'));",
+    `fs.writeFileSync(${JSON.stringify(pids)} + '/' + unit, String(process.pid));`,
+    "spawn(args[at], args.slice(at + 1), { stdio: 'inherit' }).on('exit', code => process.exit(code ?? 1));", ''].join('\n'), { mode: 0o755 });
+  await writeFile(path.join(shims, 'systemctl'), [`#!${process.execPath}`,
+    "const fs = require('fs'), args = process.argv.slice(2), unit = args.find(a => a.endsWith('.scope'));",
+    "if (!unit || !args.some(a => a === 'stop' || a === 'kill')) process.exit(0);",
+    `let root; try { root = Number(fs.readFileSync(${JSON.stringify(pids)} + '/' + unit.slice(0, -6), 'utf8')); } catch { process.exit(0); }`,
+    "const parent = {}; for (const d of fs.readdirSync('/proc').filter(n => /^[0-9]+$/.test(n))) { try { parent[d] = fs.readFileSync('/proc/' + d + '/stat', 'utf8').replace(/^.*[)] /, '').split(' ')[1]; } catch {} }",
+    "const kill = pid => { for (const [child, p] of Object.entries(parent)) if (Number(p) === pid) kill(Number(child)); try { process.kill(pid, 'SIGKILL'); } catch {} };",
+    'kill(root);', ''].join('\n'), { mode: 0o755 });
+  return { host: unpacked, path: shims + ':' + process.env.PATH };
+})();
+// The dev space prints a failure's detail only when the whole run ends; print it where it happens too.
+// The editor asks the extension gallery on start; with no network that rejects (not what these tests check).
+const online = errors => errors.filter(error => !/EAI_AGAIN|ENOTFOUND|ECONNREFUSED/.test(error));
+const logged = body => async t => { try { await body(t); } catch (error) { console.log('FAILED ' + (error.stack ?? error)); throw error; } };
+// Prints the picture into the run's log (the dev space keeps no files) and, with P9_EVIDENCE, saves it.
+async function shot(page, name) {
+  const png = await page.screenshot({ type: 'jpeg', quality: 80 });
+  console.log('SHOT ' + name + ' ' + png.toString('base64'));
+  if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(path.join(evidence, name + '.jpg'), png); }
+}
+async function openDevFocus(t, editor, extra = {}) {
+  const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
+  const env = { ...process.env, HOME: home, PATH: editor.path, P9_EDITOR_HOST: editor.host, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#cards .card').first().waitFor();
+  const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+  await shell.keyboard.press('Control+2');
+  const dev = await devWindow;
+  const errors = []; dev.on('pageerror', error => errors.push(error.stack ?? error.message));
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
+  assert.equal(await dev.locator('#status').textContent(), '');
+  return { instance, home, app, shell, dev, errors };
+}
+
+test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot while unsaved', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const { instance, dev, errors } = await openDevFocus(t, editor, { P9_SPELL_CHECK: 'off' });
+  const plain = path.join(instance.workspace, 'plain.txt');
+  await writeFile(plain, 'before\n');
+  assert.equal(await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('files').get('autoSave')), 'off');
+  await dev.evaluate(async () => {
+    const { v, open } = window.devFocus, editor = await open('plain.txt');
+    await editor.edit(edit => edit.insert(new v.Position(0, 0), 'typed '));
+  });
+  // The old behaviour wrote the edit one second after the last change; wait three times that, and a window change on top.
+  await sleep(3500);
+  assert.equal(await readFile(plain, 'utf8'), 'before\n', 'an edit is not on disk until Save');
+  assert.equal(await dev.evaluate(() => window.devFocus.v.window.activeTextEditor.document.isDirty), true);
+  const dot = await dev.evaluate(() => {
+    const label = document.querySelector('.tab.dirty .tab-actions .action-label');
+    return label && { color: getComputedStyle(label).color, mark: getComputedStyle(label, '::before').content };
+  });
+  assert.ok(dot, 'the edited tab is marked unsaved');
+  assert.equal(dot.color, 'rgb(255, 255, 255)', 'the unsaved dot is white');
+  assert.notEqual(dot.mark, 'none', 'the dot is drawn');
+  await shot(dev, 'd11-unsaved-dot');
+  // Ctrl+S saves, through the guarded save, and the dot goes.
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.focusActiveEditorGroup'));
+  await dev.keyboard.press('Control+s');
+  for (let i = 0; i < 60 && (await readFile(plain, 'utf8')) === 'before\n'; i++) await sleep(250);
+  assert.equal(await readFile(plain, 'utf8'), 'typed before\n', 'Ctrl+S writes the edit');
+  await dev.waitForFunction(() => !document.querySelector('.tab.dirty'), null, { timeout: 10000 });
+  await shot(dev, 'd11-saved');
+  // File > Save is the same command.
+  await dev.evaluate(async () => { const { v } = window.devFocus; await v.window.activeTextEditor.edit(edit => edit.insert(new v.Position(0, 0), 'again ')); });
+  await sleep(2500);
+  assert.equal(await readFile(plain, 'utf8'), 'typed before\n');
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.save'));
+  for (let i = 0; i < 60 && (await readFile(plain, 'utf8')) === 'typed before\n'; i++) await sleep(250);
+  assert.equal(await readFile(plain, 'utf8'), 'again typed before\n', 'Save writes the edit');
+  assert.deepEqual(online(errors), []);
+}));
+
+test('D12: Dev Focus underlines misspelled words (Code Spell Checker, installed once)', { skip: process.platform !== 'linux', timeout: 300000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor || !existsSync(path.join(fixtures, 'spell.vsix'))) return t.skip('needs the editor server and the fixtures spell.vsix');
+  const served = await readFile(path.join(fixtures, 'spell.vsix'));
+  const { createServer } = await import('node:http');
+  const server = createServer((_request, response) => response.end(served)).listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  await new Promise(resolve => server.once('listening', resolve));
+  const { instance, home, dev, errors } = await openDevFocus(t, editor, { P9_SPELL_URL: 'http://127.0.0.1:' + server.address().port + '/spell.vsix' });
+  await writeFile(path.join(instance.workspace, 'note.txt'), 'The quikc brwon fox jumps over the lazzy dog.\n');
+  const found = await dev.evaluate(async () => {
+    const { v, open } = window.devFocus, editor = await open('note.txt');
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      const spelling = v.languages.getDiagnostics(editor.document.uri).filter(item => /cspell/i.test(String(item.source)));
+      if (spelling.length) return spelling.map(item => editor.document.getText(item.range));
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return [];
+  });
+  assert.ok(['quikc', 'brwon', 'lazzy'].every(word => found.includes(word)), 'misspellings underlined: ' + JSON.stringify(found));
+  assert.ok(!found.includes('fox') && !found.includes('dog') && !found.includes('jumps'), 'correct words left alone: ' + JSON.stringify(found));
+  assert.ok(existsSync(path.join(home, '.local', 'share', 'p9', 'editor', 'spell-checker-offered')));
+  await shot(dev, 'd12-spelling');
+  assert.deepEqual(online(errors), []);
+}));
+
+test('D12: the spell checker is installed once, from a pinned download', { timeout: 60000 }, async t => {
+  const { createServer } = await import('node:http');
+  const { SPELL_CHECKER, installSpellChecker } = await import('../apps/desktop/editor-host.mjs');
+  const { createHash } = await import('node:crypto');
+  const body = Buffer.from('not really an extension');
+  const server = createServer((_request, response) => response.end(body)).listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  await new Promise(resolve => server.once('listening', resolve));
+  const url = 'http://127.0.0.1:' + server.address().port + '/x.vsix', good = createHash('sha256').update(body).digest('hex');
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-spell-')), data = path.join(dir, 'data'), fake = path.join(dir, 'host');
+  await mkdir(data); await mkdir(path.join(fake, 'bin'), { recursive: true });
+  await writeFile(path.join(fake, 'bin', 'codium-server'), '#!/bin/sh\nprintf "%s\\n" "$@" > ' + path.join(dir, 'args') + '\nexit 0\n', { mode: 0o755 });
+  assert.match(SPELL_CHECKER[0], /^https:\/\/open-vsx\.org\//);
+  // A download that is not the pinned file installs nothing and leaves no marker or temp folder.
+  assert.equal(await installSpellChecker({ host: fake, data, download: [url, '0'.repeat(64)] }), 'checksum-mismatch');
+  assert.deepEqual((await readdir(data)).sort(), []);
+  assert.equal(existsSync(path.join(dir, 'args')), false, 'the host was not asked to install it');
+  // The pinned file goes to the host's own --install-extension, then the offer is marked and not repeated.
+  assert.equal(await installSpellChecker({ host: fake, data, download: [url, good] }), 'installed');
+  const args = (await readFile(path.join(dir, 'args'), 'utf8')).split('\n');
+  assert.equal(args[0], '--install-extension');
+  assert.ok(args.includes('--extensions-dir') && args.includes(path.join(data, 'extensions')));
+  assert.deepEqual((await readdir(data)).sort(), ['spell-checker-offered']);
+  await rm(path.join(dir, 'args'));
+  assert.equal(await installSpellChecker({ host: fake, data, download: [url, good] }), 'offered-before');
+  assert.equal(existsSync(path.join(dir, 'args')), false);
+  // Offline: a failed download is reported, never thrown, and the next start tries again (no marker).
+  const dead = await mkdtemp(path.join(os.tmpdir(), 'p9-spell-'));
+  assert.equal(await installSpellChecker({ host: fake, data: dead, download: ['http://127.0.0.1:1/x.vsix', good] }), 'download-failed');
+  assert.deepEqual(await readdir(dead), []);
 });

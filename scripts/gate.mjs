@@ -86,6 +86,7 @@ export async function mutationInventory(directory) {
   // server move (Send to server, row 51) = a moving chat's history in <ownership>/moves (0700/0600, removed when settled), and on the receiving server the pieces there plus the transcript in ~/.claude/projects (a temp file, then rename).
   // icons = Mission tile art: the cache of site icons in the state folder (a temp file, then rename) and the user's pictures in the icons folder beside the registry (content-named, written only after the edit route's confirm and hash checks).
   // editor install (D5, row 52) = editor-host's installEditorHost: the pinned REH into a temp folder in P9's folder, checked, then renamed into place (an old one renamed aside); install-editor = reads the installed product.json and calls it.
+  // editor spell checker (D12, row 56) = editor-host's installSpellChecker: the pinned Code Spell Checker file into a temp folder in the editor's data folder, checked, handed to the editor server's own --install-extension, then an 'offered' marker.
   // desktop rollback (AU5) = update-state.json in the profile folder and rollback.json's shown mark in P9's folder (a temp file, then rename); it starts nothing (main does).
   // files/win32 = the Windows form of the file guard's handle walk (index.mjs's writes, through NtCreateFile handles);
   // conpty = a terminal's input pipe (write), no filesystem; installer.nsh = runs install-windows.ps1 on install and

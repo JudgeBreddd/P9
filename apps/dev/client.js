@@ -62,8 +62,10 @@ await initUserConfiguration(JSON.stringify({ 'workbench.colorTheme': 'P9 Prime',
   'files.watcherExclude': heavy, 'search.exclude': heavy, 'search.followSymlinks': false }));
 const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
   contributes: { themes: [{ id: 'P9 Prime', label: 'P9 Prime', uiTheme: 'vs-dark', path: './prime-theme.json' }],
-    // A default, not a user setting: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles it.
-    configurationDefaults: { 'editor.wordWrap': 'on' } } }, ExtensionHostKind.LocalProcess);
+    // Defaults, not user settings: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles wrap.
+    // files.autoSave: the web workbench defaults to afterDelay, which wrote every edit a second after the last key (Builder, 2026-10-26:
+    // "save only on ctrl s or save button"). Off: an edit stays in the editor, with the unsaved dot on its tab, until Save.
+    configurationDefaults: { 'editor.wordWrap': 'on', 'files.autoSave': 'off' } } }, ExtensionHostKind.LocalProcess);
 theme.registerFileUrl('./prime-theme.json', new URL('./prime-theme.json', location.href).href);
 
 // The guard boundary, installed on the remote file provider's class before the workbench starts, so no instance of it

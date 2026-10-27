@@ -146,7 +146,7 @@ test('Phase 12: hostile chat and repository content never run code or reach IPC 
 test('Phase 12: a hostile repository runs nothing when Dev Focus opens it', { skip: process.platform !== 'linux' || !existsSync(editorHost) ? 'needs the Linux editor host at ' + editorHost : false, timeout: 240000 }, async (t) => {
   const server = await hostileDaemon(t);
   const canary = path.join(server.directory, 'pwned');
-  const app = await launch(t, server, { P9_EDITOR_HOST: editorHost, P9_FAKE_SENTINEL_KEY: FAKE_KEY });
+  const app = await launch(t, server, { P9_EDITOR_HOST: editorHost, P9_SPELL_CHECK: 'off', P9_FAKE_SENTINEL_KEY: FAKE_KEY });
   const shell = await app.firstWindow();
   await shell.locator('#cards .card').first().waitFor();
   const devWindow = app.waitForEvent('window', { predicate: (page) => page.url().startsWith('p9://dev/'), timeout: 60000 });
