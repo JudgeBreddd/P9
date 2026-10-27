@@ -168,7 +168,6 @@ export async function createDesktop({ state, open } = {}) {
     }
     if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
   };
-  if (process.platform === 'win32' && state) health(state).catch(wake);
   // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
   // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
   if (process.platform === 'linux' && app.isPackaged && process.env.APPIMAGE) appImageService(process.resourcesPath);
@@ -223,6 +222,8 @@ export async function createDesktop({ state, open } = {}) {
     connect(attempt);
   };
   if (serverHost) { state = serverFolder(serverHost); connect(++serverTry); }
+  // Here, not beside wake(): wake() reads serverHost, which does not exist before this point.
+  if (process.platform === 'win32' && localState) health(localState).catch(wake);
   app.on('will-quit', () => { serverTry++; server?.close().catch(() => {}); });
   const petsFolder = path.join(app.getPath('userData'), 'pets');
   // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.

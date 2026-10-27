@@ -156,7 +156,9 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   const change = main.slice(main.indexOf("ipcMain.handle('p9:workspace-change'"), main.indexOf("ipcMain.handle('p9:pet-remove'"));
   assert.match(change, /if \(win\) \{[^]*\/stop-all[^]*repairWindowsTask\(process\.resourcesPath, folder\)[^]*repairWindowsTask\(process\.resourcesPath, old\)[^]*workspace-not-started/, 'Stop All, then the script, else the old folder again');
   // Fable review finding 3: wake()'s schtasks /Run between Stop All and the new task restarted the old task on the old folder.
-  assert.match(main, /const wake = async \(\) => \{\s*if \(changing \|\| Date\.now\(\) - woke < 30000\) return;/, 'wake() does nothing during a change');
+  // Server mode: no task wake either while the window is on a server (that daemon is not this machine's task).
+  assert.match(main, /const wake = async \(\) => \{\s*if \(changing \|\| serverHost \|\| Date\.now\(\) - woke < 30000\) return;/, 'wake() does nothing during a change');
+  assert.ok(main.indexOf('health(localState).catch(wake)') > main.indexOf('let serverHost'), 'the launch wake runs once serverHost exists');
   assert.match(change, /changing = true;\s*try \{\s*const ran = await repairWindowsTask\(process\.resourcesPath, folder\)[^]*\} finally \{ changing = false; \}/, 'the change holds wake() off until it returns');
   // Fable review finding 1: the page names a saved folder that was not there at the daemon's start.
   assert.match(main, /h\.savedWorkspace \? \{ savedWorkspace: h\.savedWorkspace, workspace: h\.workspace \}/);
