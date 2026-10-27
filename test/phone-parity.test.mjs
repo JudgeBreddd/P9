@@ -33,13 +33,13 @@ async function phoneOn(t) {
   await device.page.setViewportSize({ width: 390, height: 844 });
   return { ...device, server, session };
 }
-// Waits for the chat this tap made, not just any change: straight after a reload the page is still choosing its first
-// chat, and that change once ended the wait before the new chat (and its mode) was there.
+// Waits for the chat this tap made to be shown, not just any change: straight after a reload the page is still choosing
+// its first chat, and a chat made then is a stub, drawn (with its mode) once its history is in.
 async function newChat(page, agent) {
   const made = page.waitForResponse((response) => new URL(response.url()).pathname === '/chat' && response.request().method() === 'POST' && response.status() === 201, { timeout: 10000 });
   await page.click(`[data-new="${agent}"]`);
   const id = String((await (await made).json()).conversation);
-  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 10000 });
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id && !document.querySelector('#events').textContent.includes('Loading'), id, { timeout: 10000 });
   return id;
 }
 const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };

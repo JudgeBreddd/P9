@@ -261,6 +261,9 @@ function render() {
 // from its newest config event.
 const provider = (id: string) => String(state.conversations.find((item) => item.id === id)?.provider ?? '');
 let picksFor = '';
+// A chat made here starts in this phone's last pick for its agent. Kept by ID until its picks are first drawn: a chat
+// made while the page's first read runs is a stub, drawn only once its history is in.
+const startPick = new Map<string, string>();
 function renderPicks(id: string) {
   const configs = state.events.filter((event) => event.conversation === id && event.type === 'config');
   const set = state.events.findLast((event) => event.conversation === id && event.type === 'mode')?.data as { name?: string } | undefined;
@@ -268,10 +271,10 @@ function renderPicks(id: string) {
   if (key === picksFor) return;
   // The confirmed pick is kept: a redraw while the red warning is open (Codex reports its mode as it starts) must not
   // turn the pick waiting on that warning into the one Cancel goes back to.
-  const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.dataset.was ?? '' : '';
+  const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.dataset.was ?? '' : startPick.get(id) ?? '';
   picksFor = key;
   mode.innerHTML = `<option value="">Mode: ${escape(set?.name ?? 'as set')}</option>` + ((modes as Record<string, string[]>)[provider(id)] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
-  mode.value = keep; mode.dataset.was = keep;
+  mode.value = keep; mode.dataset.was = mode.value; startPick.delete(id);
   type Pick = { current?: string; options?: { value: string; name: string }[] };
   const config = (configs.at(-1)?.data ?? {}) as { model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
@@ -472,9 +475,8 @@ document.querySelectorAll<HTMLButtonElement>('[data-new]').forEach((button) => {
   const folder = one<HTMLSelectElement>('#startIn').value;
   const result = await mutate('/chat', { provider: button.dataset.new, ...(folder && { folder }) });
   if (result.status !== 201) return;
+  const last = localStorage.getItem('p9-mode:' + button.dataset.new); if (last) startPick.set(String(result.body.conversation), last);
   await loadChat(); one<HTMLSelectElement>('#conversation').value = String(result.body.conversation); render();
-  const mode = one<HTMLSelectElement>('#mode'), last = localStorage.getItem('p9-mode:' + button.dataset.new) ?? '';
-  if ([...mode.options].some((option) => option.value === last)) mode.value = mode.dataset.was = last;
 }; });
 // P6: Bypass permissions and Full access ask first, in the desktop's words; Cancel puts the pick back. "Don't show again"
 // is kept per mode on this phone, as the desktop keeps it on its computer.
