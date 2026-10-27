@@ -151,6 +151,13 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.waitForSelector('#sheet:not([open])', { state: 'attached', timeout: 5000 });
   await page.click('#screen'); await page.keyboard.type('echo P9-PHONE-4""2'); await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#screen .xterm-rows')?.textContent.includes('P9-PHONE-42'), null, { timeout: 10000 });
+  // A long session name is cut short before it reaches the bar's buttons, and every key is on the screen (Paste was cut off).
+  const edges = await page.evaluate(() => {
+    const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+    return { title: box('#pickTerminal').right, dot: box('[data-bar="terminal"] .sync').left, paste: box('#keys [data-key="paste"]').right, width: innerWidth };
+  });
+  assert.ok(edges.title <= edges.dot, `the terminal title ends before the bar's buttons: ${edges.title} > ${edges.dot}`);
+  assert.ok(edges.paste <= edges.width, `Paste is on the screen: ${edges.paste} > ${edges.width}`);
   await shot(page, 'tab-terminal');
   await page.setViewportSize({ width: 390, height: 500 });
   await page.waitForTimeout(400);
@@ -165,6 +172,9 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.click('#mission dialog[open] summary:has-text("Backup now")');
   await page.click('#mission dialog[open] form[data-run] button');
   await page.waitForSelector('#mission dialog[open] pre[data-output]:has-text("backup-ok")', { timeout: 10000 });
+  // An opened row stacks: its text is under the title, not beside it (the Chats list's .row rule once made these flex rows).
+  const stack = await page.evaluate(() => { const row = document.querySelector('#mission dialog[open] details[open]'); return { summary: row.querySelector('summary').getBoundingClientRect().bottom, body: row.querySelector('.body').getBoundingClientRect().top }; });
+  assert.ok(stack.body >= stack.summary - 1, 'the opened row text is under its title: ' + stack.body + ' < ' + stack.summary);
   await shot(page, 'tab-mission-window');
   await page.click('#mission dialog[open] [data-close]');
 

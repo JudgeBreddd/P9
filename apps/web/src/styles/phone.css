@@ -60,15 +60,15 @@ dialog.sheet .opt[aria-checked=true]::after{content:"✓";margin-left:auto;color
 .bar h1:has(.pick){overflow:visible}
 .bar h1 .pick,.bar h1 .pick:hover{position:relative;display:inline-flex;align-items:center;gap:2px;min-height:0;width:auto;max-width:100%;padding:0;border:0;background:transparent;color:var(--text);font:inherit;text-align:left}
 .bar h1 .pick::after{content:"";position:absolute;inset:-12px -8px}
-.bar h1 .pick span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar h1 .pick svg{flex:none;width:18px;height:18px;color:var(--muted)}
-.bar .title:has(.pick){align-content:center}.bar .title:has(.pick) h1{line-height:1}
+.bar h1 .pick span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar h1 .pick svg{flex:none;width:18px;height:18px;color:var(--muted)}
+.bar .title:has(.pick){align-content:center;grid-template-columns:minmax(0,1fr)}.bar .title:has(.pick) h1{line-height:1;min-width:0}
 #termState{white-space:normal}.bar small#termState{font-size:12px}
 section[data-view=terminal]:not([hidden]){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
 main>section>#screen{flex:1;min-height:0;height:auto;margin:0;padding:4px 6px;border:0;border-radius:0;background:#0d131c;overflow:hidden}
 main>section>#keys{flex:none;display:flex;gap:2px;margin:0;padding:4px 8px calc(4px + env(safe-area-inset-bottom));overflow-x:auto;scrollbar-width:none;background:var(--bg);border-top:1px solid var(--hair)}
 body:not(.kbd) #keys{padding-bottom:4px}
 #keys::-webkit-scrollbar{display:none}
-#keys button{flex:1 0 auto;min-height:44px;min-width:40px;padding:0 8px;border:0;border-radius:10px;background:transparent;color:var(--text);font-weight:600;font-size:15px}
+#keys button{flex:1 0 auto;min-height:44px;min-width:36px;padding:0 4px;border:0;border-radius:10px;background:transparent;color:var(--text);font-weight:600;font-size:14px}
 #keys button:active{background:var(--raised)}
 /* Mission: a grouped list. Needs attention first, then the rest; order moves tiles across the #hub wrapper without touching the DOM. */
 #mission,#usage{margin-left:0;margin-right:0;gap:0}
@@ -91,6 +91,9 @@ dialog.window:not([open]){display:none}
 dialog.window>.bar{position:sticky;top:0}
 dialog.window .wbody{padding:0 16px calc(16px + env(safe-area-inset-bottom));display:grid;gap:0;align-content:start}
 dialog.window .wbody>.card,dialog.window .wbody>.empty{margin:8px 0;border:0;background:transparent;padding:8px 0}
+/* Chats' bare .row rule (a flex list row) also matches these <details class="row">: put them back to blocks. */
+details.row{display:block;width:auto;min-height:0;padding:0;font-weight:inherit;color:inherit}
+details.row small,details.row b{overflow:visible;text-overflow:clip;white-space:normal}
 dialog.window details.row{border:0;border-radius:0;background:transparent;border-bottom:1px solid var(--hair)}
 dialog.window details.row summary{min-height:52px;padding:8px 0;align-content:center;list-style:none}
 dialog.window details.row summary::-webkit-details-marker{display:none}
