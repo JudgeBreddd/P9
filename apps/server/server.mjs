@@ -359,6 +359,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.get('/chat/:id/move-part', async (c) => reply(c, await chat.part(c.req.param('id'), c.req.query('kind'), Number(c.req.query('offset')))));
   app.post('/chat/:id/moved', async (c) => reply(c, await chat.moved(c.req.param('id'), await json(c))));
   app.post('/chat-import/:id/part', async (c) => reply(c, await chat.take(c.req.param('id'), await json(c))));
+  app.post('/chat-import/:id/cancel', async (c) => reply(c, await chat.cancelUpload(c.req.param('id'))));
   app.post('/chat-import/:id', async (c) => reply(c, await chat.land(c.req.param('id'), await json(c))));
   // Send files over the tunnel (item 23, xfer.mjs): desktop main copies a folder between two daemons; never the phone's.
   app.post('/xfer/manifest', async (c) => reply(c, await xfer.manifest(await json(c))));

@@ -56,7 +56,16 @@ let mode = 'unset', model = 'default', cwd = '', mcpServers = null, folder = '';
 // and a resume only of a session whose transcript is there (claude-agent-acp's findTranscript searches every folder).
 // The home is the test's (XDG_STATE_HOME, which the daemon passes on); never HOME, so a test cannot write a real one.
 const projects = () => existsSync('claude-home') && process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, '.claude', 'projects') : null;
+// As codex, the same marker keeps a rollout where Codex does, <home>/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl,
+// and resumes only a session whose rollout is there (item 10).
+const rollouts = () => projects() && path.join(process.env.XDG_STATE_HOME, '.codex', 'sessions');
 const transcript = (sessionId) => {
+  if (process.argv[2] === 'codex') {
+    const root = rollouts();
+    if (!root || !existsSync(root)) return null;
+    for (const entry of readdirSync(root, { recursive: true })) if (String(entry).endsWith('-' + sessionId + '.jsonl')) return path.join(root, String(entry));
+    return null;
+  }
   const root = projects();
   for (const dir of root && existsSync(root) ? readdirSync(root) : []) if (existsSync(path.join(root, dir, sessionId + '.jsonl'))) return path.join(root, dir, sessionId + '.jsonl');
   return null;
@@ -100,7 +109,11 @@ const connection = new acp.AgentSideConnection(() => ({
   async authenticate() { return {}; },
   async newSession(params) {
     cwd = 'new:' + params.cwd; folder = params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`;
-    if (projects()) {
+    if (projects() && process.argv[2] === 'codex') {
+      const now = new Date().toISOString(), dir = path.join(rollouts(), now.slice(0, 4), now.slice(5, 7), now.slice(8, 10));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'rollout-' + now.slice(0, 19).replace(/:/g, '-') + '-' + sessionId + '.jsonl'), JSON.stringify({ type: 'session_meta', cwd: params.cwd, sessionId }) + '\n');
+    } else if (projects()) {
       const dir = path.join(projects(), params.cwd.replace(/[^a-zA-Z0-9]/g, '-'));
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, sessionId + '.jsonl'), JSON.stringify({ type: 'session', cwd: params.cwd, sessionId }) + '\n');

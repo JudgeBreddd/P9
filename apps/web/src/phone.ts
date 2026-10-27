@@ -290,6 +290,8 @@ function build(picked: string) {
   for (const event of state.events) {
     if (event.conversation !== picked) continue;
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
+    // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
+    if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
     if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)) });
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
@@ -495,7 +497,9 @@ one('#sheetBody').addEventListener('click', async (event) => {
     sheet.close();
     const result = await mutate('/chat', { provider: make.dataset.new, ...(folder && { folder }) });
     if (result.status !== 201) return;
-    const last = localStorage.getItem('p9-mode:' + make.dataset.new); if (last) startPick.set(String(result.body.conversation), last);
+    // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
+    const last = localStorage.getItem('p9-mode:' + make.dataset.new);
+    if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
     await loadChat(); openChat(String(result.body.conversation));
   }
 });

@@ -1226,7 +1226,8 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await app.close();
   ({ app, page } = await launch()); dlg = page.locator('#looseDlg');
   codex = await chat('codex');
-  assert.equal(await mode(codex).inputValue(), 'Full access', 'a new chat starts in the last mode picked for its agent');
+  // Review #2: "Turn on" was for that chat; a new one does not start in Full access without "don't show again".
+  assert.equal(await mode(codex).inputValue(), 'Auto review', 'a loosened last pick does not carry to a new chat after a plain Turn on');
   claude = await chat('claude');
   await mode(claude).selectOption('Manual'); await mode(claude).selectOption('Bypass permissions');
   await said(claude, 'mode', 'mode:bypassPermissions');
@@ -1234,7 +1235,7 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   codex = await chat('codex'); await mode(codex).selectOption('Read-only'); await mode(codex).selectOption('Full access');
   await dlg.waitFor(); await dlg.getByRole('button', { name: 'Cancel' }).click();
   await settled(codex, 'Read-only', 'Full access still warns: its own don\'t show again was never picked');
-  console.log('PASS loosened modes: Codex starts in Auto review; Full access warns in red, Cancel and Escape keep Auto review, Turn on reaches the agent; Claude bypass with don\'t show again skips the warning after a restart; Full access still warns');
+  console.log('PASS loosened modes: Codex starts in Auto review; Full access warns in red, Cancel and Escape keep Auto review, Turn on reaches the agent but does not carry to the next new chat; Claude bypass with don\'t show again skips the warning after a restart; Full access still warns');
 });
 
 test('D2: Settings > New chats start in sets each agent\'s starting mode; the loosened ones warn first; a chat\'s own pick leaves it (threat model row 25a)', { timeout: 120000 }, async (t) => {
