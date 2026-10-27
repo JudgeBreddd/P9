@@ -33,11 +33,14 @@ async function phoneOn(t) {
   await device.page.setViewportSize({ width: 390, height: 844 });
   return { ...device, server, session };
 }
+// Waits for the chat this tap made, not just any change: straight after a reload the page is still choosing its first
+// chat, and that change once ended the wait before the new chat (and its mode) was there.
 async function newChat(page, agent) {
-  const before = await page.inputValue('#conversation');
+  const made = page.waitForResponse((response) => new URL(response.url()).pathname === '/chat' && response.request().method() === 'POST' && response.status() === 201, { timeout: 10000 });
   await page.click(`[data-new="${agent}"]`);
-  await page.waitForFunction((was) => { const v = document.querySelector('#conversation').value; return v && v !== was; }, before, { timeout: 10000 });
-  return page.inputValue('#conversation');
+  const id = String((await (await made).json()).conversation);
+  await page.waitForFunction((id) => document.querySelector('#conversation').value === id, id, { timeout: 10000 });
+  return id;
 }
 const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };
 

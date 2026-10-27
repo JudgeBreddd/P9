@@ -1,4 +1,4 @@
-import { popover as createPopover, svg, esc, limitLine, md, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { popover as createPopover, svg, esc, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -434,7 +434,7 @@ DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
 // CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
-const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
+const mdOf = e => { if (e.mdFor !== e.text) { e.md = mdReply.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
@@ -2069,7 +2069,7 @@ addEventListener('click', e => {
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();
-// A reply's web link (helpers.mjs md, row 18): the window never navigates, so main opens it in the browser.
+// A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser.
 addEventListener('click', e => {
   const a = e.target.closest?.('a.link[href]'); if (!a || !window.p9?.openLink) return; // a browser preview follows the link
   e.preventDefault(); window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));

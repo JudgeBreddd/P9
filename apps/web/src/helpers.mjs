@@ -40,23 +40,24 @@ export const info = (tip, section) => `<button class="info" type="button" data-d
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed
 // shows "new window": the old figure expired and the new one is not known until the tool records it again.
-// Agent replies are Markdown (threat model row 18): marked escapes text and code; raw HTML shows as text, an image as its
-// alt text. A link opens outside P9 only when it is one plain http(s) address (webLink); then the host shows after text
-// that is not the address, so a reply cannot dress one site as another. Anything else stays text with the address in a
-// tooltip. Desktop and phone both use it; the desktop's click goes to main (p9:open-link), which checks the URL again.
+// Markdown (threat model row 18): marked escapes text and code; raw HTML shows as text, an image as its alt text. md
+// (notes, pinned cards, file previews): a link is its text with the address in a tooltip (nothing to click). mdReply
+// (agent replies, P9): a link opens outside P9 only when it is one plain http(s) address (webLink); then the host shows
+// after text that is not the address, so a reply cannot dress one site as another; anything else stays as in md.
+// Desktop and phone both use them; the desktop's click goes to main (p9:open-link), which checks the URL again.
 export const webLink = href => {
   if (typeof href !== 'string' || href.length > 2048 || /[\s\p{Cc}\p{Cf}]/u.test(href)) return null;
   try { const u = new URL(href); return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password ? u : null; } catch { return null; }
 };
-export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: {
-  html: t => esc(t.text),
+const textLink = function (t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; };
+const mdText = { html: t => esc(t.text), image: t => esc(t.text) };
+export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText, link: textLink } });
+export const mdReply = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText,
   link(t) {
-    const text = this.parser.parseInline(t.tokens), u = webLink(t.href);
-    if (!u) return `<span class="link" title="${esc(t.href)}">${text}</span>`;
+    const u = webLink(t.href); if (!u) return textLink.call(this, t);
     const same = [t.href, u.href, u.host, u.href.replace(/^https?:\/\//, '')].includes(t.text.trim());
-    return `<a class="link" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${text}</a>` + (same ? '' : ` <span class="link-host">(${esc(u.host)})</span>`);
+    return `<a class="link" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${this.parser.parseInline(t.tokens)}</a>` + (same ? '' : ` <span class="link-host">(${esc(u.host)})</span>`);
   },
-  image: t => esc(t.text),
 } });
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES) and the two loosened ones, which ask first in red
 // (threat model row 25). Desktop and phone (P6).

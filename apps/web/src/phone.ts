@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, md, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
@@ -71,7 +71,11 @@ function show(view: string) {
 }
 document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => { button.onclick = () => show(button.dataset.nav!); });
 
-async function loadChat() {
+// One load at a time, in order: the page's first load, still reading when New is tapped, must not refill the picker
+// after the newer one with a list from before the new chat (it put the old chat back, and its mode with it).
+let loads = Promise.resolve();
+const loadChat = () => loads = loads.then(readChat);
+async function readChat() {
   try {
     const list = await request('/chat'); state.conversations = list.conversations ?? [];
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
@@ -243,7 +247,7 @@ function render() {
   // A question's answers in progress survive the redraw.
   const draft = document.querySelector<HTMLFormElement>('#events form[data-question]'), kept = draft && { request: draft.dataset.question, values: [...draft.elements].map((el) => el instanceof HTMLInputElement ? [el.name, el.value, el.checked] as const : null) };
   one('#events').innerHTML = blocks.length ? blocks.slice(-30).map((block) =>
-    `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${md.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${sentImgs(picked, block.sent)}${agentImgs(block.images, 'the agent')}${block.request && block.form !== undefined ? questionForm(block.request, block.form) : block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
+    `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${mdReply.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${sentImgs(picked, block.sent)}${agentImgs(block.images, 'the agent')}${block.request && block.form !== undefined ? questionForm(block.request, block.form) : block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
       `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`).join('') : '<div class="empty">No messages yet.</div>';
   const again = kept && document.querySelector<HTMLFormElement>(`#events form[data-question="${CSS.escape(kept.request ?? '')}"]`);
   if (kept && again) [...again.elements].forEach((el, i) => { const was = kept.values[i]; if (el instanceof HTMLInputElement && was && was[0] === el.name) { if (el.type === 'radio' || el.type === 'checkbox') el.checked = was[2]; else el.value = was[1]; } });
