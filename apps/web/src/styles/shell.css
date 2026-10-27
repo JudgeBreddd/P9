@@ -397,6 +397,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 .rail .bots:empty{display:none}
 .bot[data-agent="claude"]{color:#d97757}.bot[data-agent="codex"]{color:#3b82f6} /* Builder 2026-10-18: Anthropic orange, Codex blue, whatever the look */
 .bot[data-busy] svg{animation:bot-work 1.2s ease-in-out infinite}
+.bot{position:relative}.bot[data-n]::after{content:attr(data-n);position:absolute;right:1px;bottom:1px;min-width:12px;padding:0 3px;border-radius:6px;background:var(--popover,#111);color:inherit;border:1px solid currentColor;font:600 9px/12px system-ui,sans-serif;text-align:center}
 @keyframes bot-work{50%{transform:translateY(-2px)}}
 @media (prefers-reduced-motion:reduce){.bot[data-busy] svg{animation:none}}
 .pane[data-quiet] .hist :is(details.tool,details.thought){display:none}

@@ -633,10 +633,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return { status: 200, on: locked };
     },
     // Most recently used first, for the desktop's History and the phone (owner, 2026-10-25). used: the chat's newest event,
-    // not counting the stops a close, an exit or a daemon restart write; sent: a message was ever sent (History leaves out
+    // not counting the stops a close, an exit or a daemon restart write, nor the created event (its time is a later Date.now()
+    // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
-        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
+        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent
       FROM conversations c ORDER BY used DESC, created DESC`).all().map((c) => ({ ...c, sent: c.sent === 1 })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).

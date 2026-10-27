@@ -331,6 +331,8 @@ export async function createDesktop({ state, open } = {}) {
       additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
+  // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
+  window.maximize();
   if (watched) {
     window.on('session-end', quitting);
     const ready = new Promise(resolve => window.once('ready-to-show', resolve));
