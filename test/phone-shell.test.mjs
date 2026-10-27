@@ -86,6 +86,8 @@ const checks = {
   // The composer slot is marked, is a fixed row under the chat scroller, holds today's composer, and still sends.
   async slot(page) {
     await page.waitForSelector('h1:text("Chat")');
+    await page.click('[data-new="claude"]:not([disabled])');
+    await page.waitForFunction(() => document.querySelector('#conversation').value, null, { timeout: 10000 });
     assert.equal(await page.locator('#composerSlot #composer #prompt').count(), 1);
     const slot = await page.locator('#composerSlot').boundingBox();
     assert.ok(slot.y > 400 && slot.y + slot.height <= 844 - 49 + 0.5, 'the slot is the row above the tab bar');
