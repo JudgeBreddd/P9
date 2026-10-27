@@ -79,7 +79,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
   // appended is never touched. Each removal is logged without its path.
   async function sweep(now = Date.now()) {
     if (!moves) return;
-    const gone = async (file, kind, recursive) => {
+    const gone = async (file, kind, recursive = false) => {
       const info = await stat(file).catch(() => null);
       if (!info) return;
       await rm(file, { force: true, recursive });
@@ -210,7 +210,8 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       } finally { appending.delete(file); }
     },
     // Cancel during the upload: what the server has of it goes at once. A chat already here is not touched.
-    async cancel(id) {
+    // Named apart from chat.mjs's cancel (a turn's), which this object is spread beside.
+    async cancelUpload(id) {
       if (!ID.test(id)) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       if (row(id)) return refused(409, 'already-here');
