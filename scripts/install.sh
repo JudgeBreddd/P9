@@ -17,6 +17,9 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 : "${XDG_RUNTIME_DIR:?not set: run this from a normal desktop or ssh login}"
 if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ]; then
+  # An install from before the editor server was part of it gets it now (issue #14); one on the pinned release is left alone.
+  node=$(command -v node || ls "$HOME"/.local/share/p9/node-v26.10.0-linux-*/bin/node 2>/dev/null | head -1 || true)
+  [ -n "$node" ] && "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
   echo "P9 is already installed. To update: git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart p9-foundation"
   exit 0
 fi
@@ -57,9 +60,9 @@ if [ -n "$headless" ]; then pnpm install --frozen-lockfile --ignore-scripts; els
 pnpm build
 mkdir -p -- "$workspace"
 node scripts/install-service.mjs "$workspace"
-# Dev Focus's editor server (pinned and checked, threat model row 52). Not needed headless; if it fails, Dev Focus offers
-# the same install as a button.
-[ -n "$headless" ] || node scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
+# Dev Focus's editor server (pinned and checked, threat model row 52). Headless too: a desktop in Server mode runs Dev Focus
+# on the server's editor server. If it fails, Dev Focus offers the same install as a button.
+node scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
 if [ ${#path_added[@]} -gt 0 ]; then
   new_path=$(IFS=:; echo "${path_added[*]}")
   echo "Add this line to ~/.bashrc so node and pnpm are found next time:  export PATH=\"$new_path:\$PATH\""

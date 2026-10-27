@@ -1,6 +1,6 @@
 // Server mode (threat model row 50): the window talks to a P9 daemon on another machine through the user's own ssh, the way
-// VS Code Remote-SSH does. One `ssh -N -L` forwards the server daemon's Unix socket to a socket in an owner-only folder here;
-// that folder also gets the server's desktop.json, socket path rewritten, so every daemonRequest(state, ...) works unchanged.
+// VS Code Remote-SSH does. One `ssh -N` forwards the server daemon's Unix socket, and its Dev Focus editor's (editor.sock), to
+// sockets in an owner-only folder here; that folder also gets the server's desktop.json, socket path rewritten, so every daemonRequest(state, ...) works unchanged.
 // ssh is run with fixed argv (no shell here) and BatchMode: keys or an agent only, never a password prompt.
 import { spawn, execFile } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
@@ -34,7 +34,7 @@ function readServer(host, ssh) {
     let credentials;
     try { credentials = JSON.parse(rest.join('\n')); } catch { return reject(new Error('server-no-p9')); }
     if (!/^\/[\w./-]+$/.test(runtime) || runtime.includes('..') || typeof credentials?.cookie !== 'string' || typeof credentials.csrf !== 'string') return reject(new Error('server-no-p9'));
-    resolve({ remoteSocket: runtime + '/p9-foundation/daemon.sock', credentials: { cookie: credentials.cookie, csrf: credentials.csrf } });
+    resolve({ remoteSocket: runtime + '/p9-foundation/daemon.sock', remoteEditor: runtime + '/p9-foundation/editor.sock', credentials: { cookie: credentials.cookie, csrf: credentials.csrf } });
   }));
 }
 
@@ -44,16 +44,19 @@ export function restartServer(host, ssh = 'ssh') {
   return new Promise(resolve => execFile(ssh, [...SSH_OPTIONS, host, 'systemctl --user restart p9-foundation.service'], { timeout: 60000 }, error => resolve(!error)));
 }
 
-// connectServer({ host }) -> { state, host, close(), check() }. check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock (the forward) and desktop.json.
+// connectServer({ host }) -> { state, host, close(), check() }. check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock and editor.sock (the forwards) and desktop.json.
+// editor.sock answers only once Dev Focus has asked the server's daemon to start its editor (POST /dev/editor); ssh connects each forwarded socket when it is used.
+// editor: false leaves the editor forward off (the move's tunnel has no use for it).
 // onDrop runs when the tunnel ends without close() (lid closed, network gone, server restarted); the caller reconnects.
-export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), onDrop = () => {} }) {
+export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {} }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
-  const { remoteSocket, credentials } = await readServer(host, ssh);
+  const { remoteSocket, remoteEditor, credentials } = await readServer(host, ssh);
   const state = serverFolder(host, runtime), parent = path.dirname(state);
   await mkdir(state, { recursive: true, mode: 0o700 });
   await chmod(parent, 0o700); await chmod(state, 0o700);
-  const socketPath = path.join(state, 'daemon.sock');
+  const socketPath = path.join(state, 'daemon.sock'), editorSocket = path.join(state, 'editor.sock');
   await rm(socketPath, { force: true });
+  await rm(editorSocket, { force: true });
   const save = c => writeFile(path.join(state, 'desktop.json'), JSON.stringify({ ...c, socketPath }), { mode: 0o600 });
   await save(credentials);
   // A restarted server daemon has new credentials, so its /health answers 401; the forward itself survives (one ssh channel per
@@ -65,7 +68,7 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
     return health(state);
   });
   const child = spawn(ssh, [...SSH_OPTIONS, '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes', '-o', 'StreamLocalBindMask=0177',
-    '-L', socketPath + ':' + remoteSocket, host], { stdio: 'ignore' });
+    '-L', socketPath + ':' + remoteSocket, ...(editor ? ['-L', editorSocket + ':' + remoteEditor] : []), host], { stdio: 'ignore' });
   let closed = false, exited = false, ready = false;
   const close = async () => { closed = true; if (!exited) child.kill(); await rm(state, { recursive: true, force: true }); };
   child.on('exit', () => { exited = true; if (!closed) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); if (ready) onDrop(); } });
