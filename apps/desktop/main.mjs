@@ -11,7 +11,7 @@ import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './re
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
-import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
+import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR } from './editor-host.mjs';
 import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
@@ -125,6 +125,32 @@ async function addPet(pets, folder) {
 }
 // The Dev Focus page itself (query and hash aside); any other p9://dev/ file is an asset, never a page with IPC.
 const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
+
+// D5: the page Dev Focus shows when it cannot start. It names the cause; a missing editor server or another release of it
+// gets one button, Install, which asks main (p9dev:install-editor, no arguments) for the pinned download (threat model row 52).
+const html = text => String(text).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+const INSTALL_SCRIPT = "const b = document.getElementById('install'), n = document.getElementById('note');\n"
+  + "b.onclick = async () => { b.disabled = true; n.textContent = 'Downloading and checking it. This takes a minute or two.';\n"
+  + "  const r = await window.p9dev.installEditor().catch(() => ({ error: 'The install did not answer. Try again.' }));\n"
+  + "  if (r.error) { n.textContent = r.error; b.disabled = false; } else n.textContent = 'Installed. Starting Dev Focus.'; };";
+function devErrorPage(error, download = editorDownload()) {
+  const problem = error.message === 'server-mode' || error.message === 'daemon-unavailable' ? error.message : editorProblem(error);
+  const host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
+  const text = {
+    'server-mode': 'Dev Focus works on this computer\'s files only for now. Switch to Local in Settings to use it.',
+    'daemon-unavailable': 'Dev Focus is unavailable: P9\'s background service is not answering. It restarts on its own; open Dev Focus again in a few seconds.',
+    missing: 'Dev Focus needs VSCodium\'s editor server (release 1.121.03429), and it is not installed on this computer. It belongs in ' + host + '.',
+    'other-release': 'Dev Focus needs VSCodium\'s editor server release 1.121.03429; ' + host + ' holds a different release.',
+    failed: 'Dev Focus is unavailable: the editor server did not start (' + String(error.message).slice(0, 300) + ').',
+  }[problem];
+  const fixable = problem === 'missing' || problem === 'other-release';
+  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server</button></p>'
+      + '<p id="note" style="color:#8b97ad">Downloads about 83 MB from VSCodium\'s GitHub releases, checks its SHA-256 against the one P9 pins, and installs it there.'
+      + (problem === 'other-release' ? ' The release there now is kept beside it.' : '') + '</p><script>' + INSTALL_SCRIPT + '</script>'
+    : '<p style="color:#8b97ad">P9 has no download of it for this computer (' + html(process.platform + '-' + process.arch) + '). The README\'s Requirements say how to install it by hand.</p>';
+  const page = '<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px"><p id="cause">' + html(text) + '</p>' + fix + '</body>';
+  return { files: new Map([['/index.html', Buffer.from(page)]]), csp: "default-src 'none'; style-src 'unsafe-inline'; script-src " + (inlineHashes(page).join(' ') || "'none'") };
+}
 
 // CSP hashes of a page's inline scripts (the ones without src).
 const inlineHashes = html => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
@@ -415,7 +441,8 @@ export async function createDesktop({ state, open } = {}) {
     if (typeof open !== 'string' || !open.startsWith(NEW_ISSUE) || /[\s]/.test(open)) return { status: 502, body: { error: 'request-refused' } };
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(open);
-    return { status: 200, body: { opened: true, cut: result.body.cut === true } };
+    const cut = result.body.cut === true, counts = cut && Number.isSafeInteger(result.body.kept) && Number.isSafeInteger(result.body.total);
+    return { status: 200, body: { opened: true, cut, ...(counts ? { kept: result.body.kept, total: result.body.total } : {}) } };
   });
   // Wizard sign-in (threat model row 31): the daemon runs the agent's own login CLI. "Browser didn't open?" opens the
   // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
@@ -544,6 +571,9 @@ export async function createDesktop({ state, open } = {}) {
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
+    // D7/D8: an agent's install or sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
+    agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && ['install', 'login'].includes(action) && !Object.keys(rest).length
+      && ['POST', '/setup/agent-terminal', { agent, action }],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
@@ -693,8 +723,7 @@ export async function createDesktop({ state, open } = {}) {
       devServing = devFolder;
       config = { port: host.port, token: host.token, commit: host.commit, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
     } catch (error) {
-      sites.dev = { files: new Map([['/index.html', Buffer.from('<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px">' + (error.message === 'server-mode' ? 'Dev Focus works on this computer\'s files only for now. Switch to Local in Settings to use it.' : 'Dev Focus is unavailable: the editor host or daemon did not start.') + '</body>')]]),
-        csp: "default-src 'none'; style-src 'unsafe-inline'" };
+      sites.dev = devErrorPage(error);
       config = { error: error.message };
     }
     await devView.webContents.loadURL(DEV_URL);
@@ -713,6 +742,25 @@ export async function createDesktop({ state, open } = {}) {
   };
   // A workspace change shows the new workspace, whatever folder was open.
   const devToWorkspace = () => { devFolder = null; reopenDev(); };
+  // D5 (threat model row 52): Install on Dev Focus's error page. No arguments: main installs only the pinned download, one
+  // install at a time, never over an editor server that is running; then Dev Focus opens again.
+  let editorInstall = null;
+  const INSTALL_ERRORS = {
+    'editor-download-unavailable': 'P9 has no download of the editor server for this computer.',
+    'editor-download-failed': 'The download did not finish. Check the internet connection, then press Install again.',
+    'editor-download-too-big': 'The download was far larger than the editor server is, so it was stopped. Nothing was installed.',
+    'editor-download-mismatch': 'The download did not match the SHA-256 P9 pins, so nothing was installed. Press Install to try again.',
+    'editor-unpack-failed': 'The download could not be unpacked (tar failed). Nothing was installed.',
+    'editor-host-commit-mismatch': 'The download held a different release than P9 runs. Nothing was installed.',
+  };
+  ipcMain.handle('p9dev:install-editor', async (event, ...args) => {
+    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
+    if (await editorHost?.catch(() => null)) return { error: 'The editor server is already running.' };
+    try { await (editorInstall ??= installEditorHost().finally(() => { editorInstall = null; })); }
+    catch (error) { return { error: INSTALL_ERRORS[error.message] ?? 'The install failed (' + String(error.message).slice(0, 200) + ').' }; }
+    setTimeout(reopenDev);
+    return { ok: true };
+  });
   // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
   // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it.
   ipcMain.handle('p9dev:open-folder', async (event, ...args) => {

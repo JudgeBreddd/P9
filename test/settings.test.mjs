@@ -728,7 +728,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
-  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'conflict', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
+  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'claudeCli', 'codex', 'codexCli', 'conflict', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
     'settingsInvalid', 'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
   // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.

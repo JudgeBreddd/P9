@@ -57,6 +57,9 @@ if [ -n "$headless" ]; then pnpm install --frozen-lockfile --ignore-scripts; els
 pnpm build
 mkdir -p -- "$workspace"
 node scripts/install-service.mjs "$workspace"
+# Dev Focus's editor server (pinned and checked, threat model row 52). Not needed headless; if it fails, Dev Focus offers
+# the same install as a button.
+[ -n "$headless" ] || node scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
 if [ ${#path_added[@]} -gt 0 ]; then
   new_path=$(IFS=:; echo "${path_added[*]}")
   echo "Add this line to ~/.bashrc so node and pnpm are found next time:  export PATH=\"$new_path:\$PATH\""
