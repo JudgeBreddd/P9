@@ -345,7 +345,7 @@ function chatBar(id: string, run: string) {
 }
 // Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
 // so the browser's own back, the iOS edge swipe included, returns to the list.
-let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, anchored = false;
+let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, anchored = false, seenItems = 0;
 const body = one<HTMLElement>('#chatBody');
 function route(id: string) {
   const changed = id !== openId; openId = id;
@@ -354,7 +354,7 @@ function route(id: string) {
   document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
   barSig = '';
   if (!id) { pushed = false; mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] }); online(); renderList(); return; }
-  if (changed) { one('#events').replaceChildren(); windowSize = 60; stuck = true; one('#jump').hidden = true; }
+  if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one('#jump').hidden = true; }
   render();
 }
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
@@ -367,7 +367,10 @@ function render() {
     history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
     return;
   }
-  const { blocks, strip } = build(picked), all = itemsOf(blocks), shown = all.slice(-windowSize), events = one('#events');
+  const { blocks, strip } = build(picked), all = itemsOf(blocks), events = one('#events');
+  if (!stuck && seenItems) windowSize += Math.max(0, all.length - seenItems); // a reader part way up keeps their top; the window slides only at the bottom
+  seenItems = all.length;
+  const shown = all.slice(-windowSize);
   hiddenBlocks = all.length - shown.length;
   const height = body.scrollHeight, top = body.scrollTop;
   patch(events, shown);

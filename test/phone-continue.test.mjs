@@ -239,7 +239,7 @@ for (const agent of ['claude', 'codex']) {
       await card.waitFor({ state: 'attached', timeout: 15000 });
       assert.equal(await card.locator('.eyebrow').textContent(), 'status · markdown');
       assert.match(await card.textContent(), /<img src=x onerror="window\.pwned=1"> <b>not bold<\/b>/);
-      assert.equal(await card.locator('strong').innerText(), 'Build');
+      assert.equal(await card.locator('strong').textContent(), 'Build');
       assert.equal(await page.locator('#pinned img, #pinned b, #pinned script').count(), 0);
       assert.equal(await page.locator('#pinned [data-card="gone"]').count(), 0);
       assert.equal(await page.evaluate(() => window.pwned), undefined);
