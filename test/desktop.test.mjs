@@ -410,7 +410,7 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   let seq = 0;
   const move = (phase, percent, extra) => app.evaluate(({ BrowserWindow }, m) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === m.url).webContents.send('p9:move', m.move),
     { url: page.url(), move: { id, seq: ++seq, host: 'test-host', phase, percent, bytes: { sent: Math.round(percent * 100000), total: 10000000 }, ...extra } });
-  const fx = page.locator('#moveFx');
+  const fx = page.locator('#moveFx'), b = await pane.boundingBox(); // the pane's place before it is pulled in
   await move('stopping', 0);
   await fx.waitFor();
   assert.equal(await pane.getAttribute('data-pulled'), '', 'the chat is pulled in');
@@ -422,12 +422,15 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   assert.equal(await page.locator('.move-bar').getAttribute('aria-valuenow'), '40');
   assert.equal(await page.locator('#moveBytes').textContent(), ' · 3.8 MB of 9.5 MB');
   // The overlay covers the chat's pane, not the window.
-  const [a, b] = await Promise.all([fx.boundingBox(), pane.boundingBox()]);
+  const a = await fx.boundingBox();
   assert.deepEqual([a.x, a.y, a.width, a.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round));
   for (const n of [1, 2, 3]) await shot('move-frame-' + n, page);
   // No event for 15 s (three missed heartbeats): the label says so; the next event clears it.
   await page.locator('#moveFx[data-wait]').waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#moveWhat').textContent(), 'Waiting for the server…');
+  // Long after the chat has fallen in (scaled to a dot), the overlay still covers the pane's whole place.
+  const c = await fx.boundingBox();
+  assert.deepEqual([c.x, c.y, c.width, c.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round), 'the overlay keeps the pane\'s size');
   await shot('move-waiting', page);
   await move('uploading', 70);
   assert.equal(await fx.getAttribute('data-wait'), null);

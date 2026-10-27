@@ -2308,9 +2308,10 @@ async function sendAway(s) {
 function fxPlace() {
   const pane = [...document.querySelectorAll('.pane[data-id]')].find(p => p.dataset.id === FX.id);
   if (!pane) return;
-  const home = pane.closest('dialog') || document.body, r = pane.getBoundingClientRect();
+  // The pull scales and turns the pane about its centre: the centre stays, the size is its layout size (not the shrunk box).
+  const home = pane.closest('dialog') || document.body, r = pane.getBoundingClientRect(), w = pane.offsetWidth, h = pane.offsetHeight;
   if (fx.parentElement !== home) home.append(fx);
-  Object.assign(fx.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  Object.assign(fx.style, { left: r.left + r.width / 2 - w / 2 + 'px', top: r.top + r.height / 2 - h / 2 + 'px', width: w + 'px', height: h + 'px' });
 }
 function fxFrame(now) {
   FX.raf = requestAnimationFrame(fxFrame);
