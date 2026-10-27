@@ -142,6 +142,8 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
           || typeof body.data !== 'string' || body.data.length > Math.ceil(PIECE / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       if (row(id)) return refused(409, 'already-here');
+      // ponytail: an abandoned upload (moves/in-<id>.*, up to 512 MiB per kind) is removed only by a later land of the
+      // same id; there is no sweep. Fine while only the user's own desktop, over ssh, can send one.
       const file = staged('in-' + id + '.' + body.kind);
       if (appending.has(file)) return refused(409, 'busy');
       appending.add(file);
@@ -220,6 +222,8 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
 }
 
 // The first prompt after a move: the transcript names this chat's old folder, so the agent is told where it is now.
+// The old folder is the sender's own word, put in the prompt as-is: trusted only because the sender is the user's own
+// desktop over ssh (row 51).
 export function movedNote(db, id) {
   const last = db.prepare("SELECT type, data FROM events WHERE conversation = ? AND type IN ('moved-in', 'user') ORDER BY cursor DESC LIMIT 1").get(id);
   if (last?.type !== 'moved-in') return null;
