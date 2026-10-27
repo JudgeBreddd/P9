@@ -35,10 +35,11 @@ async function phoneOn(t) {
 }
 // Waits for the chat this tap made to be shown, not just any change: straight after a reload the page is still choosing
 // its first chat, and a chat made then is a stub, drawn (with its mode) once its history is in.
-async function newChat(page, agent) {
+async function newChat(page, agent, made201 = () => {}) {
   const made = page.waitForResponse((response) => new URL(response.url()).pathname === '/chat' && response.request().method() === 'POST' && response.status() === 201, { timeout: 10000 });
   await page.click(`[data-new="${agent}"]`);
   const id = String((await (await made).json()).conversation);
+  made201();
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id && !document.querySelector('#events').textContent.includes('Loading'), id, { timeout: 10000 });
   return id;
 }
@@ -159,8 +160,15 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
   await page.click('#looseDlg button[value="never"]');
   await page.waitForFunction(() => document.querySelector('#mode').value === 'Bypass permissions', null, { timeout: 5000 });
+  // Tapped while the first read runs (held here until the chat is made), the new chat is a stub, drawn once its history
+  // is in: it still starts in the last pick. pass8 and pass9 lost it there.
+  let release;
+  const go = new Promise((resolve) => { release = resolve; setTimeout(resolve, 10000); });
+  const firstRead = (url) => url.pathname === '/chat/events' && url.searchParams.has('only') && !url.searchParams.has('until');
+  await page.route(firstRead, async (route) => { await go; await route.continue(); });
   await page.reload();
-  await newChat(page, 'claude');
+  await newChat(page, 'claude', release);
+  await page.unroute(firstRead);
   assert.equal(await page.inputValue('#mode'), 'Bypass permissions');
   await page.selectOption('#mode', 'Auto');
   await page.selectOption('#mode', 'Bypass permissions');
