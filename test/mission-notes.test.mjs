@@ -170,7 +170,7 @@ test('notes on the phone: list, preview, and the conflict box', { timeout: 60000
   assert.equal(await page.locator('#fileState').innerText(), 'Loaded');
   assert.equal(listed, 0, 'no folder list over the note');
   const edit = async (text) => {
-    if (await page.locator('#editor').isHidden()) await page.click('#preview');
+    if (await page.locator('#editor').isHidden()) { await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]'); }
     await page.click('#editor .cm-content');
     await page.keyboard.press('Control+End');
     await page.keyboard.type(text);
