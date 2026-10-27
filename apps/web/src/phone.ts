@@ -33,7 +33,7 @@ const topBar = (o: BarOptions) => (o.back ? `<button type="button" class="back" 
   + `<div class="title"><h1>${o.title}</h1>${o.sub !== undefined || o.subId ? `<small${o.subId ? ` id="${o.subId}"` : ''}>${o.sub ?? ''}</small>` : ''}</div><span class="sync" role="img" aria-label="Live"></span>`
   + (o.acts ?? []).map((a) => `<button type="button"${a.id ? ` id="${a.id}"` : ''} aria-label="${a.label}"${a.attrs ? ' ' + a.attrs : ''}>${a.icon}</button>`).join('');
 const mountBar = (name: string, o: BarOptions) => { one(`[data-bar="${name}"]`).innerHTML = topBar(o); };
-mountBar('chat', { title: 'Chat', acts: [{ id: 'refreshChat', label: 'Refresh', icon: ICON.refresh }] });
+mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] });
 mountBar('terminal', { title: 'Terminal', acts: [{ id: 'refreshTerminal', label: 'Refresh', icon: ICON.refresh }] });
 mountBar('mission', { title: 'Mission', acts: [{ id: 'refreshMission', label: 'Refresh', icon: ICON.refresh }] });
 mountBar('usage', { title: 'Usage', acts: [{ id: 'refreshUsage', label: 'Refresh', icon: ICON.refresh }] });
@@ -99,8 +99,10 @@ async function mutate(path: string, body: Json) {
   keepPending(key);
   return { status: response.status, body: result };
 }
+let openId = ''; // the chat on the chat screen; '' is the Chats list
 function show(view: string) {
   document.body.dataset.view = view;
+  document.body.classList.toggle('inchat', view === 'chat' && !!openId);
   document.querySelectorAll<HTMLElement>('[data-view]').forEach((section) => { section.hidden = section.dataset.view !== view; });
   document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => button.setAttribute('aria-current', button.dataset.nav === view ? 'page' : 'false'));
   if (view === 'mission') void loadMission();
@@ -119,9 +121,8 @@ async function readChat() {
     const list = await request('/chat'); state.conversations = list.conversations ?? [];
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
-    if (!linked && applyLink()) linked = true;
-    render();
-  } catch { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
+    if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
+  } catch { one('#events').innerHTML = one('#chatList').innerHTML = '<div class="empty">Chat is unavailable.</div>'; }
 }
 // Most recently used first, in the daemon's order (owner, 2026-10-25): the open chats, then History, the stopped ones a
 // message was sent in, as on the desktop. Labelled with when it started and its state, so two "Claude" chats are told
@@ -133,11 +134,12 @@ function fillPicker() {
   select.innerHTML = group('Open', state.conversations.filter((item) => item.state !== 'stopped')) + group('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
     || '<option value="">No conversations yet</option>';
   if ([...select.options].some((option) => option.value === was)) select.value = was;
-  // P10: a new chat can start in a folder a recent chat used (the daemon's list is newest first); the desktop's
-  // folder dialog has no phone form, so a new folder is picked there once.
-  const start = one<HTMLSelectElement>('#startIn'), at = start.value, folders = [...new Set(state.conversations.map((item) => String(item.folder ?? '')).filter(Boolean))].slice(0, 8);
-  start.innerHTML = '<option value="">Start in: Workspace</option>' + folders.map((item) => `<option value="${escape(item)}">Start in: ${escape(item)}</option>`).join('');
-  start.hidden = !folders.length; if (folders.includes(at)) start.value = at;
+}
+// P10: a new chat can start in a folder a recent chat used (the daemon's list is newest first); the desktop's
+// folder dialog has no phone form, so a new folder is picked there once. Shown in the New chat sheet.
+function startIn() {
+  const folders = [...new Set(state.conversations.map((item) => String(item.folder ?? '')).filter(Boolean))].slice(0, 8);
+  return folders.length ? `<select id="startIn" aria-label="Start in"><option value="">Start in: Workspace</option>${folders.map((item) => `<option value="${escape(item)}">Start in: ${escape(item)}</option>`).join('')}</select>` : '';
 }
 // PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
 // link changes on an open page).
@@ -148,7 +150,7 @@ function applyLink() {
   select.value = id;
   return true;
 }
-addEventListener('hashchange', () => { if (applyLink()) { show('chat'); render(); } });
+addEventListener('hashchange', () => { if (applyLink()) { show('chat'); route(one<HTMLSelectElement>('#conversation').value); } else if (openId) route(''); });
 // Reads every event after state.cursor into state.events (the daemon pages 500 at a time); wait > 0 long-polls for the
 // first. `extra` narrows it to some chats (the first read, PH3). The page holds what it has read, so a reload or a second
 // visit shows each chat in full.
@@ -207,8 +209,8 @@ function history(id: string) {
   return loading.get(id)!;
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
-// updates (usage, commands, titles) are left out.
-type Block = { label: string; text: string; tool?: boolean; id?: unknown; title?: string; request?: string; options?: Json[]; images?: string[]; form?: Json[] | null; sent?: string[] };
+// updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
+type Block = { kind: string; text: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; form?: Json[] | null; sent?: string[] };
 type Attached = { mimeType: string; data: string; name: string };
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
@@ -236,63 +238,226 @@ function questionAnswer(form: HTMLFormElement, fields: Json[]) {
   });
   return content;
 }
+type Entry = { key: string; sig: string; html: () => string };
+type Strip = { events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> };
+const DETAIL_CAP = 2000; // a tool call's expandable detail: the ledger's status and text content, escaped, capped (threat model row 18)
+const toolText = (data: Json) => (Array.isArray(data.content) ? data.content as Json[] : []).map((item) => String(((item.content ?? item) as Json | undefined)?.text ?? '')).filter(Boolean).join('\n');
+function build(picked: string) {
+  const blocks: Block[] = [];
+  // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
+  const strip: Strip = { events: [] };
+  const add = (kind: string, text: unknown, extra: Partial<Block> = {}) => { blocks.push({ kind, text: String(text ?? ''), ...extra }); };
+  // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
+  const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.text += ' · not answered'; } if (block.kind === 'ask') block.closed = true; });
+  for (const event of state.events) {
+    if (event.conversation !== picked) continue;
+    const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
+    if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)) });
+    else if (kind === 'update') {
+      const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
+      if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
+        const type = update === 'agent_message_chunk' ? 'agent' : 'think';
+        if (last?.kind === type) last.text += String(text); else add(type, text);
+        // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
+        const image = type === 'agent' && imgSrc(data.content); if (image) (blocks.at(-1)!.images ??= []).push(image);
+      } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
+      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content) });
+      else if (update === 'tool_call_update') {
+        const tool = blocks.find((block) => block.kind === 'tool' && block.id === data.toolCallId);
+        if (tool) {
+          if (typeof data.status === 'string') tool.status = data.status;
+          if (typeof data.title === 'string' && data.title) tool.text = data.title;
+          const more = toolText(data); if (more) tool.detail = ((tool.detail ? tool.detail + '\n' : '') + more).slice(0, DETAIL_CAP);
+          if (data.content) tool.images = toolImages(data.content);
+        }
+      }
+    }
+    else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
+    else if (kind === 'approval') add('approval', (data.toolCall as Json | undefined)?.title || 'Tool call', { request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [] });
+    else if (kind === 'answered') {
+      const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
+      if (asked) asked.request = undefined;
+      const question = blocks.find((block) => block.kind === 'ask' && block.id === data.request); if (question) question.closed = true;
+      const chosen = asked?.options?.find((option) => option.optionId === outcome?.optionId);
+      add('answered', 'You answered · ' + (outcome ? (outcome.outcome === 'selected' ? String(chosen?.name ?? outcome.optionId) : 'Cancelled') : (({ accept: 'Answered', decline: 'Declined' } as Json)[String(answer.action)] ?? 'Cancelled')));
+    }
+    else if (kind === 'question') add('ask', data.message, { id: data.request, form: ((data.form as Json | null)?.fields as Json[] | undefined) ?? null });
+    else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('note', 'Turn ended · ' + data.stopReason); }
+    else if (kind === 'error') add('error', data.message);
+    else if (kind === 'steer-lost') add('note', 'This message may not have reached the agent · ' + data.text);
+    else if (kind === 'interrupted') { settle(); add('note', 'Stopped · The P9 daemon restarted mid-turn. Send again to resume.'); }
+    else if (kind === 'exited' || kind === 'stopped') { settle(); add('note', 'Stopped · Send again to resume.'); }
+  }
+  return { blocks, strip };
+}
+const toolRow = (block: Block) => `<article data-kind="tool" data-status="${escape(block.status)}"><details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${agentImgs(block.images, 'the agent')}</article>`;
+function blockHtml(block: Block) {
+  const kind = block.kind;
+  if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
+  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${mdReply.parse(block.text)}${agentImgs(block.images, 'the agent')}</article>`;
+  if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
+  if (kind === 'tool') return toolRow(block);
+  // P10: an open question is answered here, from the daemon's checked form.
+  if (kind === 'ask' && !block.closed) return `<article data-kind="ask" class="msg ask open"><div>${escape(block.text)}</div>${questionForm(String(block.id), block.form ?? null)}</article>`;
+  if (kind === 'approval' || kind === 'ask') {
+    const open = kind === 'ask' ? !block.closed : !!block.request;
+    return `<article data-kind="${kind}" class="msg ask${open ? ' open' : ''}"><div>${escape(block.text)}</div>${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
+      `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`;
+  }
+  return `<article data-kind="${kind}" class="note">${escape(block.text)}</article>`;
+}
+// Three or more tool calls in a row fold into one row. A block's key is its index (a group's is its first block's), so a
+// node is kept while its signature holds; a streaming reply re-renders only its own node.
+function itemsOf(blocks: Block[]) {
+  const out: Entry[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
+    if (j - i >= 2) {
+      const run = blocks.slice(i, j + 1);
+      out.push({ key: 'g' + i, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map(toolRow).join('')}</details></article>` });
+      i = j;
+    } else { const block = blocks[i]; out.push({ key: 'b' + i, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join(''), html: () => blockHtml(block) }); }
+  }
+  return out;
+}
+type Keyed = HTMLElement & { sig?: string };
+// Appends and patches: every node whose key and signature still hold stays in the page (scroll position, text selection and
+// an expanded row survive a long-poll tick); only a changed block is replaced, a new one inserted, a gone one removed.
+function patch(list: HTMLElement, wanted: Entry[]) {
+  for (const node of [...list.children]) if (!(node as HTMLElement).dataset.key) node.remove(); // notes and "Loading…" last one render
+  const have = new Map<string, Keyed>(), keep = new Set(wanted.map((item) => item.key));
+  for (const node of [...list.children] as Keyed[]) if (keep.has(node.dataset.key!)) have.set(node.dataset.key!, node); else node.remove();
+  const template = document.createElement('template'); let prev: Element | null = null;
+  for (const item of wanted) {
+    let node = have.get(item.key);
+    if (!node || node.sig !== item.sig) {
+      template.innerHTML = item.html();
+      const fresh = template.content.firstElementChild as Keyed;
+      fresh.dataset.key = item.key; fresh.sig = item.sig;
+      if (node) { const was = [...node.querySelectorAll('details')].map((details) => details.open); fresh.querySelectorAll('details').forEach((details, index) => { details.open = was[index] ?? false; }); node.replaceWith(fresh); }
+      node = fresh;
+    }
+    const expected: Element | null = prev ? prev.nextElementSibling : list.firstElementChild;
+    if (node !== expected) list.insertBefore(node, expected);
+    prev = node;
+  }
+}
+// P7: what each chat is doing, read from its events the way the desktop's robot heads are: a user message with no turn end
+// after it is working; an approval or question not yet answered is waiting on you; otherwise stopped.
+type Digest = { run: 'working' | 'needs' | 'idle'; last: string };
+function digest() {
+  const seen = new Map<string, { working: boolean; open: Set<string>; last: string; tail: boolean }>();
+  for (const event of state.events) {
+    const id = String(event.conversation), kind = String(event.type), data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json;
+    let chat = seen.get(id); if (!chat) seen.set(id, chat = { working: false, open: new Set(), last: '', tail: false });
+    if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; }
+    else if (kind === 'update') {
+      const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
+      if (update === 'agent_message_chunk') { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; }
+      else if (update === 'tool_call') chat.tail = false;
+    }
+    else if (kind === 'approval' || kind === 'question') chat.open.add(String(data.request));
+    else if (kind === 'answered') chat.open.delete(String(data.request));
+    else if (['turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error'].includes(kind)) { chat.working = false; chat.open.clear(); }
+  }
+  const out = new Map<string, Digest>();
+  seen.forEach((chat, id) => out.set(id, { run: chat.open.size ? 'needs' : chat.working ? 'working' : 'idle', last: chat.last.trim().split('\n')[0] ?? '' }));
+  return out;
+}
+const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+let listSig = '';
+function renderList() {
+  const found = digest(), row = (item: Json) => {
+    const id = String(item.id), info = found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
+    return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
+  };
+  const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
+  const html = section('Open', state.conversations.filter((item) => item.state !== 'stopped')) + section('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
+    || '<div class="empty">No chats yet. Tap + to start one.</div>';
+  if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
+}
+// The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
+let barSig = '';
+function chatBar(id: string, run: string) {
+  const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
+  const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
+  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div><span class="run" data-run="${run}" role="img" aria-label="${run === 'working' ? 'Working' : run === 'needs' ? 'Needs you' : 'Stopped'}"></span><span class="sync" role="img" aria-label="Live"></span>`;
+  if (html === barSig) return;
+  barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
+}
+// Where the reader is: the list ('') or a chat. Opening pushes a history entry (#chat=<id>, as "Continue on phone" links),
+// so the browser's own back, the iOS edge swipe included, returns to the list.
+let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, anchored = false, seenItems = 0;
+const body = one<HTMLElement>('#chatBody');
+function route(id: string) {
+  const changed = id !== openId; openId = id;
+  const select = one<HTMLSelectElement>('#conversation'); if (id) select.value = id;
+  one('#chatList').hidden = !!id; one('#chatArea').hidden = !id; one('#composerSlot').hidden = !id;
+  document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
+  barSig = '';
+  if (!id) { pushed = false; mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] }); online(); renderList(); return; }
+  if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one('#jump').hidden = true; }
+  render();
+}
+function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
+function back() { if (pushed) window.history.back(); else { window.history.replaceState(null, '', location.pathname + location.search); route(''); } }
 function render() {
-  const picked = one<HTMLSelectElement>('#conversation').value;
+  if (!openId) return renderList();
+  const picked = openId;
   if (state.stubs.has(picked)) {
     one('#events').innerHTML = '<div class="empty">Loading…</div>';
     history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
     return;
   }
-  const blocks: Block[] = [];
-  // PH4: the plan and the pinned cards, drawn by the desktop's own strip (pinned.mjs) from the same ledger events.
-  const strip: { events: { t: string; entries: unknown }[]; cards?: Map<string, unknown> } = { events: [] };
-  const add = (label: string, text: unknown, tool = false) => { blocks.push({ label, text: String(text ?? ''), tool }); };
-  // An approval keeps its buttons until it is answered or its turn ends (a daemon restart or Stop drops it unanswered).
-  const settle = () => blocks.forEach((block) => { if (block.request) { block.request = undefined; block.tool = true; block.text += ' · not answered'; } });
-  for (const event of state.events) {
-    if (event.conversation !== picked) continue;
-    const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
-    if (kind === 'user') blocks.push({ label: 'You', text: String(data.text ?? ''), sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)) });
-    else if (kind === 'update') {
-      const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
-      if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
-        // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
-        const label = update === 'agent_message_chunk' ? 'Agent' : 'Thinking', image = label === 'Agent' && imgSrc(data.content);
-        if (last?.label === label) last.text += String(text); else add(label, text);
-        if (image) (blocks.at(-1)!.images ??= []).push(image);
-      } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
-      else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId, images: toolImages(data.content) });
-      else if (update === 'tool_call_update') {
-        const tool = blocks.find((block) => block.label === 'Tool' && block.id === data.toolCallId);
-        if (tool && typeof data.status === 'string') tool.text = String(data.title || tool.title) + ' · ' + data.status;
-        if (tool && data.content) tool.images = toolImages(data.content);
-      }
-    }
-    else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
-    else if (kind === 'approval') blocks.push({ label: 'Approval needed', text: String((data.toolCall as Json | undefined)?.title || 'Tool call'), request: String(data.request), options: Array.isArray(data.options) ? data.options as Json[] : [] });
-    else if (kind === 'answered') {
-      const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
-      if (asked) { asked.request = undefined; asked.tool = true; }
-      const chosen = asked?.options?.find((option) => option.optionId === outcome?.optionId);
-      add('You answered', outcome ? (outcome.outcome === 'selected' ? String(chosen?.name ?? outcome.optionId) : 'Cancelled') : ({ accept: 'Answered', decline: 'Declined' } as Json)[String(answer.action)] ?? 'Cancelled', true);
-    }
-    else if (kind === 'question') blocks.push({ label: 'Question', text: String(data.message ?? ''), request: String(data.request), form: ((data.form as Json | null)?.fields as Json[] | undefined) ?? null });
-    else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('Turn ended', data.stopReason, true); }
-    else if (kind === 'error') add('Error', data.message, true);
-    else if (kind === 'steer-lost') add('This message may not have reached the agent', data.text, true);
-    else if (kind === 'interrupted') { settle(); add('Stopped', 'The P9 daemon restarted mid-turn. Send again to resume.', true); }
-    else if (kind === 'exited' || kind === 'stopped') { settle(); add('Stopped', 'Send again to resume.', true); }
-  }
-  // A question's answers in progress survive the redraw.
-  const draft = document.querySelector<HTMLFormElement>('#events form[data-question]'), kept = draft && { request: draft.dataset.question, values: [...draft.elements].map((el) => el instanceof HTMLInputElement ? [el.name, el.value, el.checked] as const : null) };
-  one('#events').innerHTML = blocks.length ? blocks.slice(-30).map((block) =>
-    `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${mdReply.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${sentImgs(picked, block.sent)}${agentImgs(block.images, 'the agent')}${block.request && block.form !== undefined ? questionForm(block.request, block.form) : block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
-      `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`).join('') : '<div class="empty">No messages yet.</div>';
-  const again = kept && document.querySelector<HTMLFormElement>(`#events form[data-question="${CSS.escape(kept.request ?? '')}"]`);
-  if (kept && again) [...again.elements].forEach((el, i) => { const was = kept.values[i]; if (el instanceof HTMLInputElement && was && was[0] === el.name) { if (el.type === 'radio' || el.type === 'checkbox') el.checked = was[2]; else el.value = was[1]; } });
+  const { blocks, strip } = build(picked), all = itemsOf(blocks), events = one('#events');
+  if (!stuck && seenItems) windowSize += Math.max(0, all.length - seenItems); // a reader part way up keeps their top; the window slides only at the bottom
+  seenItems = all.length;
+  const shown = all.slice(-windowSize);
+  hiddenBlocks = all.length - shown.length;
+  const height = body.scrollHeight, top = body.scrollTop;
+  patch(events, shown);
+  if (!blocks.length) events.insertAdjacentHTML('beforeend', '<div class="empty">No messages yet.</div>');
+  if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
+  anchored = false;
+  const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one('#chips');
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
+  chips.hidden = !plan.length && !cards;
+  chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (cards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button>` : '');
+  chatBar(picked, digest().get(picked)?.run ?? 'idle');
   renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
+body.addEventListener('scroll', () => {
+  stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 80; one('#jump').hidden = stuck;
+  if (body.scrollTop < 60 && hiddenBlocks > 0) { windowSize += 60; anchored = true; render(); } // older history loads when the reader reaches the top
+}, { passive: true });
+new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(body);
+new ResizeObserver(() => { if (stuck) body.scrollTop = body.scrollHeight; }).observe(one('#events'));
+one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
+one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+one('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
+one('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
+one('[data-bar="chat"]').addEventListener('click', (event) => {
+  const button = (event.target as Element).closest('button'); if (!button) return;
+  if (button.dataset.back !== undefined) back();
+  else if (button.id === 'newChat') openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>${startIn()}`);
+  else if (button.id === 'modelBtn') {
+    const model = one<HTMLSelectElement>('#model'), options = [...model.options];
+    openSheet('Model', options.length ? options.map((option) => `<button type="button" class="opt" data-model="${escape(option.value)}" aria-checked="${option.selected}">${escape(option.textContent)}</button>`).join('') : '<div class="empty">This agent lists no models.</div>');
+  }
+});
+one('#sheetBody').addEventListener('click', async (event) => {
+  const target = event.target as Element, pick = target.closest<HTMLElement>('[data-model]'), make = target.closest<HTMLElement>('[data-new]');
+  if (pick) { const model = one<HTMLSelectElement>('#model'); model.value = pick.dataset.model!; model.dispatchEvent(new Event('change')); barSig = ''; sheet.close(); render(); }
+  if (make) {
+    if (!navigator.onLine) return;
+    const folder = document.querySelector<HTMLSelectElement>('#startIn')?.value;
+    sheet.close();
+    const result = await mutate('/chat', { provider: make.dataset.new, ...(folder && { folder }) });
+    if (result.status !== 201) return;
+    const last = localStorage.getItem('p9-mode:' + make.dataset.new); if (last) startPick.set(String(result.body.conversation), last);
+    await loadChat(); openChat(String(result.body.conversation));
+  }
+});
 // Mode and Model for the picked chat (Builder, 2026-10-18: the phone could change neither; threat model row 15). An open
 // chat starts at "as set" and sends nothing until picked, so a Plan picked on the desktop stays; the label shows the mode
 // the daemon last set (its 'mode' event). A chat made here starts in this phone's last pick for its agent. P6 (row 25):
@@ -361,34 +526,36 @@ function asking(id: string) {
   }
   return open.size > 0;
 }
-// P4: whether a turn runs in this chat, and the messages the daemon holds for it (Steer or Queue mid-turn), read from
-// the chat's events as the desktop reads them: a user event starts a turn and sends the held ones it names.
+// P4: the messages the daemon holds for this chat (Steer or Queue mid-turn), read from its events as the desktop reads
+// them: a user event sends the held ones it names. Whether a turn runs is the Chats list's reading (digest), so the top
+// bar's "Working…" and the Stop button never disagree.
+const running = (id: string) => (digest().get(id)?.run ?? 'idle') !== 'idle';
 function turn(id: string) {
-  let running = false; const held = new Map<string, { text: string; when: string }>();
+  const held = new Map<string, { text: string; when: string }>();
   for (const event of state.events) {
     if (event.conversation !== id) continue;
     const kind = String(event.type), data = (event.data ?? {}) as Json;
-    if (kind === 'user') { running = true; for (const sent of Array.isArray(data.held) ? data.held : []) held.delete(String(sent)); }
-    else if (['turn-end', 'interrupted', 'exited', 'stopped', 'error'].includes(kind)) { running = false; if (kind !== 'turn-end') held.clear(); }
+    if (kind === 'user') { for (const sent of Array.isArray(data.held) ? data.held : []) held.delete(String(sent)); }
+    else if (['interrupted', 'exited', 'stopped', 'error'].includes(kind)) held.clear();
     else if (kind === 'held') held.set(String(data.id), { text: String(data.text), when: String(data.when) });
     else if (kind === 'unheld') held.delete(String(data.id));
   }
-  return { running, held };
+  return { held };
 }
 // The send button, as the desktop's: during a turn an empty box makes it Stop (the text stays yours), and text goes
 // in with Steer (after the current step) or, from the Queue button beside it, after the turn.
 function label() {
   const id = one<HTMLSelectElement>('#conversation').value, send = one<HTMLButtonElement>('#composer button[type="submit"]');
-  const local = !navigator.onLine || asking(id) || queued(id).length > 0, running = !local && turn(id).running;
+  const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
   const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
   const box = one<HTMLTextAreaElement>('#prompt');
   box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
   // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
   // here. ponytail: by hand, as iOS Safari has no field-sizing.
   box.style.height = 'auto'; box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
-  send.dataset.stop = String(running && empty);
-  one('#send .vh').textContent = running ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
-  one<HTMLButtonElement>('button[form="composer"][data-when="queue"]').hidden = !running || empty;
+  send.dataset.stop = String(busy && empty);
+  one('#send .vh').textContent = busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
+  one<HTMLButtonElement>('button[form="composer"][data-when="queue"]').hidden = !busy || empty;
 }
 function renderQueue() {
   const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
@@ -460,7 +627,7 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return;
   }
-  const when = turn(id).running ? (submitter?.dataset.when ?? 'steer') : undefined;
+  const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { input.value = ''; note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
@@ -496,8 +663,8 @@ const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, val
 // P4: + and the mode pill open the shared sheet. The phone's own pickers: the photo library, the camera, or its files
 // (the same image types the daemon takes); the chooser opens in the same tap, so the browser lets it.
 one('#attach').onclick = () => openSheet('Attach', opts([['pick', 'library', 'Photo library'], ['pick', 'camera', 'Take photo'], ['pick', 'file', 'File']]));
-// The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's model, effort and fast mode,
-// which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
+// The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's effort, fast mode and plan
+// (the model is the top bar's Model sheet), which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
 function pill() {
   const name = (one<HTMLSelectElement>('#mode').selectedOptions[0]?.text ?? '').replace(/^Mode: /, ''), button = one('#modePill');
   button.textContent = (name === 'as set' ? 'Mode' : name) + ' ▾'; button.setAttribute('aria-label', 'Mode: ' + (name || 'as set'));
@@ -581,13 +748,6 @@ one<HTMLElement>('#events').onclick = async (event) => {
   if (result.status === 200) { await fetchEvents(); render(); }
   else { button.parentElement!.querySelectorAll('button').forEach((item) => { item.disabled = false; }); one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not answered: ${escape(result.body.error ?? result.status)}</div>`); }
 };
-document.querySelectorAll<HTMLButtonElement>('[data-new]').forEach((button) => { button.onclick = async () => {
-  const folder = one<HTMLSelectElement>('#startIn').value;
-  const result = await mutate('/chat', { provider: button.dataset.new, ...(folder && { folder }) });
-  if (result.status !== 201) return;
-  const last = localStorage.getItem('p9-mode:' + button.dataset.new); if (last) startPick.set(String(result.body.conversation), last);
-  await loadChat(); one<HTMLSelectElement>('#conversation').value = String(result.body.conversation); render();
-}; });
 // P6: Bypass permissions and Full access ask first, in the desktop's words; Cancel puts the pick back. "Don't show again"
 // is kept per mode on this phone, as the desktop keeps it on its computer.
 const loose = one<HTMLDialogElement>('#looseDlg');
@@ -671,7 +831,7 @@ addEventListener('click', (event) => {
   const image = (event.target as Element).closest?.('.agent-imgs img, .user-imgs img') as HTMLImageElement | null; if (!image) return;
   picture.replaceChildren(Object.assign(document.createElement('img'), { src: image.src, alt: image.alt })); picture.showModal();
 });
-one<HTMLButtonElement>('#refreshChat').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };
+one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };
 
 // Mission: the same daemon routes the desktop uses. Native <details> rows open in place; scripts stream output from
 // /runs/:id. Terminal scripts and laptop apps open windows on the laptop, so the phone lists them as laptop-only.

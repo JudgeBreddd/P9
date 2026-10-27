@@ -27,7 +27,7 @@ dialog.loose{width:calc(100vw - 32px);max-width:420px;border:1px solid var(--red
 /* P10: an agent's question, answered on the phone */
 form.question{display:grid;gap:10px;margin-top:8px}form.question fieldset{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:0;display:grid;gap:4px}form.question legend{font-weight:600;padding:0 4px}form.question small{color:var(--muted)}form.question label.pick{display:flex;align-items:center;gap:8px;min-height:40px}form.question input[type=text],form.question input[type=number]{min-height:44px;font-size:16px;width:100%}
 /* P10: slash commands above the message box, and the new chat's folder */
-.slash{display:grid;gap:2px;max-height:40vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px}.slash button{display:block;text-align:left;min-height:44px;width:100%}.slash small{color:var(--muted)}#startIn{max-width:100%}
+.slash{display:grid;gap:2px;max-height:40vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px}.slash button{display:block;text-align:left;min-height:44px;width:100%}.slash small{color:var(--muted)}#startIn{max-width:100%;margin-top:8px}
 /* P8: attach sheet, 48 px chips with a remove button, photos already sent */
 .attached{display:flex;flex-wrap:wrap;gap:8px}.chip-img{position:relative;width:48px;height:48px}.chip-img img{width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
 .chip-img button{position:absolute;top:-10px;right:-10px;width:28px;height:28px;min-height:0;padding:0;border-radius:50%;font-size:13px;line-height:1}
@@ -87,3 +87,59 @@ dialog.sheet .opt{display:flex;align-items:center;width:100%;min-height:48px;pad
 dialog.sheet .opt:last-child{border-bottom:0}
 dialog.sheet .opt[aria-checked=true]::after{content:"✓";margin-left:auto;color:var(--cyan)}
 @media(prefers-reduced-motion:no-preference){dialog.sheet[open]{animation:sheet .22s ease-out}@keyframes sheet{from{transform:translateY(24px);opacity:0}}}
+/* Chats (v0.1.6, phone spec §2, §3): a list of rows, then one chat screen: top bar, one scroller, the composer slot. No cards, no labels. */
+section[data-view=chat]>:not(.bar){margin-left:0;margin-right:0}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+#chatArea{flex:1;min-height:0;display:flex;flex-direction:column}
+.scrollwrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+body.inchat nav{display:none}
+.sec{margin:16px 16px 4px;font-size:13px;font-weight:600;color:var(--muted)}
+.row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:8px 16px;border:0;border-radius:0;background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.08)) right bottom/calc(100% - 16px) 1px no-repeat;color:var(--text);font-weight:400;text-align:left}
+.row .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--muted)}
+.row .dot.claude{background:#d97757}.row .dot.codex{background:#5b9cff}
+.row .t{flex:1;min-width:0;display:grid;gap:2px}
+.row b{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row small{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row time{flex:none;color:var(--muted);font-size:13px}
+.row[data-run=working] small{color:var(--cyan)}
+.row[data-run=needs] small{color:var(--amber)}.row[data-run=needs] .dot{background:var(--amber)}
+.bar .sub{min-height:0;min-width:0;display:flex;align-items:center;gap:2px;padding:2px 0;border-radius:6px;color:var(--muted);font-size:12px;font-weight:400;text-align:left;overflow:hidden;white-space:nowrap}
+.bar .sub svg{flex:none;width:12px;height:12px}
+.bar .run{flex:none;width:16px;height:16px;margin:0 6px;border-radius:50%}
+.bar .run[data-run=idle]{display:none}
+.bar .run[data-run=needs]{background:var(--amber)}
+.bar .run[data-run=working]{border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan)}
+.chips{flex:none;display:flex;gap:8px;min-height:32px;align-items:center;padding:0 16px 6px}
+.chip{min-height:32px;padding:0 12px;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:var(--raised);color:var(--text);font-size:13px;font-weight:600}
+#events{display:flex;flex-direction:column;gap:12px;padding:12px 16px 16px}
+#events>article{margin:0}
+#events>article[data-kind=user]+article:not([data-kind=user]){margin-top:4px}
+#events .msg{font-size:16px;line-height:1.5}
+#events .msg.user{padding:10px 14px;border-radius:16px;background:var(--raised);white-space:pre-wrap;overflow-wrap:anywhere}
+#events .msg.ask{padding:10px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow-wrap:anywhere}
+#events .msg.ask.open{border-color:var(--amber)}
+#events .msg.ask .actions{margin-top:8px}
+#events .note{text-align:center;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+#events .note[data-kind=error]{color:var(--red)}
+#events [data-kind=think] summary,#events [data-kind=group]>details>summary{color:var(--muted);font-size:13px}
+#events summary{display:flex;align-items:center;gap:8px;min-height:36px;cursor:pointer;list-style:none}
+#events summary::-webkit-details-marker{display:none}
+#events [data-kind=think] summary::after,#events [data-kind=group]>details>summary::after{content:"▸";margin-left:2px}
+#events [data-kind=think] details[open]>summary::after,#events [data-kind=group]>details[open]>summary::after{content:"▾"}
+#events [data-kind=think] details>div{padding:0 0 4px;color:var(--muted);font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+#events [data-kind=tool],#events [data-kind=group]{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:0 10px;overflow:hidden}
+#events [data-kind=group] [data-kind=tool]{border-width:0 0 0 0;padding:0}
+#events [data-kind=tool] summary .t,#events [data-kind=group]>details>summary .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px "JetBrains Mono",ui-monospace,monospace;color:var(--text)}
+#events [data-kind=group]>details>summary .t{font-family:inherit;color:var(--muted)}
+#events pre{margin:0 0 8px;padding:8px;border-radius:8px;background:rgba(255,255,255,.04);color:var(--muted);font:12px/1.4 "JetBrains Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+#events .st{flex:none;display:inline-grid;place-items:center;width:14px;height:14px;font-size:12px;line-height:1}
+#events [data-status=completed]>details>summary .st::before,#events [data-status=done]>details>summary .st::before{content:"✓";color:var(--cyan)}
+#events [data-status=failed]>details>summary .st::before{content:"✕";color:var(--red)}
+#events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{content:"";width:12px;height:12px;border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan);border-radius:50%}
+#jump{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:36px;height:36px;min-width:36px;min-height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.08);background:var(--raised);color:var(--text);display:grid;place-items:center;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+#jump svg{width:18px;height:18px}
+@media(prefers-reduced-motion:no-preference){
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.35}}
+.bar .run[data-run=working],#events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{animation:spin .8s linear infinite}
+.row[data-run=working] .dot{animation:pulse 1.4s ease-in-out infinite}}
+#composerSlot{margin-left:16px;margin-right:16px}

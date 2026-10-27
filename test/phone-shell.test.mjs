@@ -49,17 +49,22 @@ async function open(device, server, { fix = [], init } = {}) {
   return { page, hits: () => hit.filter(Boolean).length, missed: () => fix.map((_, i) => hit[i] ? '' : 'patch ' + i + ' did not hit' + (seen[i] ? '; the served text reads: ' + seen[i] : '; its first 14 characters appear nowhere')).filter(Boolean).join(' | ') };
 }
 
+// A new Claude chat through the + sheet; the chat screen opens on it.
+async function newChat(page) {
+  await page.click('#newChat'); await page.click('#sheet [data-new="claude"]');
+  await page.waitForSelector('#composer', { state: 'visible' });
+}
 const checks = {
   // The page itself never scrolls: the column is exactly the window; every tab has a 44 px bar with the sync dot.
   async column(page) {
-    await page.waitForSelector('h1:text("Chat")');
+    await page.waitForSelector('h1:text("Chats")');
     const f = await page.evaluate(() => {
       const root = document.scrollingElement, app = document.querySelector('#app').getBoundingClientRect();
       return { scrolls: root.scrollHeight > root.clientHeight, top: app.top, height: app.height, inner: innerHeight };
     });
     assert.equal(f.scrolls, false, 'the page does not scroll');
     assert.deepEqual([f.top, f.height], [0, f.inner], 'the column is the window');
-    for (const [view, title] of [['chat', 'Chat'], ['terminal', 'Terminal'], ['mission', 'Mission'], ['usage', 'Usage'], ['files', 'Files']]) {
+    for (const [view, title] of [['chat', 'Chats'], ['terminal', 'Terminal'], ['mission', 'Mission'], ['usage', 'Usage'], ['files', 'Files']]) {
       await page.click(`nav [data-nav="${view}"]`);
       const bar = page.locator(`section[data-view="${view}"] > .bar`);
       assert.equal(await bar.locator('h1').innerText(), title);
@@ -74,33 +79,45 @@ const checks = {
   // The tab bar is visible at full height, gone when the viewport shrinks (what a keyboard does), back when it grows;
   // the composer stays whole and on screen in the short viewport.
   async keyboard(page) {
-    await page.waitForSelector('h1:text("Chat")');
+    await page.waitForSelector('h1:text("Chats")');
     assert.equal(await page.locator('nav').isVisible(), true);
     await page.setViewportSize({ width: 390, height: 500 });
     await page.waitForFunction(() => document.body.classList.contains('kbd'));
     assert.equal(await page.locator('nav').isVisible(), false, 'the tab bar yields to a short viewport');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => !document.body.classList.contains('kbd'));
+    assert.equal(await page.locator('nav').isVisible(), true, 'the tab bar comes back');
+  },
+  // Inside a chat the tab bar is gone (the composer owns the bottom) and the composer rides a short viewport.
+  async inchat(page) {
+    await page.waitForSelector('h1:text("Chats")');
+    assert.equal(await page.locator('nav').isVisible(), true, 'the Chats list has the tab bar');
+    await newChat(page);
+    assert.equal(await page.locator('nav').isVisible(), false, 'no tab bar inside a chat');
+    await page.setViewportSize({ width: 390, height: 500 });
+    await page.waitForFunction(() => document.body.classList.contains('kbd'));
     const slot = await page.locator('#composerSlot').boundingBox(), field = await page.locator('#prompt').boundingBox();
     assert.ok(slot.y + slot.height <= 500.5 && field.y >= 44 && field.y + field.height <= 500, 'the composer sits inside the short viewport');
     await shot(page, 'c1-shell-500');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForFunction(() => !document.body.classList.contains('kbd'));
-    assert.equal(await page.locator('nav').isVisible(), true, 'the tab bar comes back');
+    await page.click('[data-back]'); await page.waitForSelector('h1:text("Chats")');
+    assert.equal(await page.locator('nav').isVisible(), true, 'the tab bar is back on the list');
   },
   // The composer slot is marked, is a fixed row under the chat scroller, holds today's composer, and still sends.
   async slot(page) {
-    await page.waitForSelector('h1:text("Chat")');
-    await page.click('[data-new="claude"]:not([disabled])');
-    await page.waitForFunction(() => document.querySelector('#conversation').value, null, { timeout: 10000 });
+    await page.waitForSelector('h1:text("Chats")');
+    await newChat(page);
     assert.equal(await page.locator('#composerSlot #composer #prompt').count(), 1);
     const slot = await page.locator('#composerSlot').boundingBox();
-    assert.ok(slot.y > 400 && slot.y + slot.height <= 844 - 49 + 0.5, 'the slot is the row above the tab bar');
+    assert.ok(slot.y > 400 && slot.y + slot.height <= 844.5, 'the slot is the bottom row of the chat screen');
     await page.fill('#prompt', 'hello from the shell');
     await page.click('#composer button[type=submit]');
     await page.waitForFunction(() => /hello from the shell/.test(document.querySelector('#events').innerText), null, { timeout: 5000 });
   },
   // The shared sheet opens with a title and body; a tap on the backdrop closes it.
   async sheet(page) {
-    await page.waitForSelector('h1:text("Chat")');
+    await page.waitForSelector('h1:text("Chats")');
     await page.evaluate(() => dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Pick one', html: '<button class="opt" aria-checked="true">Alpha</button>' } })));
     await page.waitForSelector('#sheet[open] .opt');
     assert.equal(await page.locator('#sheetTitle').innerText(), 'Pick one');
@@ -111,6 +128,7 @@ const checks = {
 const breaks = {
   column: { fix: [[/(#app\{[^}]*?)height:\s*var\(--vvh,\s*100dvh\)/, '$1height:300px']] },
   keyboard: { fix: [['body.kbd nav{display:none}', 'body.kbd nav{}']] },
+  inchat: { fix: [['body.inchat nav{display:none}', 'body.inchat nav{}']] },
   slot: { fix: [['id="composerSlot"', 'id="composerSlotGone"']] },
   sheet: { init: () => { HTMLDialogElement.prototype.close = function () {}; } },
 };

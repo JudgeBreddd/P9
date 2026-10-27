@@ -33,11 +33,15 @@ async function phoneOn(t) {
   await device.page.setViewportSize({ width: 390, height: 844 });
   return { ...device, server, session };
 }
-// Waits for the chat this tap made to be shown, not just any change: straight after a reload the page is still choosing
-// its first chat, and a chat made then is a stub, drawn (with its mode) once its history is in.
-async function newChat(page, agent, made201 = () => {}) {
+// New chat is the Chats list's + (c1's shell): from a chat, back to the list first. Waits for the chat this tap made to
+// be shown, not just any change: straight after a reload the page is still choosing its first chat, and a chat made
+// then is a stub, drawn (with its mode) once its history is in.
+async function newChat(page, agent, made201 = () => {}, folder = '') {
   const made = page.waitForResponse((response) => new URL(response.url()).pathname === '/chat' && response.request().method() === 'POST' && response.status() === 201, { timeout: 10000 });
-  await page.click(`[data-new="${agent}"]`);
+  if (await page.isVisible('[data-bar="chat"] [data-back]')) await page.click('[data-bar="chat"] [data-back]');
+  await page.click('#newChat');
+  if (folder) await page.selectOption('#sheet[open] #startIn', folder);
+  await page.click(`#sheet[open] [data-new="${agent}"]`);
   const id = String((await (await made).json()).conversation);
   made201();
   await page.waitForFunction((id) => document.querySelector('#conversation').value === id && !document.querySelector('#events').textContent.includes('Loading'), id, { timeout: 10000 });
@@ -201,10 +205,14 @@ test('P10: effort and fast mode, slash commands and a recent chat\'s folder on t
   const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 });
   assert.equal((await server.desk('/chat', 'POST', { provider: 'claude', folder: 'proj/sub' })).status, 201);
   await page.reload();
-  await page.waitForSelector('#startIn option[value="proj/sub"]', { state: 'attached', timeout: 10000 });
-  assert.equal(await page.isVisible('#startIn'), true);
-  await page.selectOption('#startIn', 'proj/sub');
-  await newChat(page, 'claude');
+  // The folder list is drawn when the New chat sheet opens, so the list has that chat first.
+  await page.waitForSelector('#chatList [data-chat]', { timeout: 10000 });
+  await page.click('#newChat');
+  assert.equal(await page.locator('#sheet[open] #startIn option[value="proj/sub"]').count(), 1);
+  assert.equal(await page.isVisible('#sheet[open] #startIn'), true);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 });
+  await newChat(page, 'claude', undefined, 'proj/sub');
   await send(page, 'cwd');
   await replied('/proj/sub');
   // Effort and fast mode sit under the modes in the pill's sheet, and stay put once it closes.
