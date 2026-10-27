@@ -387,7 +387,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   const edit = async (text) => { await page.locator('.cm-content').click(); await page.keyboard.press('Control+A'); await page.keyboard.type(text); };
   await edit('saved from phone'); await page.click('#save'); await page.waitForSelector('#fileState:text("Saved")');
   assert.equal(await readFile(path.join(server.workspace, 'note.txt'), 'utf8'), 'saved from phone');
-  await edit('discard me'); await page.click('#discard');
+  await edit('discard me'); await page.click('#moreFile'); await page.click('#sheetBody [data-file="discard"]');
   assert.equal(await page.locator('.cm-content').textContent(), 'saved from phone');
   externalEdit(path.join(server.workspace, 'note.txt'));
   await edit('conflicting phone draft'); await page.click('#save'); await page.waitForSelector('#conflict:not([hidden])');

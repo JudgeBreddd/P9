@@ -39,10 +39,9 @@ import '../styles/phone.css';
       </section>
       <section data-view="terminal" hidden>
         <header class="bar" data-bar="terminal"></header>
-        <label>Terminal<select id="terminal"></select></label>
-        <div class="actions start"><button class="quiet" id="newTerminal">New terminal</button><button class="quiet" id="stopTerminal">Stop</button><span id="termState" role="status">No terminal open</span></div>
+        <select id="terminal" aria-label="Terminal" hidden></select>
         <div id="screen" aria-label="Terminal"></div>
-        <div id="keys" class="actions start keys"><button class="quiet" data-key="esc">Esc</button><button class="quiet" data-key="tab">Tab</button><button class="quiet" data-key="ctrlc">Ctrl+C</button><button class="quiet" data-key="up" aria-label="Up arrow">↑</button><button class="quiet" data-key="down" aria-label="Down arrow">↓</button></div>
+        <div id="keys" class="keys"><button data-key="esc">Esc</button><button data-key="tab">Tab</button><button data-key="ctrlc">Ctrl+C</button><button data-key="up" aria-label="Up arrow">↑</button><button data-key="down" aria-label="Down arrow">↓</button><button data-key="left" aria-label="Left arrow">←</button><button data-key="right" aria-label="Right arrow">→</button><button data-key="paste">Paste</button></div>
       </section>
       <section data-view="mission" hidden>
         <header class="bar" data-bar="mission"></header>
@@ -54,13 +53,11 @@ import '../styles/phone.css';
       </section>
       <section data-view="files" hidden>
         <header class="bar" data-bar="files"></header>
-        <div id="browser"><div class="crumbs"><button id="up" class="quiet" disabled>Up</button><span id="dirPath">Workspace</span></div><ul id="fileList" class="list"></ul></div>
+        <div id="browser"><ul id="fileList" class="list"></ul></div>
         <div id="fileView" hidden>
-          <div class="crumbs"><button id="closeFile" class="quiet">Back</button><span id="openPath"></span><button id="preview" class="quiet" hidden>Preview</button></div>
-          <div id="rendered" class="md card" hidden></div>
+          <div id="conflict" class="conflict" role="alert" hidden><span>Changed on disk after you opened it. Your draft is kept and not saved.</span><button id="loadDisk" class="quiet">Load disk version</button><button id="saveMine" class="quiet">Save mine</button></div>
+          <div id="rendered" class="md" hidden></div>
           <div id="editor" aria-label="File contents"></div>
-          <div id="conflict" class="conflict" role="alert" hidden>The file changed on disk after you opened it. Your draft is still here and was not saved.<div class="actions"><button id="loadDisk" class="quiet">Load disk version</button><button id="saveMine">Save mine over it</button></div></div>
-          <div class="actions"><button id="discard" class="quiet" disabled>Discard</button><button id="save" disabled>Save</button></div>
         </div>
       </section>
     </main>

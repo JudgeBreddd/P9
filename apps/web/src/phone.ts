@@ -10,20 +10,23 @@ const one = <T extends Element>(selector: string) => document.querySelector<T>(s
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
-const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping,
+const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
+// Save is live only once the draft differs from what was loaded (spec §6).
+const dirty = () => !!state.file && editor.state.doc.toString() !== state.file.content;
+function syncSave() { one<HTMLButtonElement>('#save').disabled = !navigator.onLine || !dirty(); }
 function online() {
   const value = navigator.onLine;
   one<HTMLElement>('#stale').hidden = value;
   document.querySelectorAll<HTMLElement>('.sync').forEach((dot) => { dot.dataset.state = value ? 'live' : 'stale'; dot.setAttribute('aria-label', value ? 'Live' : 'Stale'); });
-  document.querySelectorAll<HTMLButtonElement>('#save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !state.file); });
+  document.querySelectorAll<HTMLButtonElement>('#save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !dirty()); });
   label();
   return value;
 }
 // ---- Shell (phone spec §1, §4, §7): the pieces every screen shares. c7 lays the other tabs out with these. ----
 const svg = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
-const ICON = { refresh: svg('<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>'), plus: svg('<path d="M12 5v14M5 12h14"/>'), back: svg('<path d="m15 5-7 7 7 7"/>'), chevron: svg('<path d="m7 10 5 5 5-5"/>'), up: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+const ICON = { folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'), file: svg('<path d="M6 3h8l4 4v14H6z"/>'), refresh: svg('<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>'), plus: svg('<path d="M12 5v14M5 12h14"/>'), back: svg('<path d="m15 5-7 7 7 7"/>'), chevron: svg('<path d="m7 10 5 5 5-5"/>'), up: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
   stop: svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'), down: svg('<path d="M12 5v14M5 12l7 7 7-7"/>') };
 type BarAction = { id?: string; label: string; icon: string; attrs?: string };
 type BarOptions = { title: string; sub?: string; subId?: string; back?: { label: string; to: string }; acts?: BarAction[] };
@@ -34,10 +37,16 @@ const topBar = (o: BarOptions) => (o.back ? `<button type="button" class="back" 
   + (o.acts ?? []).map((a) => `<button type="button"${a.id ? ` id="${a.id}"` : ''} aria-label="${a.label}"${a.attrs ? ' ' + a.attrs : ''}>${a.icon}</button>`).join('');
 const mountBar = (name: string, o: BarOptions) => { one(`[data-bar="${name}"]`).innerHTML = topBar(o); };
 mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] });
-mountBar('terminal', { title: 'Terminal', acts: [{ id: 'refreshTerminal', label: 'Refresh', icon: ICON.refresh }] });
+// Terminal (spec §6): the title is the picker, + starts one, ■ stops the open one; #termState is the line under the title.
+mountBar('terminal', { title: `<button type="button" id="pickTerminal" class="pick" aria-label="Choose terminal"><span id="termTitle">Terminal</span>${ICON.chevron}</button>`, sub: 'No terminal open', subId: 'termState',
+  acts: [{ id: 'newTerminal', label: 'New terminal', icon: ICON.plus }, { id: 'stopTerminal', label: 'Stop terminal', icon: ICON.stop }, { id: 'refreshTerminal', label: 'Refresh', icon: ICON.refresh }] });
+one('#termState').setAttribute('role', 'status');
 mountBar('mission', { title: 'Mission', acts: [{ id: 'refreshMission', label: 'Refresh', icon: ICON.refresh }] });
 mountBar('usage', { title: 'Usage', acts: [{ id: 'refreshUsage', label: 'Refresh', icon: ICON.refresh }] });
-mountBar('files', { title: 'Files', sub: 'Not loaded', subId: 'fileState' });
+// Files: one bar for the folder list and for an open file (the CSS shows one set), so #fileState, #up and #closeFile stay single elements.
+one('[data-bar="files"]').innerHTML = `<button type="button" id="up" class="back" aria-label="Up one folder" disabled>${ICON.back}</button><button type="button" id="closeFile" class="back" aria-label="Back">${ICON.back}</button>`
+  + '<div class="title"><h1><span id="dirPath">Workspace</span><span id="openPath"></span></h1><small id="fileState">Not loaded</small></div><span class="sync" role="img" aria-label="Live"></span>'
+  + `<button type="button" id="save" disabled>Save</button><button type="button" id="moreFile" aria-label="More">${svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>')}</button>`;
 // The hairline under a top bar shows only once its screen has scrolled.
 one('main').addEventListener('scroll', (event) => { const box = event.target as HTMLElement; box.closest('section')?.querySelector(':scope > .bar')?.classList.toggle('ruled', box.scrollTop > 0); }, true);
 // Bottom sheet: one shared <dialog>. Fill the body with .opt rows (or anything); a tap on the backdrop closes it.
@@ -61,7 +70,7 @@ window.visualViewport?.addEventListener('resize', fit); window.visualViewport?.a
 fit();
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
-  if (response.status === 401) location.replace('/login');
+  if (response.status === 401) { forgetMission(); location.replace('/login'); }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
   return body;
@@ -84,6 +93,7 @@ async function mutate(path: string, body: Json) {
   keepPending(key, pending);
   const relogin = () => {
     keepPending(key, { ...pending, used: true });
+    forgetMission();
     location.replace('/login');
     return new Error('login-required');
   };
@@ -105,7 +115,7 @@ function show(view: string) {
   document.body.classList.toggle('inchat', view === 'chat' && !!openId);
   document.querySelectorAll<HTMLElement>('[data-view]').forEach((section) => { section.hidden = section.dataset.view !== view; });
   document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => button.setAttribute('aria-current', button.dataset.nav === view ? 'page' : 'false'));
-  if (view === 'mission') void loadMission();
+  if (view === 'mission') { if (!missionDrawn && lastMission) void loadMission(true); void loadMission(); }
   if (view === 'usage') void loadUsage();
   if (view === 'files' && !state.file) void loadFolder();
   if (view === 'terminal' && !term.open) void loadTerminals();
@@ -534,7 +544,7 @@ one<HTMLElement>('#events').onclick = async (event) => {
   else { button.parentElement!.querySelectorAll('button').forEach((item) => { item.disabled = false; }); one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not answered: ${escape(result.body.error ?? result.status)}</div>`); }
 };
 // Phase 17 rows 4-5: the phone's terminal; terminal.mjs holds the part the desktop dock shares (leases, size, output).
-const KEYS: Record<string, string> = { esc: '\x1b', tab: '\t', ctrlc: '\x03', up: '\x1b[A', down: '\x1b[B' };
+const KEYS: Record<string, string> = { esc: '\x1b', tab: '\t', ctrlc: '\x03', up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C' };
 const term = createTerminal({ screen: one('#screen'), connect: (id: string) => new WebSocket(location.origin.replace(/^http/, 'ws') + '/terminals/' + encodeURIComponent(id) + '/socket'),
   state(text: string, live: boolean) {
     one('#termState').textContent = text;
@@ -542,7 +552,8 @@ const term = createTerminal({ screen: one('#screen'), connect: (id: string) => n
   } });
 const termState = term.show;
 function attach() {
-  const id = one<HTMLSelectElement>('#terminal').value;
+  const picked = one<HTMLSelectElement>('#terminal'), id = picked.value;
+  one('#termTitle').textContent = id ? picked.selectedOptions[0].textContent : 'Terminal';
   if (!id) { term.close(); return termState('No terminal open'); }
   if (!navigator.onLine) { term.close(); return termState('Offline: terminal closed'); }
   term.attach(id);
@@ -561,6 +572,10 @@ async function loadTerminals() {
   }
 }
 one<HTMLSelectElement>('#terminal').onchange = attach;
+one('#pickTerminal').onclick = () => {
+  const select = one<HTMLSelectElement>('#terminal'), options = [...select.options].filter((option) => option.value);
+  if (options.length) openSheet('Terminals', options.map((option) => `<button type="button" class="opt" role="menuitemradio" aria-checked="${option.value === select.value}" data-term="${escape(option.value)}">${escape(option.textContent)}</button>`).join(''));
+};
 one<HTMLButtonElement>('#refreshTerminal').onclick = () => void loadTerminals();
 one<HTMLButtonElement>('#newTerminal').onclick = async () => {
   const result = await mutate('/terminals', {});
@@ -575,8 +590,12 @@ one<HTMLButtonElement>('#stopTerminal').onclick = async () => {
   if (result.status !== 200) return termState('Stop failed: ' + String(result.body.error ?? result.body.result ?? result.status));
   await loadTerminals();
 };
-document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.onclick = () => { term.sendKeys(KEYS[button.dataset.key!]); term.focus(); }; });
-addEventListener('resize', term.fit);
+document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.onclick = async () => {
+  if (button.dataset.key === 'paste') { try { const text = await navigator.clipboard.readText(); if (text) term.sendKeys(text); } catch { one('#termState').textContent = 'Paste was not allowed'; } } // the phone's clipboard, only on this tap
+  else term.sendKeys(KEYS[button.dataset.key!]);
+  term.focus();
+}; });
+addEventListener('resize', term.fit); window.visualViewport?.addEventListener('resize', term.fit); // the screen fills the column, which follows a keyboard
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
 termState('No terminal open');
 one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };
@@ -592,9 +611,12 @@ let mission: { queue: Waiting[]; scripts: Item[] } = { queue: [], scripts: [] };
 const row = (summary: string, body: string) => `<details class="row"><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
 // its in a window i can open"). Callers escape title and line.
-const win = (id: string, title: string, count: number | string, line: string, body: string, bad = false) =>
-  `<button type="button" class="tile${bad ? ' bad' : ''}" data-open="${id}"><span>${title}</span><b>${count}</b><small>${line}</small></button>`
-  + `<dialog class="window" id="w-${id}"><header><h2>${title}</h2><button type="button" class="quiet" data-close>Close</button></header>${body}</dialog>`;
+const win = (id: string, title: string, count: number | string, line: string, body: string, bad = false) => {
+  // Rows needing attention (a red one, or something waiting) lead the list; a zero count is drawn muted (spec §6).
+  const attn = bad || (id === 'queue' && Number(count) > 0), zero = /^(0( .*)?)?$/.test(String(count));
+  return `<button type="button" class="tile${bad ? ' bad' : ''}"${attn ? ' data-attn' : ''}${zero ? ' data-zero' : ''} data-open="${id}"><span>${title}</span><b>${count}</b><small>${line}</small></button>`
+    + `<dialog class="window" id="w-${id}"><header class="bar"><button type="button" class="back" data-close aria-label="Back to Mission">${ICON.back}Mission</button><div class="title"><h1>${title}</h1></div></header><div class="wbody">${body}</div></dialog>`;
+};
 // A reload rebuilds the tiles (loadMission empties #hub until loadHub refills it); the window Builder had open opens
 // again, with the rows he had expanded (matched by the summary's title, not its <small>, which can change; reopening
 // fires toggle, which reloads lazy text).
@@ -610,9 +632,16 @@ function keepOpen(render: () => void) {
   if (again && !again.open) again.showModal();
   rows(again).forEach((d) => { if (!d.open && expanded.has(title(d))) d.open = true; });
 }
-async function loadMission() {
+// T7: the last Mission and hub answers are kept here and in localStorage (threat model row 56; a 401 forgets them). A tap
+// on Mission draws them at once, then both routes refresh behind; before, the page waited on GET /mission, then emptied
+// #hub and waited on GET /mission/hub.
+const kept = (key: string) => { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } };
+const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }; // storage full: no cache
+const forgetMission = () => { try { localStorage.removeItem('p9-mission'); localStorage.removeItem('p9-mission-hub'); } catch {} };
+let lastMission: any = kept('p9-mission'), lastHub: Hub | null = kept('p9-mission-hub'), missionDrawn = false;
+async function loadMission(cached = false) {
   try {
-    const data = await request('/mission');
+    const data = cached ? lastMission : await request('/mission');
     mission = data;
     const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${escape(item.project)} · ${escape(item.age)}</small>`,
       `<pre>${escape(item.content)}</pre>` + (item.answerable
@@ -643,24 +672,29 @@ async function loadMission() {
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
     keepOpen(() => { one('#mission').innerHTML = (data.restart?.needed ? `<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
-      + '<div class="tiles">'
+      + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
       + '<div id="hub"></div>'
       + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, 'scripts', (notes.get(group) ?? '') + rows.join(''))).join('')
       + win('pages', 'Pages', data.pages.length, 'links', `<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
-  } catch { one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
-  void loadHub();
+    missionDrawn = true;
+    if (!cached) { lastMission = data; keep('p9-mission', data); }
+  } catch { if (cached) lastMission = null; else if (!missionDrawn) one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
+  if (lastHub) void loadHub(true); // the redraw above emptied #hub: refill it from memory, not from the wire
+  if (!cached) void loadHub();
 }
 // The old workspace-hub sections. Each row's text loads when it is opened.
 const ago = (min: number) => min < 60 ? `${min} min` : min < 2880 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} d`;
 const lazy = (query: Record<string, string>) => `<pre data-text="${escape(new URLSearchParams(query).toString())}">Loading…</pre>`;
-async function loadHub() {
+async function loadHub(cached = false) {
   const target = document.querySelector<HTMLElement>('#hub');
   if (!target) return;
   let o: Hub;
-  try { o = await request('/mission/hub'); } catch { return; } // no hub folder in settings: these sections stay hidden
+  // No hub folder in settings (an answer, not a lost connection): these sections stay hidden, cached or not.
+  try { o = cached ? lastHub! : await request('/mission/hub'); } catch (error) { if ((error as { body?: unknown }).body) { lastHub = null; target.innerHTML = ''; try { localStorage.removeItem('p9-mission-hub'); } catch {} } return; }
+  if (!cached) { lastHub = o; keep('p9-mission-hub', o); }
   const notices = o.notices === null ? '<div class="empty">Checking scheduled jobs and setup…</div>'
     : o.notices.map((n) => `<article class="card warn"><h2>${n.kind === 'job' ? 'SILENT JOB' : 'SETUP'}</h2><p>${escape(n.text)}</p></article>`).join('') || '<div class="empty">Every scheduled job reported in.</div>';
   const open = o.incidents.filter((i) => !i.resolved);
@@ -679,7 +713,7 @@ async function loadHub() {
     + win('work', 'Workspace', o.ideas, `ideas · ${o.needs_done} punch-list · + New idea`, `<article class="card"><h2>Workspace</h2><p>${o.ideas} ideas not researched · ${o.needs_done} punch-list items</p>${audit}</article>`
     + row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>'))
     + win('logs', 'Logs', o.logs.length, o.logs[0] ? escape(o.logs[0].name) : 'No logs.', logs); });
-  if (o.notices === null) setTimeout(() => void loadHub(), 15000);
+  if (o.notices === null && !cached) setTimeout(() => void loadHub(), 15000);
 }
 one('#mission').addEventListener('click', (event) => {
   const target = event.target as Element;
@@ -753,17 +787,24 @@ one('#mission').addEventListener('click', async (event) => {
 });
 one<HTMLButtonElement>('#refreshMission').onclick = () => void loadMission();
 
+// A used-% bar: cyan, amber from 75%, red from 90%; a window that already reset shows empty.
+const meter = (label: string, window: { usedPercent: number; resetsAt: number | null } | null) => {
+  const pct = !window || (window.resetsAt && window.resetsAt < Date.now()) ? 0 : Math.min(100, Math.round(window.usedPercent));
+  return `<div class="meter" role="meter" aria-label="${label} used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${pct}%"></i></div><span>${label}</span></div>`;
+};
 async function loadUsage() {
   try {
     const data = await request('/usage') as Usage;
-    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records.
-    const limits = data.limits ? `<div class="metrics" data-limits>${[limitLine('Claude', data.limits.claude), limitLine('Codex', data.limits.codex)].map((l) => `<article class="card${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(l.text)}</small></article>`).join('')}</div>` : '';
+    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two bars under the text.
+    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
+    const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
     if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>'; return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
     // Context fill per conversation (from usage_update), so a chat close to its limit shows before it stalls.
-    const contexts = data.contexts.map((item) => `<article class="card"><h2>${escape(item.provider)} context</h2><span class="value">${Math.round(item.used / item.size * 100)}%</span><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></article>`).join('');
+    const contexts = data.contexts.map((item) => { const pct = Math.round(item.used / item.size * 100); return `<div class="ctx"><span>${escape(item.provider)} context</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    one('#usage').innerHTML = limits + stale + none + `<div class="metrics"><article class="card"><h2>Input</h2><span class="value">${data.totals.inputTokens.toLocaleString()}</span><small>tokens</small></article><article class="card"><h2>Output</h2><span class="value">${data.totals.outputTokens.toLocaleString()}</span><small>tokens</small></article><article class="card"><h2>Cost</h2><span class="value">$${data.totals.costUsd.toFixed(4)}</span><small>recorded USD</small></article><article class="card"><h2>Samples</h2><span class="value">${data.samples}</span><small>${data.discarded} malformed discarded</small></article>${contexts}</div>`;
+    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>$${data.totals.costUsd.toFixed(4)}</b> recorded</p>`
+      + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
   } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
 }
 one<HTMLButtonElement>('#refreshUsage').onclick = () => void loadUsage();
@@ -774,10 +815,10 @@ async function loadFolder(path = folder) {
   try {
     const { entries } = await request('/files/list?path=' + encodeURIComponent(path)) as { entries: { name: string; dir?: boolean }[] };
     folder = path;
-    one('#dirPath').textContent = path || 'Workspace';
+    one('#dirPath').textContent = path.split('/').pop() || 'Workspace';
     one<HTMLButtonElement>('#up').disabled = !path;
     const sorted = [...entries.filter((entry) => entry.dir), ...entries.filter((entry) => !entry.dir)];
-    one('#fileList').innerHTML = sorted.map((entry) => `<li><button class="quiet" data-name="${escape(entry.name)}" data-dir="${entry.dir ? 1 : ''}">${entry.dir ? '▸ ' : ''}${escape(entry.name)}</button></li>`).join('') || '<li class="empty">This folder is empty.</li>';
+    one('#fileList').innerHTML = sorted.map((entry) => `<li><button class="quiet" data-name="${escape(entry.name)}" data-dir="${entry.dir ? 1 : ''}">${entry.dir ? ICON.folder : ICON.file}${escape(entry.name)}</button></li>`).join('') || '<li class="empty">This folder is empty.</li>';
     one('#fileState').textContent = 'Pick a file';
   } catch (error) { one('#fileState').textContent = 'Folder unavailable'; one('#fileList').innerHTML = `<li class="empty">Could not list this folder (${escape((error as Error).message)}).</li>`; }
 }
@@ -800,18 +841,26 @@ one('#mission').addEventListener('click', (event) => {
 one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
 // A .md file can be read rendered: md shows raw HTML as text and links and images as plain text (threat model row 18).
 const preview = (on: boolean) => {
-  one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on; one('#preview').textContent = on ? 'Edit' : 'Preview';
+  one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on;
   if (on) one('#rendered').innerHTML = md.parse(editor.state.doc.toString()) as string;
 };
-one<HTMLButtonElement>('#preview').onclick = () => preview(one<HTMLElement>('#rendered').hidden);
+// The Discard and Preview/Edit choices live in the bar's more menu (the shared sheet).
+const discard = () => { if (state.file) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: state.file.content } }); };
+one<HTMLButtonElement>('#moreFile').onclick = () => openSheet('File', (state.file && /\.md$/i.test(state.file.path) ? `<button type="button" class="opt" data-file="preview">${one<HTMLElement>('#rendered').hidden ? 'Preview' : 'Edit'}</button>` : '') + '<button type="button" class="opt" data-file="discard">Discard changes</button>');
+one('#sheetBody').addEventListener('click', (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-file], [data-term]'); if (!button) return;
+  if (button.dataset.term) { one<HTMLSelectElement>('#terminal').value = button.dataset.term; attach(); }
+  else if (button.dataset.file === 'preview') preview(one<HTMLElement>('#rendered').hidden); else discard();
+  sheet.close();
+});
 async function openFile(path: string, root?: string) {
   try {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
-    one('#openPath').textContent = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
-    one<HTMLElement>('#preview').hidden = !/\.md$/i.test(path); preview(!!root);
+    one('#openPath').textContent = path.split('/').pop()!; one('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
+    preview(!!root);
     one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
-    one<HTMLButtonElement>('#discard').disabled = false; online();
+    online();
     return true;
   } catch (error) {
     // Binary, oversize, symlinked or locked files are refused by the daemon (request-refused); say so instead of "Unavailable".
@@ -819,12 +868,11 @@ async function openFile(path: string, root?: string) {
     return false;
   }
 }
-one<HTMLButtonElement>('#discard').onclick = () => { if (state.file) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: state.file.content } }); };
 async function saveFile(hash: string) {
   if (!state.file) return;
   const { path, root } = state.file, content = editor.state.doc.toString();
   const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content });
-  if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; }
+  if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; syncSave(); }
   else if (result.status === 409) {
     // the disk version, when the file is still there, so the draft can be kept or the disk loaded (as on the desktop)
     state.file.disk = typeof result.body.diskHash === 'string' ? { content: String(result.body.diskContent), hash: result.body.diskHash } : undefined;
