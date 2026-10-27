@@ -38,6 +38,9 @@ async function open(device, server, { fix = [], init } = {}) {
     }
     await route.fulfill({ response, body });
   });
+  // The phone's service worker re-fetches /_astro/ itself once it claims the page, and page.route never sees that fetch:
+  // the reload would get the unpatched file whenever the worker wins the race. These pages run without it.
+  await page.addInitScript(() => { if (navigator.serviceWorker) navigator.serviceWorker.register = async () => undefined; });
   if (init) await page.addInitScript(init);
   await page.goto(server.origin + '/phone/');
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
