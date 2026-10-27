@@ -199,14 +199,22 @@ test('P1, P2, P3, P7: the Chats list and the chat screen (A/B)', { timeout: 9000
   t.after(() => browser.close());
   // Every check runs, and every failure is listed at the end: a run is too slow to find them one at a time.
   const failures = [];
-  for (const [name, check] of Object.entries(checks)) {
+  let said = '';
+  for (const stream of [server.child.stdout, server.child.stderr]) stream.on('data', (chunk) => { said += chunk; });
+  const run = async (name, check) => {
     const good = await open(await phoneOn(t, server, browser), server);
-    try { await check(good.page, { server, shots: true }); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); continue; }
+    try { await check(good.page, { server, shots: true }); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); return; }
     const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
-    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); continue; }
+    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); return; }
     let broke = true;
     try { await check(bad.page, { server, shots: false }); broke = false; } catch { /* the check failed on the broken page, as it must */ }
     if (!broke) failures.push(name + ' (A/B): the check passed on the broken page');
+  };
+  for (const [name, check] of Object.entries(checks)) {
+    try { await run(name, check); } catch (error) {
+      failures.push(name + ': ' + String(error.message).split('\n')[0] + ' [daemon exit ' + server.child.exitCode + '/' + server.child.signalCode + '; its last output: ' + said.slice(-800) + ']');
+      if (server.child.exitCode !== null) break;
+    }
   }
   assert.deepEqual(failures, []);
 });
