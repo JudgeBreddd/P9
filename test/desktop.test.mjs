@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { daemon, http, authenticated } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 test('Phase 4: real sandboxed Electron, bridge boundary and approved shell acceptance', { timeout: 90000 }, async () => {
@@ -24,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'sendToServer', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -240,4 +241,147 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/')), ['p9://app/']);
     if (process.env.P9_SCREENSHOTS) await writeFile(path.join(process.env.P9_SCREENSHOTS, 'navigation-check.json'), JSON.stringify(navigation, null, 2));
   } finally { await application.close(); await rm(profile, { recursive: true, force: true }); }
+});
+
+const fake = path.join(root, 'test/fake-acp-agent.mjs');
+const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+  headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+  body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => JSON.parse(result.text));
+
+// Chunk 3 (v0.1.6): first launch and Mission Control. D13.5 maximised window, D9 empty Mission explains itself, D3 the
+// starter-files step, D1 "Connect to a P9 on another machine" on the welcome screen, D6 an existing layout is attached,
+// D4 labels use the owner's own name, D10 robot heads are numbered.
+const openFirst = async (t, instance) => {
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-first-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const shot = async (name, locator = page) => { await page.waitForTimeout(500); const png = await locator.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  return { app, page, shot };
+};
+
+// One test per item, so one broken item fails only its own test and a single A/B run can break them all at once.
+const signedIn = async ({ directory }) => { await mkdir(path.join(directory, '.claude'), { recursive: true }); await writeFile(path.join(directory, '.claude', '.credentials.json'), '{}'); };
+const emptyFirst = async (t) => openFirst(t, await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] })));
+const openWelcome = async (page) => {
+  await page.locator('#cards [data-key="welcome"] .open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  // The card opens at the first thing not done (sign in); Back reaches the welcome step.
+  for (let back = 0; back < 4 && (await page.locator('#welT').textContent()) !== 'Welcome to Event Horizon'; back++) await page.locator('#welFoot [data-act="back"]').click();
+  assert.equal(await page.locator('#welT').textContent(), 'Welcome to Event Horizon');
+};
+
+test('First launch D13.5: the main window is maximised when it is made', { timeout: 20000 }, async () => {
+  // The test display has no window manager, so isMaximized() is false there whatever the code asks: check the call itself, right after the window is made.
+  assert.match(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'), /new BrowserWindow\([\s\S]{0,900}?\n  window\.removeMenu\(\);[^\n]*\n(?:  \/\/[^\n]*\n)*  window\.maximize\(\);/);
+});
+
+test('First launch D9: an empty Mission says what Mission Control is and offers Set up', { timeout: 60000 }, async (t) => {
+  const { page, shot } = await emptyFirst(t);
+  await page.click('#rMission');
+  const intro = page.locator('#fMission [data-mission-intro]');
+  await intro.waitFor({ timeout: 15000 });
+  assert.match(await intro.innerText(), /What is Mission Control\?[\s\S]*buttons[\s\S]*apps and pages[\s\S]*waiting on you[\s\S]*Set up Mission Control/);
+  await shot('mission-empty');
+});
+
+test('First launch D1: the welcome screen offers a P9 on another machine', { timeout: 60000 }, async (t) => {
+  const { page, shot } = await emptyFirst(t);
+  await openWelcome(page);
+  const connect = page.locator('#welBody [data-act="remote"]');
+  assert.match(await connect.innerText(), /Connect to a P9 on another machine/);
+  await shot('wizard-welcome', page.locator('#welDlg'));
+  await connect.click();
+  await page.locator('#welBody [data-wiz-remote]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#welBody [data-wiz-remote]').innerText(), /ssh|Host/);
+  await shot('wizard-welcome-remote', page.locator('#welDlg'));
+  await page.locator('#welBody [data-act="remote"]').click();
+  assert.equal(await page.locator('#welBody [data-wiz-remote]').count(), 0, 'Hide closes the choice');
+});
+
+test('First launch D3: the Mission step says what is created, what is not, and what the button does', { timeout: 60000 }, async (t) => {
+  // Signed in, so the Set up card opens at the first thing not done: Mission Control's files (Next stays off until an agent is signed in).
+  const { page, shot } = await openFirst(t, await daemon(t, undefined, false, async (where) => { await signedIn(where); return { args: ['--acp-override', fake] }; }));
+  await page.locator('#cards [data-key="welcome"] .open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  await page.locator('#welT', { hasText: 'Mission Control' }).waitFor({ timeout: 10000 });
+  const step = await page.locator('#welBody').innerText();
+  assert.match(step, /control room[\s\S]*buttons for your scripts[\s\S]*A file that is already there is never changed or replaced/);
+  assert.match(step, /Create the starter files adds only this \(nothing that exists changes\)/);
+  assert.match(step, /Makes the files listed above, empty, and points P9 at them\./);
+  assert.match(step, /Mission Control files[\s\S]*Not there yet/);
+  assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Create the starter files');
+  await shot('wizard-mission-step', page.locator('#welDlg'));
+});
+
+// A workspace that keeps its own layout: AGENTS.md in Work/, a registry in Work/tools, waiting items in Work/_waiting.
+const layout = async ({ workspace }) => {
+  await mkdir(path.join(workspace, 'Work/_waiting'), { recursive: true });
+  await mkdir(path.join(workspace, 'Work/tools'), { recursive: true });
+  await writeFile(path.join(workspace, 'Work/AGENTS.md'), '# Workspace\n');
+  await writeFile(path.join(workspace, 'Work/tools/registry.json'), JSON.stringify({
+    scripts: [{ id: 'backup', title: 'Back up', group: 'Maintenance', cmd: ['true'] }], apps: [], pages: [] }));
+  await writeFile(path.join(workspace, 'Work/_waiting/alpha-question.md'), '# Which colour?\n\nA.\n');
+};
+
+test('First launch D6: the wizard finds the workspace\'s own layout and attaches it', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async (where) => { await layout(where); await signedIn(where); return { args: ['--acp-override', fake] }; });
+  const { page, shot } = await openFirst(t, instance);
+  const card = page.locator('#cards [data-key="welcome"]');
+  await card.waitFor({ timeout: 15000 });
+  await card.locator('.open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  await page.locator('#welBody [data-path]').first().waitFor({ timeout: 10000 });
+  // The nested main file, the registry and the _waiting folder are proposed, not the empty starter paths.
+  assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
+  assert.match(await page.locator('#welBody [data-creates]').innerText(), /^[^,]*settings\.json$/, 'only the settings file is written, no project files');
+  await shot('wizard-mission-existing', page.locator('#welDlg'));
+  await page.click('#welBody [data-act="starter"]');
+  await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => document.querySelector('#welDlg').close());
+  await page.click('#rMission');
+  await page.locator('#fMission .needs [data-list] li .kind').first().waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#fMission [data-mission-intro]').count(), 0, 'a filled Mission has no intro');
+  await shot('mission-filled');
+});
+
+test('First launch D4: a waiting item says who it waits on, from the owner\'s own name', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async (where) => {
+    await layout(where);
+    const file = path.join(where.directory, '.config', 'p9', 'settings.json');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ primary: 'Work/AGENTS.md', registry: 'Work/tools/registry.json', waiting: 'Work/_waiting' }));
+    return { args: ['--acp-override', fake] };
+  });
+  const { page } = await openFirst(t, instance);
+  await page.click('#rMission');
+  const chip = page.locator('#fMission .needs [data-list] li .kind');
+  await chip.first().waitFor({ timeout: 20000 });
+  // A new profile's name is the account's own (the greeting's), so the chip reads it; it is never a fixed person.
+  const own = await page.evaluate(async () => (await window.p9.getSettings()).name);
+  assert.equal(await chip.first().textContent(), own ? 'needs ' + own : 'needs you');
+  const reopen = async (name) => { await page.evaluate(async (name) => window.p9.setSettings({ ...(await window.p9.getSettings()), name }), name); await page.reload(); await page.click('#rMission'); await chip.first().waitFor({ timeout: 20000 }); return chip.first().textContent(); };
+  assert.equal(await reopen('Sam'), 'needs Sam');
+  assert.equal(await reopen(''), 'needs you');
+});
+
+test('First launch D10: two running chats are told apart by number and title', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  for (const text of ['first chat', 'second chat']) {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text });
+    await page.locator(`#rBots [data-bot="${id}"]`).waitFor({ timeout: 20000 });
+  }
+  const heads = await page.locator('#rBots [data-bot]').evaluateAll((all) => all.map((b) => [b.dataset.n, b.title, b.getAttribute('aria-label')]));
+  assert.equal(heads.length, 2);
+  assert.deepEqual(heads.map((h) => h[0]).sort(), ['1', '2']);
+  for (const [n, title, label] of heads) { assert.match(title, new RegExp('^#' + n + ' .+ · (Claude|Codex) · (working|idle)$')); assert.equal(label, title); }
+  assert.notEqual(heads[0][1], heads[1][1], 'the two heads read differently');
+  await page.click('#rChat');
+  await shot('rail-robot-heads', page.locator('.rail'));
 });

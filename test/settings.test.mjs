@@ -780,7 +780,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await shot('wizard-2-agents.png');
 
   await next(); await at(4, 'Mission Control');
-  assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
+  assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Mission Control files[\s\S]*Not there yet/);
   // RH2: the first sentence names Mission Control; with none of the files yet, the step says what each is and opens the guide.
   assert.match(await body(), /Mission Control's buttons, apps and pages come from files in your workspace\./);
   assert.match(await page.locator('#welBody [data-setup-help]').innerText(), /None of these is here yet[\s\S]*Main project file[\s\S]*Buttons, apps and pages file[\s\S]*Folder of items waiting on you/);

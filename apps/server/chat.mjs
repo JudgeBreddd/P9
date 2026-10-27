@@ -14,6 +14,7 @@ import { childEnv } from './child-env.mjs';
 import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
+import { createMove, movedNote } from './move.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -192,7 +193,7 @@ function trim(update) {
 }
 
 // socketPath: the desktop socket the P9 MCP relay calls; without it (tests that never start the daemon) chats get no MCP server.
-export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath, state }) {
+export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath, state, ownership }) {
   const db = ledger.db;
   const live = new Map(); // conversation -> { proc, agent, sessionId, exited, turn, pending: Map }
   const listeners = new Set();
@@ -633,10 +634,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return { status: 200, on: locked };
     },
     // Most recently used first, for the desktop's History and the phone (owner, 2026-10-25). used: the chat's newest event,
-    // not counting the stops a close, an exit or a daemon restart write; sent: a message was ever sent (History leaves out
+    // not counting the stops a close, an exit or a daemon restart write, nor the created event (its time is a later Date.now()
+    // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
-        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
+        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent
       FROM conversations c ORDER BY used DESC, created DESC`).all().map((c) => ({ ...c, sent: c.sent === 1 })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
@@ -675,6 +677,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!['idle', 'running', 'stopped'].includes(conversation.state)) { release(); return refused(409, conversation.state); }
       if (closing) { release(); return refused(503, 'shutting-down'); }
       setState(id, 'turn');
+      const note = movedNote(db, id); // read before this message's own user event
       emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
@@ -718,7 +721,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const turn = session.turn = randomUUID();
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       let ended;
-      const prompt = blocks(body.text, images);
+      const prompt = [...(note ? [{ type: 'text', text: note }] : []), ...blocks(body.text, images)];
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
@@ -768,6 +771,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       await recovered;
       if (!ID.test(id) || !row(id)) return refused(404, 'unknown-conversation');
       if (body?.close !== undefined && body.close !== true) return refused(400, 'request-refused');
+      // Send to server (move.mjs): a frozen or moved chat is already stopped, and a Stop would make it runnable here again.
+      if (['moving', 'moved'].includes(row(id).state)) { if (body?.close) emit(id, 'closed'); return { status: 200, result: 'stopped' }; }
       const result = await stopConversation(id);
       if (body?.close) emit(id, 'closed');
       return { status: result === 'stopped' ? 200 : 500, result };
@@ -779,7 +784,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       await recovered;
       const conversation = ID.test(id) && row(id);
       if (!conversation) return refused(404, 'unknown-conversation');
-      if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '')) return refused(409, 'handoff-unavailable');
+      if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '') || ['moving', 'moved'].includes(conversation.state)) return refused(409, 'handoff-unavailable');
       if (!await listDirectory(workspace, conversation.folder ?? '').then(() => true, () => false)) return refused(409, 'folder-unavailable');
       const result = await stopConversation(id);
       if (result !== 'stopped') return { status: 500, result };
@@ -788,6 +793,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,
+    ...createMove({ db, workspace, ownership, row, emit, stopConversation, recovered }),
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).

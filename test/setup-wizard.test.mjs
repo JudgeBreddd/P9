@@ -253,6 +253,7 @@ test('Setup wizard: confirming the found paths repoints loaded settings; the old
     await mkdir(path.join(workspace, hub), { recursive: true });
     await writeFile(path.join(workspace, hub, 'registry.json'),
       JSON.stringify({ scripts: [{ id: 'hubdoc', title: 'Hub doc', cmd: ['bash', path.basename(workspace) + '/doc.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'doc.sh'), 'echo'); // the command's path must exist above the workspace (S2)
     await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
     await mkdir(path.join(workspace, 'work/_owner'));
     await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
@@ -278,27 +279,54 @@ test('Setup wizard: confirming the found paths repoints loaded settings; the old
   console.log('PASS starter: confirmed paths replace the settings, keep a .bak and other keys, create nothing else, and Mission lists the hub');
 });
 
-test('Setup wizard: scripts_root is proposed only when the hub registry commands start with the workspace folder name', { timeout: 60000 }, async (t) => {
+test('Setup wizard: scripts_root is proposed only when a local hub registry command starts with the workspace folder name and that path exists above it (S2, threat model row 37)', { timeout: 60000 }, async (t) => {
   const hub = 'work/workspace-hub';
-  for (const [commands, expected] of [['ICMX', true], ['elsewhere', false]]) {
+  // ssh: an ssh record's paths name the other machine. missing: the path is not there above the workspace.
+  for (const [kind, expected] of [['local', true], ['elsewhere', false], ['ssh', false], ['missing', false]]) {
     const instance = await daemon(t, undefined, false, async ({ workspace }) => {
       await mkdir(path.join(workspace, hub), { recursive: true });
-      const start = commands === 'ICMX' ? path.basename(workspace) : 'elsewhere';
-      await writeFile(path.join(workspace, hub, 'registry.json'),
-        JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', start + '/a.sh'] }], apps: [], pages: [] }));
+      const start = kind === 'elsewhere' ? 'elsewhere' : path.basename(workspace);
+      const cmd = kind === 'ssh' ? ['ssh', 'box', 'bash', start + '/a.sh'] : ['bash', start + '/a.sh'];
+      await writeFile(path.join(workspace, hub, 'registry.json'), JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd }], apps: [], pages: [] }));
+      if (kind !== 'missing') await writeFile(path.join(workspace, 'a.sh'), 'echo');
       await writeFile(path.join(workspace, 'AGENTS.md'), 'mine');
       return {};
     });
     const s = (await call(instance, '/setup')).body;
-    assert.equal(s.found.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
-    assert.equal(s.proposed.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
+    assert.equal(s.found.scripts_root, expected ? path.dirname(instance.workspace) : undefined, kind);
+    assert.equal(s.proposed.scripts_root, expected ? path.dirname(instance.workspace) : undefined, kind);
     if (expected) {
       const made = await call(instance, '/setup/starter', 'POST', s.proposed);
       assert.equal(made.status, 201);
       assert.equal(JSON.parse(await readFile(settingsPath(instance.directory), 'utf8')).scripts_root, path.dirname(instance.workspace));
     }
   }
-  console.log('PASS starter: scripts_root is proposed for a registry written from the workspace parent, and not otherwise');
+  console.log('PASS starter: scripts_root is proposed for a local registry written from the workspace parent, and not for ssh, missing or foreign paths');
+});
+
+test('Setup wizard: a workspace with nested AGENTS.md, a registry.json and a _waiting folder but no workspace-hub is found as it is (D6, threat model row 55)', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, 'Work/_waiting'), { recursive: true });
+    await mkdir(path.join(workspace, 'Work/tools'), { recursive: true });
+    await writeFile(path.join(workspace, 'Work/AGENTS.md'), '# Workspace\n');
+    await writeFile(path.join(workspace, 'Work/tools/registry.json'), JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', 'a.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'Work/tools/other.json'), '{}');
+    await mkdir(path.join(workspace, 'Work/deep/er/est/registry'), { recursive: true });
+    await writeFile(path.join(workspace, 'notes.txt'), 'x');
+    return {};
+  });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.found.primary, s.found.registry, s.found.waiting], ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.deepEqual([s.proposed.primary, s.proposed.registry, s.proposed.waiting], ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.deepEqual(s.creates, [], 'nothing to create: it uses what is there');
+  // A registry.json that is not a registry (no scripts, apps or pages list) is not taken.
+  const other = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, 'cfg'), { recursive: true });
+    await writeFile(path.join(workspace, 'cfg/registry.json'), JSON.stringify({ name: 'npm', version: 1 }));
+    return {};
+  });
+  assert.equal((await call(other, '/setup')).body.found.registry, undefined);
+  console.log('PASS detect: nested AGENTS.md, a registry.json and a _waiting folder are found; a registry.json that is not one is ignored');
 });
 
 test('Setup wizard: a top-level waiting-on folder is found; with no Main project line the top AGENTS.md is primary', { timeout: 60000 }, async (t) => {
