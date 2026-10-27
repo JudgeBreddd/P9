@@ -678,7 +678,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (closing) { release(); return refused(503, 'shutting-down'); }
       setState(id, 'turn');
       const note = movedNote(db, id); // read before this message's own user event
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }) }); // hash and type only: events stay small
+      // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
       release();

@@ -16,6 +16,14 @@ const KINDS = ['transcript', 'events'];
 // Raw bytes a piece: as base64 in JSON it stays well under the daemon's 12 MiB body limit.
 export const PIECE = 4 * 1024 * 1024;
 const MAX_PART = 512 * 1024 * 1024, MAX_FILES = 500;
+// An upload nobody finished (app quit, lost link) is swept after this long (Tyler, 2026-10-27: 6 h); the sweep runs at
+// daemon start and every hour.
+export const ABANDONED = 6 * 3600_000;
+const SWEEP_EVERY = 3600_000;
+// The sender's old folder, as the moved note puts it in the agent's prompt: an absolute path (POSIX or Windows), at most
+// 1024 characters, with no control or format character and no ']' (the note's own end), so it cannot add instructions.
+const fromOk = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && (path.posix.isAbsolute(value) || path.win32.isAbsolute(value))
+  && !/[\p{Cc}\p{Cf}\]]/u.test(value);
 // The Hand off host check (remote.mjs HOST), for the host named in a moved event.
 const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
 const refused = (status, error, extra) => ({ status, error, ...extra });
@@ -50,6 +58,35 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
   const cwdOf = (conversation) => conversation.folder ? path.join(workspace, conversation.folder) : workspace;
   const unfreeze = (id) => db.prepare("UPDATE conversations SET state = 'stopped' WHERE id = ? AND state = 'moving'").run(id).changes > 0;
   const appending = new Set();
+
+  // Abandoned uploads (item 6, row 51): an upload here older than the limit whose chat never landed, the sender's staged
+  // history of a chat that is no longer moving, and a file send's staging (item 23) older than the limit. A piece being
+  // appended is never touched. Each removal is logged without its path.
+  async function sweep(now = Date.now()) {
+    if (!moves) return;
+    const gone = async (file, kind, recursive) => {
+      const info = await stat(file).catch(() => null);
+      if (!info) return;
+      await rm(file, { force: true, recursive });
+      console.error(JSON.stringify({ event: 'P9_MOVE_SWEPT', kind, bytes: info.size }));
+    };
+    for (const name of await readdir(moves).catch(() => [])) {
+      const file = staged(name), incoming = /^in-([0-9a-f-]{36})\.(transcript|events)$/.exec(name), outgoing = /^([0-9a-f-]{36})\.events$/.exec(name);
+      if (incoming && ID.test(incoming[1]) && !appending.has(file) && !row(incoming[1])) {
+        const info = await stat(file).catch(() => null);
+        if (info && now - info.mtimeMs > ABANDONED && !appending.has(file)) await gone(file, 'upload');
+      } else if (outgoing && ID.test(outgoing[1]) && row(outgoing[1])?.state !== 'moving') await gone(file, 'staged');
+    }
+    const xfer = path.join(ownership, 'xfer');
+    for (const name of await readdir(xfer).catch(() => [])) {
+      const id = /^in-([0-9a-f-]{36})$/.exec(name)?.[1], info = id && await stat(path.join(xfer, name)).catch(() => null);
+      if (info && now - info.mtimeMs > ABANDONED) await gone(path.join(xfer, name), 'files', true);
+    }
+  }
+  if (moves) {
+    recovered?.then(() => sweep()).catch(() => {});
+    setInterval(() => sweep().catch(() => {}), SWEEP_EVERY).unref();
+  }
 
   // The files the chat changed: its edit, delete and move tool calls' locations (ACP), workspace-relative, each with its
   // sha256 here (null: not a file here now, so it must not be one on the server either). Files outside the workspace
@@ -142,8 +179,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
           || typeof body.data !== 'string' || body.data.length > Math.ceil(PIECE / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       if (row(id)) return refused(409, 'already-here');
-      // ponytail: an abandoned upload (moves/in-<id>.*, up to 512 MiB per kind) is removed only by a later land of the
-      // same id; there is no sweep. Fine while only the user's own desktop, over ssh, can send one.
+      // An abandoned upload (moves/in-<id>.*, up to 512 MiB per kind) goes with Cancel, a later land of the same id, or the sweep.
       const file = staged('in-' + id + '.' + body.kind);
       if (appending.has(file)) return refused(409, 'busy');
       appending.add(file);
@@ -156,10 +192,21 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         return { status: 200, size: size + bytes.length };
       } finally { appending.delete(file); }
     },
+    // Cancel during the upload: what the server has of it goes at once. A chat already here is not touched.
+    async cancel(id) {
+      if (!ID.test(id)) return refused(400, 'request-refused');
+      if (!moves) return refused(503, 'move-unavailable');
+      if (row(id)) return refused(409, 'already-here');
+      const files = KINDS.map((kind) => staged('in-' + id + '.' + kind));
+      if (files.some((file) => appending.has(file))) return refused(409, 'busy');
+      await Promise.all([...files.map((file) => rm(file, { force: true })), rm(path.join(ownership, 'xfer', 'in-' + id), { force: true, recursive: true })]);
+      return { status: 200, cancelled: true };
+    },
+    sweep,
     async land(id, body) {
       const part = (value) => value && Number.isSafeInteger(value.bytes) && value.bytes >= 0 && value.bytes <= MAX_PART && HASH.test(value.sha256);
       if (!ID.test(id) || !ID.test(body?.session ?? '') || typeof body.title !== 'string' || body.title.length > 120 || typeof body.folder !== 'string'
-          || typeof body.from !== 'string' || body.from.length > 4096 || !Number.isSafeInteger(body.created) || !KINDS.every((kind) => part(body.parts?.[kind]))
+          || !fromOk(body.from) || !Number.isSafeInteger(body.created) || !KINDS.every((kind) => part(body.parts?.[kind]))
           || !Array.isArray(body.files) || body.files.length > MAX_FILES || !body.files.every((f) => relative(f?.path) && (f.sha256 === null || HASH.test(f.sha256)))) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       const here = row(id);
@@ -222,14 +269,14 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
 }
 
 // The first prompt after a move: the transcript names this chat's old folder, so the agent is told where it is now.
-// The old folder is the sender's own word, put in the prompt as-is: trusted only because the sender is the user's own
-// desktop over ssh (row 51).
+// The old folder is the sender's word, checked by land (fromOk) and again here for a row stored before that check.
+// chat.mjs keeps the note in the message's user event, so the history shows what the agent was told.
 export function movedNote(db, id) {
   const last = db.prepare("SELECT type, data FROM events WHERE conversation = ? AND type IN ('moved-in', 'user') ORDER BY cursor DESC LIMIT 1").get(id);
   if (last?.type !== 'moved-in') return null;
   let data;
   try { data = JSON.parse(last.data); } catch { return null; }
-  if (typeof data?.from !== 'string' || typeof data.to !== 'string' || data.from === data.to) return null;
+  if (!fromOk(data?.from) || typeof data.to !== 'string' || data.from === data.to) return null;
   return `[P9: this chat moved here from another computer. Its working folder there was ${data.from}; here it is ${data.to}. `
     + `A path under ${data.from} is at the same place under ${data.to}.]\n\n`;
 }
