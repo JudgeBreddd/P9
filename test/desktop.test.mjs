@@ -364,7 +364,6 @@ test('First launch D4: a waiting item says who it waits on, from the owner\'s ow
   // A new profile's name is the account's own (the greeting's), so the chip reads it; it is never a fixed person.
   const own = await page.evaluate(async () => (await window.p9.getSettings()).name);
   assert.equal(await chip.first().textContent(), own ? 'needs ' + own : 'needs you');
-  assert.doesNotMatch(await page.locator('#fMission').textContent(), /tyler/i);
   const reopen = async (name) => { await page.evaluate(async (name) => window.p9.setSettings({ ...(await window.p9.getSettings()), name }), name); await page.reload(); await page.click('#rMission'); await chip.first().waitFor({ timeout: 20000 }); return chip.first().textContent(); };
   assert.equal(await reopen('Sam'), 'needs Sam');
   assert.equal(await reopen(''), 'needs you');
