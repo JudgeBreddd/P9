@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'sendToServer', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -384,4 +384,97 @@ test('First launch D10: two running chats are told apart by number and title', {
   assert.notEqual(heads[0][1], heads[1][1], 'the two heads read differently');
   await page.click('#rChat');
   await shot('rail-robot-heads', page.locator('.rail'));
+});
+
+// Items 24 and 25 (specs/move-progress-events.md check 4): the window draws main's p9:move stream over the moving chat,
+// says when the server goes quiet, cancels through main, and on done asks "Open it on <host>?"; Enter switches with the
+// host main sent. Main's handlers stand in for the move (its own stream is send-to-server.test.mjs).
+test('Send to server: the black hole and bar follow p9:move; Cancel goes to main; done asks, then switches and reopens the chat; a reload mid-move asks to finish', { timeout: 150000 }, async (t) => {
+  // The fake agent keeps a Claude Code transcript (claude-home), so the daemon can freeze the chat for the reload check.
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const marker of ['uuid-sessions', 'claude-home']) await writeFile(path.join(workspace, marker), '');
+    return { args: ['--acp-override', fake] };
+  });
+  const { app, page, shot } = await openFirst(t, instance);
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'move me' });
+  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  const pane = page.locator(`.pane[data-id="${id}"]`);
+  await pane.waitFor();
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.calls = [];
+    for (const name of ['p9:server', 'p9:move-cancel']) ipcMain.removeHandler(name);
+    ipcMain.handle('p9:server', (_event, ...args) => { globalThis.calls.push(['server', ...args]); return args.length ? { ok: true } : { host: null, last: 'test-host', connected: false, hosts: [] }; });
+    ipcMain.handle('p9:move-cancel', (_event, ...args) => { globalThis.calls.push(['cancel', ...args]); return { cancelling: true }; });
+  });
+  let seq = 0;
+  const move = (phase, percent, extra) => app.evaluate(({ BrowserWindow }, m) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === m.url).webContents.send('p9:move', m.move),
+    { url: page.url(), move: { id, seq: ++seq, host: 'test-host', phase, percent, bytes: { sent: Math.round(percent * 100000), total: 10000000 }, ...extra } });
+  const fx = page.locator('#moveFx'), b = await pane.boundingBox(); // the pane's place before it is pulled in
+  await move('stopping', 0);
+  await fx.waitFor();
+  assert.equal(await pane.getAttribute('data-pulled'), '', 'the chat is pulled in');
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Pausing the chat here…');
+  await move('connecting', 0);
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Connecting to test-host…');
+  await move('uploading', 40);
+  await page.waitForFunction(() => document.querySelector('#movePct').textContent === '40%');
+  assert.equal(await page.locator('.move-bar').getAttribute('aria-valuenow'), '40');
+  assert.equal(await page.locator('#moveBytes').textContent(), ' · 3.8 MB of 9.5 MB');
+  // The overlay covers the chat's pane, not the window.
+  const a = await fx.boundingBox();
+  assert.deepEqual([a.x, a.y, a.width, a.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round));
+  for (const n of [1, 2, 3]) await shot('move-frame-' + n, page);
+  // No event for 15 s (three missed heartbeats): the label says so; the next event clears it.
+  await page.locator('#moveFx[data-wait]').waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Waiting for the server…');
+  // Long after the chat has fallen in (scaled to a dot), the overlay still covers the pane's whole place.
+  const c = await fx.boundingBox();
+  assert.deepEqual([c.x, c.y, c.width, c.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round), 'the overlay keeps the pane\'s size');
+  await shot('move-waiting', page);
+  await move('uploading', 70);
+  assert.equal(await fx.getAttribute('data-wait'), null);
+  await page.click('#moveCancel');
+  for (let i = 0; i < 50 && !(await app.evaluate(() => globalThis.calls.length)); i++) await page.waitForTimeout(100);
+  assert.deepEqual(await app.evaluate(() => globalThis.calls), [['cancel', id]]);
+  await move('landing', 99);
+  assert.equal(await page.locator('#moveWhat').textContent(), 'test-host is setting it up…');
+  assert.equal(await page.locator('#moveCancel').isVisible(), false, 'no Cancel once the server has it');
+  await shot('move-landing', page);
+  await move('done', 100);
+  const ask = page.locator('#moveDlg');
+  await ask.waitFor();
+  assert.equal(await page.locator('#moveT').textContent(), 'Open it on test-host?');
+  await shot('move-ask', page);
+  // Enter from the "Don't show again" box still takes the switch (a form's own Enter would press Stay).
+  await page.locator('#moveNever').check();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => localStorage.getItem('p9-after-move'));
+  assert.deepEqual(await page.evaluate(() => [JSON.parse(localStorage.getItem('p9-after-move')), localStorage.getItem('p9-after-move-ask')]), [{ id }, 'open']);
+  assert.deepEqual(await app.evaluate(() => globalThis.calls), [['cancel', id], ['server', 'test-host']]);
+  // The reload main does: the chat opens in the pane and the key goes.
+  await page.evaluate(() => sessionStorage.clear());
+  await page.reload();
+  await pane.waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => localStorage.getItem('p9-after-move') === null);
+  // A window reloaded mid-move: the daemon says moving, main sends nothing for 6 s, so the window asks to finish. Yes asks
+  // main to move it (here main has no server, and says so).
+  let frozen;
+  for (let i = 0; i < 100 && !(frozen = await call(instance, '/chat/' + id + '/send-away', 'POST', {})).session && frozen.error !== 'moving'; i++) await page.waitForTimeout(100);
+  assert.ok(frozen.session || frozen.error === 'moving', JSON.stringify(frozen));
+  await page.reload();
+  await page.locator('#moveDlg[open]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#moveT').textContent(), 'Finish the move?');
+  assert.equal(await page.locator('#moveNeverRow').isVisible(), false);
+  await shot('move-finish-ask', page);
+  await page.click('#moveYes');
+  await pane.getByText('Not sent to the server: No server yet').waitFor({ timeout: 10000 });
+  // Reduced motion: no sky, no mark; the bar, its label and Cancel.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload();
+  await pane.waitFor({ timeout: 20000 });
+  await move('uploading', 55);
+  await fx.waitFor();
+  assert.deepEqual(await page.evaluate(() => ['#moveSky', '.move-mark'].map((s) => getComputedStyle(document.querySelector(s)).display)), ['none', 'none']);
+  await shot('move-reduced', page);
 });

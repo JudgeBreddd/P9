@@ -126,7 +126,7 @@ test('P9: the phone shows the agent\'s own pictures and real links, and loads no
   assert.deepEqual(remote, [], 'the phone loaded something remote');
 });
 
-test('P6: every mode on the phone; the loosened ones ask first in red; a chat made here starts in the last pick', { timeout: 90000 }, async (t) => {
+test('P6: every mode on the phone; the loosened ones ask first in red; a chat made here starts in the last pick, a loosened one only after "don\'t show again"', { timeout: 90000 }, async (t) => {
   const { page, server } = await phoneOn(t);
   const id = await newChat(page, 'codex');
   const labels = () => page.$$eval('#mode option', (list) => list.map((o) => o.textContent));
@@ -158,9 +158,11 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   await send(page, 'mode');
   await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes('mode:agent-full-access')), null, { timeout: 15000 });
   await page.waitForFunction(() => document.querySelector('#mode option').textContent === 'Mode: Full access', null, { timeout: 5000 });
-  // A new Codex chat made on this phone starts there; a Claude one does not (its own last pick: none yet).
+  // A new Codex chat made on this phone does not start there: "Turn on" was for that chat only (review #2), so it starts
+  // "as set", with no silent loosened mode. A Claude one neither (its own last pick: none yet).
   await newChat(page, 'codex');
-  assert.equal(await page.inputValue('#mode'), 'Full access');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-mode:codex')), 'Full access');
+  assert.equal(await page.inputValue('#mode'), '');
   await newChat(page, 'claude');
   assert.equal(await page.inputValue('#mode'), '');
   assert.ok((await labels()).includes('Mode: Bypass permissions'));
