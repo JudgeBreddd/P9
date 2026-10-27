@@ -119,7 +119,7 @@ async function mutate(path: string, body: Json) {
     toLogin();
     return new Error('login-required');
   };
-  // A reopened app keeps its cookie but not sessionStorage's CSRF token: log in again for a fresh one (release r1 R1-4).
+  // A reopened app keeps its cookie and, for the session's 12 hours, its CSRF token (csrfToken); with neither, log in again for a fresh one.
   const csrf = csrfToken();
   if (!csrf) throw relogin();
   let response: Response;
@@ -421,7 +421,7 @@ let barSig = '';
 function chatBar(id: string, run: string) {
   const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
-  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div><span class="run" data-run="${run}" role="img" aria-label="${run === 'working' ? 'Working' : run === 'needs' ? 'Needs you' : 'Stopped'}"></span><span class="sync" role="img" aria-label="Live"></span>`;
+  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '<span class="run" data-run="idle" role="img" aria-label="Stopped"></span>' : `<button type="button" class="run" id="stopTurn" data-run="${run}" aria-label="Stop"></button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
   barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
 }
@@ -479,9 +479,18 @@ one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
 one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 one<HTMLElement>('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
 one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
+// L3: a turn that runs can be stopped from the top bar, where its status ring is (the composer's send button turns into Stop
+// only when the box is empty and nothing is queued). The route is the composer's and the desktop's: POST /chat/:id/cancel.
+async function stopChat(id: string) {
+  if (!id) return;
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+  if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
+  await fetchEvents(); render();
+}
 one('[data-bar="chat"]').addEventListener('click', (event) => {
   const button = (event.target as Element).closest('button'); if (!button) return;
   if (button.dataset.back !== undefined) back();
+  else if (button.id === 'stopTurn') stopChat(openId);
   else if (button.id === 'newChat') openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>${startIn()}`);
   else if (button.id === 'modelBtn') {
     const model = one<HTMLSelectElement>('#model'), options = [...model.options];
