@@ -16,7 +16,7 @@ const KINDS = ['transcript', 'events'];
 // Raw bytes a piece: as base64 in JSON it stays well under the daemon's 12 MiB body limit.
 export const PIECE = 4 * 1024 * 1024;
 const MAX_PART = 512 * 1024 * 1024, MAX_FILES = 500;
-// An upload nobody finished (app quit, lost link) is swept after this long (Tyler, 2026-10-27: 6 h); the sweep runs at
+// An upload nobody finished (app quit, lost link) is swept after this long (Builder, 2026-10-27: 6 h); the sweep runs at
 // daemon start and every hour.
 export const ABANDONED = 6 * 3600_000;
 const SWEEP_EVERY = 3600_000;
