@@ -30,7 +30,7 @@ async function open(device, server, { fix = [], init } = {}) {
   // The A/B: swap text in the served document, stylesheet and script so the old behaviour is back. The swap must hit.
   await page.route('**/*', async (route) => {
     if (!fix.length || !['document', 'stylesheet', 'script'].includes(route.request().resourceType())) return route.continue();
-    const response = await route.fetch();
+    const response = await route.fetch({ url: route.request().url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...route.request().headers(), host: server.host } });
     let body = await response.text();
     for (const [from, to] of fix) if (body.includes(from)) { body = body.replace(from, to); hits++; }
     await route.fulfill({ response, body });
