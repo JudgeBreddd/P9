@@ -185,6 +185,9 @@ async function replay() {
   state.base = state.cursor;
   state.conversations = (await request('/chat')).conversations ?? [];
   state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
+  // A chat made during the read is open, not history: the list reads its state from its events (P7), so they load now.
+  // Left a stub, a chat started while the phone loads showed idle until it was opened.
+  await Promise.all(state.conversations.filter((item) => item.state !== 'stopped' && state.stubs.has(String(item.id))).map((item) => history(String(item.id))));
 }
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }

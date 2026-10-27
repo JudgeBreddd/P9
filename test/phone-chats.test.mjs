@@ -143,8 +143,17 @@ const checks = {
     assert.ok(Math.abs(after.top - before.top) < 3, `the reader stayed put: ${before.top} -> ${after.top}`);
   },
   // P7: the list says which chats work and which wait on you.
+  // The chats are made while the page's first read is in flight (held here until they exist): a chat started on the
+  // desktop while the phone loads. Before the fix that read left them stubs and their rows idle (the 05:00 flake).
   async running(page, { server, shots }) {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route(/\/chat\/events\?.*only=/, async (route) => { await held; await route.continue(); });
+    const reload = page.reload();
+    await page.waitForRequest(/\/chat\/events\?.*only=/, { timeout: 30000 });
     const working = await liveChat(server, 'slow'), needs = await liveChat(server, 'permission');
+    release();
+    await reload;
     await page.waitForSelector('h1:text("Chats")');
     await page.waitForSelector(`[data-chat="${working}"][data-run=working]`, { timeout: 30000 });
     await page.waitForSelector(`[data-chat="${needs}"][data-run=needs]`, { timeout: 30000 });

@@ -145,15 +145,15 @@ section[data-view=chat]>:not(.bar){margin-left:0;margin-right:0}
 .scrollwrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
 body.inchat nav{display:none}
 .sec{margin:16px 16px 4px;font-size:13px;font-weight:600;color:var(--muted)}
-.row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:8px 16px;border:0;border-radius:0;background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.08)) right bottom/calc(100% - 16px) 1px no-repeat;color:var(--text);font-weight:400;text-align:left}
-.row .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--muted)}
-.row .dot.claude{background:#d97757}.row .dot.codex{background:#5b9cff}
-.row .t{flex:1;min-width:0;display:grid;gap:2px}
-.row b{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row small{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.row time{flex:none;color:var(--muted);font-size:13px}
-.row[data-run=working] small{color:var(--cyan)}
-.row[data-run=needs] small{color:var(--amber)}.row[data-run=needs] .dot{background:var(--amber)}
+#chatList .row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:8px 16px;border:0;border-radius:0;background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.08)) right bottom/calc(100% - 16px) 1px no-repeat;color:var(--text);font-weight:400;text-align:left}
+#chatList .row .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--muted)}
+#chatList .row .dot.claude{background:#d97757}#chatList .row .dot.codex{background:#5b9cff}
+#chatList .row .t{flex:1;min-width:0;display:grid;gap:2px}
+#chatList .row b{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chatList .row small{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chatList .row time{flex:none;color:var(--muted);font-size:13px}
+#chatList .row[data-run=working] small{color:var(--cyan)}
+#chatList .row[data-run=needs] small{color:var(--amber)}#chatList .row[data-run=needs] .dot{background:var(--amber)}
 .bar .sub{min-height:0;min-width:0;display:flex;align-items:center;gap:2px;padding:2px 0;border-radius:6px;color:var(--muted);font-size:12px;font-weight:400;text-align:left;overflow:hidden;white-space:nowrap}
 .bar .sub svg{flex:none;width:12px;height:12px}
 .bar .run{flex:none;width:16px;height:16px;margin:0 6px;border-radius:50%}
@@ -192,5 +192,5 @@ body.inchat nav{display:none}
 @media(prefers-reduced-motion:no-preference){
 @keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.35}}
 .bar .run[data-run=working],#events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{animation:spin .8s linear infinite}
-.row[data-run=working] .dot{animation:pulse 1.4s ease-in-out infinite}}
+#chatList .row[data-run=working] .dot{animation:pulse 1.4s ease-in-out infinite}}
 #composerSlot{margin-left:16px;margin-right:16px}
