@@ -71,7 +71,9 @@ test('T6, T2, T1: a phone terminal has P9_PHONE=1, a desktop one does not; Paste
   assert.ok(desk, 'the desktop terminal was not made');
   await page.click('#refreshTerminal');
   await page.waitForFunction((id) => [...document.querySelectorAll('#terminal option')].some((o) => o.value === id), desk, { timeout: 10000 });
-  await page.selectOption('#terminal', desk);
+  // The terminal is picked from the title's sheet (c7's Terminal bar).
+  await page.click('#pickTerminal');
+  await page.click(`#sheet[open] [data-term="${desk}"]`);
   await connected();
   await type('echo DK-$P9_PHONE-END');
   await shows('DK--END');
@@ -382,8 +384,9 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   await page.waitForFunction(() => document.querySelector('#modePill').textContent === 'Auto ▾' && !document.querySelector('#sheet').open, null, { timeout: 5000 });
   assert.equal(await page.inputValue('#mode'), 'Auto');
   assert.equal(await page.getAttribute('#modePill', 'aria-label'), 'Mode: Auto');
-  // The pickers went back home when the sheet closed (a later sheet's HTML would have wiped them).
-  assert.equal(await page.locator('#modeHome #more').count(), 1);
+  // The pickers went back home when the sheet closed (a later sheet's HTML would have wiped them). The dialog's close
+  // event comes a task after open turns false, so this waits for it.
+  await page.waitForSelector('#modeHome #more', { state: 'attached', timeout: 5000 });
   // No sideways scroll on a 390 px phone.
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
 });

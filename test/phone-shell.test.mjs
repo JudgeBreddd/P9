@@ -64,7 +64,7 @@ const checks = {
     });
     assert.equal(f.scrolls, false, 'the page does not scroll');
     assert.deepEqual([f.top, f.height], [0, f.inner], 'the column is the window');
-    for (const [view, title] of [['chat', 'Chats'], ['terminal', 'Terminal'], ['mission', 'Mission'], ['usage', 'Usage'], ['files', 'Files']]) {
+    for (const [view, title] of [['chat', 'Chats'], ['terminal', 'Terminal'], ['mission', 'Mission'], ['usage', 'Usage'], ['files', 'Workspace']]) {
       await page.click(`nav [data-nav="${view}"]`);
       const bar = page.locator(`section[data-view="${view}"] > .bar`);
       assert.equal(await bar.locator('h1').innerText(), title);
