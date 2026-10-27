@@ -194,6 +194,7 @@ body.inchat nav{display:none}
 .bar .sub svg{flex:none;width:12px;height:12px}
 .bar .run{flex:none;width:16px;height:16px;margin:0 6px;border-radius:50%}
 .bar .run[data-run=idle]{display:none}
+.bar button.run{position:relative;display:grid;place-items:center;padding:0;min-height:0;background:none;color:var(--text)}.bar button.run::before{content:"■";font-size:7px;line-height:1}.bar button.run::after{content:"";position:absolute;inset:-14px}.bar button.run[data-run=needs]{background:var(--amber);color:#111}
 .bar .run[data-run=needs]{background:var(--amber)}
 .bar .run[data-run=working]{border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan)}
 .chips{flex:none;display:flex;gap:8px;min-height:32px;align-items:center;padding:0 16px 6px}
