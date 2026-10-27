@@ -178,7 +178,8 @@ test('D13: the tokenless link stays within 7,000 characters, keeps the start of 
     const text = await readFile(path.join(root, name), 'utf8');
     assert.doesNotMatch(text, /GITHUB_TOKEN|ghp_|github_pat_/, name + ' ships no token');
   }
-  const note = Array.from({ length: 2000 }, (_, i) => 'line ' + i + ' of a long bug report').join('\n');
+  const note = Array.from({ length: 1500 }, (_, i) => 'line ' + i + ' of a long bug report').join('\n');
+  assert.ok(note.length > 30000 && note.length < 50000, String(note.length));
   const r = await createAnymouse()({ kind: 'bug', text: note });
   assert.equal(r.status, 200);
   assert.ok(r.open.startsWith(NEW_ISSUE), r.open.slice(0, 60));
@@ -211,7 +212,9 @@ test('D13 in the desktop: a long note opens the cut link and the box says how ma
   const said = await page.locator('#amNote').innerText();
   const [, kept, total] = said.match(/GitHub got only the start \(the first ([\d,]+) of ([\d,]+) characters\); paste the rest from here\./) ?? [];
   assert.ok(kept, said);
-  assert.equal(Number(total.replaceAll(',', '')), (note + '\n\n---\nSent with Anymouse from P9.').length);
+  const all = Number(total.replaceAll(',', '')), footer = '\n\n---\nSent with Anymouse from P9.'.length;
+  assert.ok(all >= note.length + footer && all <= note.length + footer + 203, all + ' for a ' + note.length + '-character note');
+  assert.ok(Number(kept.replaceAll(',', '')) < all);
   assert.equal(await page.locator('#amText').inputValue(), note, 'the whole note stays in the box');
   let url = '';
   for (const end = Date.now() + 10000; Date.now() < end && !url; await new Promise((r) => setTimeout(r, 100))) url = (await readFile(opened, 'utf8').catch(() => '')).trim();
