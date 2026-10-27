@@ -79,10 +79,10 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
   // appended is never touched. Each removal is logged without its path.
   async function sweep(now = Date.now()) {
     if (!moves) return;
-    const gone = async (file, kind, recursive = false) => {
+    const gone = async (file, kind) => {
       const info = await stat(file).catch(() => null);
       if (!info) return;
-      await rm(file, { force: true, recursive });
+      await rm(file, { force: true });
       console.error(JSON.stringify({ event: 'P9_MOVE_SWEPT', kind, bytes: info.size }));
     };
     for (const name of await readdir(moves).catch(() => [])) {
@@ -92,10 +92,16 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         if (info && now - info.mtimeMs > ABANDONED && !appending.has(file)) await gone(file, 'upload');
       } else if (outgoing && ID.test(outgoing[1]) && row(outgoing[1])?.state !== 'moving') await gone(file, 'staged');
     }
+    // Send files' staging (xfer.mjs, by its own upload id): a piece being appended touches only its own file, not the
+    // folder, so the folder goes only when it and every piece in it are older than the limit.
     const xfer = path.join(ownership, 'xfer');
     for (const name of await readdir(xfer).catch(() => [])) {
-      const id = /^in-([0-9a-f-]{36})$/.exec(name)?.[1], info = id && await stat(path.join(xfer, name)).catch(() => null);
-      if (info && now - info.mtimeMs > ABANDONED) await gone(path.join(xfer, name), 'files', true);
+      if (!/^in-[0-9a-f-]{36}$/.test(name)) continue;
+      const dir = path.join(xfer, name), pieces = await readdir(dir).catch(() => null);
+      const infos = pieces && await Promise.all([dir, ...pieces.map((piece) => path.join(dir, piece))].map((file) => stat(file).catch(() => null)));
+      if (!infos?.[0] || infos.some((info) => info && now - info.mtimeMs <= ABANDONED)) continue;
+      await rm(dir, { force: true, recursive: true });
+      console.error(JSON.stringify({ event: 'P9_MOVE_SWEPT', kind: 'files', bytes: infos.slice(1).reduce((n, info) => n + (info?.size ?? 0), 0) }));
     }
   }
   if (moves) {
@@ -217,7 +223,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       if (row(id)) return refused(409, 'already-here');
       const files = KINDS.map((kind) => staged('in-' + id + '.' + kind));
       if (files.some((file) => appending.has(file))) return refused(409, 'busy');
-      await Promise.all([...files.map((file) => rm(file, { force: true })), rm(path.join(ownership, 'xfer', 'in-' + id), { force: true, recursive: true })]);
+      await Promise.all(files.map((file) => rm(file, { force: true })));
       return { status: 200, cancelled: true };
     },
     sweep,

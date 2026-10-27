@@ -22,7 +22,7 @@ test('Move sweep: an abandoned upload older than 6 h goes; a young one, one bein
   const move = createMove({ db: null, workspace: ownership, ownership, row: (id) => rows.get(id), emit: () => {}, stopConversation: null, recovered: new Promise(() => {}) });
   const old = (Date.now() - ABANDONED - 60_000) / 1000, young = (Date.now() - ABANDONED + 3600_000) / 1000;
   const put = async (name, when, text = 'x') => { await writeFile(path.join(moves, name), text); await utimes(path.join(moves, name), when, when); };
-  const [abandoned, fresh, appending, landed, moving, done] = Array.from({ length: 6 }, () => randomUUID());
+  const [abandoned, fresh, appending, landed, moving, done, sending] = Array.from({ length: 7 }, () => randomUUID());
   await put('in-' + abandoned + '.transcript', old, 'x'.repeat(5000));
   await put('in-' + abandoned + '.events', old);
   await put('in-' + fresh + '.transcript', young);
@@ -30,7 +30,13 @@ test('Move sweep: an abandoned upload older than 6 h goes; a young one, one bein
   rows.set(landed, { state: 'stopped' }); await put('in-' + landed + '.transcript', old);
   rows.set(moving, { state: 'moving' }); await put(moving + '.events', old);
   rows.set(done, { state: 'moved' }); await put(done + '.events', young);
-  await mkdir(path.join(xfer, 'in-' + abandoned)); await writeFile(path.join(xfer, 'in-' + abandoned, 'a.txt'), 'x'); await utimes(path.join(xfer, 'in-' + abandoned), old, old);
+  const staging = async (id, folderWhen, pieceWhen) => {
+    const dir = path.join(xfer, 'in-' + id);
+    await mkdir(dir); await writeFile(path.join(dir, '0'), 'x'.repeat(700)); await utimes(path.join(dir, '0'), pieceWhen, pieceWhen); await utimes(dir, folderWhen, folderWhen);
+  };
+  await staging(abandoned, old, old);
+  // A file send still appending to its one piece: the folder is old, the piece is not.
+  await staging(sending, old, young);
   await mkdir(path.join(xfer, 'in-' + fresh)); await utimes(path.join(xfer, 'in-' + fresh), young, young);
   // An upload being appended: its file is a FIFO, so the append waits until a reader opens it (the hard link lets the test
   // open one even if the sweep wrongly removed the name).
@@ -54,9 +60,10 @@ test('Move sweep: an abandoned upload older than 6 h goes; a young one, one bein
     await taking.catch(() => {});
   }
   assert.deepEqual(left, ['in-' + appending + '.transcript', 'in-' + fresh + '.transcript', 'in-' + landed + '.transcript', moving + '.events'].sort());
-  assert.deepEqual((await readdir(xfer)).sort(), ['in-' + fresh]);
+  assert.deepEqual((await readdir(xfer)).sort(), ['in-' + fresh, 'in-' + sending].sort());
   // Logged without paths: what kind and how many bytes.
   assert.deepEqual(logged.map(({ event, kind }) => [event, kind]).sort(), [['P9_MOVE_SWEPT', 'files'], ['P9_MOVE_SWEPT', 'staged'], ['P9_MOVE_SWEPT', 'upload'], ['P9_MOVE_SWEPT', 'upload']]);
   assert.ok(logged.some((l) => l.bytes === 5000));
+  assert.ok(logged.some((l) => l.kind === 'files' && l.bytes === 700), 'a staging folder logs its pieces\' bytes');
   assert.ok(logged.every((l) => !JSON.stringify(l).includes(ownership)));
 });
