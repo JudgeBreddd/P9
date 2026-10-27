@@ -1,4 +1,4 @@
-import { popover as createPopover, svg, esc, limitLine, md, info } from './helpers.mjs';
+import { popover as createPopover, svg, esc, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -83,10 +83,9 @@ function pickerSelects(s) {
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
 // picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
-const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
-const LOOSE = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
-  'Full access': 'Codex runs without a sandbox: it can read and change any file on this computer and use the network, without asking first.' };
-const startMode = agent => { const m = localStorage.getItem('p9-mode:' + agent); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
+// D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
+const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent].includes(m) ? m : ''; };
+const startMode = agent => { const m = defaultMode(agent) || localStorage.getItem('p9-mode:' + agent); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
 const looseOk = (agent, m) => new Promise(done => {
   const d = $('#looseDlg'); $('#looseT').textContent = `Turn on ${m} for ${names[agent]}?`; $('#looseP').textContent = LOOSE[m]; d.returnValue = '';
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
@@ -437,7 +436,7 @@ DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
 // CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
-const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
+const mdOf = e => { if (e.mdFor !== e.text) { e.md = mdReply.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
@@ -640,29 +639,17 @@ function answered(s) {
   renderTabs(); renderChats(new Set([s.id]));
 }
 // Paperclip (Builder, 2026-10-17: it only drew a blue square). Threat model row 20; the daemon checks the same limits.
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_IMAGE = 2 * 1024 * 1024;
-const base64 = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
 function pickImages(s) {
-  const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMAGE_TYPES.join(','), multiple: true });
+  const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMG_OK.join(','), multiple: true });
   input.onchange = () => addImages(s, input.files);
   input.click();
 }
 // The paperclip, a pasted screenshot and dropped files all come through here (Builder, 2026-10-18: "not paste the screenshots").
 async function addImages(s, files) {
   for (const file of files) {
-    if ((s.images ||= []).length >= 4) { toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
-    if (!IMAGE_TYPES.includes(file.type)) { toast({ kind: 'not attached', txt: file.name + ': PNG, JPEG, GIF or WebP only.', level: 'warn' }, true); continue; }
-    try {
-      let blob = file, mimeType = file.type;
-      const bmp = await createImageBitmap(file), k = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
-      if (k < 1 || file.size > MAX_IMAGE * 3 / 4) {
-        const c = new OffscreenCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k)); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-        blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); mimeType = 'image/jpeg';
-      }
-      const data = await base64(blob);
-      if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
-      s.images.push({ mimeType, data, name: file.name });
-    } catch (e) { toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e), level: 'warn' }, true); }
+    if ((s.images ||= []).length >= MAX_IMAGES) { toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
+    try { s.images.push(await readImage(file)); }
+    catch (e) { toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
   }
   renderChats();
 }
@@ -1644,6 +1631,7 @@ function renderSettings() {
     + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
     + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
     + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
+    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
     + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents in every chat can read and answer but cannot edit files or run anything that asks permission.', 'agent-lock') : '')
@@ -1657,6 +1645,11 @@ function renderSettings() {
   $('#setName').onchange = e => saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) });
   $('#setStartLast').onchange = e => saveSettings({ ...settings, startLast: e.target.checked });
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
+  $('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
+    const a = el.dataset.defaultMode, m = el.value;
+    if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await looseOk(a, m)) { el.value = defaultMode(a); return; }
+    m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
+  }; });
   if (pets) wirePetSettings();
   if (missionFiles?.settings) wireMission();
   // Main reloads the window onto the chosen daemon, so nothing here re-renders.
@@ -2108,12 +2101,6 @@ liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
 const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
-// Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
-// built here; a block's uri is never used. ponytail: data: strings are re-diffed each render; blob: needs a CSP change.
-const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
-const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
-const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
   const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
@@ -2127,6 +2114,11 @@ addEventListener('click', e => {
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();
+// A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser.
+addEventListener('click', e => {
+  const a = e.target.closest?.('a.link[href]'); if (!a || !window.p9?.openLink) return; // a browser preview follows the link
+  e.preventDefault(); window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
+});
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
 // A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).

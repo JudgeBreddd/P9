@@ -224,7 +224,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
   const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
-    .then((result) => { session.mode = value; return result; });
+    .then((result) => { session.mode = value; emit(session.id, 'mode', { mode: value, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === value) ?? value, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
   // The chat's Mode picker, sent with each desktop prompt (Builder, 2026-10-17: Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   const MODES = { claude: { Auto: 'auto', Manual: 'default', Plan: 'plan', 'Accept edits': 'acceptEdits', 'Bypass permissions': 'bypassPermissions' },
@@ -354,7 +354,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
     // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.
-    const session = { proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
+    const session = { id: conversation.id, proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
     const mcpServers = socketPath ? [{ name: 'p9', command: process.execPath, args: [mcpRelay],
       env: [{ name: 'P9_MCP_SOCKET', value: socketPath }, { name: 'P9_MCP_TOKEN', value: session.mcpToken }] }] : [];
     session.exited = new Promise((resolve) => {

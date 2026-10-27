@@ -283,7 +283,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/handoff', async (c) => {
     const { cwd, command, ...result } = await chat.handoff(c.req.param('id'));
     if (result.status !== 200) return reply(c, result);
-    const made = await terminals.create({}, { cwd, typed: command });
+    const made = await terminals.create({}, { cwd, typed: command, phone: !!c.get('device') });
     return reply(c, made.terminal ? { ...result, terminal: made.terminal } : { ...made, command });
   });
   api.get('/chat/:id/images/:hash', (c) => reply(c, chat.image(c.req.param('id'), c.req.param('hash'))));
@@ -294,7 +294,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       throw error;
     }
   });
-  api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c))));
+  api.post('/terminals', async (c) => reply(c, await terminals.create(await json(c), { phone: !!c.get('device') })));
   api.post('/terminals/:id/stop', async (c) => reply(c, await terminals.stop(c.req.param('id'))));
   api.post('/stop-all', async (c) => {
     // Checked after the lifecycle wait for running starts, so a device revoked meanwhile stops nothing.
@@ -702,7 +702,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     remoteApp.use('*', hardening, limit);
     remoteApp.use('*', async (c, next) => {
       await next();
-      c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+      // img-src data: (threat model row 26, v0.1.6 P9): an agent's own images and attachment chips; a data: image makes no request.
+      c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
       c.header('Referrer-Policy', 'no-referrer');
     });
     const login = (c, { status, token, csrf, ...result }) => {

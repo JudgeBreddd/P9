@@ -31,10 +31,12 @@ export function createTerminal({ screen, state, connect }) {
     state(text, live);
     if (term.view) term.view.options.disableStdin = !live;
   }
-  function sendKeys(data) {
+  // at: the time of the tap that asked for these keys when they are sent after an await (the phone's Paste waits for the
+  // clipboard), so they keep that tap's lease; otherwise the input event running now.
+  function sendKeys(data, at) {
     // Typed data runs inside its input event, or on one of xterm's timers above; with neither, it is xterm answering a
     // query in the output (no keys), and takes the newest lease.
-    const typed = Math.min(owed, window.event?.timeStamp ?? Infinity), bytes = new TextEncoder().encode(data);
+    const typed = Math.min(owed, at ?? window.event?.timeStamp ?? Infinity), bytes = new TextEncoder().encode(data);
     // Strictly before: coarse or sleep-paused clocks (WebKit) can give a later lease the same time as the key.
     const lease = term.leases.findLast((held) => held.at < typed)?.bytes;
     if (!lease || term.socket?.readyState !== WebSocket.OPEN) return;

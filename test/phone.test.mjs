@@ -149,10 +149,13 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   };
   assert.deepEqual(await page.locator('#mode option').allInnerTexts(), ['Mode: as set', 'Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review']);
   assert.equal(await page.inputValue('#mode'), '', 'the phone picked a mode by itself');
-  await page.selectOption('#mode', 'Read-only'); await reply('mode', 'mode:read-only');
-  await page.selectOption('#mode', ''); await reply('mode', 'mode:read-only');
+  // The mode is picked from the composer's pill, which opens the Mode sheet (P4).
+  const pickMode = async (value) => { await page.click('#modePill'); await page.click(`#sheet[open] [data-mode="${value}"]`); };
+  await pickMode('Read-only'); await reply('mode', 'mode:read-only');
+  await pickMode(''); await reply('mode', 'mode:read-only');
   assert.deepEqual(await page.locator('#model option').evaluateAll((o) => o.map((x) => x.value)), ['default', 'opus', 'haiku']);
-  await page.selectOption('#model', 'opus'); await reply('model', 'model:opus');
+  await page.click('#modelBtn'); await page.click('#sheet[open] [data-model="opus"]'); // the top bar's Model sheet (c1's shell)
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 }); await reply('model', 'model:opus');
   await page.screenshot({ path: path.join(evidence, 'phone-mode-model.png') });
 
   // Phase 16 free-form space: with the daemon already running, one file edit adds a section with a button and a
@@ -444,6 +447,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), csrfKept);
   await page.click('[data-nav="files"]'); await page.click('#fileList button[data-name="note.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
 
+  await edit('before 401'); // Save is disabled until the draft differs; typing makes no /files request
   let used401;
   await page.route('**/files', async (route) => {
     used401 = route.request().headers()['x-p9-op'];

@@ -40,13 +40,53 @@ export const info = (tip, section) => `<button class="info" type="button" data-d
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed
 // shows "new window": the old figure expired and the new one is not known until the tool records it again.
-// Agent replies are Markdown (threat model row 18): marked escapes text and code; raw HTML shows as text, a link as its
-// text with the address in a tooltip (nothing to click), an image as its alt text. Desktop and phone both use it.
-export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: {
-  html: t => esc(t.text),
-  link(t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; },
-  image: t => esc(t.text),
+// Markdown (threat model row 18): marked escapes text and code; raw HTML shows as text, an image as its alt text. md
+// (notes, pinned cards, file previews): a link is its text with the address in a tooltip (nothing to click). mdReply
+// (agent replies, P9): a link opens outside P9 only when it is one plain http(s) address (webLink); then the host shows
+// after text that is not the address, so a reply cannot dress one site as another; anything else stays as in md.
+// Desktop and phone both use them; the desktop's click goes to main (p9:open-link), which checks the URL again.
+export const webLink = href => {
+  if (typeof href !== 'string' || href.length > 2048 || /[\s\p{Cc}\p{Cf}]/u.test(href)) return null;
+  try { const u = new URL(href); return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password ? u : null; } catch { return null; }
+};
+const textLink = function (t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; };
+const mdText = { html: t => esc(t.text), image: t => esc(t.text) };
+export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText, link: textLink } });
+export const mdReply = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText,
+  link(t) {
+    const u = webLink(t.href); if (!u) return textLink.call(this, t);
+    const same = [t.href, u.href, u.host, u.href.replace(/^https?:\/\//, '')].includes(t.text.trim());
+    return `<a class="link" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${this.parser.parseInline(t.tokens)}</a>` + (same ? '' : ` <span class="link-host">(${esc(u.host)})</span>`);
+  },
 } });
+// Each agent's own mode names (the daemon's allowlist, chat.mjs MODES) and the two loosened ones, which ask first in red
+// (threat model row 25). Desktop and phone (P6).
+export const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
+export const LOOSE = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
+  'Full access': 'Codex runs without a sandbox: it can read and change any file on this computer and use the network, without asking first.' };
+// Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
+// built here; a block's uri is never used. Desktop and phone (P9). ponytail: data: strings are re-diffed each render;
+// blob: needs a CSP change.
+export const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
+export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
+export const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
+// An image a person attaches (threat model row 20; the daemon checks the same limits): desktop paperclip, paste and drop,
+// and the phone's + (P8). Over 1568 px or near 2 MB it is scaled to a JPEG; still over 2 MB, refused with the reason.
+export const MAX_IMAGES = 4, MAX_IMAGE = 2 * 1024 * 1024;
+const base64 = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
+export async function readImage(file) {
+  if (!IMG_OK.includes(file.type)) throw new Error('PNG, JPEG, GIF or WebP only');
+  let blob = file, mimeType = file.type;
+  const bmp = await createImageBitmap(file), k = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
+  if (k < 1 || file.size > MAX_IMAGE * 3 / 4) {
+    const c = new OffscreenCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k)); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); mimeType = 'image/jpeg';
+  }
+  const data = await base64(blob);
+  if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
+  return { mimeType, data, name: file.name };
+}
 export const limitLine = (name, limits, now = Date.now()) => {
   if (!limits) return { name, text: 'no plan limits recorded yet', stale: true };
   const when = at => new Date(at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
