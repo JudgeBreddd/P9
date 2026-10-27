@@ -159,7 +159,9 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   await page.selectOption('#mode', 'Bypass permissions');
   await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
   await page.click('#looseDlg button[value="never"]');
-  await page.waitForFunction(() => document.querySelector('#mode').value === 'Bypass permissions', null, { timeout: 5000 });
+  // Kept once the warning has closed, a frame after the tap in Chromium: the select shows the pick from the moment it is
+  // picked, so waiting on it let the reload come first and nothing was kept (pass8 to pass10).
+  await page.waitForFunction(() => localStorage.getItem('p9-mode:claude') === 'Bypass permissions' && localStorage.getItem('p9-mode-ok:Bypass permissions'), null, { timeout: 5000 });
   // Tapped while the first read runs (held here until the chat is made), the new chat is a stub, drawn once its history
   // is in: it still starts in the last pick. pass8 and pass9 lost it there.
   let release;
