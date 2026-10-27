@@ -10,7 +10,7 @@ import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
 
 // The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
-const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+const shot = async (page, name) => { const png = await page.screenshot({ animations: 'disabled' }); /* a sheet's slide-in is finished first */ if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 async function setup(paths) {
   await mkdir(path.join(paths.workspace, 'hub'), { recursive: true });
   await mkdir(path.join(paths.workspace, 'proj', 'sub'), { recursive: true });
