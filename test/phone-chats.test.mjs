@@ -203,11 +203,13 @@ test('P1, P2, P3, P7: the Chats list and the chat screen (A/B)', { timeout: 9000
   for (const stream of [server.child.stdout, server.child.stderr]) stream.on('data', (chunk) => { said += chunk; });
   const run = async (name, check) => {
     const good = await open(await phoneOn(t, server, browser), server);
-    try { await check(good.page, { server, shots: true }); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); return; }
+    try { await check(good.page, { server, shots: true }); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); await good.page.context().close(); return; }
+    await good.page.context().close();
     const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
-    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); return; }
+    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); await bad.page.context().close(); return; }
     let broke = true;
     try { await check(bad.page, { server, shots: false }); broke = false; } catch { /* the check failed on the broken page, as it must */ }
+    await bad.page.context().close();
     if (!broke) failures.push(name + ' (A/B): the check passed on the broken page');
   };
   for (const [name, check] of Object.entries(checks)) {

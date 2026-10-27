@@ -138,11 +138,13 @@ test('P5 and the shell: a fixed column, a 44 px bar on every tab, the tab bar yi
   const failures = [];
   for (const [name, check] of Object.entries(checks)) {
     const good = await open(await phoneOn(t, server, browser), server);
-    try { await check(good.page); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); continue; }
+    try { await check(good.page); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); await good.page.context().close(); continue; }
+    await good.page.context().close();
     const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
-    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); continue; }
+    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); await bad.page.context().close(); continue; }
     let broke = true;
     try { await check(bad.page); broke = false; } catch { /* the check failed on the broken page, as it must */ }
+    await bad.page.context().close();
     if (!broke) failures.push(name + ' (A/B): the check passed on the broken page');
   }
   assert.deepEqual(failures, []);
