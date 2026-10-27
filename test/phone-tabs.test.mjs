@@ -169,6 +169,8 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await shot(page, 'tab-mission');
   await page.click('#mission .tile:has(span:text-is("Backups"))');
   await page.waitForSelector('#mission dialog[open]', { timeout: 5000 });
+  // The window's title is the h1 in the bar; phone.test.mjs Phase 11 reads the same selector for every tile.
+  assert.equal(await page.locator('#mission dialog[open] > header .title h1').innerText({ timeout: 5000 }), 'Backups');
   await page.click('#mission dialog[open] summary:has-text("Backup now")');
   await page.click('#mission dialog[open] form[data-run] button');
   await page.waitForSelector('#mission dialog[open] pre[data-output]:has-text("backup-ok")', { timeout: 10000 });
