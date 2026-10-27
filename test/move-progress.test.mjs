@@ -4,8 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createReadStream } from 'node:fs';
-import { link, mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { constants, createReadStream } from 'node:fs';
+import { link, mkdir, mkdtemp, open, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,15 +37,22 @@ test('Move sweep: an abandoned upload older than 6 h goes; a young one, one bein
   const pipe = path.join(moves, 'in-' + appending + '.transcript'), spare = path.join(ownership, 'spare-pipe');
   execFileSync('mkfifo', [pipe]); await link(pipe, spare); await utimes(pipe, old, old);
   const taking = move.take(appending, { kind: 'transcript', offset: 0, data: Buffer.from('piece').toString('base64') });
-
+  let left;
   const logged = [], error = console.error;
-  console.error = (line) => logged.push(JSON.parse(line));
-  try { await move.sweep(); } finally { console.error = error; }
-  const left = (await readdir(moves)).sort();
-  // The pipe is drained after the check, so the held append ends either way.
-  const drained = new Promise((resolve) => createReadStream(spare).on('data', () => {}).on('end', resolve));
-  assert.equal((await taking).status, 200);
-  await drained;
+  try {
+    console.error = (line) => logged.push(JSON.parse(line));
+    try { await move.sweep(); } finally { console.error = error; }
+    left = (await readdir(moves)).sort();
+    // The pipe is drained after the check, so the held append ends either way.
+    const drained = new Promise((resolve) => createReadStream(spare).on('data', () => {}).on('end', resolve));
+    assert.equal((await taking).status, 200);
+    await drained;
+  } finally {
+    // A failure above can leave the append or the drain waiting in open() on the pipe, and the file would never end (the
+    // run's whole timeout). Opening it read-write without blocking wakes either side.
+    await (await open(spare, constants.O_RDWR | constants.O_NONBLOCK)).close();
+    await taking.catch(() => {});
+  }
   assert.deepEqual(left, ['in-' + appending + '.transcript', 'in-' + fresh + '.transcript', 'in-' + landed + '.transcript', moving + '.events'].sort());
   assert.deepEqual((await readdir(xfer)).sort(), ['in-' + fresh]);
   // Logged without paths: what kind and how many bytes.

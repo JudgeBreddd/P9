@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes, rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { request } from 'node:http';
@@ -308,10 +308,12 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'look', images: [{ mimeType: 'image/png', data: png }] })).status, 202);
   const { hit, seen } = await until(instance, said(id, 'echo:'));
   assert.equal(hit.data.content.text, `echo:look[image image/png ${bytes}]`);
-  const hash = createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex'), images = path.join(instance.state, 'images');
+  const hash = createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex'), images = path.join(instance.directory, '.local', 'state', 'p9-foundation', 'images');
   assert.deepEqual(seen.find((event) => event.type === 'user').data, { text: 'look', images: [{ hash, type: 'image/png' }] }, 'the event keeps the hash and type, not the image');
-  // CP3 (threat model row 43): kept by hash in the state folder, and served only to the chat whose message names it.
+  // CP3 (threat model row 43): kept by hash in the ownership folder (item 26: not the state folder, which the unit empties
+  // each time the daemon stops), and served only to the chat whose message names it.
   assert.deepEqual(await readdir(images), [hash + '.png']);
+  assert.equal(existsSync(path.join(instance.state, 'images')), false, 'nothing in the state folder');
   const back = await json(call(instance, `/chat/${id}/images/${hash}`));
   assert.deepEqual([back.status, back.body.mimeType, Buffer.from(back.body.data, 'base64').equals(Buffer.from(png, 'base64'))], [200, 'image/png', true]);
   const other = await create(instance);
@@ -336,7 +338,13 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   const refused = await json(call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'look', images: [image] }));
   assert.deepEqual([refused.status, refused.body.error], [400, 'images-unsupported']);
   assert.equal((await call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'words' })).status, 202, 'the conversation still takes text');
-  console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused');
+  // Item 26: a reboot, or any stop (the unit's RuntimeDirectory goes with the daemon), empties the state folder; the photo stays.
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  await rm(instance.state, { recursive: true, force: true });
+  const after = await json(call(await restart(t, instance, 'state-2'), `/chat/${id}/images/${hash}`));
+  assert.deepEqual([after.status, after.body.mimeType], [200, 'image/png'], 'the photo is still there after the state folder went');
+  console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused, kept across a restart with the state folder gone');
 });
 
 test('operation IDs: required, replayed once finished, refused when reused, outcome unknown after a crash', async (t) => {

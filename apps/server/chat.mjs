@@ -200,9 +200,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const stops = new Map(); // conversation -> the Stop in progress
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
-  // CP3 (threat model row 43): a sent photo is kept as <state>/images/<sha256>.<ext>, so the chat can show it again; the
+  // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
   // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. Chats are never deleted, so nothing else removes them.
-  const imageDir = state && path.join(state, 'images');
+  // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
+  const imageDir = (ownership || state) && path.join(ownership || state, 'images');
   const keep = (images) => images.map(({ mimeType, data }) => {
     const bytes = Buffer.from(data, 'base64'), hash = createHash('sha256').update(bytes).digest('hex');
     if (imageDir) {
