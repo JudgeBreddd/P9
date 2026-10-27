@@ -26,6 +26,7 @@ import { agentDirs, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
+import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
 import pkg from '../../package.json' with { type: 'json' };
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
@@ -113,6 +114,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
+  // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
+  const editor = transport === 'unix' && state ? daemonEditor({ socket: path.join(state, 'editor.sock'), unit: 'p9-editor-server-' + instance }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
   setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
   const json = async (c) => {
@@ -379,6 +382,32 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     devRoot = target.root;
     return c.json({ root: devRoot });
   });
+  // Server mode's Dev Focus (threat model row 50): the desktop asks the server's daemon for its editor, which listens on
+  // editor.sock (0600) in the state folder; the tunnel's second forward carries it. Same answer as the desktop's own start:
+  // the token, the release and the data folder; a failure names the cause as Dev Focus's page does, and whether Install can fix it.
+  if (editor) {
+    const empty = async (c) => { const input = await json(c); return input && typeof input === 'object' && !Array.isArray(input) && !Object.keys(input).length; };
+    app.post('/dev/editor', async (c) => {
+      if (!(await empty(c))) return c.json({ error: 'request-refused' }, 400);
+      try { const host = await editor.start(); return c.json({ token: host.token, commit: host.commit, data: host.data }); }
+      catch (error) {
+        return c.json({ error: editorProblem(error), message: String(error.message).slice(0, 300), download: Boolean(editorDownload()),
+          place: process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server') }, 503);
+      }
+    });
+    // Install (threat model row 52): the same pinned, checked download as the desktop's button, run here on the server.
+    app.post('/dev/editor/install', async (c) => {
+      if (!(await empty(c))) return c.json({ error: 'request-refused' }, 400);
+      try { await editor.install(); return c.json({ ok: true }); }
+      catch (error) { return c.json({ error: String(error.message).slice(0, 200) }, error.message === 'editor-running' ? 409 : 502); }
+    });
+    // The dev view's writes into the editor's own data folder (p9dev:host-path): checked where the folder is.
+    app.post('/dev/editor/writable', async (c) => {
+      const input = await json(c);
+      if (!input || typeof input !== 'object' || Object.keys(input).sort().join() !== 'kind,path' || typeof input.path !== 'string' || !['write', 'name'].includes(input.kind)) return c.json({ error: 'request-refused' }, 400);
+      return c.json({ ok: await editor.writable(input.path, input.kind) });
+    });
+  }
   // First-run welcome (threat model row 17): what is missing, as booleans; the credential files are stat'ed, never opened.
   // Desktop only (F2): it names the workspace and settings file, which the phone never shows.
   // The credential files are looked for where the agents keep them: CLAUDE_CONFIG_DIR and CODEX_HOME when set (BL10).
@@ -667,6 +696,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   server.maxConnections = 32;
   Object.assign(server, { chat, mission, terminals, lifecycle, auth });
   if (auth) server.remote = remoteListener();
+  server.editor = editor;
   return server;
 
   function remoteListener() {

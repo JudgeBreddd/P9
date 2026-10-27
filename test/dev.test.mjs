@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { root, daemon } from './helpers.mjs';
+import { editorFor } from './editor-fixture.mjs';
 import { startEditorHost, stopEditorHost, hostWritable, openInCode, EDITOR_DIR, EDITOR_COMMIT } from '../apps/desktop/editor-host.mjs';
 
 const host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
@@ -645,36 +646,8 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
 });
 
 // ---- Chunk 5: D11 (save only on Ctrl+S / Save, white dot while unsaved) and D12 (spell check) ----
-// The dev space has no editor server and no systemd user bus. There, the pinned release is unpacked from the private fixtures folder
-// (untracked: the sprint put it there) and started through a stand-in systemd-run that only runs the command; on a machine
-// with the editor server and a user bus (the server itself, CI) the real ones are used.
-const fixtures = path.join(root, '_private', 'fixtures');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-let preparedEditor;
-const editorFor = () => preparedEditor ??= (async () => {
-  if (process.platform !== 'linux') return null;
-  const bus = spawnSync('systemd-run', ['--user', '--scope', '--quiet', 'true'], { timeout: 10000 }).status === 0;
-  if (existsSync(host) && bus) return { host, path: process.env.PATH };
-  if (!existsSync(path.join(fixtures, 'reh.tar.gz'))) return null;
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-reh-')), unpacked = path.join(dir, 'codium-server'), shims = path.join(dir, 'shims');
-  await mkdir(unpacked); await mkdir(shims);
-  assert.equal(spawnSync('tar', ['-xzf', path.join(fixtures, 'reh.tar.gz'), '-C', unpacked]).status, 0);
-  // Stand-ins for the user manager: systemd-run records which process is the scope's, and systemctl stop/kill ends it and its children.
-  const pids = path.join(dir, 'pids'); await mkdir(pids);
-  await writeFile(path.join(shims, 'systemd-run'), [`#!${process.execPath}`,
-    "const fs = require('fs'), { spawn } = require('child_process');",
-    "const args = process.argv.slice(2), unit = (args.find(a => a.startsWith('--unit=')) ?? '').slice(7), at = args.findIndex(a => !a.startsWith('--'));",
-    `fs.writeFileSync(${JSON.stringify(pids)} + '/' + unit, String(process.pid));`,
-    "spawn(args[at], args.slice(at + 1), { stdio: 'inherit' }).on('exit', code => process.exit(code ?? 1));", ''].join('\n'), { mode: 0o755 });
-  await writeFile(path.join(shims, 'systemctl'), [`#!${process.execPath}`,
-    "const fs = require('fs'), args = process.argv.slice(2), unit = args.find(a => a.endsWith('.scope'));",
-    "if (!unit || !args.some(a => a === 'stop' || a === 'kill')) process.exit(0);",
-    `let root; try { root = Number(fs.readFileSync(${JSON.stringify(pids)} + '/' + unit.slice(0, -6), 'utf8')); } catch { process.exit(0); }`,
-    "const parent = {}; for (const d of fs.readdirSync('/proc').filter(n => /^[0-9]+$/.test(n))) { try { parent[d] = fs.readFileSync('/proc/' + d + '/stat', 'utf8').replace(/^.*[)] /, '').split(' ')[1]; } catch {} }",
-    "const kill = pid => { for (const [child, p] of Object.entries(parent)) if (Number(p) === pid) kill(Number(child)); try { process.kill(pid, 'SIGKILL'); } catch {} };",
-    'kill(root);', ''].join('\n'), { mode: 0o755 });
-  return { host: unpacked, path: shims + ':' + process.env.PATH };
-})();
+const fixtures = path.join(root, '_private', 'fixtures');
 // The dev space prints a failure's detail only when the whole run ends; print it where it happens too.
 // The editor asks the extension gallery on start; with no network that rejects (not what these tests check).
 const online = errors => errors.filter(error => !/EAI_AGAIN|ENOTFOUND|ECONNREFUSED/.test(error));

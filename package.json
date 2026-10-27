@@ -194,6 +194,10 @@
         {
           "from": ".build/node-linux/bin/node",
           "to": "daemon/node"
+        },
+        {
+          "from": ".build/editor/reh.tar.gz",
+          "to": "editor/reh.tar.gz"
         }
       ]
     },
