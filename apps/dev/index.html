@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <title>P9 Dev Focus</title>
-<style>html,body{height:100%;margin:0;overflow:hidden;background:#05070e;color:#dce4f2;font:14px system-ui}#workbench{height:100%;width:100%}#status{position:fixed;inset:auto 0 0 0;padding:8px 12px}#status:empty{display:none}</style>
+<style>html,body{height:100%;margin:0;overflow:hidden;background:#05070e;color:#dce4f2;font:14px system-ui}#workbench{height:100%;width:100%}#status{position:fixed;inset:auto 0 0 0;padding:8px 12px}#status:empty{display:none}
+/* The unsaved dot on a tab is white on a dark theme (the theme's tab colour would make it teal on the active tab), as in VS Code. */
+.monaco-workbench.vs-dark .tab.dirty .tab-actions .action-label{color:#fff!important}</style>
 </head>
 <body>
 <div id="workbench" inert></div>
