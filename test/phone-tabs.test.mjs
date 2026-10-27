@@ -158,7 +158,7 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   });
   assert.ok(edges.title <= edges.dot, `the terminal title ends before the bar's buttons: ${edges.title} > ${edges.dot}`);
   assert.ok(edges.paste <= edges.width, `Paste is on the screen: ${edges.paste} > ${edges.width}`);
-  // c7's leftovers (spec §6), finished by c1. Each is noted and the test goes on, so one A/B run shows all six.
+  // c7's leftovers (spec §6), finished by c1. Each is noted and the test goes on, so one A/B run shows all five.
   const misses = [], soft = async (name, check) => { try { await check(); } catch (error) { misses.push(name + ': ' + String(error.message).split('\n')[0]); } };
   await soft('Terminal title not cut', async () => {
     const title = await page.evaluate(() => { const span = document.querySelector('#termTitle'); return { text: span.textContent, cut: span.scrollWidth > span.clientWidth }; });
@@ -169,16 +169,7 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.waitForTimeout(400);
   await shot(page, 'tab-terminal-keyboard');
   await page.setViewportSize({ width: 390, height: 844 });
-  // Paste reads the phone's clipboard (stubbed here) on the tap and types it; a refused read says so.
-  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => window.clip === 'refuse' ? Promise.reject(new DOMException('no', 'NotAllowedError')) : window.clip } }));
-  await soft('Paste types the clipboard', async () => {
-    await page.evaluate(() => { window.clip = 'echo P9-PASTE-7""3\r'; });
-    await page.click('#keys [data-key="paste"]');
-    await page.waitForFunction(() => document.querySelector('#screen .xterm-rows')?.textContent.includes('P9-PASTE-73'), null, { timeout: 5000 });
-    await page.evaluate(() => { window.clip = 'refuse'; });
-    await page.click('#keys [data-key="paste"]');
-    await page.waitForFunction(() => document.querySelector('#termState')?.textContent === 'Paste was not allowed', null, { timeout: 5000 });
-  });
+  // Paste with a stubbed clipboard is phone-parity.test.mjs's T2 (typed, refused, too late).
 
   await page.click('[data-nav="mission"]');
   await page.waitForSelector('#hub [data-open="work"]', { timeout: 10000 });
