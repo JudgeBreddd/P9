@@ -387,6 +387,12 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   // The pickers went back home when the sheet closed (a later sheet's HTML would have wiped them). The dialog's close
   // event comes a task after open turns false, so this waits for it.
   await page.waitForSelector('#modeHome #more', { state: 'attached', timeout: 5000 });
+  // The model is the top bar's Model sheet (c1's), the same path Phase 11 takes past its offline stop.
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
+  await send(page, 'model'); await replied('model:default');
+  await page.click('#modelBtn'); await page.click('#sheet[open] [data-model="opus"]');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 });
+  await send(page, 'model'); await replied('model:opus');
   // No sideways scroll on a 390 px phone.
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
 });
