@@ -189,9 +189,10 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
 // RS1: a restart is done when /health answers with a boot other than the one before it (the old daemon's, or none when it
 // was not answering); a service that started but never answers is reported, not called restarted. Up to 90 s, the most a
 // first start has taken on CI (Wait-Daemon). Resolves { restarted: true } or { error }.
-export async function answered(state, before, ms = 90_000) {
+// probe: how /health is asked; Server mode passes its own, which re-reads the restarted server's credentials (remote.mjs).
+export async function answered(state, before, ms = 90_000, probe = health) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 500))) {
-    const boot = await health(state).then((h) => h.boot, () => null);
+    const boot = await probe(state).then((h) => h.boot, () => null);
     if (boot && (boot.pid !== before?.pid || boot.started !== before?.started)) return { restarted: true };
   }
   return { error: 'daemon-not-answering' };
@@ -223,11 +224,13 @@ export async function restartWindowsTask(state, ms) {
 
 // The same on Linux: the p9-foundation user unit, restarted by systemd. No unit means there is nothing to restart
 // (install-service.mjs makes one). Resolves { restarted: true } or { error }.
+// The unit is named after its RuntimeDirectory, the state folder: p9-foundation, or the dev build's p9-dev beside it.
+export const unitFor = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation') + '.service';
 const systemctl = (...args) => new Promise((resolve) => execFile('systemctl', ['--user', ...args], { timeout: 60_000 }, (error) => resolve(!error)));
 export async function restartLinuxService(state, ms) {
-  if (!await systemctl('cat', 'p9-foundation.service')) return { error: 'service-missing' };
+  if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing' };
   const before = await health(state).then((h) => h.boot, () => null);
-  if (!await systemctl('restart', 'p9-foundation.service')) return { error: 'restart-failed' };
+  if (!await systemctl('restart', unitFor(state))) return { error: 'restart-failed' };
   return answered(state, before, ms);
 }
 
@@ -235,10 +238,10 @@ export async function restartLinuxService(state, ms) {
 // loop), so its drop-ins (phone flags, the GitHub token) stay. No unit: the installer's command, since a daemon this page talks
 // to without a unit was started by hand and holds the lock a new unit would need.
 export async function repairLinuxService(state, ms) {
-  if (!await systemctl('cat', 'p9-foundation.service')) return { error: 'service-missing', detail: 'run node scripts/install-service.mjs <workspace folder>' };
+  if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing', detail: 'run node scripts/install-service.mjs <workspace folder>' };
   const before = await health(state).then((h) => h.boot, () => null);
-  for (const args of [['daemon-reload'], ['reset-failed', 'p9-foundation.service'], ['enable', 'p9-foundation.service']]) await systemctl(...args);
-  if (!await systemctl('restart', 'p9-foundation.service')) return { error: 'repair-failed' };
+  for (const args of [['daemon-reload'], ['reset-failed', unitFor(state)], ['enable', unitFor(state)]]) await systemctl(...args);
+  if (!await systemctl('restart', unitFor(state))) return { error: 'repair-failed' };
   return answered(state, before, ms);
 }
 

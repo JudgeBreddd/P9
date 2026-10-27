@@ -6,7 +6,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -157,7 +158,7 @@ export async function createDesktop({ state, open } = {}) {
   // old folder and the change rolled back (Fable review finding 3).
   let reason = 'not-answering', woke = 0, repaired = false, changing = false, rebuilding = false;
   const wake = async () => {
-    if (changing || Date.now() - woke < 30000) return;
+    if (changing || serverHost || Date.now() - woke < 30000) return;
     woke = Date.now();
     const task = await windowsTask();
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
@@ -194,6 +195,35 @@ export async function createDesktop({ state, open } = {}) {
   const name = await accountName();
   let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
   let settingsSaving = Promise.resolve();
+  // Server mode (remote.mjs, threat model row 50): while a host is chosen, state is that server's forward, else this machine's
+  // daemon. Both daemons keep running; switching reloads the window onto the other. The choice is kept in p9-server.json.
+  const localState = state, serverFile = path.join(app.getPath('userData'), 'p9-server.json');
+  const sshCommand = (!app.isPackaged && process.env.P9_SSH) || 'ssh'; // P9_SSH: the tests' stand-in, source checkouts only
+  // last: the host used before, so Local can show a one-click way back.
+  const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
+  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
+  // One attempt chain per choice (serverTry): retried 1 s, then doubling to 30 s; a drop starts it again.
+  const connect = async (attempt, wait = 1000) => {
+    if (attempt !== serverTry || !serverHost) return;
+    try {
+      const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; connect(attempt); } } });
+      if (attempt !== serverTry) return void s.close();
+      server = s; serverError = null;
+    } catch (error) {
+      serverError = error.message;
+      if (attempt === serverTry) setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
+    }
+  };
+  const useServer = async host => {
+    const attempt = ++serverTry, old = server;
+    server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
+    state = host ? serverFolder(host) : localState;
+    await old?.close().catch(() => {});
+    await writeFile(serverFile, JSON.stringify({ host, last: serverLast }), { mode: 0o600 });
+    connect(attempt);
+  };
+  if (serverHost) { state = serverFolder(serverHost); connect(++serverTry); }
+  app.on('will-quit', () => { serverTry++; server?.close().catch(() => {}); });
   const petsFolder = path.join(app.getPath('userData'), 'pets');
   // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
   if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
@@ -340,7 +370,8 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   app.on('before-quit', (event) => {
-    if (persistent || stoppingBeforeQuit || !state) return;
+    // Server mode: quitting this window never stops the server's chats (the owner, 2026-10-26); the phone may be in one.
+    if (persistent || stoppingBeforeQuit || !state || serverHost) return;
     event.preventDefault();
     stoppingBeforeQuit = true;
     daemonRequest(state, 'POST', '/stop-all', {}, randomBytes(16).toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5'))
@@ -349,6 +380,11 @@ export async function createDesktop({ state, open } = {}) {
   ipcMain.handle('p9:get-status', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
     // savedWorkspace: the saved folder was not there at the daemon's start, so it runs on the default (apps/server/main.mjs).
+    // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
+    if (serverHost) {
+      const h = await server?.check().catch(() => null);
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting' };
+    }
     try {
       const h = state && await health(state);
       if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
@@ -550,6 +586,16 @@ export async function createDesktop({ state, open } = {}) {
   });
   let dockSocket = null, dockSerial = 0;
   const endDock = () => { dockSerial++; dockSocket?.terminate(); dockSocket = null; };
+  // Settings > Server: no argument reads the mode and the ~/.ssh/config hosts; null is Local; a host name connects there, and
+  // the window reloads onto that daemon. Neither daemon is stopped.
+  ipcMain.handle('p9:server', async (event, ...args) => {
+    if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts() };
+    endDock();
+    await useServer(args[0]);
+    setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
+    return { ok: true };
+  });
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
     endDock();
@@ -622,6 +668,7 @@ export async function createDesktop({ state, open } = {}) {
     let config;
     try {
       if (!state) throw new Error('daemon-unavailable');
+      if (serverHost) throw new Error('server-mode');
       const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state)]);
       const host = await startHost();
       const origin = 'http://127.0.0.1:' + host.port;
@@ -645,7 +692,7 @@ export async function createDesktop({ state, open } = {}) {
       devServing = devFolder;
       config = { port: host.port, token: host.token, commit: host.commit, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
     } catch (error) {
-      sites.dev = { files: new Map([['/index.html', Buffer.from('<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px">Dev Focus is unavailable: the editor host or daemon did not start.</body>')]]),
+      sites.dev = { files: new Map([['/index.html', Buffer.from('<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px">' + (error.message === 'server-mode' ? 'Dev Focus works on this computer\'s files only for now. Switch to Local in Settings to use it.' : 'Dev Focus is unavailable: the editor host or daemon did not start.') + '</body>')]]),
         csp: "default-src 'none'; style-src 'unsafe-inline'" };
       config = { error: error.message };
     }
@@ -669,7 +716,7 @@ export async function createDesktop({ state, open } = {}) {
   // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it.
   ipcMain.handle('p9dev:open-folder', async (event, ...args) => {
     if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!state) return { error: 'daemon-unavailable' };
+    if (!state || serverHost) return { error: 'daemon-unavailable' };
     const workspace = await realpath((await health(state)).workspace);
     const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
     if (pick.canceled || !pick.filePaths[0]) return { ok: false };
@@ -806,6 +853,8 @@ export async function createDesktop({ state, open } = {}) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length > 1 || (args.length && !Object.hasOwn(PICKS, args[0]))) throw new Error('ipc-sender-refused');
     if (!state) return null;
+    // ponytail: no picker in Server mode (this machine's dialog cannot browse the server); acts as Cancel. A server folder list is the sprint's.
+    if (serverHost) return undefined;
     const root = await realpath((await health(state)).workspace);
     const [title, buttonLabel, kind] = args.length ? PICKS[args[0]] : ['Start the chat in', 'Start here', 'openDirectory'];
     const pick = await dialog.showOpenDialog(window, { title, buttonLabel, properties: [kind], defaultPath: root });
@@ -821,10 +870,13 @@ export async function createDesktop({ state, open } = {}) {
   // script stops the old daemon itself. P9's private folder there is %LOCALAPPDATA%\P9, the state folder's parent.
   ipcMain.handle('p9:workspace-change', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'server-mode-local-only' }; // this machine's service; the server's folder is set where it is installed
     const old = state && (await health(state).catch(() => null))?.workspace;
     if (!old) return { error: 'daemon-unavailable' };
     const win = process.platform === 'win32';
     if (!win && process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
+    // The steps below rewrite the p9-foundation unit; a window on the dev daemon (p9-dev) must not touch the daily one.
+    if (!win && unitFor(state) !== 'p9-foundation.service') return { error: 'workspace-change-unsupported', workspace: old };
     const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
       properties: ['openDirectory', 'createDirectory'], defaultPath: old });
     if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
@@ -888,18 +940,24 @@ export async function createDesktop({ state, open } = {}) {
   const service = repair => async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
     if (!state) return { error: 'daemon-unavailable' };
+    if (serverHost && repair) return { error: 'server-mode-local-only' };
     const win = process.platform === 'win32';
-    if (!win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
+    if (!serverHost && !win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
     if (repair && win && !await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing' };
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: repair ? 'Repair P9?' : 'Restart P9?',
-      message: repair ? 'Repair P9\'s background service?' : 'Restart P9\'s background service?',
-      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + 'Running chats, scripts and terminals stop.',
+      message: repair ? 'Repair P9\'s background service?' : serverHost ? 'Restart P9 on ' + serverHost + '?' : 'Restart P9\'s background service?',
+      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + (serverHost ? 'Running chats, scripts and terminals on the server stop, the ones open on your phone too.' : 'Running chats, scripts and terminals stop.'),
       buttons: ['Cancel', repair ? 'Repair' : 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
     if (response !== 1) return { cancelled: true };
     // A daemon that does not answer at all is restarted anyway (finding 6: otherwise a hung service had no way back); one that
     // answers but cannot stop something is left running, as before.
     const stopped = await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => 'no-answer');
     if (stopped !== 'no-answer' && stopped?.status !== 200) return { error: 'stop-all-failed' };
+    if (serverHost) {
+      const remote = server, before = await remote?.check().then(h => h.boot, () => null);
+      if (!remote || !await restartServer(serverHost, sshCommand)) return { error: 'restart-failed' };
+      return answered(state, before, undefined, () => remote.check());
+    }
     if (!win) return repair ? repairLinuxService(state) : restartLinuxService(state);
     changing = true;
     try {

@@ -50,6 +50,11 @@ test('Phase 13: a unit that starts but whose daemon never answers is removed too
   const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace], { env, encoding: 'utf8' });
   // The unit carries the installer's PATH, so tmux and agent CLIs found here are found by the service (R1-10).
   assert.ok(readFileSync(path.join(home, 'unit.copy'), 'utf8').includes('\nEnvironment="PATH=' + bin + ':'));
+  // The daemon runs in p9.slice, capped so P9 can only take itself down (default share of RAM when unset).
+  assert.ok(readFileSync(path.join(home, 'unit.copy'), 'utf8').includes('\nSlice=p9.slice\n'));
+  assert.match(readFileSync(path.join(home, '.config', 'systemd', 'user', 'p9.slice'), 'utf8'), /\nMemoryHigh=25%\nMemoryMax=33%\n/);
+  const bad = spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace], { env: { ...env, P9_MEMORY_MAX: '10G\nExecStart=/bin/sh' }, encoding: 'utf8' });
+  assert.match(bad.stderr, /invalid-P9_MEMORY_MAX/);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /daemon-not-answering/);
   assert.doesNotMatch(result.stdout, /P9_SERVICE_INSTALLED/);
@@ -181,9 +186,9 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
     + 'printf \'#!/bin/sh\\n[ "$1" = --version ] && { echo v26.10.0; exit 0; }\\necho "p9node $*" >> ' + log + '\\n\' > "$dir/node-v26.10.0-linux-x64/bin/node"\n'
     + 'chmod +x "$dir/node-v26.10.0-linux-x64/bin/node"');
   const share = path.join(home, '.local', 'share', 'p9'), ownNode = path.join(share, 'node-v26.10.0-linux-x64');
-  const run = (env = {}) => {
+  const run = (env = {}, args = ['ws']) => {
     rmSync(log, { force: true });
-    const result = spawnSync('/bin/bash', [path.join(root, 'scripts', 'install.sh'), 'ws'],
+    const result = spawnSync('/bin/bash', [path.join(root, 'scripts', 'install.sh'), ...args],
       { cwd: home, encoding: 'utf8', env: { HOME: home, XDG_RUNTIME_DIR: home, PATH: bin, ...env } });
     return { ...result, log: existsSync(log) ? readFileSync(log, 'utf8') : '' };
   };
@@ -194,6 +199,13 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
 
   assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
+
+  // --headless (a server with no screen): the install skips postinstall, the step that downloads Electron.
+  const headless = run({}, ['--headless', 'ws']);
+  assert.equal(headless.status, 0, headless.stdout + headless.stderr);
+  assert.equal(headless.log, 'pnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
+  assert.match(headless.stdout, /P9 runs on this server/);
+  assert.doesNotMatch(headless.stdout, /pnpm desktop/);
 
   // Wrong Node: a download that fails its checksum installs nothing and leaves nothing behind.
   const badSum = run({ FAKE_NODE: 'v24.19.0' });

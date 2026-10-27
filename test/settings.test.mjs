@@ -370,6 +370,13 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     }
     await page.click('#mdlX'); await page.locator('#mdl').waitFor({ state: 'hidden' });
   }
+  // History names a chat the way its tab does (the agent's title), not by its first message (P9 0.1.6).
+  await call(instance, `/chat/${md}/prompt`, 'POST', { text: 'title Named by the agent' });
+  await page.locator(`#tabs .tab[data-id="${md}"]`, { hasText: 'Named by the agent' }).waitFor({ timeout: 15000 });
+  // Read before the restart: a restarted chat is a stub with no messages, which hides the difference.
+  await page.click('#histBtn');
+  assert.match(await page.locator('#histPop .item', { has: page.locator(`[data-open="${md}"]`) }).innerText(), /^Named by the agent/, 'History row = tab title, not the first message');
+  await page.keyboard.press('Escape');
   // Its x stops it (Builder, 2026-10-18: "same as vs code"), so its robot head goes too.
   await page.locator(`#tabs .tab[data-id="${md}"] .close`).click();
   await page.locator(`#tabs .tab[data-id="${md}"]`).waitFor({ state: 'detached' });

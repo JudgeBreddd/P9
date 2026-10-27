@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Installs P9 for this user from this clone: checks the tools, installs pnpm if missing, builds, and starts the
 # daemon as a user service (the README's Linux steps in one command).
-# Usage: bash scripts/install.sh [workspace folder, default ~/work]
+# Usage: bash scripts/install.sh [--headless] [workspace folder, default ~/work]
+# --headless: a server with no screen. The daemon only, no Electron download; desktops and phones connect to it.
 set -euo pipefail
+headless=
+if [ "${1:-}" = --headless ]; then headless=1; shift; fi
 workspace=$(realpath -m -- "${1:-$HOME/work}")
 cd "$(dirname -- "$0")/.."
 
@@ -49,13 +52,18 @@ if ! command -v pnpm >/dev/null; then
   npm install -g pnpm@10.34.6 || npm install -g pnpm@10.34.6 --prefix "$HOME/.local"
   command -v pnpm >/dev/null || { export PATH="$HOME/.local/bin:$PATH"; path_added+=("$HOME/.local/bin"); }
 fi
-pnpm install --frozen-lockfile
+# --ignore-scripts skips package.json's postinstall, the one step that downloads Electron.
+if [ -n "$headless" ]; then pnpm install --frozen-lockfile --ignore-scripts; else pnpm install --frozen-lockfile; fi
 pnpm build
 mkdir -p -- "$workspace"
 node scripts/install-service.mjs "$workspace"
 if [ ${#path_added[@]} -gt 0 ]; then
   new_path=$(IFS=:; echo "${path_added[*]}")
   echo "Add this line to ~/.bashrc so node and pnpm are found next time:  export PATH=\"$new_path:\$PATH\""
+fi
+if [ -n "$headless" ]; then
+  echo "P9 runs on this server. Connect from a desktop's Settings > Server, or pair a phone with: node scripts/teh.mjs devices"
+elif [ ${#path_added[@]} -gt 0 ]; then
   echo "Open P9:  export PATH=\"$new_path:\$PATH\" && cd $PWD && pnpm desktop --state \"\$XDG_RUNTIME_DIR/p9-foundation\""
 else
   echo "Open P9:  cd $PWD && pnpm desktop --state \"\$XDG_RUNTIME_DIR/p9-foundation\""

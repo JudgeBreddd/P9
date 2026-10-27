@@ -74,7 +74,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
     if (!hasUserBus() || !gone(await serverState())) return;
     await systemctl(['reset-failed', unit]).catch(() => {});
     const environment = Object.entries(childEnv()).map(([key, value]) => key + '=' + value);
-    await run('systemd-run', ['--user', '--quiet', '--collect', '--unit', unit, '--property=KillMode=control-group', '--',
+    await run('systemd-run', ['--user', '--quiet', '--collect', '--slice=p9.slice', '--unit', unit, '--property=KillMode=control-group', '--',
       '/usr/bin/env', '-i', ...environment, 'tmux', '-L', socket, '-D'], { env: childEnv(), timeout: 3000 });
     for (let i = 0; i < 60; i++) {
       try { await tmux(['list-sessions']); return; } catch (error) { if (/no sessions/i.test(String(error.stderr))) return; }

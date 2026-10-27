@@ -156,7 +156,7 @@ test('A browser --app tile or an interpreter tile takes the site\'s icon or its 
   const data = await mkdtemp(path.join(os.tmpdir(), 'xdg-'));
   await mkdir(path.join(data, 'applications'), { recursive: true });
   await mkdir(path.join(data, 'icons/hicolor/48x48/apps'), { recursive: true });
-  for (const [name, exec] of [['chrome', '/usr/bin/google-chrome-stable %U'], ['bash', 'bash'], ['python', 'python3.12']]) {
+  for (const [name, exec] of [['chrome', '/usr/bin/google-chrome-stable %U'], ['bash', 'bash'], ['python', 'python3.12'], ['konsole', 'konsole']]) {
     await writeFile(path.join(data, `applications/${name}.desktop`), `[Desktop Entry]\nName=${name}\nExec=${exec}\nIcon=${name}\n`);
     await writeFile(path.join(data, `icons/hicolor/48x48/apps/${name}.png`), png(name));
   }
@@ -170,12 +170,14 @@ test('A browser --app tile or an interpreter tile takes the site\'s icon or its 
     { id: 'front', cmd: ['env', 'BROWSER=true', 'bash', 'run.sh'], url: 'http://front.example/' },
     { id: 'script', cmd: ['/usr/bin/python3.12', 'status.py'] },
     { id: 'chrome', cmd: ['google-chrome-stable'] },
+    { id: 'dev', cmd: ['konsole', '--hold', '-e', 'python', 'run.py'], url: 'http://dev.example/' },
+    { id: 'shell', cmd: ['konsole'] },
   ];
   const art = await icons.collect({ pages: [], apps, sections: [] }, { platform: 'linux', env: { XDG_DATA_HOME: data, XDG_DATA_DIRS: data } });
   assert.deepEqual(Object.fromEntries(Object.entries(art.apps).map(([id, entry]) => [id, entry.auto])), {
-    chat: uri('image/png', png('chat.example')), front: uri('image/png', png('front.example')), chrome: uri('image/png', png('chrome')) });
-  assert.deepEqual(asked.sort(), ['http://front.example/', 'https://chat.example/']);
+    chat: uri('image/png', png('chat.example')), front: uri('image/png', png('front.example')), chrome: uri('image/png', png('chrome')), dev: uri('image/png', png('dev.example')), shell: uri('image/png', png('konsole')) });
+  assert.deepEqual(asked.sort(), ['http://dev.example/', 'http://front.example/', 'https://chat.example/']);
   const win = await icons.collect({ pages: [], apps, sections: [] }, { platform: 'win32' });
-  assert.deepEqual(win.programs, [{ id: 'chrome', program: 'google-chrome-stable' }], 'Windows asks the OS only about real programs');
+  assert.deepEqual(win.programs, [{ id: 'chrome', program: 'google-chrome-stable' }, { id: 'shell', program: 'konsole' }], 'Windows asks the OS only about real programs');
   console.log('PASS tile icons: --app=https uses the site icon, --app=file and bash/env/python give the letter tile or the named link, Chrome alone keeps its icon');
 });

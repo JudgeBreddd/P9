@@ -19,7 +19,7 @@ import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windo
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
 const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
-  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' } } });
+  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' } } });
 if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbsolute(values[key]))) {
   throw new Error('absolute-workspace-state-and-recovery-required');
 }
@@ -58,7 +58,10 @@ for (const directory of [values.state, values.recovery]) {
 const state = await realpath(values.state), recovery = await realpath(values.recovery);
 if (inside(state, recovery) || inside(recovery, state)) throw new Error('state-and-recovery-must-be-separate');
 const socketPath = internalEndpoint(state);
-const ownershipDirectory = windows ? windowsStateRoot() : path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+// ponytail: --ownership gives a second Linux daemon (the dev build's p9-dev unit) its own ledger, lock and tmux socket;
+// only a unit's ExecStart passes it. Without it, the one folder every install uses.
+if (values.ownership !== undefined && !path.isAbsolute(values.ownership)) throw new Error('absolute-ownership-required');
+const ownershipDirectory = windows ? windowsStateRoot() : values.ownership ?? path.join(os.homedir(), '.local', 'state', 'p9-foundation');
 if (inside(workspace, await canonicalDestination(ownershipDirectory))) throw new Error('private-directory-inside-workspace');
 await mkdir(ownershipDirectory, { recursive: true, mode: 0o700 });
 const ownershipStat = await lstat(ownershipDirectory);

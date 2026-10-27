@@ -1,0 +1,141 @@
+// Server mode (threat model row 50, apps/desktop/remote.mjs): the window reaches a P9 daemon on another machine through ssh.
+// A stand-in ssh (test/fake-ssh.mjs) runs remote.mjs's real remote command against a real daemon's runtime folder and
+// forwards a Unix socket the way OpenSSH's -L does, so everything but the network hop is the real thing.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import os from 'node:os';
+import path from 'node:path';
+import { _electron } from '@playwright/test';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
+import { execFileSync } from 'node:child_process';
+import { connectServer, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
+
+const skip = process.platform === 'win32' ? 'Unix sockets and sh; Windows OpenSSH is checked on a Windows desktop' : false;
+const mode = async file => (await stat(file)).mode & 0o777;
+const gone = async (folder, ms = 3000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 50))) if (!await stat(folder).catch(() => null)) return true;
+  return false;
+};
+
+// server: this side's view of the server's $XDG_RUNTIME_DIR, its p9-foundation a link to the daemon's state folder.
+// local: this machine's runtime folder. ssh: a wrapper that runs the stand-in; log: one line per ssh call.
+async function stage(instance) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-remote-'));
+  const server = path.join(directory, 'server'), local = path.join(directory, 'local'), log = path.join(directory, 'ssh.log');
+  await mkdir(server); await mkdir(local, { mode: 0o700 });
+  if (instance) await symlink(instance.state, path.join(server, 'p9-foundation'));
+  const ssh = path.join(directory, 'ssh'), q = s => "'" + s + "'";
+  await writeFile(ssh, '#!/bin/sh\nFAKE_RUNTIME=' + q(server) + ' FAKE_SSH_LOG=' + q(log) + ' exec ' + q(process.execPath) + ' ' + q(path.join(root, 'test/fake-ssh.mjs')) + ' "$@"\n');
+  await chmod(ssh, 0o755);
+  const calls = () => readFile(log, 'utf8').then(text => text.trim().split('\n').map(line => JSON.parse(line)), () => []);
+  return { directory, server, local, log, ssh, calls };
+}
+
+test('Server mode: the forward, its files and the ssh it runs', { skip }, async (t) => {
+  const instance = await daemon(t), s = await stage(instance);
+  let dropped = false;
+  const server = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local, onDrop: () => { dropped = true; } });
+  t.after(() => server.close());
+  assert.equal(server.state, path.join(s.local, 'p9-server', 'test-host'));
+  const saved = JSON.parse(await readFile(path.join(server.state, 'desktop.json'), 'utf8'));
+  assert.deepEqual(saved, { cookie: instance.credentials.cookie, csrf: instance.credentials.csrf, socketPath: path.join(server.state, 'daemon.sock') });
+  assert.equal((await server.check()).status, 'ok');
+  // Through the forward the server's own desktop check applies: its cookie gets in, another does not.
+  assert.equal((await http({ socketPath: saved.socketPath, headers: authenticated(saved) })).status, 200);
+  assert.equal((await http({ socketPath: saved.socketPath, headers: authenticated({ ...saved, cookie: 'x'.repeat(saved.cookie.length) }) })).status, 401);
+  // Owner-only: the folders 0700, the credentials and the forwarded socket 0600.
+  assert.deepEqual([await mode(path.dirname(server.state)), await mode(server.state), await mode(path.join(server.state, 'desktop.json')), await mode(saved.socketPath)],
+    [0o700, 0o700, 0o600, 0o600]);
+  // Fixed argv, BatchMode on every call; the tunnel forwards exactly the server daemon's socket.
+  const calls = await s.calls();
+  assert.ok(calls.length >= 2 && calls.every(c => c.argv.includes('BatchMode=yes') && c.argv.includes('test-host')), JSON.stringify(calls));
+  const tunnel = calls.find(c => c.argv.includes('-N'));
+  assert.equal(tunnel.argv[tunnel.argv.indexOf('-L') + 1], saved.socketPath + ':' + path.join(s.server, 'p9-foundation', 'daemon.sock'));
+  assert.ok(tunnel.argv.includes('StreamLocalBindMask=0177') && tunnel.argv.includes('ExitOnForwardFailure=yes'));
+  // close() removes the folder and is not a drop.
+  await server.close();
+  assert.ok(await gone(server.state));
+  assert.equal(dropped, false);
+});
+
+test('Server mode: host names ssh would read as options are refused before ssh runs', { skip }, async () => {
+  const s = await stage();
+  for (const host of ['-oProxyCommand=touch pwned', 'a b', 'a;b', '$(id)', '', 'a\nb', 'x'.repeat(254)]) {
+    await assert.rejects(connectServer({ host, ssh: s.ssh, runtime: s.local }), /server-host-refused/, JSON.stringify(host));
+    assert.equal(await restartServer(host, s.ssh), false);
+  }
+  assert.deepEqual(await s.calls(), []);
+  // A server that answers but runs no P9, and one ssh cannot reach, say so apart.
+  await assert.rejects(connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local }), /server-no-p9/);
+  await assert.rejects(connectServer({ host: 'test-host', ssh: path.join(s.directory, 'no-ssh'), runtime: s.local }), /server-unreachable/);
+});
+
+// A non-tty ssh session can come without $XDG_RUNTIME_DIR (a home server, 2026-10-26); the read falls back to systemd's /run/user/<uid>.
+test('Server mode: the server read works without $XDG_RUNTIME_DIR', { skip }, () => {
+  const env = { ...process.env }; delete env.XDG_RUNTIME_DIR;
+  assert.equal(execFileSync('sh', ['-c', READ], { env, encoding: 'utf8' }).split('\n')[0], '/run/user/' + process.getuid());
+});
+
+test('Server mode: a lost tunnel is a drop, and a restarted server daemon is found again', { skip }, async (t) => {
+  const instance = await daemon(t), s = await stage(instance);
+  let drop;
+  const dropped = new Promise(resolve => { drop = resolve; });
+  const server = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local, onDrop: drop });
+  t.after(() => server.close());
+  // The server daemon restarts (new boot, new credentials) under the same runtime path; the forward stays up.
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  await rm(path.join(s.server, 'p9-foundation'));
+  await symlink(second.state, path.join(s.server, 'p9-foundation'));
+  assert.notEqual(second.credentials.cookie, instance.credentials.cookie);
+  assert.equal((await server.check()).status, 'ok');
+  assert.equal(JSON.parse(await readFile(path.join(server.state, 'desktop.json'), 'utf8')).cookie, second.credentials.cookie);
+  // The ssh process ends (lid closed, network gone): onDrop runs and the folder goes.
+  process.kill((await s.calls()).find(c => c.argv.includes('-N')).pid, 'SIGTERM');
+  await Promise.race([dropped, new Promise((_, reject) => setTimeout(() => reject(new Error('no onDrop')), 5000))]);
+  assert.ok(await gone(server.state));
+});
+
+test('Server mode: ~/.ssh/config hosts for the Settings list', { skip }, async () => {
+  const s = await stage(), file = path.join(s.directory, 'config');
+  await writeFile(file, 'Host pfister laptop\n  HostName 192.0.2.1\nHost *.example !bad -evil\nInclude other\n  host Lower\nMatch all\nHost pfister\n');
+  assert.deepEqual(await sshHosts(file), ['pfister', 'laptop', 'Lower']);
+  assert.deepEqual(await sshHosts(path.join(s.directory, 'none')), []);
+});
+
+test('Server mode in the window: badge, status, local-only actions, switch back', { skip }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile'), forward = path.join(s.local, 'p9-server', 'test-host');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const status = async want => {
+    let last;
+    for (const end = Date.now() + 20000; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 250))) {
+      last = await page.evaluate(() => window.p9.getStatus()).catch(error => error.message);
+      if (JSON.stringify(last) === JSON.stringify(want)) return;
+    }
+    assert.deepEqual(last, want);
+  };
+  await status({ status: 'ok', mode: 'server', host: 'test-host' });
+  assert.equal(JSON.parse(await readFile(path.join(forward, 'desktop.json'), 'utf8')).cookie, remote.credentials.cookie);
+  await page.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor();
+  // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
+  assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
+    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused'))]),
+  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true]);
+  // The badge switches to Local: the window reloads onto this computer's daemon and the forward closes.
+  await page.locator('#serverBadge').click();
+  await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
+  await status({ status: 'ok' });
+  assert.ok(await gone(forward));
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host' });
+});

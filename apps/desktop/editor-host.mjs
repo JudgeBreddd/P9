@@ -97,7 +97,7 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
   // so stopping it leaves nothing behind. Windows runs the REH's node.exe directly: its bin\codium-server.cmd only does that,
   // and a .cmd would need a shell.
   const server = win ? [path.join(host, 'node.exe'), path.join(host, 'out', 'server-main.js')]
-    : ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=app.slice', '--unit=' + unit, path.join(host, 'bin', 'codium-server')];
+    : ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=p9.slice', '--unit=' + unit, path.join(host, 'bin', 'codium-server')];
   const argv = [...server,
     '--host', LOOPBACK, '--port', '0', '--connection-token-file', tokenFile, '--user-data-dir', path.join(data, 'data'),
     // Server state (workspaceStorage, which the Python extension writes on activation) defaults to ~/.vscodium-server, outside

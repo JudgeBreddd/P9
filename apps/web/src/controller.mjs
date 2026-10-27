@@ -427,7 +427,7 @@ $('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { new
 // History: with the daemon, every live chat a message was sent in, most recently used first (owner, 2026-10-25; Open
 // gives it a tab again); without it, the sample list.
 const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
+const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(s.title || asks[0]?.text)}</div><div class="xs muted">${names[s.agent]}${s.used || s.created ? ' · ' + esc(when(s.used || s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
 const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
 const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
 $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
@@ -822,7 +822,7 @@ async function restartP9(button, repair) {
   if (button) button.disabled = false;
   if (r.cancelled) return;
   const done = repair ? 'repaired' : 'restarted';
-  toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
+  toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : WIZ_ERR[r.error]?.join(' ') ?? 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
   if (r.restarted) loadMission();
 }
 async function loadMission() {
@@ -1469,7 +1469,7 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
+let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 async function saveSettings(next) {
   try { settings = window.p9?.setSettings ? await window.p9.setSettings(next) : (localStorage.setItem('p9-settings', JSON.stringify(next)), next); }
   catch { toast({ kind: 'settings', txt: 'Settings not saved', level: 'bad' }, true); }
@@ -1592,6 +1592,17 @@ function wireMission() {
     saveMission({ [k]: picked });
   }; });
 }
+// Settings > Server (desktop/remote.mjs): the hosts are the Host lines of ~/.ssh/config, as VS Code Remote-SSH lists them.
+function serverRow() {
+  const { host, last, connected, error, hosts } = serverInfo, pick = host ?? last;
+  const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
+    : hosts.length ? 'This window works on this computer. Pick a server to work on its P9 over ssh.' : 'No Host lines in ~/.ssh/config yet. Add the server there, check that ssh to it works without a password prompt, then reopen Settings.';
+  const options = hosts.map(h => '<option value="' + esc(h) + '"' + (h === pick ? ' selected' : '') + '>' + esc(h) + '</option>').join('');
+  return '<div class="set-row"><span><strong>Server</strong><span class="muted sm">' + esc(note) + '</span></span><span class="spacer"></span>'
+    + (hosts.length ? '<select data-slot="input" id="setServerHost">' + options + '</select><button data-slot="button" data-variant="default" id="setServerGo">Connect</button>' : '')
+    + (host ? '<button data-slot="button" data-variant="outline" id="setServerLocal">Use Local</button>' : '')
+    + info('Server mode: chat, Mission Control and the terminal use the P9 on that server, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running. Dev Focus and folder pickers stay on this computer for now.', 'settings') + '</div>';
+}
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -1605,6 +1616,7 @@ function renderSettings() {
     + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents in every chat can read and answer but cannot edit files or run anything that asks permission.', 'agent-lock') : '')
     + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor (Dev Focus, here and on your phone) cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
     + (missionFiles?.settings ? missionGroup() : '')
+    + (serverInfo ? serverRow() : '')
     + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
@@ -1614,6 +1626,9 @@ function renderSettings() {
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
   if (pets) wirePetSettings();
   if (missionFiles?.settings) wireMission();
+  // Main reloads the window onto the chosen daemon, so nothing here re-renders.
+  if ($('#setServerGo')) $('#setServerGo').onclick = () => window.p9.server($('#setServerHost').value);
+  if ($('#setServerLocal')) $('#setServerLocal').onclick = () => window.p9.server(null);
   Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
@@ -1638,6 +1653,7 @@ $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
   if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
   if (window.p9?.fileProtection) { const r = await window.p9.fileProtection().catch(() => null); fileProtect = r?.status === 200 ? r.body.on : null; }
+  serverInfo = window.p9?.server ? await window.p9.server().catch(() => null) : null;
   if (window.p9?.chat) { const r = await window.p9.chat('missionFiles', {}).catch(() => null); missionFiles = r?.status === 200 ? r.body : null; }
   updates = window.p9?.updates ? await window.p9.updates().catch(() => null) : null;
   petMode = null; renderSettings(); $('#setDlg').showModal();
@@ -1862,6 +1878,7 @@ const WIZ_ERR = {
   'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
   'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
   'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
+  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a server.", 'Switch to Local (the top-bar badge or Settings > Server), then try again.'],
   'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
 function wizRender() {
