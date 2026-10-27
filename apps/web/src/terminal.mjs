@@ -47,6 +47,21 @@ export function createTerminal({ screen, state, connect }) {
       term.socket.send(frame);
     }
   }
+  // xterm builds a touch scroll's wheel report from a gesture event that has no clientX/clientY, so a program that had asked
+  // for the mouse (Claude Code, tmux copy mode) was sent "NaN" as the column and row, typed into its prompt. The wheel report is
+  // kept, because it is what scrolls the program's own history (the screen holds only what is drawn now), with the column and
+  // row of the finger; and a mouse report with a bad number never leaves the page.
+  let finger = null;
+  for (const type of ['touchstart', 'touchmove']) screen.addEventListener(type, (event) => { finger = event.touches[0]; }, { passive: true });
+  function mended(data) {
+    const view = term.view, box = screen.getBoundingClientRect();
+    const cell = (at, from, size, count) => Math.min(count, Math.max(1, Math.floor(((Number.isFinite(at) ? at : from + size / 2) - from) / (size / count)) + 1));
+    const sound = (n, most) => /^\d+$/.test(n) && n >= 1 && n <= most;
+    const text = data.replace(/\x1b\[(<?)(\d+);([^;mM\x1b]*);([^;mM\x1b]*)([Mm])/g, (all, lt, button, col, row, end) => sound(col, view.cols) && sound(row, view.rows) ? all
+      : '\x1b[' + lt + button + ';' + cell(finger?.clientX, box.left, box.width, view.cols) + ';' + cell(finger?.clientY, box.top, box.height, view.rows) + end);
+    // The old 1000 encoding puts one byte per number; a NUL there is a number that was not one.
+    return /\x1b\[M[\s\S]{0,2}\0/.test(text) ? '' : text;
+  }
   // Fits the terminal to its box from one measured character; tmux gets the size as the one text frame the daemon takes.
   function fit() {
     const view = term.view; if (!view?.element) return;
@@ -71,7 +86,7 @@ export function createTerminal({ screen, state, connect }) {
         // xterm opens OSC 8 links in its core (confirm, then window.open); surface 13 says links do not open.
         linkHandler: { activate() {} } });
       term.view.open(screen);
-      term.view.onData(sendKeys);
+      term.view.onData((data) => { const safe = mended(data); if (safe) sendKeys(safe); });
     }
     term.view.reset();
     const socket = connect(id);
