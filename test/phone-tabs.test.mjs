@@ -191,6 +191,8 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await shot(page, 'tab-mission');
   await page.click('#mission .tile:has(span:text-is("Backups"))');
   await page.waitForSelector('#mission dialog[open]', { timeout: 5000 });
+  // The window's title is the h1 in the bar; phone.test.mjs Phase 11 reads the same selector for every tile.
+  assert.equal(await page.locator('#mission dialog[open] > header .title h1').innerText({ timeout: 5000 }), 'Backups');
   // The closed "Backup now" row has a Run pill at its right; a tap runs it and opens the row on its output.
   await soft('Run pill in the closed row', async () => {
     const pill = page.locator('#mission dialog[open] details:not([open]) > summary:has-text("Backup now") > [data-run-now]');
