@@ -4,6 +4,7 @@
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFile, lstat, mkdir, readdir, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -25,6 +26,22 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp
 const imagesOk = (images) => Array.isArray(images) && images.length <= MAX_IMAGES && images.every((image) => image && typeof image === 'object'
   && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data));
 const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }, MAX_STORED = 200 * 1024 * 1024;
+// Item 26: before it, photos were kept in <state>/images. The Windows state folder (%LOCALAPPDATA%\P9\runtime) is never
+// emptied, so that folder made every later start refuse (state-directory-not-empty, main.mjs). Called before that check:
+// the photos (plain files named <sha256>.<ext>) move to <ownership>/images; anything else stays and the start still refuses.
+export async function keepOldPhotos(state, ownership) {
+  const old = path.join(state, 'images');
+  if (!(await lstat(old).catch(() => null))?.isDirectory()) return;
+  const dir = path.join(ownership, 'images');
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  for (const name of await readdir(old)) {
+    const from = path.join(old, name), to = path.join(dir, name);
+    if (!/^[0-9a-f]{64}\.(?:png|jpg|gif|webp)$/.test(name) || !(await lstat(from)).isFile()) continue;
+    // A state folder on another disk (Linux's RAM one): copy, then delete. The same name is the same photo.
+    await rename(from, to).catch(async (error) => { if (error.code !== 'EXDEV') throw error; await copyFile(from, to); await unlink(from); });
+  }
+  await rmdir(old).catch(() => {});
+}
 // A start holds the Stop All barrier, so an adapter that never answers the handshake must not hold it forever.
 const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -200,9 +217,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const stops = new Map(); // conversation -> the Stop in progress
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
-  // CP3 (threat model row 43): a sent photo is kept as <state>/images/<sha256>.<ext>, so the chat can show it again; the
+  // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
   // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. Chats are never deleted, so nothing else removes them.
-  const imageDir = state && path.join(state, 'images');
+  // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
+  const imageDir = (ownership || state) && path.join(ownership || state, 'images');
   const keep = (images) => images.map(({ mimeType, data }) => {
     const bytes = Buffer.from(data, 'base64'), hash = createHash('sha256').update(bytes).digest('hex');
     if (imageDir) {
@@ -678,7 +696,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (closing) { release(); return refused(503, 'shutting-down'); }
       setState(id, 'turn');
       const note = movedNote(db, id); // read before this message's own user event
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }) }); // hash and type only: events stay small
+      // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
       release();

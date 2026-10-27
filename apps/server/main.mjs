@@ -15,6 +15,7 @@ import { parseSettings } from './mission.mjs';
 import { drainSaves } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
 import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+import { keepOldPhotos } from './chat.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
@@ -98,6 +99,7 @@ if (windows) {
     throw new Error(ownership.status === 1 ? 'daemon-already-running' : 'workspace-lock-unavailable');
   }
 }
+await keepOldPhotos(state, ownershipDirectory);
 const stateEntries = await readdir(state);
 if (windows) {
   if (stateEntries.some((name) => name !== 'desktop.json')) throw new Error('state-directory-not-empty');

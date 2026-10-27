@@ -481,6 +481,37 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 @media (max-width:760px){.land-bar button{padding:14px 12px;gap:10px}.land-bar kbd{display:none}} /* room for the full description; 1-3 still work */
 @media (max-height:680px){.land-main{bottom:10px}.land-bar{margin-top:16px}.land-pets{margin-top:12px}}
 @media (prefers-reduced-motion:reduce){.land *,.land{animation:none!important;transition:none!important}.land .land-mark .orbit{stroke-dashoffset:0}}
+/* Send to server (item 25): the chat blurs and falls into the black hole drawn over its pane; P9 turns in the hole like the
+   logo, a light runs round its orbit, the bar (theme colour) and its % sit under it. Reduced motion: the bar only. */
+.pane[data-pulled]{animation:move-pull 1.5s cubic-bezier(.55,0,.75,.2) forwards;pointer-events:none}
+@keyframes move-pull{25%{filter:blur(2px);transform:none;opacity:1}100%{filter:blur(12px);opacity:0;transform:scale(.04) rotate(-150deg)}}
+.move-fx{--ink:oklch(0.96 0.01 255);--dim:oklch(0.76 0.03 262);position:fixed;z-index:60;overflow:hidden;color:var(--ink);pointer-events:none}
+.move-fx[hidden]{display:none}
+#moveSky{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity 1.3s .2s ease-in;background:radial-gradient(closest-side circle at 50% 40%,#000 52%,oklch(0.9 0.09 80/.9) 56%,oklch(0.6 0.15 280/.35) 64%,transparent 82%),radial-gradient(120% 80% at 50% 40%,oklch(0.18 0.06 275),#000 70%)}
+.move-fx[data-on] #moveSky{opacity:1}
+.move-mark{position:absolute;left:50%;top:40%;width:min(52%,300px);translate:-50% -50%;overflow:visible;opacity:0;transition:opacity .8s 1.2s;perspective:600px}
+.move-fx[data-on] .move-mark{opacity:1}
+.move-mark text{font:700 124px/1 "Space Grotesk",sans-serif;letter-spacing:-6px;filter:drop-shadow(0 0 14px oklch(0.7 0.14 265/.45))}
+.move-mark .orbit{fill:none;stroke:url(#moveOrbit);stroke-width:2.4;stroke-linecap:round}
+.move-mark .back{opacity:.5}
+.move-p9{transform-box:fill-box;transform-origin:center;animation:move-turn 3.6s cubic-bezier(.6,0,.4,1) infinite}
+@keyframes move-turn{0%{transform:scaleX(1)}25%{transform:scaleX(.08)}50%{transform:scaleX(-1)}75%{transform:scaleX(.08)}100%{transform:scaleX(1)}}
+.move-info{position:absolute;left:50%;bottom:9%;translate:-50% 0;width:min(80%,380px);display:grid;justify-items:center;gap:7px;text-align:center;pointer-events:auto}
+.move-info p{margin:0}
+.move-info [hidden]{display:none}
+#moveWhat{font-weight:600;text-shadow:0 1px 6px #000}
+.move-fx[data-wait] #moveWhat{color:var(--warn)}
+.move-bar{width:100%;height:8px;border-radius:99px;background:color-mix(in oklch,var(--primary) 22%,transparent);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--primary) 40%,transparent);overflow:hidden}
+.move-bar>i{display:block;height:100%;width:var(--p,0%);background:var(--primary);box-shadow:0 0 12px var(--primary);transition:width .4s ease-out}
+.move-pct{font-variant-numeric:tabular-nums;color:var(--dim)}.move-pct b{color:var(--ink);font-size:15px}
+#moveNeverRow{padding-top:0}
+@media (prefers-reduced-motion:reduce){
+  .pane[data-pulled]{animation:none;filter:blur(6px)}
+  #moveSky,.move-mark{display:none}
+  .move-fx{color:var(--foreground);--ink:var(--foreground);--dim:var(--muted-foreground)}
+  .move-info{top:50%;bottom:auto;translate:-50% -50%;padding:16px;border-radius:12px;background:var(--card);box-shadow:0 0 0 1px var(--border)}
+  #moveWhat{text-shadow:none}.move-bar>i{transition:none}
+}
 /* Sprint tracker: one ring per chunk; the colour is the chunk's state (green merged, amber waiting, blue running, red blocked). */
 .springs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
 .spr{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}

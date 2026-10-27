@@ -95,6 +95,32 @@
   <div class="dlg-head"><div><h2 id="looseT"></h2><p id="looseP"></p><p class="muted sm">The agent lock in Settings still overrides it. Mode changes back at any time.</p></div></div>
   <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no" autofocus>Cancel</button><button data-slot="button" data-variant="outline" value="never">Turn on, don't show again</button><button data-slot="button" data-variant="destructive" value="yes">Turn on</button></div>
 </form></dialog>
+<!-- Send to server (items 24, 25, specs/move-progress-events.md): the black hole over the chat that is moving, P9 turning in
+     it like the logo, the bar with the % under it and Cancel while it uploads; then "Open it on <host>?". -->
+<div id="moveFx" class="move-fx" hidden>
+  <canvas id="moveSky" aria-hidden="true"></canvas>
+  <svg class="move-mark" viewBox="0 0 320 150" aria-hidden="true">
+    <defs>
+      <linearGradient id="moveChrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbfdff"/><stop offset=".42" stop-color="#c4cfdd"/><stop offset=".5" stop-color="#6d7a8c"/><stop offset=".62" stop-color="#e8eef6"/><stop offset="1" stop-color="#9aa6b6"/></linearGradient>
+      <linearGradient id="moveNine" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#bcd4ff"/><stop offset=".45" stop-color="#6f8dff"/><stop offset="1" stop-color="#8b4dff"/></linearGradient>
+      <linearGradient id="moveOrbit" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8fb4ff" stop-opacity="0"/><stop offset=".3" stop-color="#9fc0ff"/><stop offset=".55" stop-color="#ffe2a8"/><stop offset=".8" stop-color="#a98bff"/><stop offset="1" stop-color="#a98bff" stop-opacity="0"/></linearGradient>
+    </defs>
+    <g transform="rotate(-9 160 80)"><path class="orbit back" d="M14 80a146 30 0 0 1 292 0"/></g>
+    <g class="move-p9"><text x="160" y="118" text-anchor="middle"><tspan fill="url(#moveChrome)">P</tspan><tspan fill="url(#moveNine)">9</tspan></text></g>
+    <g transform="rotate(-9 160 80)"><path class="orbit front" d="M306 80a146 30 0 0 1-292 0"/></g>
+  </svg>
+  <div class="move-info">
+    <p id="moveWhat" role="status"></p>
+    <div class="move-bar" role="progressbar" aria-labelledby="moveWhat" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+    <p class="move-pct"><b id="movePct">0%</b><span id="moveBytes"></span></p>
+    <button data-slot="button" data-variant="outline" data-size="sm" id="moveCancel">Cancel</button>
+  </div>
+</div>
+<dialog id="moveDlg" aria-labelledby="moveT" aria-describedby="moveP"><form method="dialog">
+  <div class="dlg-head"><div><h2 id="moveT"></h2><p id="moveP"></p></div></div>
+  <div class="dlg-body" id="moveNeverRow"><label class="sm"><input type="checkbox" id="moveNever"> Don't show again</label></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no" id="moveNo"></button><button data-slot="button" value="yes" id="moveYes" autofocus></button></div>
+</form></dialog>
 <dialog id="stopDlg" aria-labelledby="stopT">
   <div class="dlg-head"><div><h2 id="stopT">Session controls</h2><p id="sessionModeNote">Persistent is the default. Closing the UI keeps owned work running.</p></div></div>
   <div class="dlg-body" style="display:grid;gap:10px">

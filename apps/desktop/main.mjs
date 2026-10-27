@@ -667,17 +667,26 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   // Send to server (D14, move.mjs): this computer's chat moves to the server used last. From Local only: in Server mode the
-  // chats are on the server already. One move per chat at a time.
-  const sending = new Set();
+  // chats are on the server already. One move per chat at a time; each has its Cancel.
+  // Its progress goes to the window on p9:move (specs/move-progress-events.md, threat row 3): phase, percent, bytes and the
+  // host main chose, never a path or a credential. Only for drawing; the ledger events stay the record.
+  const sending = new Map();
   ipcMain.handle('p9:send-to-server', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
     if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the server already.' } };
     if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' } };
     if (!localState || sending.has(args[0])) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
-    sending.add(args[0]);
-    try { return await sendToServer({ local: localState, id: args[0], host: serverLast, ssh: sshCommand }); }
+    const stop = new AbortController();
+    sending.set(args[0], stop);
+    const onProgress = move => { if (!window.isDestroyed()) window.webContents.send('p9:move', move); };
+    try { return await sendToServer({ local: localState, id: args[0], host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal }); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
     finally { sending.delete(args[0]); }
+  });
+  ipcMain.handle('p9:move-cancel', (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
+    sending.get(args[0])?.abort();
+    return { cancelling: sending.has(args[0]) };
   });
   // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
   // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's

@@ -87,7 +87,9 @@ function pickerSelects(s) {
 // picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
 // D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
 const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent].includes(m) ? m : ''; };
-const startMode = agent => { const m = defaultMode(agent) || localStorage.getItem('p9-mode:' + agent); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
+// A loosened last pick carries to a new chat only after "don't show again" (review #2): a plain "Turn on" was for that chat.
+// The D2 default was confirmed in Settings for new chats, so it holds as set.
+const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
 const looseOk = (agent, m) => new Promise(done => {
   const d = $('#looseDlg'); $('#looseT').textContent = `Turn on ${m} for ${names[agent]}?`; $('#looseP').textContent = LOOSE[m]; d.returnValue = '';
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
@@ -97,6 +99,8 @@ const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startM
   focus: 'chat', termOpen: { chat: false, dev: false, mission: false }, termMode: { chat: 'float', dev: 'drawer', mission: 'float' },
   snoozed: new Set(), quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
   docs: {}, dev: { tabs: [], active: null } };
+// Send to server's drawing (items 24, 25; below with the black hole): pull is the pane pulled into it.
+const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
 const names = { claude: 'Claude', codex: 'Codex' };
 const focusNames = { chat: 'Chat Focus', dev: 'Dev Focus', mission: 'Mission Control' };
 /* icons */
@@ -507,7 +511,7 @@ function pane(s, i, bare) {
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
-  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''} aria-label="${names[s.agent]} chat">
+  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''}${FX.pull === s.id ? ' data-pulled' : ''} aria-label="${names[s.agent]} chat">
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span><span class="name">${names[s.agent]}</span>
       <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
       <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
@@ -517,9 +521,8 @@ function pane(s, i, bare) {
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
-      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host ? (s.agent === 'claude'
-        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>`
-        : `<button data-slot="button" data-variant="ghost" data-size="sm" disabled title="Codex chats cannot move to the server yet: their history lives in Codex's own files. Claude chats can.">Send to server</button>`) : ''}
+      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
@@ -601,12 +604,7 @@ function paint(root, ss, only) {
       showTerminal(r.body.terminal);
     });
     // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
-    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => {
-      b.disabled = true;
-      const r = await window.p9.sendToServer(s.id).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
-      if (r.status !== 200 && r.body?.error !== 'move-failed') { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
-      b.disabled = false;
-    });
+    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => { b.disabled = true; await sendAway(s); b.disabled = false; });
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
     p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome(2));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
@@ -2252,7 +2250,7 @@ function applyChat(ev) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -2354,11 +2352,115 @@ async function loadChat() {
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
       for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+      moveReloaded();
     }
     // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
     else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
     try { renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
+}
+
+/* ---------- Send to server: the black hole and the switch (items 24, 25, specs/move-progress-events.md) ---------- */
+// Drawn from main's p9:move stream only; the ledger's moving, moved and move-failed events stay the record. The overlay sits
+// over the moving chat's pane, not in it (panes are morphed on every paint), and in its dialog when the pane is in one.
+// ponytail: one move drawn at a time; another chat's events while one is drawn are not drawn (its ledger events still show).
+const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
+const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending the chat to ' + h,
+  landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
+const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+async function sendAway(s) {
+  const r = await window.p9.sendToServer(s.id).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  // busy: main is moving it already (a window reloaded mid-move); its events draw it.
+  if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
+}
+function fxPlace() {
+  const pane = [...document.querySelectorAll('.pane[data-id]')].find(p => p.dataset.id === FX.id);
+  if (!pane) return;
+  // The pull scales and turns the pane about its centre: the centre stays, the size is its layout size (not the shrunk box).
+  const home = pane.closest('dialog') || document.body, r = pane.getBoundingClientRect(), w = pane.offsetWidth, h = pane.offsetHeight;
+  if (fx.parentElement !== home) home.append(fx);
+  Object.assign(fx.style, { left: r.left + r.width / 2 - w / 2 + 'px', top: r.top + r.height / 2 - h / 2 + 'px', width: w + 'px', height: h + 'px' });
+}
+function fxFrame(now) {
+  FX.raf = requestAnimationFrame(fxFrame);
+  if (now - FX.drawn < 33) return;
+  const dt = FX.drawn ? Math.min(0.1, (now - FX.drawn) / 1000) : 0, k = Math.min(1, (now - FX.t0) / 2400), e = 1 - (1 - k) ** 5;
+  FX.drawn = now;
+  // The landing intro's ignition (30 -> 22), here driven by the move's percent: the hole draws closer as the chat goes in.
+  FX.dist += (30 - 8 * FX.pct / 100 - FX.dist) * Math.min(1, dt * 2);
+  FX.spin += dt * (0.8 + FX.pct / 100);
+  fxPlace();
+  fxSky.size(0.6);
+  fxSky.set({ uDist: FX.dist, uShift: 0, uIgnite: e, uStars: e, uDim: 1 - 0.38 * e, uSpin: FX.spin, uTime: now / 1000 });
+  fxSky.frame();
+}
+function fxStart(m) {
+  Object.assign(FX, { id: m.id, pull: m.id, host: m.host, t0: performance.now(), drawn: 0, spin: 0, dist: 30, pct: 0 });
+  renderChats();
+  fx.hidden = false; fxPlace();
+  requestAnimationFrame(() => fx.toggleAttribute('data-on', true));
+  if (!still && fxSky.ok) FX.raf = requestAnimationFrame(fxFrame);
+  // Three missed heartbeats (5 s each): the move is not touched, the label says so.
+  FX.tick = setInterval(() => { fxPlace(); if (performance.now() - FX.at > 15000 && !fx.hasAttribute('data-wait')) { fx.toggleAttribute('data-wait', true); $('#moveWhat').textContent = 'Waiting for the server…'; } }, 1000);
+}
+function fxEnd() {
+  cancelAnimationFrame(FX.raf); clearInterval(FX.tick);
+  fx.hidden = true; fx.removeAttribute('data-on'); fx.removeAttribute('data-wait');
+  Object.assign(FX, { id: null, pull: null, raf: 0, tick: 0 });
+  renderChats();
+}
+function onMove(m) {
+  if (!m?.id || (FX.id && FX.id !== m.id)) return;
+  if (!FX.id) fxStart(m);
+  FX.at = performance.now(); fx.removeAttribute('data-wait');
+  if (Number.isFinite(m.percent)) FX.pct = m.percent;
+  $('#moveWhat').textContent = FX_WHAT[m.phase]?.(m.host) || 'Moving the chat to ' + m.host;
+  $('.move-bar').style.setProperty('--p', FX.pct + '%'); $('.move-bar').setAttribute('aria-valuenow', FX.pct);
+  $('#movePct').textContent = FX.pct + '%';
+  $('#moveBytes').textContent = m.bytes?.total ? ' · ' + mb(m.bytes.sent) + ' of ' + mb(m.bytes.total) : '';
+  $('#moveCancel').hidden = !['stopping', 'connecting', 'uploading'].includes(m.phase);
+  if (m.phase === 'done') afterMove(m);
+  // failed: the ledger's move-failed notice says why. unknown: the pane's "press to finish" button stays, with main's words.
+  if (m.phase === 'failed') fxEnd();
+  if (m.phase === 'unknown') { const s = S.sessions.find(x => x.id === m.id); if (s && m.message) s.events.push({ t: 'notice', text: m.message }); fxEnd(); }
+}
+$('#moveCancel').onclick = () => { $('#moveCancel').hidden = true; $('#moveWhat').textContent = 'Cancelling…'; window.p9.cancelMove(FX.id).catch(() => {}); };
+window.p9?.onMove?.(onMove);
+// "Open it on <host>?" and "Finish the move?": Enter takes the switch from anywhere in the box (a form's Enter would take
+// its first button, Stay); Esc is no.
+function moveAsk({ title, text, yes, no, never }) {
+  $('#moveT').textContent = title; $('#moveP').textContent = text; $('#moveYes').textContent = yes; $('#moveNo').textContent = no;
+  $('#moveNeverRow').hidden = !never; $('#moveNever').checked = false;
+  moveDlg.returnValue = '';
+  moveDlg.showModal();
+  return new Promise(done => moveDlg.addEventListener('close', () => done({ yes: moveDlg.returnValue === 'yes', never: !!never && $('#moveNever').checked }), { once: true }));
+}
+moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.matches('button')) { e.preventDefault(); moveDlg.close('yes'); } });
+// Item 24. "Don't show again" keeps the answer it was ticked with: always open on the server, or always stay.
+async function afterMove(m) {
+  let kept = null; try { kept = localStorage.getItem('p9-after-move-ask'); } catch {}
+  const pick = kept === 'open' || kept === 'stay' ? { yes: kept === 'open' } : await moveAsk({ title: 'Open it on ' + m.host + '?', yes: 'Open it', no: 'Stay here', never: true,
+    text: 'The chat is on ' + m.host + ' now. Opening it switches this window to the server; your chats on this computer stay here for when you switch back.' });
+  if (pick.never) localStorage.setItem('p9-after-move-ask', pick.yes ? 'open' : 'stay');
+  if (!pick.yes) return fxEnd();
+  localStorage.setItem('p9-after-move', JSON.stringify({ id: m.id }));
+  const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the server's P9
+  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Server switches by hand.' }); renderChats(); }
+}
+// After the first replay. The chat a move took here opens in the pane (on the server it is stopped, here it is moved).
+// A chat left moving by a reload: no stream event within 6 s means main is not moving it, so ask to finish.
+function moveReloaded() {
+  let after = null; try { after = JSON.parse(localStorage.getItem('p9-after-move'))?.id; localStorage.removeItem('p9-after-move'); } catch {}
+  const landed = after && S.sessions.find(s => s.id === after && s.state !== 'moved');
+  if (landed) focus(landed.id);
+  const left = S.sessions.find(s => s.live && s.state === 'moving');
+  if (!left || !window.p9?.sendToServer) return;
+  setTimeout(async () => {
+    if (FX.id || left.state !== 'moving' || serverInfo?.host || moveDlg.open) return;
+    const r = await moveAsk({ title: 'Finish the move?', yes: 'Finish the move', no: 'Not now',
+      text: '"' + (left.title || 'This chat') + '" was moving to ' + (serverInfo?.last || 'the server') + ' when the window closed. It stays paused here until the move finishes; its Send to server button finishes it later.' });
+    if (r.yes) sendAway(left);
+  }, 6000);
 }
 
 addEventListener('focus', () => renderChats());
