@@ -3,7 +3,7 @@
 // forwards a Unix socket the way OpenSSH's -L does, so everything but the network hop is the real thing.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
@@ -254,6 +254,102 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   await page.locator('#fMission [data-idea]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-sprint]').count(), 0, 'a Sprint tile in Local with no status file here');
   console.log('PASS desktop sprint: tile and rings from the server file, start confirmed and ran there, no tile in Local');
+});
+
+// Send files (item 23) in the window (Local mode, a server chosen before): the files panel's button, the first-send prompt, the conflict prompt
+// with the delete box and the Syncthing warning, and a limit refusal that opens its Setting. The pictures go out in
+// the log as "P9_SHOT <name> <base64>" (the dev space keeps no files; not on GitHub).
+test('xfer window: the first-send and conflict prompts ask in words, and a limit refusal opens its Setting', { skip, timeout: 60000 }, async (t) => {
+  const at = (hhmm) => new Date('2026-10-27T' + hhmm + ':00Z'); // the window runs at TZ=UTC
+  // Mission's settings (the page goes live, and the files panel with it, once Mission answers), the same on both sides,
+  // so those files are "same" in the plan.
+  const fill = (files) => async ({ workspace, directory }) => {
+    files = { ...files, 'hub/registry.json': JSON.stringify({ scripts: [], apps: [], pages: [] }), 'projects/AGENTS.md': '# Projects\n' };
+    for (const [name, text] of Object.entries(files)) { await mkdir(path.dirname(path.join(workspace, name)), { recursive: true }); await writeFile(path.join(workspace, name), text); }
+    await mkdir(path.join(workspace, 'waiting'));
+    await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: 'waiting' }));
+    return { args: ['--settings', path.join(directory, 'settings.json')] };
+  };
+  const laptop = await daemon(t, undefined, false, fill({ 'docs/a.md': '# A, the laptop\'s', 'docs/plan.md': 'plan, laptop', 'src/new.js': 'new' }));
+  const server = await daemon(t, undefined, false, fill({ 'docs/a.md': '# A, the server\'s', 'docs/plan.md': 'plan, server' }));
+  await utimes(path.join(laptop.workspace, 'docs/a.md'), at('11:02'), at('11:02'));
+  await utimes(path.join(server.workspace, 'docs/a.md'), at('13:40'), at('13:40'));
+  await utimes(path.join(laptop.workspace, 'docs/plan.md'), at('16:20'), at('16:20'));
+  await utimes(path.join(server.workspace, 'docs/plan.md'), at('09:15'), at('09:15'));
+  const s = await stage(server), profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, TZ: 'UTC' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', laptop.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
+  const dialog = page.locator('#xferDlg'), title = page.locator('#xferT');
+  const send = async () => { await page.click('#xferBtn'); await dialog.waitFor({ timeout: 20000 }); };
+  await page.locator('#rFiles').click({ timeout: 20000 });
+  await page.locator('#fileScope').waitFor({ state: 'visible', timeout: 20000 });
+  await page.selectOption('#fileScope', 'workspace');
+  await page.locator('#xferBtn').waitFor({ timeout: 20000 });
+  assert.match(await page.locator('#xferBtn').getAttribute('title'), /test-host/);
+
+  // First send: nothing recorded, two files differ; one choice for the list, and no "Keep the server's".
+  await send();
+  assert.equal(await title.innerText(), 'First send to test-host');
+  const asked = await page.locator('[data-xfer-asked]').innerText();
+  assert.match(asked, /2 files differ between the two/);
+  assert.match(asked, /1 newer on the laptop, 1 newer on the server/);
+  assert.match(asked, /docs\/a\.md different on the two; the server's copy is newer \([^)]*1:40[^)]*\) than the laptop's \([^)]*11:02[^)]*\)/);
+  assert.deepEqual(await dialog.locator('[data-xfer-choice]').allInnerTexts(), ['Laptop wins', 'Keep the newer of each']);
+  assert.equal(await dialog.locator('[data-xfer-syncthing]').count(), 0);
+  await shot('xfer-first-send');
+  await dialog.locator('[data-xfer-choice="newer"]').click();
+  for (const end = Date.now() + 20000; (await title.innerText()) !== 'Sent'; await new Promise((resolve) => setTimeout(resolve, 100))) assert.ok(Date.now() < end, 'sent: ' + await dialog.innerText());
+  assert.match(await page.locator('#xferP').innerText(), /2 sent, 1 taken from the server, 2 old copies kept in recovery/);
+  const read = (box, name) => readFile(path.join(box.workspace, name), 'utf8');
+  assert.deepEqual([await read(laptop, 'docs/a.md'), await read(server, 'docs/plan.md'), await read(server, 'src/new.js')], ['# A, the server\'s', 'plan, laptop', 'new']);
+  await dialog.locator('[data-xfer-close]').click();
+  console.log('PASS xfer window first send: asked in words with the summary line; keep the newer settled each file');
+
+  // Since: docs/a.md changed on both, src/new.js deleted here, and the server's docs is a Syncthing folder.
+  await writeFile(path.join(laptop.workspace, 'docs/a.md'), '# A, laptop edit');
+  await writeFile(path.join(server.workspace, 'docs/a.md'), '# A, server edit');
+  await utimes(path.join(laptop.workspace, 'docs/a.md'), at('11:02'), at('11:02'));
+  await utimes(path.join(server.workspace, 'docs/a.md'), at('13:40'), at('13:40'));
+  await rm(path.join(laptop.workspace, 'src/new.js'));
+  await mkdir(path.join(server.workspace, 'docs/.stfolder'));
+  await send();
+  assert.equal(await title.innerText(), 'Files changed on both sides');
+  assert.match(await page.locator('[data-xfer-asked]').innerText(),
+    /docs\/a\.md changed on both since your last send; the server's copy is newer \([^)]*1:40[^)]*\) than the laptop's \([^)]*11:02[^)]*\)/);
+  assert.match(await page.locator('[data-xfer-asked]').innerText(), /0 newer on the laptop, 1 newer on the server/);
+  assert.match(await page.locator('[data-xfer-deletes]').innerText(), /Delete on the server too\s*1 file was deleted on the laptop since your last send/);
+  assert.match(await page.locator('[data-xfer-syncthing]').innerText(), /Syncthing already syncs this folder.*docs \(server\)/s);
+  assert.deepEqual(await dialog.locator('[data-xfer-choice]').allInnerTexts(), ['Keep the laptop\'s', 'Keep the server\'s', 'Keep the newer of each']);
+  await page.check('#xferDel');
+  await shot('xfer-conflict');
+  await dialog.locator('[data-xfer-choice="server"]').click();
+  for (const end = Date.now() + 20000; (await title.innerText()) !== 'Sent'; await new Promise((resolve) => setTimeout(resolve, 100))) assert.ok(Date.now() < end, 'sent: ' + await dialog.innerText());
+  assert.match(await page.locator('#xferP').innerText(), /1 taken from the server, 1 deleted on the server, 2 old copies kept in recovery/);
+  assert.equal(await read(laptop, 'docs/a.md'), '# A, server edit');
+  await assert.rejects(stat(path.join(server.workspace, 'src/new.js')));
+  await dialog.locator('[data-xfer-close]').click();
+  console.log('PASS xfer window conflict: asked with the delete box and the Syncthing warning; keep the server\'s and the delete landed');
+
+  // A limit: 1 MiB a file, a 2 MiB file. Refused before anything is copied; Open Settings lands on that limit.
+  await page.evaluate(() => window.p9.getSettings().then((s) => window.p9.setSettings({ ...s, xfer: { ...s.xfer, fileMiB: 1 } })));
+  await rm(path.join(server.workspace, 'docs/.stfolder'), { recursive: true });
+  await writeFile(path.join(laptop.workspace, 'docs/big.bin'), Buffer.alloc(2 * 1024 * 1024, 1));
+  await send();
+  for (const end = Date.now() + 20000; (await title.innerText()) !== 'Not sent'; await new Promise((resolve) => setTimeout(resolve, 100))) assert.ok(Date.now() < end, 'refused: ' + await dialog.innerText());
+  assert.match(await page.locator('#xferP').innerText(), /docs\/big\.bin is 2\.0 MiB; the limit is 1 MiB a file\. Change it in Settings, Largest file to send\./);
+  await shot('xfer-limit');
+  await page.click('#xferSetting');
+  await page.locator('#setXfer-fileMiB').waitFor({ timeout: 10000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'setXfer-fileMiB');
+  await assert.rejects(stat(path.join(server.workspace, 'docs/big.bin')));
+  console.log('PASS xfer window limit: refused before sending, named Largest file to send, and Open Settings focused it');
 });
 
 // ---- Item 33: Dev Focus in Server mode (threat model row 50). The server's daemon starts its editor server on editor.sock;
