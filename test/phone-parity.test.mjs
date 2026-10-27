@@ -363,15 +363,15 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');
   const rect = (sel) => page.locator(sel).boundingBox();
-  const [slot, box, text, plus, pillBox, send] = [await rect('#composerSlot'), await rect('#box'), await rect('#prompt'), await rect('#attach'), await rect('#modePill'), await rect('#send')];
+  const [slot, box, text, plus, pillBox, sendBox] = [await rect('#composerSlot'), await rect('#box'), await rect('#prompt'), await rect('#attach'), await rect('#modePill'), await rect('#send')];
   assert.deepEqual(await page.$eval('#box', (el) => [getComputedStyle(el).borderTopLeftRadius, el.parentElement.id]), ['22px', 'composerSlot']);
   assert.ok(box.x >= 8 && box.x + box.width <= 382 && box.y + box.height <= slot.y + slot.height, 'the box sits 8 px in from each side, inside the slot');
   // A chat hides the tab bar (c1's chat screen), so the slot is the foot of the screen.
   assert.ok(!await page.isVisible('nav') && Math.abs(slot.y + slot.height - 844) <= 1, 'the slot sits at the foot of the screen: ' + (slot.y + slot.height));
   // Line 2 under the message: + at the left, then the pill, the send at the right, all on one row inside the box.
-  for (const [name, r] of [['+', plus], ['pill', pillBox], ['send', send]]) assert.ok(r.y >= text.y + text.height - 0.5 && r.y + r.height <= box.y + box.height + 0.5, name + ' sits under the message, inside the box');
-  assert.ok(plus.x < pillBox.x && pillBox.x + pillBox.width < send.x && send.x + send.width >= box.x + box.width - 12, 'the row reads +, pill, then send at the right');
-  assert.deepEqual([plus.width, plus.height, send.width, send.height], [44, 44, 36, 36]);
+  for (const [name, r] of [['+', plus], ['pill', pillBox], ['send', sendBox]]) assert.ok(r.y >= text.y + text.height - 0.5 && r.y + r.height <= box.y + box.height + 0.5, name + ' sits under the message, inside the box');
+  assert.ok(plus.x < pillBox.x && pillBox.x + pillBox.width < sendBox.x && sendBox.x + sendBox.width >= box.x + box.width - 12, 'the row reads +, pill, then send at the right');
+  assert.deepEqual([plus.width, plus.height, sendBox.width, sendBox.height], [44, 44, 36, 36]);
   assert.equal(await page.evaluate(() => document.elementFromPoint(...(({ x, y }) => [x - 3, y - 3])(document.querySelector('#send').getBoundingClientRect()))?.id), 'send', 'the send takes taps 4 px past its edge (a 44 px target)');
   assert.equal(await page.textContent('#modePill'), 'Mode ▾');
   await shot(page, 'phone-composer');
