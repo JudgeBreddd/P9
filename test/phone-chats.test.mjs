@@ -50,13 +50,16 @@ async function phoneOn(t, server, browser) {
 }
 async function open(device, server, { fix = [], init } = {}) {
   const { page, session } = device;
-  let hits = 0;
   // The A/B: swap text (a string or a pattern) in the served document, stylesheet and script so the old behaviour is back. The swap must hit.
+  const hit = fix.map(() => false), seen = fix.map(() => '');
   await page.route('**/*', async (route) => {
     if (!fix.length || !['document', 'stylesheet', 'script'].includes(route.request().resourceType())) return route.continue();
     const response = await route.fetch({ url: route.request().url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...route.request().headers(), host: server.host } });
     let body = await response.text();
-    for (const [from, to] of fix) if (typeof from === 'string' ? body.includes(from) : from.test(body)) { body = body.replace(from, to); hits++; }
+    for (const [index, [from, to]] of fix.entries()) {
+      if (typeof from === 'string' ? body.includes(from) : from.test(body)) { body = body.replace(from, to); hit[index] = true; }
+      else if (!seen[index] && typeof from === 'string') { const at = body.indexOf(from.slice(0, 14)); if (at >= 0) seen[index] = body.slice(at, at + 160); }
+    }
     await route.fulfill({ response, body });
   });
   if (init) await page.addInitScript(init);
@@ -64,7 +67,7 @@ async function open(device, server, { fix = [], init } = {}) {
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
   await page.reload();
   await page.setViewportSize({ width: 390, height: 844 });
-  return { page, hits: () => hits };
+  return { page, hits: () => hit.filter(Boolean).length, missed: () => fix.map((_, i) => hit[i] ? '' : 'patch ' + i + ' did not hit' + (seen[i] ? '; the served text reads: ' + seen[i] : '; its first 14 characters appear nowhere')).filter(Boolean).join(' | ') };
 }
 const until = async (check, what) => {
   for (let i = 0; i < 150; i++) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 100)); }
@@ -102,7 +105,7 @@ const checks = {
     await openChat(page, SEED);
     await page.waitForSelector('#events article[data-kind=group]');
     assert.match(await page.locator('#events article[data-kind=group] summary').first().textContent(), /Ran 5 tools/);
-    assert.equal(await page.locator('#events article[data-kind=tool]').count(), 0, 'no loose tool rows');
+    assert.equal(await page.locator('#events > article[data-kind=tool]').count(), 0, 'no loose tool rows');
     await page.locator('#events article[data-kind=group] summary').first().click();
     assert.equal(await page.locator('#events article[data-kind=group] article[data-kind=tool]').count(), 5);
   },
@@ -194,11 +197,16 @@ test('P1, P2, P3, P7: the Chats list and the chat screen (A/B)', { timeout: 9000
   seed(server);
   const browser = await chromium.launch();
   t.after(() => browser.close());
+  // Every check runs, and every failure is listed at the end: a run is too slow to find them one at a time.
+  const failures = [];
   for (const [name, check] of Object.entries(checks)) {
     const good = await open(await phoneOn(t, server, browser), server);
-    await check(good.page, { server, shots: true });
+    try { await check(good.page, { server, shots: true }); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); continue; }
     const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
-    await assert.rejects(() => check(bad.page, { server, shots: false }), undefined, name + ': the check must fail on the broken page');
-    if (breaks[name].fix) assert.ok(bad.hits() > 0, name + ': the patch to the served files hit');
+    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); continue; }
+    let broke = true;
+    try { await check(bad.page, { server, shots: false }); broke = false; } catch { /* the check failed on the broken page, as it must */ }
+    if (!broke) failures.push(name + ' (A/B): the check passed on the broken page');
   }
+  assert.deepEqual(failures, []);
 });
