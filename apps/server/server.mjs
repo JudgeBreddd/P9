@@ -10,7 +10,8 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
+import { createXfer } from './xfer.mjs';
 import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
 import { SETTINGS } from './mission-fields.mjs';
 import { createHub } from './hub.mjs';
@@ -112,6 +113,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
+  const xfer = createXfer({ workspace, ownership, recovery });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
@@ -154,7 +156,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
-  api.get('/files/list', async (c) => c.json({ entries: await listDirectory(workspace, c.req.query('path') ?? '') }));
+  // The file tree never shows the folders P9 does not crawl (HEAVY: node_modules, .venv and the like).
+  api.get('/files/list', async (c) => c.json({ entries: (await listDirectory(workspace, c.req.query('path') ?? '')).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) }));
   // File protection off lifts these three read-only rules too (Builder, 2026-10-18: "Everything").
   const readOnly = (path, name = path.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
@@ -357,6 +360,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.post('/chat/:id/moved', async (c) => reply(c, await chat.moved(c.req.param('id'), await json(c))));
   app.post('/chat-import/:id/part', async (c) => reply(c, await chat.take(c.req.param('id'), await json(c))));
   app.post('/chat-import/:id', async (c) => reply(c, await chat.land(c.req.param('id'), await json(c))));
+  // Send files over the tunnel (item 23, xfer.mjs): desktop main copies a folder between two daemons; never the phone's.
+  app.post('/xfer/manifest', async (c) => reply(c, await xfer.manifest(await json(c))));
+  app.get('/xfer/file', async (c) => reply(c, await xfer.file(c.req.query('path'), Number(c.req.query('offset')))));
+  app.post('/xfer/:id/part', async (c) => reply(c, await xfer.part(c.req.param('id'), await json(c))));
+  app.post('/xfer/:id/commit', async (c) => reply(c, await xfer.commit(c.req.param('id'), await json(c))));
+  app.post('/xfer/:id/abort', async (c) => reply(c, await xfer.abort(c.req.param('id'))));
   // Threat model row 15: only the desktop turns the agent lock on or off; reading it is on the shared api.
   app.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   // Threat model row 4: file protection is read and changed by the desktop only; the phone just lives with it.

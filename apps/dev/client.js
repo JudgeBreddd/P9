@@ -58,8 +58,9 @@ await initUserConfiguration(JSON.stringify({ 'workbench.colorTheme': 'P9 Prime',
   'files.hotExit': 'onExitAndWindowClose', 'workbench.localHistory.enabled': false, 'security.workspace.trust.enabled': false,
   'extensions.autoUpdate': false, 'telemetry.telemetryLevel': 'off', 'remote.extensionKind': { 'openai.codex-audio': ['workspace'] },
   // Builder's long-running VS Code-over-SSH OOM: the watcher took one inotify watch per folder (29,346 on the real ICM tree,
-  // 82% of them in these folders) and search walked them too. Generated and dependency folders only; the tree stays visible.
-  'files.watcherExclude': heavy, 'search.exclude': heavy, 'search.followSymlinks': false }));
+  // 82% of them in these folders) and search walked them too. Generated and dependency folders only (packages/files HEAVY);
+  // since item 23 (Builder, 2026-10-27: "keep them out of P9's file crawler") the tree leaves them out too.
+  'files.watcherExclude': heavy, 'search.exclude': heavy, 'files.exclude': heavy, 'search.followSymlinks': false }));
 const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
   contributes: { themes: [{ id: 'P9 Prime', label: 'P9 Prime', uiTheme: 'vs-dark', path: './prime-theme.json' }],
     // Defaults, not user settings: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles wrap.

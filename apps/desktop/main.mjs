@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, We
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { appendFileSync, constants, openSync, watch } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
@@ -10,6 +10,7 @@ import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { sendToServer } from './move.mjs';
+import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer } from './xfer.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -43,8 +44,11 @@ export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here an
 // Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
 const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
 // name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
+// xfer: Send files' limits (apps/desktop/xfer.mjs), each a whole number from 1 to its ceiling.
+const XFER_DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(XFER_LIMITS).map(([key, limit]) => [key, limit.default])));
+const checkXfer = x => exactly(x, 'fileMiB,files,sendGiB') && Object.entries(XFER_LIMITS).every(([key, limit]) => Number.isInteger(x[key]) && x[key] >= 1 && x[key] <= limit.max);
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
-  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false });
+  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false, xfer: XFER_DEFAULTS });
 const NAME = /^[^\p{Cc}\p{Cf}]{0,40}$/u;
 const PET_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/, PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const exactly = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === keys;
@@ -54,13 +58,14 @@ const checkPet = p => exactly(p, 'claude,codex,on,pane,size,system,top') && type
   && [p.claude, p.codex, p.system].every(petName) && spot(p.top) && spot(p.pane)
   && { on: p.on, size: p.size, claude: p.claude, codex: p.codex, system: p.system, top: p.top && [...p.top], pane: p.pane && [...p.pane] };
 export function checkSettings(value) {
-  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,zoom') || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
+  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,xfer,zoom') || !checkXfer(value.xfer) || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
       || typeof value.name !== 'string' || !NAME.test(value.name) || typeof value.startLast !== 'boolean'
       || value.zoom < 0.5 || value.zoom > 3 || !exactly(value.focus, 'chat,dev,mission') || !exactly(value.pet, 'chat,dev,mission')) return null;
   const focus = value.focus, pet = { chat: checkPet(value.pet.chat), dev: checkPet(value.pet.dev), mission: checkPet(value.pet.mission) };
   if (![focus.chat, focus.dev, focus.mission].every(on => typeof on === 'boolean') || !(focus.chat || focus.dev || focus.mission)) return null;
   if (!pet.chat || !pet.dev || !pet.mission) return null;
-  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast };
+  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast,
+    xfer: { fileMiB: value.xfer.fileMiB, files: value.xfer.files, sendGiB: value.xfer.sendGiB } };
 }
 // Older files: no pet, one pet name, or one pet per agent ({ claude, codex, system }) become every focus's pets, shown in Chat only.
 // Files from before the landing page get its name (the account's, below) and startLast off.
@@ -70,7 +75,7 @@ export function upgradeSettings(file, name = '') {
     const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old; // an older file keeps its own (no) pet
     file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
   }
-  return { name, startLast: false, ...file };
+  return { name, startLast: false, xfer: XFER_DEFAULTS, ...file };
 }
 // Windows keeps the full name in the output of "net user <login>"; the label is localized, so another language falls back to the login name.
 // ponytail: local accounts only (a work-domain full name needs "net user /domain"); a Microsoft account with no full name set also falls back.
@@ -673,6 +678,46 @@ export async function createDesktop({ state, open } = {}) {
     try { return await sendToServer({ local: localState, id: args[0], host: serverLast, ssh: sshCommand }); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
     finally { sending.delete(args[0]); }
+  });
+  // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
+  // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
+  // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
+  let xferPlan = null, xferBusy = false;
+  const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
+  ipcMain.handle('p9:xfer', async (event, ...args) => {
+    const [action, a, b, c] = args;
+    const ok = action === 'plan' ? args.length === 2 && typeof a === 'string' && a.length <= 4096 && XFER_FOLDER.test(a) && !a.split('/').some(p => p === '.' || p === '..')
+      : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
+    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Server to Local first: Send files copies this computer\'s files to the server.' };
+    if (!serverLast) return { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' };
+    if (!localState) return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' };
+    if (xferBusy) return { error: 'busy', message: 'A send is running already.' };
+    xferBusy = true;
+    try {
+      if (action === 'plan') {
+        const got = await planFolder({ local: localState, host: serverLast, folder: a, userData: app.getPath('userData'), ssh: sshCommand });
+        if (got.error) return got;
+        const p = got.plan, record = !p.first.length; // first: nothing sent to this folder yet
+        xferPlan = { id: randomUUID(), host: serverLast, plan: p };
+        const asked = [...p.conflicts, ...p.first];
+        return { id: xferPlan.id, host: serverLast, folder: a, send: p.send.length, same: p.same.length, sendBytes: p.send.reduce((n, i) => n + i.laptop.size, 0),
+          kind: p.first.length ? 'first' : p.conflicts.length ? 'conflict' : null, summary: p.summary, asked: asked.length,
+          list: asked.slice(0, SHOWN).map(item => ({ path: item.path, text: describeXfer(item, record) })),
+          deletes: p.deletes.length, deleteList: p.deletes.slice(0, SHOWN).map(item => item.path), skipped: p.skipped, syncthing: p.syncthing };
+      }
+      if (xferPlan?.id !== a) return { error: 'stale', message: 'That plan is gone: press Send files again.' };
+      const { host, plan: p } = xferPlan, work = resolveXfer(p, b, c);
+      if (!work) return { error: 'choice', message: 'Pick how to settle the files that differ.' };
+      const limit = overLimit(work, settings.xfer, p.truncated);
+      if (limit) return limit;
+      xferPlan = null; // used once: sending again plans again (Builder, 2026-10-27: that is the resync)
+      const r = await runPlan({ local: localState, host, userData: app.getPath('userData'), plan: p, work, ssh: sshCommand,
+        onProgress: progress => { if (!window.isDestroyed()) window.webContents.send('p9:xfer', { id: a, ...progress }); } });
+      return { ...r, sent: r.sent?.length ?? 0, received: r.received?.length ?? 0, deletedOnServer: r.deletedOnServer?.length ?? 0, deletedHere: r.deletedHere?.length ?? 0,
+        kept: (r.recovery?.server.length ?? 0) + (r.recovery?.laptop.length ?? 0), recovery: undefined, changed: r.changed?.length ?? 0 };
+    } catch { return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' }; }
+    finally { xferBusy = false; }
   });
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');

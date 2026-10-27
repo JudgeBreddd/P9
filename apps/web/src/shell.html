@@ -38,7 +38,7 @@
       <div class="focuses">
         <section class="fpane on" id="fChat" data-focus="chat" aria-label="Chat Focus">
     <aside class="files" id="files" aria-label="Files" hidden>
-      <div class="hd"><select data-slot="select" id="fileScope" aria-label="Files from" hidden></select><input data-slot="input" id="fileSearch" placeholder="Search files" aria-label="Search files"></div>
+      <div class="hd"><select data-slot="select" id="fileScope" aria-label="Files from" hidden></select><input data-slot="input" id="fileSearch" placeholder="Search files" aria-label="Search files"><button data-slot="button" data-variant="outline" data-size="sm" id="xferBtn" hidden>Send files to server</button></div>
       <div class="tree" id="tree"></div>
     </aside>
           <main class="content"><div class="chats" id="chats" data-split="false"></div></main>
@@ -115,6 +115,11 @@
   <div class="dlg-head"><div><h2 id="setT">Settings</h2><p>Kept on this computer; each one survives a restart.</p></div></div>
   <div class="dlg-body settings" id="setBody"></div>
   <div class="dlg-foot"><button data-slot="button" data-variant="outline" id="setClose">Close</button></div>
+</dialog>
+<dialog id="xferDlg" aria-labelledby="xferT">
+  <div class="dlg-head"><div><h2 id="xferT">Send files</h2><p id="xferP"></p></div></div>
+  <div class="dlg-body settings" id="xferBody"></div>
+  <div class="dlg-foot" id="xferFoot"></div>
 </dialog>
 <dialog id="welDlg" aria-labelledby="welT">
   <div class="dlg-head"><div><div class="eyebrow" id="welStep"></div><h2 id="welT">Welcome to Event Horizon</h2></div></div>
