@@ -45,6 +45,13 @@ document.getElementById('login').onclick = async () => {
   done(await post('/auth/login/verify', encode(credential)));
 };
 document.getElementById('enroll').onclick = async () => {
+  // One request at a time: a second tap used to ask the desktop for a second approval (S1).
+  const button = document.getElementById('enroll');
+  if (button.disabled) return;
+  button.disabled = true;
+  try { await enroll(); } finally { button.disabled = false; }
+};
+async function enroll() {
   const asked = await post('/auth/enroll', { name: document.getElementById('name').value.trim() });
   if (asked.status !== 201) return status('Refused (' + (asked.body.error ?? asked.status) + ')');
   document.getElementById('code').textContent = asked.body.code;
@@ -61,5 +68,5 @@ document.getElementById('enroll').onclick = async () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   status('Approval timed out.');
-};
+}
 `;

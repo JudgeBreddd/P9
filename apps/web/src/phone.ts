@@ -16,11 +16,49 @@ const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup,
 function online() {
   const value = navigator.onLine;
   one<HTMLElement>('#stale').hidden = value;
-  one('#syncState').textContent = value ? 'Live' : 'Stale';
+  document.querySelectorAll<HTMLElement>('.sync').forEach((dot) => { dot.dataset.state = value ? 'live' : 'stale'; dot.setAttribute('aria-label', value ? 'Live' : 'Stale'); });
   document.querySelectorAll<HTMLButtonElement>('#save, [data-new], #newTerminal, #stopTerminal').forEach((button) => { button.disabled = !value || (button.id === 'save' && !state.file); });
   label();
   return value;
 }
+// ---- Shell (phone spec §1, §4, §7): the pieces every screen shares. c7 lays the other tabs out with these. ----
+const svg = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = { refresh: svg('<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>'), plus: svg('<path d="M12 5v14M5 12h14"/>'), back: svg('<path d="m15 5-7 7 7 7"/>'), chevron: svg('<path d="m7 10 5 5 5-5"/>'), up: svg('<path d="M12 19V5M5 12l7-7 7 7"/>'),
+  stop: svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'), down: svg('<path d="M12 5v14M5 12l7 7 7-7"/>') };
+type BarAction = { id?: string; label: string; icon: string; attrs?: string };
+type BarOptions = { title: string; sub?: string; subId?: string; back?: { label: string; to: string }; acts?: BarAction[] };
+// One top bar for every screen: 44 px (plus the safe area), the title left, the sync dot, at most a few icon actions.
+// Callers pass trusted strings; text from the daemon goes through escape() first.
+const topBar = (o: BarOptions) => (o.back ? `<button type="button" class="back" data-back="${o.back.to}" aria-label="Back to ${o.back.label}">${ICON.back}${o.back.label}</button>` : '')
+  + `<div class="title"><h1>${o.title}</h1>${o.sub !== undefined || o.subId ? `<small${o.subId ? ` id="${o.subId}"` : ''}>${o.sub ?? ''}</small>` : ''}</div><span class="sync" role="img" aria-label="Live"></span>`
+  + (o.acts ?? []).map((a) => `<button type="button"${a.id ? ` id="${a.id}"` : ''} aria-label="${a.label}"${a.attrs ? ' ' + a.attrs : ''}>${a.icon}</button>`).join('');
+const mountBar = (name: string, o: BarOptions) => { one(`[data-bar="${name}"]`).innerHTML = topBar(o); };
+mountBar('chat', { title: 'Chat', acts: [{ id: 'refreshChat', label: 'Refresh', icon: ICON.refresh }] });
+mountBar('terminal', { title: 'Terminal', acts: [{ id: 'refreshTerminal', label: 'Refresh', icon: ICON.refresh }] });
+mountBar('mission', { title: 'Mission', acts: [{ id: 'refreshMission', label: 'Refresh', icon: ICON.refresh }] });
+mountBar('usage', { title: 'Usage', acts: [{ id: 'refreshUsage', label: 'Refresh', icon: ICON.refresh }] });
+mountBar('files', { title: 'Files', sub: 'Not loaded', subId: 'fileState' });
+// The hairline under a top bar shows only once its screen has scrolled.
+one('main').addEventListener('scroll', (event) => { const box = event.target as HTMLElement; box.closest('section')?.querySelector(':scope > .bar')?.classList.toggle('ruled', box.scrollTop > 0); }, true);
+// Bottom sheet: one shared <dialog>. Fill the body with .opt rows (or anything); a tap on the backdrop closes it.
+const sheet = one<HTMLDialogElement>('#sheet');
+function openSheet(title: string, html: string) { one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
+sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
+addEventListener('p9-sheet', (event) => { const { title, html } = (event as CustomEvent).detail; openSheet(String(title), String(html)); }); // ponytail: the one door into the sheet for code outside this file and for its test; callers pass trusted HTML
+// The app is a column the size of the visible viewport: when a keyboard opens, visualViewport shrinks (iOS Safari leaves
+// the layout viewport alone and offsets the visual one), the column follows it, and the composer rides the keyboard. The
+// tab bar hides while a keyboard is up: the visible height under 75% of the tallest this window has been.
+// ponytail: a desktop window dragged much shorter reads as a keyboard too; the phone page never does that.
+let tallest = innerHeight;
+function fit() {
+  const vv = window.visualViewport, height = vv?.height ?? innerHeight;
+  tallest = Math.max(tallest, innerHeight);
+  document.documentElement.style.setProperty('--vvh', height + 'px');
+  document.documentElement.style.setProperty('--vvtop', (vv?.offsetTop ?? 0) + 'px');
+  document.body.classList.toggle('kbd', height < tallest * 0.75);
+}
+window.visualViewport?.addEventListener('resize', fit); window.visualViewport?.addEventListener('scroll', fit); addEventListener('resize', fit); addEventListener('orientationchange', () => { tallest = 0; fit(); });
+fit();
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
   if (response.status === 401) location.replace('/login');
@@ -62,6 +100,7 @@ async function mutate(path: string, body: Json) {
   return { status: response.status, body: result };
 }
 function show(view: string) {
+  document.body.dataset.view = view;
   document.querySelectorAll<HTMLElement>('[data-view]').forEach((section) => { section.hidden = section.dataset.view !== view; });
   document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => button.setAttribute('aria-current', button.dataset.nav === view ? 'page' : 'false'));
   if (view === 'mission') void loadMission();
