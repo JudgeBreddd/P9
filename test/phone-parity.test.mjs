@@ -44,7 +44,8 @@ async function newChat(page, agent, made201 = () => {}, folder = '') {
   await page.click(`#sheet[open] [data-new="${agent}"]`);
   const id = String((await (await made).json()).conversation);
   made201();
-  await page.waitForFunction((id) => document.querySelector('#conversation').value === id && !document.querySelector('#events').textContent.includes('Loading'), id, { timeout: 10000 });
+  // Shown = the chat screen's link (set as it is drawn); the hidden select alone also names the newest chat on the list.
+  await page.waitForFunction((id) => location.hash === '#chat=' + id && document.querySelector('#conversation').value === id && !document.querySelector('#events').textContent.includes('Loading'), id, { timeout: 10000 });
   return id;
 }
 const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };
