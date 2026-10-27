@@ -99,7 +99,8 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
   // A failed recovery is tried again on the next route call, so installing tmux needs no daemon restart.
   const ready = () => recovered.catch(() => (recovered = recover()));
 
-  // start (from server.mjs only, never a request's body): the folder and a command typed in but not run (Hand off), and
+  // start (from server.mjs only, never a request's body): the folder and a command typed in but not run (Hand off; run:
+  // true presses Enter too, only for Sprint's fixed tmux attach), and
   // phone: made from a phone, so that session's own environment has P9_PHONE=1 (threat model row 13; a shell config can
   // skip a desktop-only greeting). The tmux server's shared environment is not changed.
   async function create(body, start = {}) {
@@ -115,6 +116,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
       stillAuthorized();
       await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, ...(start.phone ? ['-e', 'P9_PHONE=1'] : [])]);
       if (start.typed) await tmux(['send-keys', '-t', '=' + name(id) + ':', '-l', start.typed]);
+      if (start.typed && start.run) await tmux(['send-keys', '-t', '=' + name(id) + ':', 'Enter']); // a fixed command from server.mjs (Sprint: Open tmux)
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);
       return { status: 201, terminal: id };
     } catch (error) {

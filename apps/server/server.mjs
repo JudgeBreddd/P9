@@ -20,6 +20,7 @@ import { createChat } from './chat.mjs';
 import { createMcp } from './mcp.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
+import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth } from './auth.mjs';
 import { agentDirs, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
@@ -256,6 +257,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return reply(c, { status: 201, path: relative });
   });
   api.post('/mission/hub/decide', async (c) => reply(c, await hub.decide(await json(c))));
+  // Sprint tracker: read-only view of the coordinator's status file; Open tmux is a new P9 terminal running one fixed
+  // command (sprint.mjs), with an empty body only, like the agent terminal (threat model row 53). Tmux only: Windows' terminals have none.
+  api.get('/mission/sprint', async (c) => reply(c, await readSprint()));
+  api.post('/mission/sprint/tmux', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return reply(c, { status: 400, error: 'request-refused' });
+    if (process.platform === 'win32') return reply(c, { status: 409, error: 'tmux-not-on-windows' });
+    return reply(c, await terminals.create({}, { typed: SPRINT_TMUX, run: true, phone: !!c.get('device') }));
+  });
   // Notes (threat model row 34): both listeners, the same gates; mission.mjs checks the root, path and kind.
   api.get('/mission/notes', async (c) => reply(c, await mission.notesList(c.req.query('root'))));
   api.get('/mission/notes/file', async (c) => reply(c, await mission.notesRead(c.req.query('root'), c.req.query('path'))));

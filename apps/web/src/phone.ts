@@ -825,9 +825,13 @@ one<HTMLButtonElement>('#newTerminal').onclick = async () => {
   const result = await mutate('/terminals', {});
   if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING
     : result.body.error === 'terminal-unavailable' ? unavailableText(result.body.reason) : 'Not started: ' + String(result.body.error ?? result.status));
-  one<HTMLSelectElement>('#terminal').value = ''; await loadTerminals();
-  one<HTMLSelectElement>('#terminal').value = String(result.body.terminal); attach();
+  await openTerminal(String(result.body.terminal));
 };
+// A terminal the daemon just made (New terminal, Sprint's Open tmux): the picker reloads and attaches to it.
+async function openTerminal(id: string) {
+  one<HTMLSelectElement>('#terminal').value = ''; await loadTerminals();
+  one<HTMLSelectElement>('#terminal').value = id; attach();
+}
 one<HTMLButtonElement>('#stopTerminal').onclick = async () => {
   const id = one<HTMLSelectElement>('#terminal').value; if (!id) return;
   const result = await mutate('/terminals/' + encodeURIComponent(id) + '/stop', {});
@@ -937,7 +941,7 @@ async function loadMission(cached = false) {
       + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
-      + '<div id="hub"></div>'
+      + '<div id="hub"></div><div id="sprint"></div>'
       + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
       + win('pages', 'Pages', data.pages.length, escape(data.pages.map((item: Item) => item.title).join(' · ')) || 'No pages.',`<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
@@ -946,7 +950,40 @@ async function loadMission(cached = false) {
   } catch { if (cached) lastMission = null; else if (!missionDrawn) one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
   if (lastHub) void loadHub(true); // the redraw above emptied #hub: refill it from memory, not from the wire
   if (!cached) void loadHub();
+  if (!cached) void loadSprint();
 }
+// Sprint tracker: a tile while the computer has a sprint status file (404 = none, so no tile); one ring per chunk, the
+// sprint scripts (registry ids sprint-start, sprint-close, sprint-heavy; they ask first like any script) and Open tmux.
+type Sprint = { sprint: string; updatedAt: string; cutoff: string; chunks: { id: string; title: string; state: string; percent: number; waitingOn: string }[] };
+const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
+async function loadSprint() {
+  const target = document.querySelector<HTMLElement>('#sprint');
+  if (!target) return;
+  let data: Sprint | null = null, error = '';
+  try { data = await request('/mission/sprint'); } catch (failed) {
+    const body = (failed as { body?: { error?: string; reason?: string } }).body;
+    if (!body || body.error === 'no-sprint' || body.error === 'settings-missing') { target.innerHTML = ''; return; }
+    error = body.reason ?? body.error ?? 'unreadable';
+  }
+  const rings = data ? data.chunks.map((c) => `<div class="spr" data-state="${escape(['running', 'waiting', 'merged', 'blocked'].includes(c.state) ? c.state : 'unknown')}"><div class="ring" role="img" aria-label="${escape(c.id)} ${escape(c.state)} ${c.percent}%" style="--p:${Number(c.percent)}"><b>${Number(c.percent)}%</b></div>`
+    + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
+  const scripts = SPRINT_SCRIPTS.map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
+    return index < 0 ? `<p class="muted">${label}: add a ${id} button to the registry.</p>` : `<form data-run="${index}"><button type="submit">${label} (asks first)</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`; }).join('');
+  const merged = data ? data.chunks.filter((c) => c.state === 'merged').length : 0;
+  keepOpen(() => { target.innerHTML = win('sprint', data ? 'Sprint · ' + escape(data.sprint || 'unnamed') : 'Sprint', data ? `${merged}/${data.chunks.length}` : '!',
+    data ? `merged · updated ${escape(data.updatedAt || 'unknown')}` : 'status file unreadable',
+    (data ? `<p class="muted">Updated ${escape(data.updatedAt || 'unknown')}${data.cutoff ? ' · cutoff ' + escape(data.cutoff) : ''}</p><div class="springs">${rings}</div>`
+      : `<article class="card warn"><p>The sprint status file is there but P9 cannot read it (${escape(error)}).</p></article>`)
+    + `<div class="sprint-acts">${scripts}<button type="button" class="quiet" data-sprint-tmux>Open tmux</button><p class="muted" data-tmux-note></p></div>`, !data); });
+}
+one('#mission').addEventListener('click', async (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-sprint-tmux]');
+  if (!button) return;
+  const result = await mutate('/mission/sprint/tmux', {});
+  if (result.status !== 201) { button.parentElement!.querySelector<HTMLElement>('[data-tmux-note]')!.textContent = 'Not opened: ' + String(result.body.error ?? result.status); return; }
+  button.closest('dialog')?.close();
+  show('terminal'); await openTerminal(String(result.body.terminal));
+});
 // The old workspace-hub sections. Each row's text loads when it is opened.
 const ago = (min: number) => min < 60 ? `${min} min` : min < 2880 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} d`;
 const lazy = (query: Record<string, string>) => `<pre data-text="${escape(new URLSearchParams(query).toString())}">Loading…</pre>`;

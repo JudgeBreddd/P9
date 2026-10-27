@@ -178,3 +178,70 @@ test('Send to server in the window: the button, then Moved to the server', { ski
   await shot('send-to-server-moved');
   assert.equal((await call(remote, '/chat')).conversations.find(c => c.id === id)?.state, 'stopped');
 });
+
+// Sprint tracker (#35) in the window, in Server mode: the tile and its window read the server's status file, not this
+// computer's; a sprint script asks first and runs there; switching to Local (no file here) takes the tile away.
+test('Sprint in the window: the server\'s status file draws the tile and rings, scripts ask first, Local has none', { skip, timeout: 60000 }, async (t) => {
+  const settings = async (paths) => {
+    for (const dir of ['hub', 'projects', 'waiting']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
+    await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [
+      { id: 'sprint-start', title: 'Sprint start', group: 'Sprint', cmd: [process.execPath, '-e', 'console.log("start-" + "ok")'], confirm: true }], apps: [], pages: [] }));
+    await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: 'waiting' }));
+    return { args: ['--settings', path.join(paths.directory, 'settings.json')] };
+  };
+  const local = await daemon(t, undefined, false, settings), remote = await daemon(t, undefined, false, settings), s = await stage(remote);
+  const status = path.join(remote.directory, '.local', 'state', 'sprint', 'status.json');
+  await mkdir(path.dirname(status), { recursive: true });
+  await writeFile(status, JSON.stringify({ sprint: 'Window sprint', updatedAt: '2026-10-27T14:30', cutoff: '07:00', chunks: [
+    { id: 'c1', title: 'Settings rows', state: 'merged', percent: 100 }, { id: 'c2', title: 'Installer', state: 'running', percent: 40 },
+    { id: 'c3', title: 'Phone layout', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue' }] }));
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const shot = async name => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
+  await page.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor({ timeout: 20000 });
+  await page.locator('#rMission').click();
+  const tile = page.locator('#fMission [data-sprint]');
+  await tile.waitFor({ timeout: 15000 });
+  assert.match(await tile.innerText(), /Sprint status\s+1\/3/);
+  await shot('desktop-sprint-tile');
+  await tile.click();
+  const modal = page.locator('#mdl [data-sprint-body]');
+  await modal.waitFor({ timeout: 5000 });
+  assert.match(await page.locator('#mdlT').innerText(), /Window sprint/);
+  assert.deepEqual(await modal.locator('.spr').evaluateAll(rows => rows.map(r => [r.dataset.state, r.querySelector('.ring b').textContent])),
+    [['merged', '100%'], ['running', '40%'], ['waiting', '70%']]);
+  assert.match(await modal.innerText(), /Waiting on: test run 4f2a in the queue/);
+  assert.match(await modal.innerText(), /1 of 3 merged/);
+  const colours = await modal.locator('.spr').evaluateAll(rows => rows.map(r => getComputedStyle(r.querySelector('.ring')).getPropertyValue('--ring-c').trim()));
+  assert.equal(new Set(colours).size, 3, 'merged, running and waiting each their own colour: ' + colours);
+  // No sprint-close or sprint-heavy in this registry: those buttons are off and say what is missing.
+  assert.equal(await page.locator('#mdlFoot [data-sprint-run="sprint-close"]').getAttribute('title'), 'Add a sprint-close button to the registry');
+  await shot('desktop-sprint-modal');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const tmuxBox = await page.locator('#mdlFoot [data-sprint-tmux]').boundingBox();
+  assert.ok(tmuxBox && tmuxBox.x + tmuxBox.width <= 390, 'Open tmux off the edge at 390 wide: ' + JSON.stringify(tmuxBox));
+  await shot('desktop-sprint-modal-narrow');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  // Sprint start: the script window, Run arms it, Confirm run runs it on the server.
+  await page.locator('#mdlFoot [data-sprint-run="sprint-start"]').click();
+  await page.locator('#mdlFoot [data-run]', { hasText: 'Run' }).click();
+  await page.locator('#mdlFoot [data-run]', { hasText: 'Confirm run' }).click();
+  await page.locator('#mdl', { hasText: 'start-ok' }).waitFor({ timeout: 15000 });
+  await shot('desktop-sprint-ran');
+  await page.keyboard.press('Escape');
+  // Local: no status file on this computer, so no tile.
+  await page.locator('#serverBadge').click();
+  await page.locator('#serverBadge', { hasText: 'Local' }).waitFor({ timeout: 20000 });
+  await page.locator('#rMission').click();
+  await page.locator('#fMission [data-idea]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-sprint]').count(), 0, 'a Sprint tile in Local with no status file here');
+  console.log('PASS desktop sprint: tile and rings from the server file, start confirmed and ran there, no tile in Local');
+});

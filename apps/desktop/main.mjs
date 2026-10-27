@@ -486,7 +486,10 @@ export async function createDesktop({ state, open } = {}) {
     hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
     hubDecide: body => ['POST', '/mission/hub/decide', body],
     fix: ({ host, name }) => [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
-    idea: ({ name, text, needs_done }) => [name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
+    // Sprint tracker: the connected machine's status file, and a terminal attached to its sprint tmux session (no body).
+    sprint: () => ['GET', '/mission/sprint'],
+    sprintTmux: () => ['POST', '/mission/sprint/tmux', {}],
+    idea: ({ name, text, needs_done }) =>[name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],

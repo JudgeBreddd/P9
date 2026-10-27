@@ -230,3 +230,11 @@ body.inchat nav{display:none}
 .bar .run[data-run=working],#events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{animation:spin .8s linear infinite}
 #chatList .row[data-run=working] .dot{animation:pulse 1.4s ease-in-out infinite}}
 #composerSlot{margin-left:16px;margin-right:16px}
+/* Sprint tracker: one ring per chunk, coloured by state (green merged, amber waiting, blue running, red blocked). */
+#sprint{display:contents}.springs{display:grid;gap:8px;margin:10px 0}
+.spr{--ring-c:var(--muted);display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.spr[data-state=merged]{--ring-c:#5fd39a}.spr[data-state=waiting]{--ring-c:var(--amber)}.spr[data-state=running]{--ring-c:#6aa8ff}.spr[data-state=blocked]{--ring-c:var(--red)}
+.spr .ring{position:relative;display:grid;place-items:center;width:52px;height:52px}
+.spr .ring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--ring-c) calc(var(--p) * 1%),var(--line) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px));mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px))}
+.spr .ring b{position:relative;font-size:12px}.spr .spt{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}.spr .st{color:var(--ring-c)}
+.sprint-acts{display:grid;gap:8px}.sprint-acts form{display:grid}.sprint-acts pre{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;font:12.5px/1.45 ui-monospace,monospace;background:#0d131c;border:1px solid var(--line);border-radius:10px;padding:10px}
