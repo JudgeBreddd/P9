@@ -810,7 +810,7 @@ async function loadTerminals() {
   }
 }
 one<HTMLSelectElement>('#terminal').onchange = attach;
-one('#pickTerminal').onclick = () => {
+one<HTMLElement>('#pickTerminal').onclick = () => {
   const select = one<HTMLSelectElement>('#terminal'), options = [...select.options].filter((option) => option.value);
   if (options.length) openSheet('Terminals', options.map((option) => `<button type="button" class="opt" role="menuitemradio" aria-checked="${option.value === select.value}" data-term="${escape(option.value)}">${escape(option.textContent)}</button>`).join(''));
 };
@@ -1102,14 +1102,14 @@ one<HTMLButtonElement>('#moreFile').onclick = () => openSheet('File', (state.fil
 one('#sheetBody').addEventListener('click', (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-file], [data-term]'); if (!button) return;
   if (button.dataset.term) { one<HTMLSelectElement>('#terminal').value = button.dataset.term; attach(); }
-  else if (button.dataset.file === 'preview') preview(one<HTMLElement>('#rendered').hidden); else discard();
+  else if (button.dataset.file === 'preview') preview(!!one<HTMLElement>('#rendered').hidden); else discard();
   sheet.close();
 });
 async function openFile(path: string, root?: string) {
   try {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
-    one('#openPath').textContent = path.split('/').pop()!; one('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
+    one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root);
     one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
     online();
