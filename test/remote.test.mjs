@@ -183,11 +183,11 @@ test('Send to server in the window: the button, then Moved to the server', { ski
 // computer's; a sprint script asks first and runs there; switching to Local (no file here) takes the tile away.
 test('Sprint in the window: the server\'s status file draws the tile and rings, scripts ask first, Local has none', { skip, timeout: 60000 }, async (t) => {
   const settings = async (paths) => {
-    for (const dir of ['hub', 'projects', '_tyler']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
+    for (const dir of ['hub', 'projects', 'waiting']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
     await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [
       { id: 'sprint-start', title: 'Sprint start', group: 'Sprint', cmd: [process.execPath, '-e', 'console.log("start-" + "ok")'], confirm: true }], apps: [], pages: [] }));
     await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n');
-    await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler' }));
+    await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: 'waiting' }));
     return { args: ['--settings', path.join(paths.directory, 'settings.json')] };
   };
   const local = await daemon(t, undefined, false, settings), remote = await daemon(t, undefined, false, settings), s = await stage(remote);

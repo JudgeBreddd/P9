@@ -25,7 +25,7 @@ const writeStatus = async (instance, value) => { await mkdir(path.dirname(status
 // test never reaches a real tmux server.
 async function setup(paths) {
   const tmux = path.join(paths.directory, 'tmux');
-  for (const dir of ['hub', 'projects', '_tyler']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
+  for (const dir of ['hub', 'projects', 'waiting']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
   await mkdir(tmux, { mode: 0o700 });
   // The word is printed in two halves, so the echoed command line never contains it: only the run's output does.
   const script = (word) => [process.execPath, '-e', `console.log(${JSON.stringify(word.slice(0, 3))} + ${JSON.stringify(word.slice(3))})`];
@@ -34,7 +34,7 @@ async function setup(paths) {
     { id: 'sprint-close', title: 'Sprint close', group: 'Sprint', cmd: script('close-ok'), confirm: true },
     { id: 'sprint-heavy', title: 'Heavy services', group: 'Sprint', cmd: script('heavy-ok'), confirm: true }], apps: [], pages: [] }));
   await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n');
-  await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler' }));
+  await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: 'waiting' }));
   return { args: ['--settings', path.join(paths.directory, 'settings.json')], env: { TMUX_TMPDIR: tmux } };
 }
 function sprintSession(t, instance) {
