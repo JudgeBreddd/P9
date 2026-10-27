@@ -20,7 +20,7 @@ body:
     id: version
     attributes:
       label: P9 version
-      placeholder: 0.1.5
+      placeholder: 0.1.6
     validations:
       required: true
   - type: dropdown
