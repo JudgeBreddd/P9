@@ -185,6 +185,9 @@ async function replay() {
   state.base = state.cursor;
   state.conversations = (await request('/chat')).conversations ?? [];
   state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
+  // A chat made during the read is a stub whose first events (its message) are below base: read them now, or the list
+  // takes the later ones alone and shows a working chat as stopped. Stopped chats still load when picked (PH3).
+  await Promise.all(state.conversations.filter((item) => item.state !== 'stopped' && state.stubs.has(String(item.id))).map((item) => history(String(item.id))));
 }
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }
@@ -471,7 +474,8 @@ const startPick = new Map<string, string>();
 function renderPicks(id: string) {
   const configs = state.events.filter((event) => event.conversation === id && event.type === 'config');
   const set = state.events.findLast((event) => event.conversation === id && event.type === 'mode')?.data as { name?: string } | undefined;
-  const key = id + ':' + configs.length + ':' + (set?.name ?? '');
+  // The agent is in the key: a chat made here can draw before its row is read, with no modes yet.
+  const key = id + ':' + provider(id) + ':' + configs.length + ':' + (set?.name ?? '');
   if (key === picksFor) return;
   // The confirmed pick is kept: a redraw while the red warning is open (Codex reports its mode as it starts) must not
   // turn the pick waiting on that warning into the one Cancel goes back to.

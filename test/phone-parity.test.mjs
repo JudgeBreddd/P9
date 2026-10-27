@@ -376,7 +376,7 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   // The pill opens the Mode sheet with the one in use ticked, and reads the pick after it.
   await page.click('#modePill');
   assert.equal(await page.textContent('#sheetTitle'), 'Mode');
-  assert.deepEqual(await page.$$eval('#sheet[open] [data-mode]', (els) => els.map((el) => el.textContent + (el.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))).then((l) => l.slice(0, 2)), ['As set ✓', 'Read-only']);
+  assert.deepEqual(await page.$$eval('#sheet[open] [data-mode]', (els) => els.map((el) => el.textContent + (el.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))).then((l) => l.slice(0, 2)), ['As set ✓', 'Auto']);
   await shot(page, 'phone-mode-sheet');
   await page.click('#sheet[open] [data-mode="Auto"]');
   await page.waitForFunction(() => document.querySelector('#modePill').textContent === 'Auto ▾' && !document.querySelector('#sheet').open, null, { timeout: 5000 });
