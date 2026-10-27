@@ -91,6 +91,20 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
+// D7/D8: the agents' official install commands (claude.ai/install, npm's @openai/codex) and their sign-in commands.
+const AGENT_COMMANDS = process.platform === 'win32'
+  ? { claude: { install: 'irm https://claude.ai/install.ps1 | iex', login: 'claude auth login' }, codex: { install: 'npm install -g @openai/codex', login: 'codex login' } }
+  : { claude: { install: 'curl -fsSL https://claude.ai/install.sh | bash', login: 'claude auth login' }, codex: { install: 'npm install -g @openai/codex', login: 'codex login' } };
+// A program on PATH or in ~/.local/bin (where Claude's installer puts it, often not yet on a service's PATH).
+async function onPath(name) {
+  const folders = [...(process.env.PATH ?? '').split(path.delimiter), path.join(os.homedir(), '.local', 'bin')].filter(Boolean);
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.ps1'] : [''];
+  for (const folder of folders) for (const ext of exts) {
+    if (await stat(path.join(folder, name + ext)).then(info => info.isFile(), () => false)) return true;
+  }
+  return false;
+}
+
 export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
@@ -450,7 +464,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
       // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
-      claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')) });
+      claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')),
+      // D8: each agent's own CLI, for a terminal and Hand off (chats use the CLI the adapter ships, so they work without it).
+      claudeCli: await onPath('claude'), codexCli: await onPath('codex') });
   });
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.
@@ -546,6 +562,17 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.post('/setup/login', async (c) => reply(c, await chat.login.start(await json(c))));
   app.post('/setup/login/code', async (c) => reply(c, chat.login.code(await json(c))));
   app.post('/setup/login/stop', async (c) => reply(c, await chat.login.stop(await json(c))));
+  // D7/D8 (threat model row 53): an agent's official install or sign-in command, typed into a new P9 terminal and never run:
+  // the owner reads it and presses Enter, and the terminal shows its output. The command comes from this table only; the
+  // credentials the CLI saves stay in its own folder and never pass through P9.
+  app.post('/setup/agent-terminal', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'action,agent' || typeof body.agent !== 'string' || typeof body.action !== 'string'
+        || !Object.hasOwn(AGENT_COMMANDS, body.agent) || !Object.hasOwn(AGENT_COMMANDS[body.agent], body.action)) return reply(c, { status: 400, error: 'request-refused' });
+    const command = AGENT_COMMANDS[body.agent][body.action];
+    const made = await terminals.create({}, { cwd: workspace, typed: command });
+    return reply(c, made.terminal ? { status: 201, terminal: made.terminal, command } : { ...made, command });
+  });
   app.get('/file-protection', (c) => c.json({ on: protection() }));
   app.post('/file-protection', async (c) => {
     const body = await json(c);
