@@ -446,6 +446,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), csrfKept);
   await page.click('[data-nav="files"]'); await page.click('#fileList button[data-name="note.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
 
+  await edit('before 401'); // Save is disabled until the draft differs; typing makes no /files request
   let used401;
   await page.route('**/files', async (route) => {
     used401 = route.request().headers()['x-p9-op'];
