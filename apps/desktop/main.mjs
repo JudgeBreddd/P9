@@ -1081,6 +1081,17 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');
     return (await updater)[action]();
   });
+  // A link in an agent reply (threat model row 18): one plain http(s) address, checked again here, opens in the browser.
+  ipcMain.handle('p9:open-link', async (event, ...args) => {
+    const [href] = args;
+    if (!fromApp(event) || args.length !== 1 || typeof href !== 'string' || href.length > 2048 || /[\s\p{Cc}\p{Cf}]/u.test(href)) throw new Error('ipc-sender-refused');
+    let url;
+    try { url = new URL(href); } catch { throw new Error('ipc-sender-refused'); }
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url.href], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(url.href);
+    return { opened: true };
+  });
   ipcMain.handle('p9:open-petdex', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length) throw new Error('ipc-sender-refused');

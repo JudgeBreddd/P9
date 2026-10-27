@@ -289,16 +289,33 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.deepEqual(await page.locator('#indPets canvas').first().boundingBox(), top);
   assert.equal((await settingsNow()).pet.chat.top, null);
 
-  // An agent's reply shows as Markdown, and markup in it stays text: no script, image, frame or link (threat model row 18).
+  // An agent's reply shows as Markdown, and markup in it stays text: no script, image or frame (threat model row 18). Only
+  // plain http(s) addresses become links (v0.1.6 P9), opening outside P9, with the real host after text that is not it.
   const md = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
-  const hostile = '\n# Plan\n\n- **one**\n- two\n\n```js\nlet a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2"> <iframe src="https://example.com"></iframe>\n\n[click](javascript:window.pwned=3) <https://example.com> ![x](https://example.com/x.png)';
+  const hostile = '\n# Plan\n\n- **one**\n- two\n\n```js\nlet a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2"> <iframe src="https://example.com"></iframe>\n\n[click](javascript:window.pwned=3) <https://example.com> ![x](https://example.com/x.png)'
+    + ' [github.com](https://docs.example.test/p) [d](data:text/html,hi) [f](file:///etc/passwd) [r](/chat) [u](https://u:p@a.example.test/)';
   await call(instance, `/chat/${md}/prompt`, 'POST', { text: hostile });
   await page.locator(`#tabs .tab[data-id="${md}"]`).click();
   const reply = page.locator(`#chats .pane[data-id="${md}"] .msg.agent`).last();
   await reply.locator('table').waitFor({ timeout: 15000 });
+  assert.deepEqual(await reply.evaluate((m) => [...m.querySelectorAll('a')].map((a) => [a.getAttribute('href'), a.target, a.rel, a.textContent, a.nextElementSibling?.matches('.link-host') ? a.nextElementSibling.textContent : null])),
+    [['https://example.com/', '_blank', 'noopener noreferrer', 'https://example.com', null], ['https://docs.example.test/p', '_blank', 'noopener noreferrer', 'github.com', '(docs.example.test)']]);
+  // A click opens it through main, in the browser and not in a P9 window; main checks the address again and refuses
+  // anything else the page could send.
+  await app.evaluate(({ shell }) => { globalThis.linkSeen = []; shell.openExternal = async (url) => { globalThis.linkSeen.push(url); }; });
+  const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+  await reply.locator('a[href="https://docs.example.test/p"]').click();
+  for (let i = 0; i < 50 && !(await app.evaluate(() => globalThis.linkSeen.length)); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), ['https://docs.example.test/p']);
+  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), windows);
+  assert.deepEqual(await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
+    const sender = BrowserWindow.getAllWindows()[0].webContents, run = (...args) => ipcMain._invokeHandlers.get('p9:open-link')({ sender, senderFrame: sender.mainFrame }, ...args).then(() => 'accepted', (e) => e.message);
+    return [await run('javascript:alert(1)'), await run('https://u:p@a.test/'), await run('file:///etc/passwd'), await run(42), await run('https://a.test/', 'x'), await run('https://a.test/‮')];
+  }), Array(6).fill('ipc-sender-refused'));
+  assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), ['https://docs.example.test/p']);
   assert.deepEqual(await reply.evaluate((m) => ({
     shape: ['h1', 'ul li strong', 'pre code', 'table td'].map((q) => !!m.querySelector(q)),
-    banned: m.querySelectorAll('script, img, iframe, a, object, embed, svg').length,
+    banned: m.querySelectorAll('script, img, iframe, object, embed, svg').length,
     on: [...m.querySelectorAll('*')].some((el) => [...el.attributes].some((a) => /^on/i.test(a.name))),
     shown: ['<script>', 'onerror', '<iframe'].map((t) => m.textContent.includes(t)), pwned: window.pwned,
   })), { shape: [true, true, true, true], banned: 0, on: false, shown: [true, true, true], pwned: undefined });
@@ -1215,6 +1232,59 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await dlg.waitFor(); await dlg.getByRole('button', { name: 'Cancel' }).click();
   await settled(codex, 'Read-only', 'Full access still warns: its own don\'t show again was never picked');
   console.log('PASS loosened modes: Codex starts in Auto review; Full access warns in red, Cancel and Escape keep Auto review, Turn on reaches the agent; Claude bypass with don\'t show again skips the warning after a restart; Full access still warns');
+});
+
+test('D2: Settings > New chats start in sets each agent\'s starting mode; the loosened ones warn first; a chat\'s own pick leaves it (threat model row 25a)', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-d2-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const chat = async (provider) => {
+    const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
+    await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+    const pane = page.locator(`#chats .pane[data-id="${id}"]`);
+    await pane.locator('[data-mode]').waitFor();
+    return pane.locator('[data-mode]');
+  };
+  const pick = page.locator('[data-default-mode="codex"]'), dlg = page.locator('#looseDlg');
+  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); };
+  const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
+  const kept = () => page.evaluate(() => localStorage.getItem('p9-mode-default:codex'));
+  await settings();
+  assert.equal(await pick.inputValue(), '', 'a fresh install follows the last mode picked');
+  assert.deepEqual(await pick.locator('option').allInnerTexts(), ['Last mode picked', 'Read-only', 'Workspace access', 'Auto review', 'Full access']);
+  // Full access warns in red over Settings; Cancel puts "Last mode picked" back and keeps nothing.
+  await pick.selectOption('Full access');
+  await dlg.waitFor();
+  assert.match(await dlg.innerText(), /Turn on Full access for Codex\?/);
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
+  await dlg.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => document.querySelector('[data-default-mode="codex"]').value === '', null, { timeout: 3000 });
+  assert.equal(await kept(), null);
+  await closeSettings();
+  assert.equal(await (await chat('codex')).inputValue(), 'Auto review', 'Cancel: a new chat still starts in Auto review');
+  // Turn on: every new Codex chat starts in Full access, and a chat's own pick does not change that.
+  await settings();
+  await pick.selectOption('Full access');
+  await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
+  await page.waitForFunction(() => localStorage.getItem('p9-mode-default:codex') === 'Full access', null, { timeout: 3000 });
+  await closeSettings();
+  const first = await chat('codex');
+  assert.equal(await first.inputValue(), 'Full access');
+  await first.selectOption('Read-only');
+  await page.waitForFunction(() => localStorage.getItem('p9-mode:codex') === 'Read-only', null, { timeout: 3000 });
+  assert.equal(await (await chat('codex')).inputValue(), 'Full access', 'a chat\'s own pick left the default alone');
+  assert.equal(await (await chat('claude')).inputValue(), 'Auto', 'Claude has its own default');
+  // Back to "Last mode picked": the last pick (Read-only) wins again.
+  await settings();
+  await pick.selectOption('');
+  assert.equal(await kept(), null);
+  await closeSettings();
+  assert.equal(await (await chat('codex')).inputValue(), 'Read-only');
 });
 
 test('Chat folder: Start in offers the workspace, recent folders and Choose folder...; a chosen folder reaches the chat, outside picks are refused (threat model row 24)', { timeout: 120000 }, async (t) => {

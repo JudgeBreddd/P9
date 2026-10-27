@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   openUpdates: () => ipcRenderer.invoke('p9:open-updates'),
   updates: (ask) => ipcRenderer.invoke('p9:updates', ...(ask === undefined ? [] : [ask])),
   openPetdex: () => ipcRenderer.invoke('p9:open-petdex'),
+  openLink: (href) => ipcRenderer.invoke('p9:open-link', href),
   fileProtection: (...on) => ipcRenderer.invoke('p9:file-protection', ...on),
   listPets: () => ipcRenderer.invoke('p9:pets'),
   loadPet: (name) => ipcRenderer.invoke('p9:pets', name),

@@ -247,7 +247,7 @@ dialog.pic{width:fit-content;height:fit-content;max-width:none;max-height:none;b
 .msg.agent pre{overflow-x:auto;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:color-mix(in oklch,var(--background) 70%,black)}.msg.agent pre code{padding:0;background:none}
 .msg.agent pre{position:relative}.msg.agent pre [data-copycode]{position:absolute;top:4px;right:4px;opacity:0;transition:opacity .15s}.msg.agent pre:hover [data-copycode],.msg.agent pre [data-copycode]:focus-visible,.msg.agent pre [data-copycode][data-said]{opacity:1} /* CP5 */
 .msg.agent table{border-collapse:collapse;font-size:13px}.msg.agent :is(th,td){border:1px solid var(--border);padding:3px 8px;text-align:left}
-.msg.agent blockquote{padding-left:10px;border-left:3px solid var(--border);color:var(--muted-foreground)}.msg.agent .link{color:var(--primary);text-decoration:underline dotted}
+.msg.agent blockquote{padding-left:10px;border-left:3px solid var(--border);color:var(--muted-foreground)}.msg.agent .link{color:var(--primary);text-decoration:underline dotted}.msg.agent a.link{text-decoration:underline;text-underline-offset:3px;cursor:pointer}.msg.agent .link-host{color:var(--muted-foreground);font-size:.85em}
 .meter[data-stale]{opacity:.55}
 details.tool{border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--card) 60%,transparent);font-size:12.5px}
 details.tool summary{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;list-style:none;user-select:none}
