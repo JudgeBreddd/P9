@@ -44,6 +44,8 @@ async function newChat(page, agent, made201 = () => {}) {
   return id;
 }
 const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };
+// P4: a mode is picked as a thumb does it, from the pill's sheet.
+const pickMode = async (page, value) => { await page.click('#modePill'); await page.click(`#sheet[open] [data-mode="${value}"]`); };
 
 test('T6, T2, T1: a phone terminal has P9_PHONE=1, a desktop one does not; Paste sends the clipboard on its tap only', { timeout: 90000 }, async (t) => {
   const { page, context, server } = await phoneOn(t);
@@ -129,7 +131,7 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
     dlg.addEventListener('close', () => at('close')); sel.addEventListener('change', () => at('change'));
     new MutationObserver(() => at('options')).observe(sel, { childList: true }); });
   const p6dump = async () => JSON.stringify(await page.evaluate(() => window.p6log));
-  await page.selectOption('#mode', 'Full access');
+  await pickMode(page, 'Full access');
   await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
   assert.equal(await page.textContent('#looseT'), 'Turn on Full access for Codex?');
   assert.match(await page.textContent('#looseP'), /without a sandbox/);
@@ -142,7 +144,7 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   assert.equal(await page.inputValue('#mode'), '');
   assert.equal(await page.evaluate(() => localStorage.getItem('p9-mode:codex')), null);
   // Turn on: the prompt goes in Full access and the daemon's mode event names it in the label.
-  await page.selectOption('#mode', 'Full access');
+  await pickMode(page, 'Full access');
   await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
   await page.click('#looseDlg button[value="yes"]');
   await page.waitForFunction(() => document.querySelector('#mode').value === 'Full access', null, { timeout: 5000 }).catch(async (error) => { throw new Error('P6 timeline ' + await p6dump(), { cause: error }); });
@@ -156,7 +158,7 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   assert.equal(await page.inputValue('#mode'), '');
   assert.ok((await labels()).includes('Mode: Bypass permissions'));
   // "Don't show again" is kept for that mode on this phone, past a reload.
-  await page.selectOption('#mode', 'Bypass permissions');
+  await pickMode(page, 'Bypass permissions');
   await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
   await page.click('#looseDlg button[value="never"]');
   // Kept once the warning has closed, a frame after the tap in Chromium: the select shows the pick from the moment it is
@@ -172,8 +174,8 @@ test('P6: every mode on the phone; the loosened ones ask first in red; a chat ma
   await newChat(page, 'claude', release);
   await page.unroute(firstRead);
   assert.equal(await page.inputValue('#mode'), 'Bypass permissions');
-  await page.selectOption('#mode', 'Auto');
-  await page.selectOption('#mode', 'Bypass permissions');
+  await pickMode(page, 'Auto');
+  await pickMode(page, 'Bypass permissions');
   assert.equal(await page.evaluate(() => document.querySelector('#looseDlg').open), false);
 });
 
@@ -205,9 +207,13 @@ test('P10: effort and fast mode, slash commands and a recent chat\'s folder on t
   await newChat(page, 'claude');
   await send(page, 'cwd');
   await replied('/proj/sub');
-  await page.waitForSelector('#pickers select[data-config="effort"]', { timeout: 10000 });
+  // Effort and fast mode sit under the modes in the pill's sheet, and stay put once it closes.
+  await page.click('#modePill');
+  await page.waitForSelector('#sheet[open] #pickers select[data-config="effort"]', { timeout: 10000 });
   await page.selectOption('#pickers select[data-config="effort"]', 'high');
   await page.selectOption('#pickers select[data-config="fast"]', 'on');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open && document.querySelector('#modeHome #pickers select[data-config="fast"]')?.value === 'on', null, { timeout: 5000 });
   await send(page, 'config');
   await replied('effort=high,fast=on');
   await page.fill('#prompt', '/re');
@@ -229,22 +235,25 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
   const chips = (n) => page.waitForFunction((k) => document.querySelectorAll('#attached .chip-img').length === k, n, { timeout: 10000 });
   const noted = (want) => page.waitForFunction((w) => { const el = document.querySelector('#composerNote'); return !el.hidden && el.textContent.includes(w); }, want, { timeout: 10000 });
-  const paste = (count) => page.evaluate(([b64, k]) => {
+  const put = (kind, count) => page.evaluate(([b64, kind, k]) => {
     const dt = new DataTransfer(), bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    for (let i = 0; i < k; i += 1) dt.items.add(new File([bin], 'pasted' + i + '.png', { type: 'image/png' }));
-    document.querySelector('#prompt').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-  }, [png, count]);
+    for (let i = 0; i < k; i += 1) dt.items.add(new File([bin], (kind === 'paste' ? 'pasted' : 'dropped') + i + '.png', { type: 'image/png' }));
+    const init = { bubbles: true, cancelable: true };
+    document.querySelector('#prompt').dispatchEvent(kind === 'paste' ? new ClipboardEvent('paste', { ...init, clipboardData: dt }) : new DragEvent('drop', { ...init, dataTransfer: dt }));
+  }, [png, kind, count]);
+  const paste = (count) => put('paste', count);
   const choose = async (pick, files) => {
     await page.click('#attach');
-    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click(`#attachSheet [data-pick="${pick}"]`)]);
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click(`#sheet[open] [data-pick="${pick}"]`)]);
     await chooser.setFiles(files);
     return page.$eval('#attachInput', (el) => [el.accept, el.getAttribute('capture')]);
   };
   await newChat(page, 'claude');
   await page.click('#attach');
-  assert.deepEqual(await page.$$eval('#attachSheet:not([hidden]) [data-pick]', (els) => els.map((el) => el.textContent)), ['Photo library', 'Take photo', 'File']);
-  await page.click('#attach');
-  assert.equal(await page.isHidden('#attachSheet'), true);
+  assert.deepEqual(await page.$$eval('#sheet[open] [data-pick]', (els) => els.map((el) => el.textContent)), ['Photo library', 'Take photo', 'File']);
+  assert.equal(await page.textContent('#sheetTitle'), 'Attach');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 });
   // Each choice opens the phone's own picker: the camera asked for on Take photo, the four types on File.
   assert.deepEqual(await choose('camera', [{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', 'environment']);
   await chips(1);
@@ -260,6 +269,11 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await shot(page, 'phone-composer-attach');
   await page.click('#attached [aria-label="Remove pasted0.png"]');
   await page.click('#attached [aria-label="Remove lib.png"]');
+  await chips(1);
+  // A dropped picture attaches the same way.
+  await put('drop', 1);
+  await chips(2);
+  await page.click('#attached [aria-label="Remove dropped0.png"]');
   await chips(1);
   await send(page, 'look');
   await replied('echo:look' + seen);
@@ -282,4 +296,85 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }));
   await send(page, 'look');
   await replied('echo:look' + seen.repeat(4));
+});
+test('P4: one tap on send posts the message and the box keeps focus (the keyboard stays up)', { timeout: 60000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await page.focus('#prompt');
+  await page.fill('#prompt', 'one tap');
+  await page.click('#composer button[type="submit"]');
+  await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes('echo:one tap')), null, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'prompt');
+  assert.equal(await page.inputValue('#prompt'), '');
+});
+const sendLabel = (page, text) => page.waitForFunction((want) => document.querySelector('#composer button[type="submit"]').textContent === want, text, { timeout: 15000 });
+const said = (page, text) => page.waitForFunction((want) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(want)), text, { timeout: 15000 });
+test('P4: during a turn, text goes in with Steer or waits with Queue, and a queued one can be taken back', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await sendLabel(page, 'Stop');
+  assert.equal(await page.isHidden('button[data-when="queue"]'), true, 'no Queue with an empty box');
+  await page.fill('#prompt', 'later');
+  await sendLabel(page, 'Steer');
+  await page.click('button[data-when="queue"]');
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("later") >> text=Queued', { timeout: 15000 });
+  assert.equal(await page.inputValue('#prompt'), '');
+  await page.click('#queued [data-unhold]');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'later' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
+  await page.click('#composer button[type="submit"]');
+  await said(page, 'got:later'); // the turn is left running: the daemon's teardown stops it
+});
+test('P4: with an empty box during a turn the send button is Stop, and Stop ends the turn', { timeout: 60000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await sendLabel(page, 'Stop');
+  await page.click('#composer button[type="submit"]');
+  await sendLabel(page, 'Send message');
+  await send(page, 'after');
+  await said(page, 'echo:after');
+});
+test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const size = () => page.$eval('#prompt', (el) => [el.offsetHeight, el.scrollHeight > el.clientHeight, getComputedStyle(el).fontSize, el.placeholder, el.getAttribute('aria-label')]);
+  assert.deepEqual(await size(), [34, false, '16px', 'Message Claude', 'Message']);
+  await page.fill('#prompt', 'one\ntwo\nthree');
+  assert.deepEqual((await size()).slice(0, 2), [78, false]);
+  await page.fill('#prompt', Array.from({ length: 10 }, (_, i) => 'line ' + i).join('\n'));
+  assert.deepEqual((await size()).slice(0, 2), [144, true]);
+  await send(page, 'short');
+  await page.waitForFunction(() => document.querySelector('#prompt').value === '' && document.querySelector('#prompt').offsetHeight === 34, null, { timeout: 15000 });
+});
+test('P4: the composer is one rounded box at the foot of the chat: the message, then +, the mode pill and a round send', { timeout: 60000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const rect = (sel) => page.locator(sel).boundingBox();
+  const [slot, box, text, plus, pillBox, send] = [await rect('#composerSlot'), await rect('#box'), await rect('#prompt'), await rect('#attach'), await rect('#modePill'), await rect('#send')];
+  assert.deepEqual(await page.$eval('#box', (el) => [getComputedStyle(el).borderTopLeftRadius, el.parentElement.id]), ['22px', 'composerSlot']);
+  assert.ok(box.x >= 8 && box.x + box.width <= 382 && box.y + box.height <= slot.y + slot.height, 'the box sits 8 px in from each side, inside the slot');
+  assert.ok(slot.y + slot.height <= (await rect('nav')).y + 0.5, 'the slot sits on the tab bar');
+  // Line 2 under the message: + at the left, then the pill, the send at the right, all on one row inside the box.
+  for (const [name, r] of [['+', plus], ['pill', pillBox], ['send', send]]) assert.ok(r.y >= text.y + text.height - 0.5 && r.y + r.height <= box.y + box.height + 0.5, name + ' sits under the message, inside the box');
+  assert.ok(plus.x < pillBox.x && pillBox.x + pillBox.width < send.x && send.x + send.width >= box.x + box.width - 12, 'the row reads +, pill, then send at the right');
+  assert.deepEqual([plus.width, plus.height, send.width, send.height], [44, 44, 36, 36]);
+  assert.equal(await page.evaluate(() => document.elementFromPoint(...(({ x, y }) => [x - 3, y - 3])(document.querySelector('#send').getBoundingClientRect()))?.id), 'send', 'the send takes taps 4 px past its edge (a 44 px target)');
+  assert.equal(await page.textContent('#modePill'), 'Mode ▾');
+  await shot(page, 'phone-composer');
+  // The pill opens the Mode sheet with the one in use ticked, and reads the pick after it.
+  await page.click('#modePill');
+  assert.equal(await page.textContent('#sheetTitle'), 'Mode');
+  assert.deepEqual(await page.$$eval('#sheet[open] [data-mode]', (els) => els.map((el) => el.textContent + (el.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))).then((l) => l.slice(0, 2)), ['As set ✓', 'Read-only']);
+  await shot(page, 'phone-mode-sheet');
+  await page.click('#sheet[open] [data-mode="Auto"]');
+  await page.waitForFunction(() => document.querySelector('#modePill').textContent === 'Auto ▾' && !document.querySelector('#sheet').open, null, { timeout: 5000 });
+  assert.equal(await page.inputValue('#mode'), 'Auto');
+  assert.equal(await page.getAttribute('#modePill', 'aria-label'), 'Mode: Auto');
+  // The pickers went back home when the sheet closed (a later sheet's HTML would have wiped them).
+  assert.equal(await page.locator('#modeHome #more').count(), 1);
+  // No sideways scroll on a 390 px phone.
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
 });

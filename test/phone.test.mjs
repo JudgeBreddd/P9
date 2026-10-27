@@ -148,10 +148,13 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   };
   assert.deepEqual(await page.locator('#mode option').allInnerTexts(), ['Mode: as set', 'Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review']);
   assert.equal(await page.inputValue('#mode'), '', 'the phone picked a mode by itself');
-  await page.selectOption('#mode', 'Read-only'); await reply('mode', 'mode:read-only');
-  await page.selectOption('#mode', ''); await reply('mode', 'mode:read-only');
+  // The mode is picked from the composer's pill, which opens the Mode sheet (P4).
+  const pickMode = async (value) => { await page.click('#modePill'); await page.click(`#sheet[open] [data-mode="${value}"]`); };
+  await pickMode('Read-only'); await reply('mode', 'mode:read-only');
+  await pickMode(''); await reply('mode', 'mode:read-only');
   assert.deepEqual(await page.locator('#model option').evaluateAll((o) => o.map((x) => x.value)), ['default', 'opus', 'haiku']);
-  await page.selectOption('#model', 'opus'); await reply('model', 'model:opus');
+  await page.click('#modePill'); await page.selectOption('#sheet[open] #model', 'opus'); await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 }); await reply('model', 'model:opus');
   await page.screenshot({ path: path.join(evidence, 'phone-mode-model.png') });
 
   // Phase 16 free-form space: with the daemon already running, one file edit adds a section with a button and a

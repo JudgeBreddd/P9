@@ -29,14 +29,26 @@ form.question{display:grid;gap:10px;margin-top:8px}form.question fieldset{border
 /* P10: slash commands above the message box, and the new chat's folder */
 .slash{display:grid;gap:2px;max-height:40vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px}.slash button{display:block;text-align:left;min-height:44px;width:100%}.slash small{color:var(--muted)}#startIn{max-width:100%}
 /* P8: attach sheet, 48 px chips with a remove button, photos already sent */
-#attach{min-width:44px;font-size:22px;line-height:1}#attachSheet{border:1px solid var(--line);border-radius:12px;padding:6px}
 .attached{display:flex;flex-wrap:wrap;gap:8px}.chip-img{position:relative;width:48px;height:48px}.chip-img img{width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
 .chip-img button{position:absolute;top:-10px;right:-10px;width:28px;height:28px;min-height:0;padding:0;border-radius:50%;font-size:13px;line-height:1}
 .chip-img button::after{content:"";position:absolute;inset:-8px}
 .user-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.user-imgs img{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
-#composerNote{margin:0;font-size:14px}
-/* The pickers wrap rather than shrink to empty boxes on a 390 px phone */
-#composer>.actions{flex-wrap:wrap}#composer>.actions select{width:auto;max-width:100%}#pickers{display:contents}
+/* P4 (spec §4): one rounded box docked under the chat. Chips and slash commands, then the message (1 to 6 lines of
+   22 px, then it scrolls), then +, the mode pill, Queue during a turn, and a 36 px round send (44 px hit area). The form is
+   display:contents so its textarea, note and send sit in the box's grid; the send words stay in a hidden span for
+   screen readers and the tests, the arrow and the stop square are drawn. */
+#box{display:grid;grid-template-columns:auto auto 1fr auto auto;grid-template-areas:"chips chips chips chips chips" "slash slash slash slash slash" "text text text text text" "note note note note note" "plus pill . queue send";align-items:center;gap:2px 6px;margin:0 8px;padding:4px 6px 4px 12px;border:1px solid var(--line);border-radius:22px;background:var(--raised)}
+#box:focus-within{border-color:#3d4f68}#composer{display:contents}
+#attached{grid-area:chips;padding:10px 4px 4px}#slash{grid-area:slash;margin-top:6px}#composerNote{grid-area:note;margin:0;font-size:13px}
+#prompt{grid-area:text;width:100%;font-size:16px;line-height:22px;min-height:34px;max-height:144px;padding:6px 0;border:0;border-radius:0;background:transparent;resize:none;overflow-y:auto}#prompt:focus{outline:none}
+#attach{grid-area:plus;width:44px;height:44px;margin-left:-8px;padding:0;border:0;border-radius:50%;font-size:24px;font-weight:400;line-height:1}
+#modePill{grid-area:pill;width:auto;min-height:32px;padding:0 12px;border-radius:16px;font-size:13px;font-weight:600;white-space:nowrap}
+#box button[data-when=queue]{grid-area:queue;width:auto;min-height:32px;padding:0 12px;border-radius:16px;font-size:13px}
+#send{grid-area:send;position:relative;width:36px;height:36px;min-height:0;padding:0;border-radius:50%;display:grid;place-items:center}
+#send::after{content:"";position:absolute;inset:-4px}#send::before{content:"↑";font-size:20px;line-height:1}#send[data-stop=true]::before{content:"■";font-size:14px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#queued{margin:0 8px 6px;gap:4px}#queued .event{display:flex;align-items:center;gap:8px;padding:2px 2px 2px 12px;border-radius:18px;font-size:13px}#queued .event b{flex:none;margin:0;font-size:12px}#queued .event p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#queued button{width:auto;min-height:36px;padding:0 12px;border:0;font-size:13px}
+#more{display:grid;gap:8px;margin-top:10px}#pickers{display:contents}
 
 /* Shell (v0.1.6, phone spec §1, §4, §7): one fixed column the size of the visible viewport. Top bar, a scroller, a tab bar
    on top-level screens only. --vvh / --vvtop follow visualViewport (phone.ts fit()), so the composer and the editors ride

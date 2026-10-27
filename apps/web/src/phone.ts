@@ -313,7 +313,7 @@ function renderPicks(id: string) {
   const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.dataset.was ?? '' : startPick.get(id) ?? '';
   picksFor = key;
   mode.innerHTML = `<option value="">Mode: ${escape(set?.name ?? 'as set')}</option>` + ((modes as Record<string, string[]>)[provider(id)] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
-  mode.value = keep; mode.dataset.was = mode.value; startPick.delete(id);
+  mode.value = keep; mode.dataset.was = mode.value; startPick.delete(id); pill();
   type Pick = { current?: string; options?: { value: string; name: string }[] };
   const config = (configs.at(-1)?.data ?? {}) as { model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
@@ -361,14 +361,40 @@ function asking(id: string) {
   }
   return open.size > 0;
 }
+// P4: whether a turn runs in this chat, and the messages the daemon holds for it (Steer or Queue mid-turn), read from
+// the chat's events as the desktop reads them: a user event starts a turn and sends the held ones it names.
+function turn(id: string) {
+  let running = false; const held = new Map<string, { text: string; when: string }>();
+  for (const event of state.events) {
+    if (event.conversation !== id) continue;
+    const kind = String(event.type), data = (event.data ?? {}) as Json;
+    if (kind === 'user') { running = true; for (const sent of Array.isArray(data.held) ? data.held : []) held.delete(String(sent)); }
+    else if (['turn-end', 'interrupted', 'exited', 'stopped', 'error'].includes(kind)) { running = false; if (kind !== 'turn-end') held.clear(); }
+    else if (kind === 'held') held.set(String(data.id), { text: String(data.text), when: String(data.when) });
+    else if (kind === 'unheld') held.delete(String(data.id));
+  }
+  return { running, held };
+}
+// The send button, as the desktop's: during a turn an empty box makes it Stop (the text stays yours), and text goes
+// in with Steer (after the current step) or, from the Queue button beside it, after the turn.
 function label() {
-  const id = one<HTMLSelectElement>('#conversation').value;
-  one('#composer button[type="submit"]').textContent = !navigator.onLine || asking(id) || queued(id).length ? 'Queue message' : 'Send message';
+  const id = one<HTMLSelectElement>('#conversation').value, send = one<HTMLButtonElement>('#composer button[type="submit"]');
+  const local = !navigator.onLine || asking(id) || queued(id).length > 0, running = !local && turn(id).running;
+  const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
+  const box = one<HTMLTextAreaElement>('#prompt');
+  box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
+  // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
+  // here. ponytail: by hand, as iOS Safari has no field-sizing.
+  box.style.height = 'auto'; box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
+  send.dataset.stop = String(running && empty);
+  one('#send .vh').textContent = running ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
+  one<HTMLButtonElement>('button[form="composer"][data-when="queue"]').hidden = !running || empty;
 }
 function renderQueue() {
-  const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), box = one<HTMLElement>('#queued');
-  box.hidden = !items.length;
-  box.innerHTML = items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
+  const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
+  box.hidden = !items.length && !held.length;
+  box.innerHTML = held.map(([key, item]) => `<article class="event tool"><b>${item.when === 'queue' ? 'Queued' : 'After this step'}</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unhold="${escape(key)}">Take back</button></article>`).join('')
+    + items.map((item) => `<article class="event tool"><b>Queued</b><p>${escape(item.text)}</p><button type="button" class="quiet" data-unqueue="${escape(item.qid)}">Take back</button></article>`).join('');
 }
 let draining = false;
 async function drain() {
@@ -395,16 +421,34 @@ async function drain() {
   finally { draining = false; }
   if (sent) { await fetchEvents(); render(); } else renderQueue();
 }
-one<HTMLElement>('#queued').onclick = (event) => {
+one<HTMLElement>('#queued').onclick = async (event) => {
+  const hold = (event.target as Element).closest<HTMLButtonElement>('button[data-unhold]');
+  if (hold) {
+    // A held one comes back into the box only once the daemon has let it go (it may just have been sent).
+    const id = one<HTMLSelectElement>('#conversation').value, item = turn(id).held.get(hold.dataset.unhold!);
+    const result = await mutate('/chat/' + encodeURIComponent(id) + '/unhold', { held: hold.dataset.unhold });
+    if (result.status === 200 && item) { const input = one<HTMLTextAreaElement>('#prompt'); input.value = item.text + (input.value ? '\n' + input.value : ''); }
+    await fetchEvents(); render(); return;
+  }
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-unqueue]'); if (!button) return;
   const id = one<HTMLSelectElement>('#conversation').value, item = queued(id).find((entry) => entry.qid === button.dataset.unqueue); if (!item) return;
   keepQueue(id, queued(id).filter((entry) => entry.qid !== item.qid));
   const input = one<HTMLTextAreaElement>('#prompt'); input.value = item.text + (input.value ? '\n' + input.value : '');
   renderQueue(); label();
 };
+// P4: one tap sends with the keyboard open. The send button never takes focus, so the box keeps it: no blur, no
+// keyboard closing and the layout jumping under the finger to eat the tap (focus moves on mousedown, which a tap
+// also fires).
+for (const button of document.querySelectorAll<HTMLButtonElement>('#composer button[type="submit"], button[form="composer"]')) for (const type of ['pointerdown', 'mousedown']) button.addEventListener(type, (event) => event.preventDefault());
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
-  const images = attached.get(id) ?? [];
+  const images = attached.get(id) ?? [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+  if (id && submitter?.dataset.stop === 'true') {
+    // No turn to stop (it just ended): 409 no-turn, and the events say so.
+    const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
+    await fetchEvents(); render(); return;
+  }
   if (!id || (!input.value.trim() && !images.length)) return;
   one<HTMLElement>('#slash').hidden = true;
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
@@ -416,7 +460,8 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return;
   }
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
+  const when = turn(id).running ? (submitter?.dataset.when ?? 'steer') : undefined;
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { input.value = ''; note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
   else note(`Not sent: ${result.body.error ?? result.status}`);
@@ -430,6 +475,7 @@ function renderAttached() {
   const list = attached.get(one<HTMLSelectElement>('#conversation').value) ?? [], box = one<HTMLElement>('#attached');
   box.hidden = !list.length;
   box.innerHTML = list.map((image, i) => `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+  label();
 }
 async function addImages(files: Iterable<File>) {
   const id = one<HTMLSelectElement>('#conversation').value; if (!id) return;
@@ -445,18 +491,42 @@ one<HTMLElement>('#attached').onclick = (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
   attached.get(one<HTMLSelectElement>('#conversation').value)?.splice(Number(button.dataset.unattach), 1); renderAttached();
 };
-const plus = one<HTMLButtonElement>('#attach'), sheet = one<HTMLElement>('#attachSheet'), picker = one<HTMLInputElement>('#attachInput');
-plus.onclick = () => { sheet.hidden = !sheet.hidden; plus.setAttribute('aria-expanded', String(!sheet.hidden)); };
-// The phone's own pickers: the photo library, the camera, or its files (the same image types the daemon takes).
-sheet.onclick = (event) => {
-  const pick = (event.target as Element).closest<HTMLButtonElement>('[data-pick]')?.dataset.pick; if (!pick) return;
+const picker = one<HTMLInputElement>('#attachInput');
+const opts = (rows: [string, string, string, boolean?][]) => rows.map(([key, value, text, on]) => `<button type="button" class="opt" data-${key}="${escape(value)}"${on === undefined ? '' : ` role="radio" aria-checked="${on}"`}>${escape(text)}</button>`).join('');
+// P4: + and the mode pill open the shared sheet. The phone's own pickers: the photo library, the camera, or its files
+// (the same image types the daemon takes); the chooser opens in the same tap, so the browser lets it.
+one('#attach').onclick = () => openSheet('Attach', opts([['pick', 'library', 'Photo library'], ['pick', 'camera', 'Take photo'], ['pick', 'file', 'File']]));
+// The pill reads the mode in use ("Auto ▾"); its sheet lists the modes, then the agent's model, effort and fast mode,
+// which live in #modeHome and go back there when the sheet closes (the next sheet's HTML would wipe them).
+function pill() {
+  const name = (one<HTMLSelectElement>('#mode').selectedOptions[0]?.text ?? '').replace(/^Mode: /, ''), button = one('#modePill');
+  button.textContent = (name === 'as set' ? 'Mode' : name) + ' ▾'; button.setAttribute('aria-label', 'Mode: ' + (name || 'as set'));
+}
+one('#modePill').onclick = () => {
+  const mode = one<HTMLSelectElement>('#mode');
+  // The first row sends no mode: the chat stays in the one it is set to.
+  const name = (o: HTMLOptionElement) => o.value ? o.value : 'As set' + (o.text === 'Mode: as set' ? '' : ': ' + o.text.replace(/^Mode: /, ''));
+  openSheet('Mode', opts([...mode.options].map((o): [string, string, string, boolean] => ['mode', o.value, name(o), o.value === mode.value])));
+  one('#sheetBody').append(one('#more'));
+};
+sheet.addEventListener('close', () => { if (!one('#modeHome').contains(one('#more'))) one('#modeHome').append(one('#more')); });
+one('#sheetBody').addEventListener('click', (event) => {
+  const row = (event.target as Element).closest<HTMLButtonElement>('[data-pick], [data-mode]'); if (!row) return;
+  sheet.close();
+  // A mode goes through the select's change, so a loosened one still asks first (the warning opens as the sheet closes).
+  if (row.dataset.mode !== undefined) { const mode = one<HTMLSelectElement>('#mode'); mode.value = row.dataset.mode; mode.dispatchEvent(new Event('change')); return; }
+  const pick = row.dataset.pick;
   picker.accept = pick === 'file' ? IMG_OK.join(',') : 'image/*';
   if (pick === 'camera') picker.setAttribute('capture', 'environment'); else picker.removeAttribute('capture');
-  sheet.hidden = true; plus.setAttribute('aria-expanded', 'false'); picker.click();
-};
+  picker.click();
+});
 picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
 one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
   const files = [...event.clipboardData?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
+});
+// A dropped file attaches the same way (spec §4); dropped text still goes into the box.
+one<HTMLTextAreaElement>('#prompt').addEventListener('drop', (event) => {
+  const files = [...event.dataTransfer?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
 });
 // A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
 function sentImgs(id: string, hashes?: string[]) {
@@ -482,6 +552,7 @@ function showSlash() {
   slash.innerHTML = list.map((c) => `<button type="button" class="quiet" data-cmd="${escape(name(c))}"><b>/${escape(name(c))}</b> <small>${escape(c.description)}</small></button>`).join('');
 }
 one<HTMLTextAreaElement>('#prompt').addEventListener('input', showSlash);
+one<HTMLTextAreaElement>('#prompt').addEventListener('input', label);
 one<HTMLElement>('#slash').onclick = (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('[data-cmd]'), input = one<HTMLTextAreaElement>('#prompt'); if (!button) return;
   input.value = '/' + button.dataset.cmd + ' '; showSlash(); input.focus();
@@ -531,9 +602,9 @@ one<HTMLSelectElement>('#mode').onchange = async (event) => {
     answer?.('no');
     const value = await new Promise<string>((done) => { answer = done; loose.returnValue = ''; loose.showModal(); });
     if (value === 'never') localStorage.setItem('p9-mode-ok:' + pick, '1');
-    else if (value !== 'yes') { mode.value = mode.dataset.was ?? ''; return; }
+    else if (value !== 'yes') { mode.value = mode.dataset.was ?? ''; pill(); return; }
   }
-  mode.value = mode.dataset.was = pick;
+  mode.value = mode.dataset.was = pick; pill();
   if (pick && agent) localStorage.setItem('p9-mode:' + agent, pick);
 };
 // Phase 17 rows 4-5: the phone's terminal; terminal.mjs holds the part the desktop dock shares (leases, size, output).

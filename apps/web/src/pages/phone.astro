@@ -28,7 +28,16 @@ import '../styles/phone.css';
         <!-- COMPOSER SLOT (c2 builds the composer here): sits below the chat scroller, never scrolls away, rides the keyboard. Keep it one flex child; the queued list and the form are today's composer. -->
         <div id="composerSlot">
           <div id="queued" class="stack" aria-live="polite" hidden></div>
-          <div class="actions start"><button type="button" id="attach" class="quiet" aria-label="Attach images" aria-expanded="false" aria-controls="attachSheet">+</button></div><div id="attachSheet" class="actions start sheet" hidden><button type="button" class="quiet" data-pick="library">Photo library</button><button type="button" class="quiet" data-pick="camera">Take photo</button><button type="button" class="quiet" data-pick="file">File</button></div><input type="file" id="attachInput" multiple hidden><form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select><span id="pickers" class="actions start"></span></div><label for="prompt">Message</label><div id="slash" class="slash" role="listbox" aria-label="Slash commands" hidden></div><div id="attached" class="attached" hidden></div><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><p id="composerNote" class="muted" role="status" hidden></p><button type="submit">Send message</button></form>
+          <div id="box">
+            <div id="attached" class="attached" hidden></div>
+            <div id="slash" class="slash" role="listbox" aria-label="Slash commands" hidden></div>
+            <form id="composer"><textarea id="prompt" rows="1" aria-label="Message" placeholder="Message Claude"></textarea><p id="composerNote" class="muted" role="status" hidden></p><button type="submit" id="send"><span class="vh">Send message</span></button></form>
+            <button type="button" id="attach" class="quiet" aria-label="Attach images" aria-haspopup="dialog">+</button>
+            <button type="button" id="modePill" class="quiet" aria-haspopup="dialog">Mode ▾</button>
+            <button type="submit" form="composer" class="quiet" data-when="queue" hidden>Queue</button>
+            <input type="file" id="attachInput" multiple hidden>
+            <span id="modeHome" hidden><select id="mode" aria-label="Mode"></select><span id="more"><select id="model" aria-label="Model" hidden></select><span id="pickers"></span></span></span>
+          </div>
         </div>
       </section>
       <section data-view="terminal" hidden>
