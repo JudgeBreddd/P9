@@ -271,8 +271,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   const closeWindow = () => page.click('#mission dialog[open] [data-close]');
   // Phone Mission: a script runs and streams its output; a waiting item is answered in place; pages are links.
   await openWindowWith('Health check');
-  await page.click('#mission summary:has-text("Health check")');
-  await page.click('#mission dialog[open] form[data-run] button');
+  await page.click('#mission summary:has-text("Health check") [data-run-now]');
   await page.waitForFunction(() => document.querySelector('#mission dialog[open] pre[data-output]')?.textContent.includes('ok'));
   // Copy (Builder, 2026-10-18: "Yes" to phone Copy): the tap puts exactly the shown output on the clipboard.
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server.origin });
@@ -327,8 +326,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await closeWindow();
   // Phone: the same space; the button runs by its ID (no shell, as registry scripts do) and the log opens in place.
   await openWindowWith('Backup now');
-  await page.click('#mission summary:has-text("Backup now")');
-  await page.click('#mission details:has(summary:has-text("Backup now")) form[data-run] button');
+  await page.click('#mission summary:has-text("Backup now") [data-run-now]');
   await page.waitForSelector('#mission details:has(summary:has-text("Backup now")) pre[data-output]:has-text("backup-ok")');
   await page.click('#mission summary:has-text("Backup log")');
   await page.waitForSelector('#mission pre:has-text("backup line 2")');
@@ -364,7 +362,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   });
   assert.deepEqual(refused, { text: 400, save: 403, spaceSave: 403, spaceText: 400, spaceUnknown: 404 });
   await page.click('[data-nav="usage"]');
-  await page.waitForSelector('#usage >> text=$0.2768');
+  await page.waitForSelector('#usage >> text=$0.28');
   assert.match(await page.locator('#usage').innerText(), /context[\s\S]*%[\s\S]*of [\d,]+ tokens/i);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
   assert.match(phoneLimits, /Claude plan\s+5 h 42% \(resets [^)]+\) · week 17%[^\n]*just now/);

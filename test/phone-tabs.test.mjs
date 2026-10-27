@@ -158,21 +158,45 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   });
   assert.ok(edges.title <= edges.dot, `the terminal title ends before the bar's buttons: ${edges.title} > ${edges.dot}`);
   assert.ok(edges.paste <= edges.width, `Paste is on the screen: ${edges.paste} > ${edges.width}`);
+  // c7's leftovers (spec §6), finished by c1. Each is noted and the test goes on, so one A/B run shows all five.
+  const misses = [], soft = async (name, check) => { try { await check(); } catch (error) { misses.push(name + ': ' + String(error.message).split('\n')[0]); } };
+  await soft('Terminal title not cut', async () => {
+    const title = await page.evaluate(() => { const span = document.querySelector('#termTitle'); return { text: span.textContent, cut: span.scrollWidth > span.clientWidth }; });
+    assert.match(title.text, /^Terminal · \d{1,2}:\d{2}/); assert.equal(title.cut, false, title.text + ' is cut');
+  });
   await shot(page, 'tab-terminal');
   await page.setViewportSize({ width: 390, height: 500 });
   await page.waitForTimeout(400);
   await shot(page, 'tab-terminal-keyboard');
   await page.setViewportSize({ width: 390, height: 844 });
+  // Paste with a stubbed clipboard is phone-parity.test.mjs's T2 (typed, refused, too late).
 
   await page.click('[data-nav="mission"]');
   await page.waitForSelector('#hub [data-open="work"]', { timeout: 10000 });
+  // Every row shows its detail line, "Everything else" too; a section's line names what is in it.
+  await soft('Mission rows show their detail line', async () => {
+    const lines = await page.evaluate(() => [...document.querySelectorAll('#mission .tile')].map((tile) => [tile.querySelector('span').textContent, getComputedStyle(tile.querySelector('small')).display, tile.querySelector('small').textContent]));
+    assert.deepEqual(lines.filter(([, display]) => display === 'none').map(([name]) => name), []);
+    assert.equal(lines.find(([name]) => name === 'Backups')?.[2], 'Backup now · Backup log');
+  });
   await shot(page, 'tab-mission');
   await page.click('#mission .tile:has(span:text-is("Backups"))');
   await page.waitForSelector('#mission dialog[open]', { timeout: 5000 });
   // The window's title is the h1 in the bar; phone.test.mjs Phase 11 reads the same selector for every tile.
   assert.equal(await page.locator('#mission dialog[open] > header .title h1').innerText({ timeout: 5000 }), 'Backups');
-  await page.click('#mission dialog[open] summary:has-text("Backup now")');
-  await page.click('#mission dialog[open] form[data-run] button');
+  // The closed "Backup now" row has a Run pill at its right; a tap runs it and opens the row on its output.
+  await soft('Run pill in the closed row', async () => {
+    const pill = page.locator('#mission dialog[open] details:not([open]) > summary:has-text("Backup now") > [data-run-now]');
+    const edges = await pill.evaluate((button) => ({ right: button.getBoundingClientRect().right, row: button.closest('summary').getBoundingClientRect().right }), null, { timeout: 3000 });
+    assert.ok(edges.row - edges.right < 2, `the pill is at the row's right: ${edges.right} < ${edges.row}`);
+    await shot(page, 'tab-mission-window-closed');
+    await pill.click();
+    await page.waitForSelector('#mission dialog[open] details[open] pre[data-output]:has-text("backup-ok")', { timeout: 10000 });
+  });
+  if (misses.at(-1)?.startsWith('Run pill')) { // the old flow, so the checks below still run
+    await page.click('#mission dialog[open] summary:has-text("Backup now")');
+    await page.click('#mission dialog[open] form[data-run] button');
+  }
   await page.waitForSelector('#mission dialog[open] pre[data-output]:has-text("backup-ok")', { timeout: 10000 });
   // An opened row stacks: its text is under the title, not beside it (the Chats list's .row rule once made these flex rows).
   const stack = await page.evaluate(() => { const row = document.querySelector('#mission dialog[open] details[open]'); return { summary: row.querySelector('summary').getBoundingClientRect().bottom, body: row.querySelector('.body').getBoundingClientRect().top }; });
@@ -181,7 +205,17 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.click('#mission dialog[open] [data-close]');
 
   await page.click('[data-nav="usage"]');
-  await page.waitForSelector('#usage >> text=$0.2768', { timeout: 10000 });
+  await page.waitForSelector('#usage .sum', { timeout: 10000 });
+  // Spec §6: "27,600 in · 3,820 out · $0.28 recorded"; the fixture's cost is $0.2768.
+  await soft('Cost in cents', async () => assert.match(await page.locator('#usage .sum').innerText(), /^27,600 in · 3,820 out · \$0\.28 recorded/));
+  await soft('Details has a chevron', async () => {
+    const chevron = () => page.evaluate(() => { const after = getComputedStyle(document.querySelector('#usage details.more summary'), '::after'); return after.content !== 'none' && after.width === '8px' ? after.transform : 'none'; });
+    const closed = await chevron();
+    assert.notEqual(closed, 'none');
+    await page.click('#usage details.more summary');
+    assert.notEqual(await chevron(), closed, 'the chevron turns when Details opens');
+    await page.click('#usage details.more summary');
+  });
   await shot(page, 'tab-usage');
 
   await page.click('[data-nav="files"]');
@@ -206,4 +240,5 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]');
   assert.equal(await page.locator('#rendered').isVisible(), true);
   assert.equal(await page.locator('#editor').isHidden(), true);
+  assert.deepEqual(misses, []);
 });

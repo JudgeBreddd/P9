@@ -109,8 +109,8 @@ body:not(.kbd) #keys{padding-bottom:4px}
 .tile::after{content:"";grid-column:3;grid-row:1;justify-self:end;width:8px;height:8px;border-right:2px solid var(--muted);border-top:2px solid var(--muted);transform:rotate(45deg)}
 .tile span{grid-column:1;font-size:16px;color:var(--text);text-transform:none;letter-spacing:0}
 .tile b{grid-column:2;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 15px ui-monospace,monospace;color:var(--muted)}
-.tile small{display:none}
-.tile[data-attn] small{display:block;grid-column:1/-1;grid-row:2;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:13px;font-weight:400}
+/* Every row has its detail line (spec §6), muted; a row needing attention keeps its amber or red count. */
+.tile small{display:block;grid-column:1/-1;grid-row:2;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:13px;font-weight:400}
 .tile[data-attn] b{color:var(--amber);font-weight:700}.tile.bad b{color:var(--red)}
 .tile[data-zero] span{color:var(--muted)}
 /* A Mission window is a pushed screen over everything: back to Mission, the section title, flat rows. */
@@ -128,6 +128,10 @@ dialog.window details.row summary::-webkit-details-marker{display:none}
 dialog.window details.row summary small{font-size:13px}
 dialog.window details.row .body{padding:0 0 12px}
 dialog.window details.row pre{border:0;border-radius:10px}
+/* Spec §6: a script's closed row has a Run pill at its right; the hit area reaches 44 px. */
+details.row summary:has(.pill){grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:12px}
+details.row summary .pill{position:relative;width:auto;min-width:0;min-height:32px;margin:0;padding:0 16px;border:0;border-radius:999px;background:color-mix(in srgb,var(--cyan) 18%,transparent);color:var(--cyan);font-size:15px;font-weight:600}
+details.row summary .pill::after{content:"";position:absolute;inset:-6px -4px}
 dialog.window details.row form button[type=submit]{justify-self:end;width:auto;min-width:88px;padding:0 20px;border-radius:999px}
 dialog.window [data-copy]{justify-self:end;width:auto;min-height:44px;padding:0 16px;border:0;border-radius:999px;background:var(--raised);color:var(--text)}
 dialog.window .list{gap:0}dialog.window .list li{border-bottom:1px solid var(--hair)}
@@ -140,7 +144,11 @@ dialog.window a.link,dialog.window .list button{border:0;border-radius:0;backgro
 .track{height:6px;border-radius:3px;background:var(--raised);overflow:hidden}.track i{display:block;height:100%;border-radius:3px;background:var(--cyan)}.track i.warn{background:var(--amber)}.track i.bad{background:var(--red)}
 .sum{margin:4px 0;font-size:16px;color:var(--muted)}.sum b{color:var(--text);font-weight:600}
 .ctxs{display:grid;gap:12px}.ctx{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center}.ctx span{font-size:16px}.ctx b{font:600 15px ui-monospace,monospace}.ctx .track,.ctx small{grid-column:1/-1}.ctx small{color:var(--muted);font-size:13px}
-details.more summary{min-height:44px;display:flex;align-items:center;color:var(--muted);font-size:13px}details.more p{margin:0;color:var(--muted);font-size:13px}
+details.more summary{min-height:44px;display:flex;align-items:center;color:var(--muted);font-size:13px;list-style:none;cursor:pointer}
+details.more summary::-webkit-details-marker{display:none}
+/* The Details disclosure has a chevron: right while closed, down while open. */
+details.more summary::after{content:"";margin:0 4px 0 auto;width:8px;height:8px;border-right:2px solid var(--muted);border-top:2px solid var(--muted);transform:rotate(45deg)}
+details.more[open] summary::after{transform:rotate(135deg)}details.more p{margin:0;color:var(--muted);font-size:13px}
 /* Files: iOS-style rows. One bar serves the list and the open file; the file's own pieces show only while a file is open. */
 [data-bar=files] h1{display:block}
 [data-bar=files] #openPath,[data-bar=files] #closeFile,[data-bar=files] #save,[data-bar=files] #moreFile{display:none}

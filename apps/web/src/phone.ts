@@ -794,7 +794,8 @@ const term = createTerminal({ screen: one('#screen'), connect: (id: string) => n
 const termState = term.show;
 function attach() {
   const picked = one<HTMLSelectElement>('#terminal'), id = picked.value;
-  one('#termTitle').textContent = id ? picked.selectedOptions[0].textContent : 'Terminal';
+  // Spec §6: "Terminal · 11:39" in the bar (the full date was cut at 390 wide); the sheet keeps the date.
+  one('#termTitle').textContent = id ? picked.selectedOptions[0].dataset.short! : 'Terminal';
   if (!id) { term.close(); return termState('No terminal open'); }
   if (!navigator.onLine) { term.close(); return termState('Offline: terminal closed'); }
   term.attach(id);
@@ -804,7 +805,9 @@ async function loadTerminals() {
     const list = ((await request('/terminals')).terminals ?? []) as Json[];
     const select = one<HTMLSelectElement>('#terminal'), was = select.value;
     const running = list.filter((item) => item.state === 'running').reverse();
-    select.innerHTML = running.map((item) => `<option value="${escape(item.id)}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
+    // The bar's title: 24-hour today ("Terminal · 14:35"; with AM/PM it is cut at 390 wide), the date before.
+    const short = (ms: unknown) => new Date(Number(ms)).toDateString() === new Date().toDateString() ? new Date(Number(ms)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : clock(ms);
+    select.innerHTML = running.map((item) => `<option value="${escape(item.id)}" data-short="${escape('Terminal · ' + short(item.created))}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
     if (running.some((item) => item.id === was)) select.value = was;
     attach();
   } catch (error) {
@@ -902,15 +905,18 @@ async function loadMission(cached = false) {
       `<pre>${escape(item.content)}</pre>` + (item.answerable
         ? `<form data-answer="${index}"><label>Your answer<textarea rows="3" required maxlength="4000"></textarea></label><button type="submit">Send answer</button><p class="muted" data-note></p></form>`
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
-    const groups = new Map<string, string[]>();
+    const groups = new Map<string, string[]>(), names = new Map<string, string[]>(); // a section's rows, and their titles for its detail line
     (data.scripts as Item[]).forEach((item, index) => {
       const inputs = (item.args as unknown as (string | { label: string; choices?: string[] })[]).map((arg) => typeof arg === 'string'
         ? `<label>${escape(arg)}<input maxlength="8000" autocomplete="off" /></label>`
         : `<label>${escape(arg.label)}<select><option value="">(none)</option>${(arg.choices ?? []).map((choice) => `<option>${escape(choice)}</option>`).join('')}</select></label>`).join('');
       const body = `${item.desc ? `<p>${escape(item.desc)}</p>` : ''}` + (item.terminal
         ? '<p class="muted">Laptop only: this script opens a terminal window.</p>'
-        : `<form data-run="${index}">${inputs}<button type="submit">${item.confirm ? 'Run (asks first)' : 'Run'}</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`);
-      groups.set(item.group || 'Scripts', [...(groups.get(item.group || 'Scripts') ?? []), row(escape(item.title), body)]);
+        : `<form data-run="${index}">${inputs}${inputs ? `<button type="submit">${item.confirm ? 'Run (asks first)' : 'Run'}</button>` : ''}</form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`);
+      // Spec §6: the closed row has a Run pill at its right. A script with fields keeps its Run button by them; the pill opens the row there.
+      const pill = item.terminal ? '' : `<button type="button" class="pill" data-run-now>${item.confirm ? 'Run…' : 'Run'}</button>`;
+      groups.set(item.group || 'Scripts', [...(groups.get(item.group || 'Scripts') ?? []), row(escape(item.title) + pill, body)]);
+      names.set(item.group || 'Scripts', [...(names.get(item.group || 'Scripts') ?? []), item.title]);
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
@@ -919,6 +925,7 @@ async function loadMission(cached = false) {
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
       groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
+      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title)]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
       ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
@@ -931,8 +938,8 @@ async function loadMission(cached = false) {
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
       + '<div id="hub"></div>'
-      + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, 'scripts', (notes.get(group) ?? '') + rows.join(''))).join('')
-      + win('pages', 'Pages', data.pages.length, 'links', `<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
+      + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
+      + win('pages', 'Pages', data.pages.length, escape(data.pages.map((item: Item) => item.title).join(' · ')) || 'No pages.',`<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
     missionDrawn = true;
     if (!cached) { lastMission = data; keep('p9-mission', data); }
@@ -973,7 +980,14 @@ async function loadHub(cached = false) {
 one('#mission').addEventListener('click', (event) => {
   const target = event.target as Element;
   const open = target.closest<HTMLElement>('[data-open]');
-  if (open) { openWindow = open.dataset.open!; (document.getElementById('w-' + openWindow) as HTMLDialogElement).showModal(); }
+  // A Run pill runs a script with no fields at once and opens one with fields at its first field; the row opens either way, for the output.
+  const now = target.closest<HTMLElement>('[data-run-now]');
+  if (now) {
+    const details = now.closest('details')!, form = details.querySelector<HTMLFormElement>('form[data-run]')!, field = form.querySelector<HTMLElement>('input, select');
+    details.open = true;
+    if (field) field.focus(); else form.requestSubmit();
+  }
+  else if (open) { openWindow = open.dataset.open!; (document.getElementById('w-' + openWindow) as HTMLDialogElement).showModal(); }
   else if (target.closest('[data-close]')) target.closest('dialog')!.close();
 });
 // Close button or Escape; a dialog removed by a reload is outside #mission by then, so it never clears this.
@@ -1047,6 +1061,8 @@ const meter = (label: string, window: { usedPercent: number; resetsAt: number | 
   const pct = !window || (window.resetsAt && window.resetsAt < Date.now()) ? 0 : Math.min(100, Math.round(window.usedPercent));
   return `<div class="meter" role="meter" aria-label="${label} used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${pct}%"></i></div><span>${label}</span></div>`;
 };
+// Spec §6: "$0.28 recorded". A cost under a cent is not shown as $0.00.
+const cents = (usd: number) => usd > 0 && usd < 0.005 ? '< $0.01' : '$' + usd.toFixed(2);
 async function loadUsage() {
   try {
     const data = await request('/usage') as Usage;
@@ -1058,7 +1074,7 @@ async function loadUsage() {
     // Context fill per conversation (from usage_update), so a chat close to its limit shows before it stalls.
     const contexts = data.contexts.map((item) => { const pct = Math.round(item.used / item.size * 100); return `<div class="ctx"><span>${escape(item.provider)} context</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>$${data.totals.costUsd.toFixed(4)}</b> recorded</p>`
+    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> recorded</p>`
       + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
   } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
 }
