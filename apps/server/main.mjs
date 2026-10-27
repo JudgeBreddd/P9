@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { parseSettings } from './mission.mjs';
 import { drainSaves } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
+import { AGENTS, placeAgents } from './deps.mjs';
 import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
@@ -171,6 +172,8 @@ try {
   console.error('P9_START_FAILED');
   process.exit(1);
 }
+// Item 15: an update moved the CLIs P9 ships; the launchers the owner installed are rewritten to point at this version's.
+placeAgents(AGENTS, { refresh: true }).catch((error) => console.error('P9_AGENT_LAUNCHERS_NOT_UPDATED ' + (error.code ?? error.message)));
 let stopping = false;
 function stop() {
   if (stopping) return;

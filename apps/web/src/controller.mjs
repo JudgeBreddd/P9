@@ -1940,8 +1940,13 @@ async function loadSetup(paths) {
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
-function setupDone(s) { return { workspace: s.writable, agents: s.claude || s.codex, mission: s.settings && s.agentsFile && s.registryFile, terminal: s.tmux !== false }; }
+// pick (item 15): an agent installed or signed in; while it is false the wizard asks Claude, Codex or both first.
+function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: s.settings && s.agentsFile && s.registryFile, terminal: s.tmux !== false }; }
 function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
+// Item 15: the agents the wizard offers, each with the one line that says what it needs.
+const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
+// What the pick step shows as picked: this run's choice, else what is installed or signed in already.
+const wizPicked = () => W.picked || AGENTS_PICK.filter(([a]) => W.s?.[a + 'Cli'] || W.s?.[a]).map(([a]) => a);
 const STEP_NAMES = { workspace: 'workspace folder', agents: 'agent sign-in', mission: 'Mission Control files', terminal: 'terminal' };
 async function checkSetup() {
   const s = await loadSetup();
@@ -1956,16 +1961,16 @@ async function firstRun() {
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
   W.then = tour; welcome(0);
 }
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out; hub is optional.
 const PATH_KEYS = [['primary', 'Main project file', 'setup-file'], ['registry', 'Buttons, apps and pages file', 'setup-file'], ['waiting', 'Folder of items waiting on you', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder your buttons run in (optional, full path)', '']];
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
-const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
+const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
 async function welcome(at) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null, picked: null });
   W.s = await loadSetup();
   const d = W.s && setupDone(W.s);
   W.i = typeof at === 'string' ? Math.max(0, wizSteps().indexOf(at)) : at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
@@ -1995,6 +2000,8 @@ const WIZ_ERR = {
   'terminal-unavailable': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
   'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
   'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
+  'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Retry. Chats still work: they use the agent P9 ships.'],
+  'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
   'no-sign-in-page': ['The sign-in has not shown its page yet.', 'Wait a few seconds, then try again.'],
@@ -2042,22 +2049,31 @@ function wizRender() {
       + (window.p9.workspaceChange ? `<div class="set-row">${btn('change', 'Change the folder')}</div>` : '')
       + (s.writable ? '' : fail('workspace-unwritable'))
       + (note?.error ? fail(note.error, note.detail) : '');
+  } else if (key === 'pick') {
+    // Item 15: which agent, why P9 asks, then Install puts the CLI P9 ships where its terminals find it (no download, no
+    // admin password); the next step signs in to the ones picked.
+    title = 'Claude, Codex or both?';
+    const on = wizPicked();
+    body = '<p data-why>P9\'s chats run on an agent, and you need an account with the one you pick: pick the one you already have.</p>'
+      + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('pick:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
+      + `<p class="muted sm">Install sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
+      + (note?.error ? fail(note.error, note.detail) : '') + (note?.installed ? `<p class="ok sm" data-installed>Installed: ${note.installed.map(a => AGENTS_PICK.find(([k]) => k === a)[1]).join(' and ')}</p>` : '');
+    next = on.length ? btn('install', note?.installed ? 'Next' : 'Install', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Install', 'default').replace('<button', '<button disabled');
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
-    body = '<p class="muted sm">Chats run on Claude Code or Codex; at least one has to be signed in. Sign in opens your browser at its sign-in page; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
-      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].map(([a, name, sub]) => {
+    const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
+    body = '<p class="muted sm">Chats need at least one agent signed in. Sign in opens your browser at its sign-in page; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
+      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].filter(([a]) => shown.includes(a)).map(([a, name, sub]) => {
         const l = W.login[a] || {}, ended = !s[a] && !l.running && l.exit !== null && l.exit !== undefined;
         return row(name, sub, s[a] ? yes(true, 'Signed in') : l.running ? '<span class="muted sm">Waiting for the browser…</span>' : yes(false, '', 'Not signed in'),
           s[a] ? '' : l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : 'Sign in', 'default'))
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
           + (ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
-          // D8: the agent's own CLI (a terminal and Hand off use it; chats use the one P9 ships). Missing: its official install
-          // command, typed into a P9 terminal; there: its own sign-in command, the same way. Nothing runs before Enter.
-          + (s[a + 'Cli'] === false ? row(`${name} command line`, `Not found on this computer. Install types ${a === 'claude' ? "Claude Code's" : "Codex's"} official install command into a P9 terminal; press Enter there to run it.`, yes(false, '', 'Not installed'), btn('term:' + a + ':install', 'Install in a terminal'))
-            : s[a + 'Cli'] && !s[a] && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
+          // D8: its own sign-in command in a P9 terminal, run by the CLI P9 ships (item 15). Nothing runs before Enter.
+          + (s[a + 'Cli'] && !s[a] && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
           + (W.note[a]?.error ? fail(W.note[a].error, W.note[a].detail) : '');
       }).join('');
-    if (!d.agents) next = `<span class="muted sm">Sign in to one to go on, or Skip.</span>` + btn('next', 'Next', 'default').replace('<button', '<button disabled');
+    if (!d.agents) next = '<span class="muted sm">Sign in to one to go on, or Skip.</span>' + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
     title = 'Mission Control';
     // A folder with things in it keeps them (needs-done p9-wizard-respects-existing-workspace): the paths are what P9 found
@@ -2083,9 +2099,18 @@ function wizRender() {
       + (note?.error ? fail(note.error, note.detail) : '')
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
   } else if (key === 'terminal') {
-    title = 'Terminal';
-    body = row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found'))
-      + (s.tmux ? '' : fail('tmux-not-found'));
+    // Item 15 (threat model row 61): what P9 cannot carry. The reason comes first, then why it needs the admin password,
+    // then the command; Run in a terminal types it into a P9 terminal and sudo asks there. tmux cannot: P9's terminals are tmux.
+    const admin = (s.dependencies || []).filter(x => x.admin);
+    title = admin.length ? 'This needs your admin password' : 'Terminal';
+    body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(x.id === 'ssh' ? 'SSH client' : 'tmux', esc(x.why), yes(false, '', 'Not installed'))}`
+        + '<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This is a system program, and only an admin can install one, so your computer asks for your password.</p>'
+        + (x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
+          + (x.id === 'tmux' ? btn('copy:' + x.id, 'Copy') + '</div><p class="muted sm">P9\'s terminals need tmux, so run it in your own terminal app, then Retry.</p>'
+            : btn('admin:' + x.id, 'Run in a terminal') + '</div><p class="muted sm">Types it into a P9 terminal. Read it, press Enter, then type your password there.</p>')
+          : '<p class="muted sm">Install it with your system\'s package manager, then Retry.</p>')
+        + (W.note[x.id]?.error ? fail(W.note[x.id].error, W.note[x.id].detail) : '') + '</div>').join('') + `<div class="set-row">${btn('retry', 'Retry')}</div>`
+      : row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found')) + (s.tmux ? '' : fail('tmux-not-found'));
   } else if (key === 'you') {
     title = 'You';
     body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
@@ -2142,6 +2167,20 @@ $('#welDlg').addEventListener('click', async e => {
     const r = await run(() => liveChat.call('starter', body).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
+  }
+  if (act === 'pick') { const on = wizPicked(); W.picked = on.includes(agent) ? on.filter(a => a !== agent) : [...on, agent]; W.note.pick = null; return wizRender(); }
+  if (act === 'install') {
+    if (W.note.pick?.installed) { W.i += 1; return wizRender(); }
+    const on = wizPicked();
+    const r = await run(() => liveChat.call('installAgents', { claude: on.includes('claude'), codex: on.includes('codex') }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    W.picked = on;
+    W.note.pick = r.status === 200 ? { installed: r.body.installed } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
+  }
+  if (act === 'copy') { const x = W.s?.dependencies?.find(d => d.id === agent); if (x?.command) copy(x.command, b); return; }
+  if (act === 'admin') {
+    const r = await run(() => liveChat.call('adminTerminal', { id: agent }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    if (r.body?.terminal) { W.then = () => showTerminal(r.body.terminal); return $('#welDlg').close(); }
+    W.note[agent] = { error: r.body?.error || String(r.status), detail: r.body?.command ? 'Run it yourself in a terminal: ' + r.body.command : '' };
   }
   if (act === 'term') {
     const r = await run(() => liveChat.call('agentTerminal', { agent, action: kind }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
