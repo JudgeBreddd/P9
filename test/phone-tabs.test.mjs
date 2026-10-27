@@ -144,6 +144,11 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.click('[data-nav="terminal"]');
   await page.click('#newTerminal');
   await page.waitForFunction(() => document.querySelector('#termState')?.textContent === 'Connected', null, { timeout: 15000 });
+  // The title is the picker: it lists the open terminals in the shared sheet and marks the attached one.
+  await page.click('#pickTerminal');
+  await page.waitForSelector('#sheetBody [data-term][aria-checked="true"]', { timeout: 5000 });
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#sheet:not([open])', { state: 'attached', timeout: 5000 });
   await page.click('#screen'); await page.keyboard.type('echo P9-PHONE-4""2'); await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#screen .xterm-rows')?.textContent.includes('P9-PHONE-42'), null, { timeout: 10000 });
   await shot(page, 'tab-terminal');
@@ -172,6 +177,21 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await shot(page, 'tab-files');
   await page.click('#fileList button[data-name="note.txt"]');
   await page.waitForSelector('#fileState:text("Loaded")', { timeout: 10000 });
+  // Save is live only while the draft differs from the file; Discard (in the more menu) puts the file back; Preview is for .md only.
+  assert.equal(await page.locator('#save').isDisabled(), true);
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+A'); await page.keyboard.type('an edit not saved yet');
+  assert.equal(await page.locator('#save').isEnabled(), true);
   await shot(page, 'tab-editor');
+  await page.click('#moreFile');
+  assert.equal(await page.locator('#sheetBody [data-file="preview"]').count(), 0);
+  await page.click('#sheetBody [data-file="discard"]');
+  assert.equal(await page.locator('#save').isDisabled(), true);
+  await page.click('#closeFile');
+  await page.click('#fileList button[data-name="docs"]');
+  await page.click('#fileList button[data-name="inner.md"]');
+  await page.waitForSelector('#fileState:text("Loaded")', { timeout: 10000 });
+  assert.equal(await page.locator('#openPath').innerText(), 'inner.md');
+  await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]');
+  assert.equal(await page.locator('#rendered').isVisible(), true);
+  assert.equal(await page.locator('#editor').isHidden(), true);
 });

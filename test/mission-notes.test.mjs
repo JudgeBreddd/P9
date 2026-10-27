@@ -194,6 +194,6 @@ test('notes on the phone: list, preview, and the conflict box', { timeout: 60000
   await page.locator('#fileState', { hasText: 'Saved' }).waitFor({ timeout: 10000 });
   assert.equal(await readFile(file, 'utf8'), '# Old\nfrom the notes app\nmine\n');
   await page.click('#closeFile');
-  await page.locator('[data-view="mission"]').waitFor({ state: 'visible' });
+  await page.locator('section[data-view="mission"]').waitFor({ state: 'visible' });
   console.log('PASS notes phone: Journal → Notes lists newest first; a note opens as a preview; Load disk version and Save mine over it after a change on disk');
 });

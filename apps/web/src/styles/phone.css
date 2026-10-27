@@ -57,7 +57,9 @@ dialog.sheet .opt[aria-checked=true]::after{content:"✓";margin-left:auto;color
 
 /* Tabs (v0.1.6, phone spec §6): Terminal, Mission, a Mission window, Usage, Files and the editor, on the shell's pieces above. */
 :root{--hair:rgba(255,255,255,.08)}
-.bar h1 .pick,.bar h1 .pick:hover{display:inline-flex;align-items:center;gap:2px;min-height:44px;width:auto;max-width:100%;padding:0;border:0;background:transparent;color:var(--text);font:inherit;text-align:left}
+.bar h1:has(.pick){overflow:visible}
+.bar h1 .pick,.bar h1 .pick:hover{position:relative;display:inline-flex;align-items:center;gap:2px;min-height:0;width:auto;max-width:100%;padding:0;border:0;background:transparent;color:var(--text);font:inherit;text-align:left}
+.bar h1 .pick::after{content:"";position:absolute;inset:-12px -8px}
 .bar h1 .pick span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar h1 .pick svg{flex:none;width:18px;height:18px;color:var(--muted)}
 .bar .title:has(.pick){align-content:center}.bar .title:has(.pick) h1{line-height:1}
 #termState{white-space:normal}.bar small#termState{font-size:12px}
