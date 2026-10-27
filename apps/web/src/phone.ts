@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, md } from './helpers.mjs';
+import { limitLine, md, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
@@ -90,6 +90,11 @@ function fillPicker() {
   select.innerHTML = group('Open', state.conversations.filter((item) => item.state !== 'stopped')) + group('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
     || '<option value="">No conversations yet</option>';
   if ([...select.options].some((option) => option.value === was)) select.value = was;
+  // P10: a new chat can start in a folder a recent chat used (the daemon's list is newest first); the desktop's
+  // folder dialog has no phone form, so a new folder is picked there once.
+  const start = one<HTMLSelectElement>('#startIn'), at = start.value, folders = [...new Set(state.conversations.map((item) => String(item.folder ?? '')).filter(Boolean))].slice(0, 8);
+  start.innerHTML = '<option value="">Start in: Workspace</option>' + folders.map((item) => `<option value="${escape(item)}">Start in: ${escape(item)}</option>`).join('');
+  start.hidden = !folders.length; if (folders.includes(at)) start.value = at;
 }
 // PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
 // link changes on an open page).
@@ -160,7 +165,34 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out.
-type Block = { label: string; text: string; tool?: boolean; id?: unknown; title?: string; request?: string; options?: Json[] };
+type Block = { label: string; text: string; tool?: boolean; id?: unknown; title?: string; request?: string; options?: Json[]; images?: string[]; form?: Json[] | null; sent?: string[] };
+type Attached = { mimeType: string; data: string; name: string };
+const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
+// P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
+// answers it. null: a form P9 cannot show faithfully, which can only be declined here. Inputs are named f<i> (f<i>~<j>
+// for a multi choice); an empty optional field is left out of the answer.
+function questionForm(request: string, fields: Json[] | null) {
+  const choice = (name: string, options: [string, string][], required: boolean) => [...(required ? [] : [['', 'No answer'] as [string, string]]), ...options]
+    .map(([value, text], j) => `<label class="pick"><input type="radio" name="${name}" value="${escape(value)}"${!required && !j ? ' checked' : ''}${required ? ' required' : ''}> ${escape(text)}</label>`).join('');
+  const field = (f: Json, i: number) => {
+    const name = 'f' + i, options = (f.options ?? []) as [string, string][], required = f.required === true;
+    const input = f.kind === 'choice' ? choice(name, options, required) : f.kind === 'boolean' ? choice(name, [['true', 'Yes'], ['false', 'No']], required)
+      : f.kind === 'multi' ? options.map(([value, text], j) => `<label class="pick"><input type="checkbox" name="${name}~${j}" value="${escape(value)}"> ${escape(text)}</label>`).join('')
+      : `<input name="${name}" type="${f.kind === 'text' ? 'text' : 'number'}"${f.kind === 'integer' ? ' step="1"' : f.kind === 'number' ? ' step="any"' : ''}${required ? ' required' : ''}${f.min != null ? ` ${f.kind === 'text' ? 'minlength' : 'min'}="${Number(f.min)}"` : ''}${f.max != null ? ` ${f.kind === 'text' ? 'maxlength' : 'max'}="${Number(f.max)}"` : ''}>`;
+    return `<fieldset><legend>${escape(f.label)}${required ? ' *' : ''}</legend>${f.hint ? `<small>${escape(f.hint)}</small>` : ''}${input}</fieldset>`;
+  };
+  return `<form class="question" data-question="${escape(request)}">${fields ? fields.map(field).join('') : '<p class="empty">P9 cannot show this form faithfully. Decline, or answer on the desktop.</p>'}`
+    + `<div class="actions start">${fields ? '<button type="submit">Answer</button>' : ''}<button type="button" class="quiet" data-decline>Decline</button></div></form>`;
+}
+function questionAnswer(form: HTMLFormElement, fields: Json[]) {
+  const values = new FormData(form), content: Record<string, unknown> = {};
+  fields.forEach((f, i) => {
+    const value = f.kind === 'multi' ? ((f.options ?? []) as [string, string][]).filter((_, j) => values.has(`f${i}~${j}`)).map(([v]) => v) : String(values.get('f' + i) ?? '');
+    if (!f.required && (value === '' || (Array.isArray(value) && !value.length))) return;
+    content[String(f.key)] = f.kind === 'number' || f.kind === 'integer' ? Number(value) : f.kind === 'boolean' ? value === 'true' : value;
+  });
+  return content;
+}
 function render() {
   const picked = one<HTMLSelectElement>('#conversation').value;
   if (state.stubs.has(picked)) {
@@ -177,17 +209,20 @@ function render() {
   for (const event of state.events) {
     if (event.conversation !== picked) continue;
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
-    if (kind === 'user') add('You', data.text);
+    if (kind === 'user') blocks.push({ label: 'You', text: String(data.text ?? ''), sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)) });
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
-        const label = update === 'agent_message_chunk' ? 'Agent' : 'Thinking';
+        // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
+        const label = update === 'agent_message_chunk' ? 'Agent' : 'Thinking', image = label === 'Agent' && imgSrc(data.content);
         if (last?.label === label) last.text += String(text); else add(label, text);
+        if (image) (blocks.at(-1)!.images ??= []).push(image);
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
-      else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId });
+      else if (update === 'tool_call') blocks.push({ label: 'Tool', title: String(data.title || 'Tool call'), text: String(data.title || 'Tool call') + ' · ' + String(data.status || 'pending'), tool: true, id: data.toolCallId, images: toolImages(data.content) });
       else if (update === 'tool_call_update') {
         const tool = blocks.find((block) => block.label === 'Tool' && block.id === data.toolCallId);
         if (tool && typeof data.status === 'string') tool.text = String(data.title || tool.title) + ' · ' + data.status;
+        if (tool && data.content) tool.images = toolImages(data.content);
       }
     }
     else if (kind === 'card' || kind === 'unpin') applyCard(strip, kind, data);
@@ -196,38 +231,51 @@ function render() {
       const asked = blocks.find((block) => block.request === data.request), answer = (data.answer ?? {}) as Json, outcome = answer.outcome as Json | undefined;
       if (asked) { asked.request = undefined; asked.tool = true; }
       const chosen = asked?.options?.find((option) => option.optionId === outcome?.optionId);
-      add('You answered', outcome ? (outcome.outcome === 'selected' ? String(chosen?.name ?? outcome.optionId) : 'Cancelled') : String(answer.action), true);
+      add('You answered', outcome ? (outcome.outcome === 'selected' ? String(chosen?.name ?? outcome.optionId) : 'Cancelled') : ({ accept: 'Answered', decline: 'Declined' } as Json)[String(answer.action)] ?? 'Cancelled', true);
     }
-    else if (kind === 'question') add('Question', data.message, true);
+    else if (kind === 'question') blocks.push({ label: 'Question', text: String(data.message ?? ''), request: String(data.request), form: ((data.form as Json | null)?.fields as Json[] | undefined) ?? null });
     else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('Turn ended', data.stopReason, true); }
     else if (kind === 'error') add('Error', data.message, true);
     else if (kind === 'steer-lost') add('This message may not have reached the agent', data.text, true);
     else if (kind === 'interrupted') { settle(); add('Stopped', 'The P9 daemon restarted mid-turn. Send again to resume.', true); }
     else if (kind === 'exited' || kind === 'stopped') { settle(); add('Stopped', 'Send again to resume.', true); }
   }
+  // A question's answers in progress survive the redraw.
+  const draft = document.querySelector<HTMLFormElement>('#events form[data-question]'), kept = draft && { request: draft.dataset.question, values: [...draft.elements].map((el) => el instanceof HTMLInputElement ? [el.name, el.value, el.checked] as const : null) };
   one('#events').innerHTML = blocks.length ? blocks.slice(-30).map((block) =>
-    `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${md.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
+    `<article class="event ${block.tool ? 'tool' : ''}"><b>${escape(block.label)}</b>${block.label === 'Agent' ? `<div class="md">${md.parse(String(block.text))}</div>` : `<p>${escape(block.text)}</p>`}${sentImgs(picked, block.sent)}${agentImgs(block.images, 'the agent')}${block.request && block.form !== undefined ? questionForm(block.request, block.form) : block.request ? `<div class="actions start">${(block.options ?? []).map((option) =>
       `<button class="${String(option.kind).startsWith('reject') ? 'quiet' : ''}" data-request="${escape(block.request)}" data-option="${escape(option.optionId)}">${escape(option.name || option.optionId)}</button>`).join('')}</div>` : ''}</article>`).join('') : '<div class="empty">No messages yet.</div>';
+  const again = kept && document.querySelector<HTMLFormElement>(`#events form[data-question="${CSS.escape(kept.request ?? '')}"]`);
+  if (kept && again) [...again.elements].forEach((el, i) => { const was = kept.values[i]; if (el instanceof HTMLInputElement && was && was[0] === el.name) { if (el.type === 'radio' || el.type === 'checkbox') el.checked = was[2]; else el.value = was[1]; } });
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
-  renderPicks(picked); renderQueue(); label(); void drain();
+  renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
-// Mode and Model for the picked chat (Builder, 2026-10-18: the phone could change neither; threat model row 15). Mode
-// starts at "as set" and sends nothing until picked: the daemon does not report the mode, and a default would undo a
-// Plan picked on the desktop. Model lists the agent's own models from its newest config event.
-const MODES: Record<string, string[]> = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits'], codex: ['Read-only', 'Workspace access', 'Auto review'] }; // Full access and bypass only on the desktop, behind its warning (threat model row 25)
+// Mode and Model for the picked chat (Builder, 2026-10-18: the phone could change neither; threat model row 15). An open
+// chat starts at "as set" and sends nothing until picked, so a Plan picked on the desktop stays; the label shows the mode
+// the daemon last set (its 'mode' event). A chat made here starts in this phone's last pick for its agent. P6 (row 25):
+// all of the agent's modes, the two loosened ones behind the desktop's red warning. Model lists the agent's own models
+// from its newest config event.
+const provider = (id: string) => String(state.conversations.find((item) => item.id === id)?.provider ?? '');
 let picksFor = '';
 function renderPicks(id: string) {
-  const configs = state.events.filter((event) => event.conversation === id && event.type === 'config'), key = id + ':' + configs.length;
+  const configs = state.events.filter((event) => event.conversation === id && event.type === 'config');
+  const set = state.events.findLast((event) => event.conversation === id && event.type === 'mode')?.data as { name?: string } | undefined;
+  const key = id + ':' + configs.length + ':' + (set?.name ?? '');
   if (key === picksFor) return;
-  const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.value : '';
+  // The confirmed pick is kept: a redraw while the red warning is open (Codex reports its mode as it starts) must not
+  // turn the pick waiting on that warning into the one Cancel goes back to.
+  const mode = one<HTMLSelectElement>('#mode'), keep = picksFor.startsWith(id + ':') ? mode.dataset.was ?? '' : '';
   picksFor = key;
-  const provider = String(state.conversations.find((item) => item.id === id)?.provider ?? '');
-  mode.innerHTML = '<option value="">Mode: as set</option>' + (MODES[provider] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
-  mode.value = keep;
-  const config = (configs.at(-1)?.data ?? {}) as { model?: { current?: string; options?: { value: string; name: string }[] } };
+  mode.innerHTML = `<option value="">Mode: ${escape(set?.name ?? 'as set')}</option>` + ((modes as Record<string, string[]>)[provider(id)] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
+  mode.value = keep; mode.dataset.was = keep;
+  type Pick = { current?: string; options?: { value: string; name: string }[] };
+  const config = (configs.at(-1)?.data ?? {}) as { model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
   model.hidden = !options.length; model.dataset.current = config.model?.current ?? '';
   model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(o.name)}</option>`).join('');
+  // P10: the agent's own effort, fast mode and plan switch (threat model row 22), each sent only when changed.
+  one('#pickers').innerHTML = (config.pickers ?? []).map((p) => `<select data-config="${escape(p.id)}" data-current="${escape(p.current)}" aria-label="${escape(p.name)}">${(p.options ?? []).map((o) =>
+    `<option value="${escape(o.value)}"${o.value === p.current ? ' selected' : ''}>${escape(p.name + ': ' + o.name)}</option>`).join('')}</select>`).join('');
 }
 // Keeps the chat live: long-polls the daemon (it holds each request up to 8 s) while the page is visible and online.
 async function listen() {
@@ -249,7 +297,7 @@ async function listen() {
 // would decline it), is kept here, on this phone, and goes once it can, with `when: 'queue'` so it waits for the turn's
 // end. Each goes once: it keeps one operation ID until the daemon answers (mutate), so a lost reply or a reload re-sends
 // the same message under the same ID and the daemon replays it. ponytail: this phone's storage only, as the desktop's queue.
-type Queued = { qid: string; text: string; mode?: string; model?: string };
+type Queued = { qid: string; text: string; mode?: string; model?: string; config?: Record<string, string> };
 const queueKey = (id: string) => 'p9-queue:' + id;
 function queued(id: string): Queued[] {
   try { const all = JSON.parse(localStorage.getItem(queueKey(id)) ?? '[]'); return Array.isArray(all) ? all.filter((item) => typeof item?.text === 'string' && typeof item.qid === 'string') : []; } catch { return []; }
@@ -269,7 +317,7 @@ function asking(id: string) {
 }
 function label() {
   const id = one<HTMLSelectElement>('#conversation').value;
-  one('#composer button').textContent = !navigator.onLine || asking(id) || queued(id).length ? 'Queue message' : 'Send message';
+  one('#composer button[type="submit"]').textContent = !navigator.onLine || asking(id) || queued(id).length ? 'Queue message' : 'Send message';
 }
 function renderQueue() {
   const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), box = one<HTMLElement>('#queued');
@@ -293,7 +341,7 @@ async function drain() {
         else {
           const input = one<HTMLTextAreaElement>('#prompt');
           if (id === one<HTMLSelectElement>('#conversation').value) input.value = next.text + (input.value ? '\n' + input.value : '');
-          one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not sent: ${escape(result.body.error ?? result.status)}</div>`);
+          note(`Not sent: ${result.body.error ?? result.status}`);
         }
       }
     }
@@ -310,19 +358,105 @@ one<HTMLElement>('#queued').onclick = (event) => {
 };
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
-  if (!id || !input.value.trim()) return;
+  const images = attached.get(id) ?? [];
+  if (!id || (!input.value.trim() && !images.length)) return;
+  one<HTMLElement>('#slash').hidden = true;
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
-  const body = { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }) };
-  // Behind a queued message it queues too, so they go in the order typed.
-  if (!navigator.onLine || asking(id) || queued(id).length) { keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return; }
-  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', body);
+  const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
+  const body = { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
+  // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
+  // fit this phone's storage): they stay attached and the box says why.
+  if (!navigator.onLine || asking(id) || queued(id).length) {
+    if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
+    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return;
+  }
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { input.value = ''; await fetchEvents(); render(); }
-  else one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not sent: ${escape(result.body.error ?? result.status)}</div>`);
+  if (result.status === 202) { input.value = ''; note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
+  else note(`Not sent: ${result.body.error ?? result.status}`);
+};
+// Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
+function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }
+// P8: images attach as on the desktop: the + sheet (Photo library, Take photo, File) or a paste, up to four, checked
+// and scaled by the desktop's own readImage; 48 px chips with ✕ above the box. Kept per chat until sent; a reload
+// drops them (ponytail: this page's memory only).
+function renderAttached() {
+  const list = attached.get(one<HTMLSelectElement>('#conversation').value) ?? [], box = one<HTMLElement>('#attached');
+  box.hidden = !list.length;
+  box.innerHTML = list.map((image, i) => `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
+}
+async function addImages(files: Iterable<File>) {
+  const id = one<HTMLSelectElement>('#conversation').value; if (!id) return;
+  const list = attached.get(id) ?? []; attached.set(id, list);
+  note();
+  for (const file of files) {
+    if (list.length >= MAX_IMAGES) { note('Not attached: four images a message at most.'); break; }
+    try { list.push(await readImage(file)); } catch (error) { note(`Not attached: ${file.name}: ${(error as Error)?.message ?? error}.`); }
+  }
+  renderAttached();
+}
+one<HTMLElement>('#attached').onclick = (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-unattach]'); if (!button) return;
+  attached.get(one<HTMLSelectElement>('#conversation').value)?.splice(Number(button.dataset.unattach), 1); renderAttached();
+};
+const plus = one<HTMLButtonElement>('#attach'), sheet = one<HTMLElement>('#attachSheet'), picker = one<HTMLInputElement>('#attachInput');
+plus.onclick = () => { sheet.hidden = !sheet.hidden; plus.setAttribute('aria-expanded', String(!sheet.hidden)); };
+// The phone's own pickers: the photo library, the camera, or its files (the same image types the daemon takes).
+sheet.onclick = (event) => {
+  const pick = (event.target as Element).closest<HTMLButtonElement>('[data-pick]')?.dataset.pick; if (!pick) return;
+  picker.accept = pick === 'file' ? IMG_OK.join(',') : 'image/*';
+  if (pick === 'camera') picker.setAttribute('capture', 'environment'); else picker.removeAttribute('capture');
+  sheet.hidden = true; plus.setAttribute('aria-expanded', 'false'); picker.click();
+};
+picker.onchange = () => { void addImages([...picker.files ?? []]); picker.value = ''; };
+one<HTMLTextAreaElement>('#prompt').addEventListener('paste', (event) => {
+  const files = [...event.clipboardData?.files ?? []]; if (files.length) { event.preventDefault(); void addImages(files); }
+});
+// A photo already sent shows in its message, fetched once by hash from the daemon (CP3: only one this chat's messages name).
+function sentImgs(id: string, hashes?: string[]) {
+  if (!hashes?.length) return '';
+  for (const hash of hashes) if (!sentCache.has(hash)) {
+    sentCache.set(hash, '');
+    request('/chat/' + encodeURIComponent(id) + '/images/' + hash).then((image) => {
+      const src = imgSrc({ type: 'image', mimeType: image.mimeType, data: image.data });
+      if (src) { sentCache.set(hash, src); render(); }
+    }, () => {});
+  }
+  return `<div class="user-imgs">${hashes.map((hash) => sentCache.get(hash) ? `<img src="${sentCache.get(hash)}" alt="Sent image">` : '').join('')}</div>`;
+}
+// P10: slash commands, the agent's own list (its newest available_commands_update, this chat's or else the same
+// agent's), while the box holds only "/name", as on the desktop. A tap fills one in; the agent runs it.
+function showSlash() {
+  const input = one<HTMLTextAreaElement>('#prompt'), slash = one<HTMLElement>('#slash'), typed = /^\/(\S*)$/.exec(input.value), id = one<HTMLSelectElement>('#conversation').value;
+  const lists = typed ? state.events.filter((event) => (event.data as Json)?.sessionUpdate === 'available_commands_update' && (event.conversation === id || provider(String(event.conversation)) === provider(id))) : [];
+  const newest = lists.findLast((event) => event.conversation === id) ?? lists.at(-1), all = ((newest?.data as Json | undefined)?.availableCommands ?? []) as Json[];
+  const name = (command: Json) => String(command?.name ?? ''), word = typed?.[1] ?? '';
+  const list = [...all.filter((c) => name(c).startsWith(word)), ...all.filter((c) => !name(c).startsWith(word) && name(c).includes(word))].slice(0, 60);
+  slash.hidden = !list.length;
+  slash.innerHTML = list.map((c) => `<button type="button" class="quiet" data-cmd="${escape(name(c))}"><b>/${escape(name(c))}</b> <small>${escape(c.description)}</small></button>`).join('');
+}
+one<HTMLTextAreaElement>('#prompt').addEventListener('input', showSlash);
+one<HTMLElement>('#slash').onclick = (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-cmd]'), input = one<HTMLTextAreaElement>('#prompt'); if (!button) return;
+  input.value = '/' + button.dataset.cmd + ' '; showSlash(); input.focus();
 };
 one<HTMLSelectElement>('#conversation').onchange = render; // a stub's history loads from render
+// P10: a question's Answer and Decline, the same POST /chat/:id/answer.
+async function answerQuestion(form: HTMLFormElement, decline: boolean) {
+  const id = one<HTMLSelectElement>('#conversation').value, request = form.dataset.question!;
+  const asked = state.events.find((event) => event.type === 'question' && (event.data as Json)?.request === request)?.data as Json | undefined;
+  const fields = (asked?.form as Json | null)?.fields as Json[] | undefined;
+  if (!decline && !fields) return;
+  form.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/answer', { request, answer: decline ? { action: 'decline' } : { action: 'accept', content: questionAnswer(form, fields!) } });
+  if (result.status === 200) { await fetchEvents(); render(); }
+  else { form.querySelectorAll('button').forEach((item) => { item.disabled = false; }); one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not answered: ${escape(result.body.error ?? result.status)}</div>`); }
+}
+one<HTMLElement>('#events').addEventListener('submit', (event) => { event.preventDefault(); void answerQuestion(event.target as HTMLFormElement, false); });
 // Phase 17 row 2: an approval answered from the phone, the same POST /chat/:id/answer the desktop uses.
 one<HTMLElement>('#events').onclick = async (event) => {
+  const decline = (event.target as Element).closest<HTMLButtonElement>('button[data-decline]');
+  if (decline) return answerQuestion(decline.form!, true);
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-request]'); if (!button) return;
   const id = one<HTMLSelectElement>('#conversation').value;
   button.parentElement!.querySelectorAll('button').forEach((item) => { item.disabled = true; });
@@ -331,10 +465,32 @@ one<HTMLElement>('#events').onclick = async (event) => {
   else { button.parentElement!.querySelectorAll('button').forEach((item) => { item.disabled = false; }); one('#events').insertAdjacentHTML('beforeend', `<div class="empty">Not answered: ${escape(result.body.error ?? result.status)}</div>`); }
 };
 document.querySelectorAll<HTMLButtonElement>('[data-new]').forEach((button) => { button.onclick = async () => {
-  const result = await mutate('/chat', { provider: button.dataset.new });
+  const folder = one<HTMLSelectElement>('#startIn').value;
+  const result = await mutate('/chat', { provider: button.dataset.new, ...(folder && { folder }) });
   if (result.status !== 201) return;
   await loadChat(); one<HTMLSelectElement>('#conversation').value = String(result.body.conversation); render();
+  const mode = one<HTMLSelectElement>('#mode'), last = localStorage.getItem('p9-mode:' + button.dataset.new) ?? '';
+  if ([...mode.options].some((option) => option.value === last)) mode.value = mode.dataset.was = last;
 }; });
+// P6: Bypass permissions and Full access ask first, in the desktop's words; Cancel puts the pick back. "Don't show again"
+// is kept per mode on this phone, as the desktop keeps it on its computer.
+const loose = one<HTMLDialogElement>('#looseDlg');
+// Chromium fires the dialog's close a frame later, so the last warning's close can land after the next one opened:
+// it answers only a warning that is closed, and opening a new one settles the old one as Cancel.
+let answer: ((value: string) => void) | undefined;
+loose.addEventListener('close', () => { if (!loose.open) { answer?.(loose.returnValue); answer = undefined; } });
+one<HTMLSelectElement>('#mode').onchange = async (event) => {
+  const mode = event.target as HTMLSelectElement, pick = mode.value, agent = provider(one<HTMLSelectElement>('#conversation').value);
+  if (pick in LOOSE && !localStorage.getItem('p9-mode-ok:' + pick)) {
+    one('#looseT').textContent = `Turn on ${pick} for ${agent === 'codex' ? 'Codex' : 'Claude'}?`; one('#looseP').textContent = (LOOSE as Record<string, string>)[pick];
+    answer?.('no');
+    const value = await new Promise<string>((done) => { answer = done; loose.returnValue = ''; loose.showModal(); });
+    if (value === 'never') localStorage.setItem('p9-mode-ok:' + pick, '1');
+    else if (value !== 'yes') { mode.value = mode.dataset.was ?? ''; return; }
+  }
+  mode.value = mode.dataset.was = pick;
+  if (pick && agent) localStorage.setItem('p9-mode:' + agent, pick);
+};
 // Phase 17 rows 4-5: the phone's terminal; terminal.mjs holds the part the desktop dock shares (leases, size, output).
 const KEYS: Record<string, string> = { esc: '\x1b', tab: '\t', ctrlc: '\x03', up: '\x1b[A', down: '\x1b[B' };
 const term = createTerminal({ screen: one('#screen'), connect: (id: string) => new WebSocket(location.origin.replace(/^http/, 'ws') + '/terminals/' + encodeURIComponent(id) + '/socket'),
@@ -377,10 +533,28 @@ one<HTMLButtonElement>('#stopTerminal').onclick = async () => {
   if (result.status !== 200) return termState('Stop failed: ' + String(result.body.error ?? result.body.result ?? result.status));
   await loadTerminals();
 };
-document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.onclick = () => { term.sendKeys(KEYS[button.dataset.key!]); term.focus(); }; });
+document.querySelectorAll<HTMLButtonElement>('#keys button:not([data-key="paste"])').forEach((button) => { button.onclick = () => { term.sendKeys(KEYS[button.dataset.key!]); term.focus(); }; });
+// T2: Paste reads the clipboard on this tap only (threat model row 19) and sends it under the tap's lease. The browser
+// may ask first; past 4 s the daemon could drop it as late (5 s lease), so the page asks for another tap instead.
+one<HTMLButtonElement>('[data-key="paste"]').onclick = async (event) => {
+  const at = event.timeStamp;
+  let text: string;
+  try { text = await navigator.clipboard.readText(); } catch { return termState('Paste not allowed: the browser did not share the clipboard', term.open); }
+  if (performance.now() - at > 4000) return termState('Paste took too long: tap Paste again', term.open);
+  if (text) term.sendKeys(text, at);
+  term.focus();
+};
+// T1: a tap on the terminal opens the keyboard.
+one('#screen').addEventListener('click', () => term.focus());
 addEventListener('resize', term.fit);
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
 termState('No terminal open');
+// P9: a tap on an agent's image opens it full screen; any tap closes it.
+const picture = document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'picture', onclick: () => picture.close() }));
+addEventListener('click', (event) => {
+  const image = (event.target as Element).closest?.('.agent-imgs img, .user-imgs img') as HTMLImageElement | null; if (!image) return;
+  picture.replaceChildren(Object.assign(document.createElement('img'), { src: image.src, alt: image.alt })); picture.showModal();
+});
 one<HTMLButtonElement>('#refreshChat').onclick = () => { one<HTMLElement>('#gap').hidden = true; void loadChat(); };
 
 // Mission: the same daemon routes the desktop uses. Native <details> rows open in place; scripts stream output from
@@ -605,7 +779,7 @@ const preview = (on: boolean) => {
   one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on; one('#preview').textContent = on ? 'Edit' : 'Preview';
   if (on) one('#rendered').innerHTML = md.parse(editor.state.doc.toString()) as string;
 };
-one<HTMLButtonElement>('#preview').onclick = () => preview(one<HTMLElement>('#rendered').hidden);
+one<HTMLButtonElement>('#preview').onclick = () => preview(!!one<HTMLElement>('#rendered').hidden);
 async function openFile(path: string, root?: string) {
   try {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };

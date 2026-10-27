@@ -20,18 +20,18 @@ import '../styles/phone.css';
       <section data-view="chat" aria-labelledby="chatTitle">
         <div class="heading"><div><p class="eyebrow">Agent workspace</p><h1 id="chatTitle">Chat</h1></div><button id="refreshChat" class="quiet">Refresh</button></div>
         <label>Conversation<select id="conversation"></select></label>
-        <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button></div>
+        <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button><select id="startIn" aria-label="Start in" hidden></select></div>
         <div id="pinned" aria-live="polite"></div>
         <div id="events" class="feed" aria-live="polite"></div>
         <div id="queued" class="stack" aria-live="polite" hidden></div>
-        <form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select></div><label for="prompt">Message</label><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><button type="submit">Send message</button></form>
+        <div class="actions start"><button type="button" id="attach" class="quiet" aria-label="Attach images" aria-expanded="false" aria-controls="attachSheet">+</button></div><div id="attachSheet" class="actions start sheet" hidden><button type="button" class="quiet" data-pick="library">Photo library</button><button type="button" class="quiet" data-pick="camera">Take photo</button><button type="button" class="quiet" data-pick="file">File</button></div><input type="file" id="attachInput" multiple hidden><form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select><span id="pickers" class="actions start"></span></div><label for="prompt">Message</label><div id="slash" class="slash" role="listbox" aria-label="Slash commands" hidden></div><div id="attached" class="attached" hidden></div><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><p id="composerNote" class="muted" role="status" hidden></p><button type="submit">Send message</button></form>
       </section>
       <section data-view="terminal" aria-labelledby="terminalTitle" hidden>
         <div class="heading"><div><p class="eyebrow">P9 tmux sessions</p><h1 id="terminalTitle">Terminal</h1></div><button id="refreshTerminal" class="quiet">Refresh</button></div>
         <label>Terminal<select id="terminal"></select></label>
         <div class="actions start"><button class="quiet" id="newTerminal">New terminal</button><button class="quiet" id="stopTerminal">Stop</button><span id="termState" role="status">No terminal open</span></div>
         <div id="screen" aria-label="Terminal"></div>
-        <div id="keys" class="actions start keys"><button class="quiet" data-key="esc">Esc</button><button class="quiet" data-key="tab">Tab</button><button class="quiet" data-key="ctrlc">Ctrl+C</button><button class="quiet" data-key="up" aria-label="Up arrow">↑</button><button class="quiet" data-key="down" aria-label="Down arrow">↓</button></div>
+        <div id="keys" class="actions start keys"><button class="quiet" data-key="esc">Esc</button><button class="quiet" data-key="tab">Tab</button><button class="quiet" data-key="ctrlc">Ctrl+C</button><button class="quiet" data-key="up" aria-label="Up arrow">↑</button><button class="quiet" data-key="down" aria-label="Down arrow">↓</button><button class="quiet" data-key="paste">Paste</button></div>
       </section>
       <section data-view="mission" aria-labelledby="missionTitle" hidden>
         <div class="heading"><div><p class="eyebrow">Live workspace</p><h1 id="missionTitle">Mission Control</h1></div><button id="refreshMission" class="quiet">Refresh</button></div>
@@ -53,6 +53,10 @@ import '../styles/phone.css';
         </div>
       </section>
     </main>
+    <dialog id="looseDlg" class="loose" aria-labelledby="looseT" aria-describedby="looseP"><form method="dialog">
+      <h2 id="looseT"></h2><p id="looseP"></p><p class="note">The agent lock in the desktop's Settings still overrides it. Mode changes back at any time.</p>
+      <div class="stack"><button class="danger" value="yes">Turn on</button><button class="quiet" value="never">Turn on, don't show again</button><button class="quiet" value="no" autofocus>Cancel</button></div>
+    </form></dialog>
     <nav aria-label="Phone workspace">
       <button data-nav="chat" aria-current="page"><span>●</span>Chat</button>
       <button data-nav="terminal"><span>▮</span>Terminal</button>

@@ -99,7 +99,9 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
   // A failed recovery is tried again on the next route call, so installing tmux needs no daemon restart.
   const ready = () => recovered.catch(() => (recovered = recover()));
 
-  // start (Hand off, from server.mjs only, never a request's body): the folder, and a command typed in but not run.
+  // start (from server.mjs only, never a request's body): the folder and a command typed in but not run (Hand off), and
+  // phone: made from a phone, so that session's own environment has P9_PHONE=1 (threat model row 13; a shell config can
+  // skip a desktop-only greeting). The tmux server's shared environment is not changed.
   async function create(body, start = {}) {
     try { await ready(); } catch (error) { if (error.message === 'tmux-not-found') return { status: 503, error: 'tmux-not-found' }; throw error; }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
@@ -111,7 +113,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       await ensureServer();
       stillAuthorized();
-      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace]);
+      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, ...(start.phone ? ['-e', 'P9_PHONE=1'] : [])]);
       if (start.typed) await tmux(['send-keys', '-t', '=' + name(id) + ':', '-l', start.typed]);
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);
       return { status: 201, terminal: id };
@@ -239,7 +241,7 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
       stillAuthorized();
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       let pty;
-      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: childEnv() }); } catch (error) {
+      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: { ...childEnv(), ...(start.phone ? { P9_PHONE: '1' } : {}) } }); } catch (error) {
         // spawnPty undoes its own partial start, so nothing is left running.
         db.prepare("UPDATE terminals SET state = 'stopped' WHERE id = ?").run(id);
         return { status: 503, error: 'terminal-unavailable', reason: 'The Windows terminal did not start: ' + String(error.message).slice(0, 200) };

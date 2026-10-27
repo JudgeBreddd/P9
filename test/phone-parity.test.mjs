@@ -1,0 +1,272 @@
+// Phone parity (v0.1.6 chunk 2): the phone's terminal knows it is a phone (T6), Paste (T2) and tap-to-type (T1), the
+// agent's pictures and real links in a reply (P9), every mode behind the desktop's red warning (P6), and the desktop's
+// chat controls the phone lacked (P10: questions, effort and fast mode, slash commands, a new chat's folder), and
+// images attached from the phone (P8).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { chromium } from '@playwright/test';
+import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
+
+// The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
+const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+async function setup(paths) {
+  await mkdir(path.join(paths.workspace, 'hub'), { recursive: true });
+  await mkdir(path.join(paths.workspace, 'proj', 'sub'), { recursive: true });
+  await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+  await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', hub: 'hub', server_host: 'test-server' }));
+  return { args: ['--settings', path.join(paths.directory, 'settings.json')] };
+}
+// The dev space has no network, so Chromium reports navigator.onLine false: the page is told it is online.
+async function phoneOn(t) {
+  const server = await remoteDaemon(t, { setup, args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const device = await passkeyDevice(browser, server, 'phone-parity');
+  const session = await enrollDevice(server, device);
+  await device.context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  await device.context.addInitScript(() => Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }));
+  await device.page.goto(server.origin + '/phone/');
+  await device.page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
+  await device.page.reload();
+  await device.page.setViewportSize({ width: 390, height: 844 });
+  return { ...device, server, session };
+}
+async function newChat(page, agent) {
+  const before = await page.inputValue('#conversation');
+  await page.click(`[data-new="${agent}"]`);
+  await page.waitForFunction((was) => { const v = document.querySelector('#conversation').value; return v && v !== was; }, before, { timeout: 10000 });
+  return page.inputValue('#conversation');
+}
+const send = async (page, text) => { await page.fill('#prompt', text); await page.click('#composer button[type="submit"]'); };
+
+test('T6, T2, T1: a phone terminal has P9_PHONE=1, a desktop one does not; Paste sends the clipboard on its tap only', { timeout: 90000 }, async (t) => {
+  const { page, context, server } = await phoneOn(t);
+  const screen = () => page.locator('#screen .xterm-rows').innerText();
+  const shows = (text) => page.waitForFunction((want) => document.querySelector('#screen .xterm-rows')?.textContent.includes(want), text, { timeout: 10000 });
+  const connected = () => page.waitForFunction(() => document.querySelector('#termState').textContent === 'Connected', null, { timeout: 10000 });
+  const type = async (line) => { await page.click('#screen'); await page.keyboard.type(line); await page.keyboard.press('Enter'); };
+
+  await page.click('[data-nav="terminal"]');
+  await page.click('#newTerminal');
+  await connected();
+  // T1: one tap on the screen and the keys go to the shell (the hidden textarea has focus).
+  await page.click('#screen');
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea')), true, 'a tap did not focus the terminal');
+  await type('echo PH-$P9_PHONE-END');
+  await shows('PH-1-END');
+  // Made on the desktop after the phone's (so the tmux server already runs): its shell has no P9_PHONE.
+  const desk = (await server.desk('/terminals', 'POST', {})).body.terminal;
+  assert.ok(desk, 'the desktop terminal was not made');
+  await page.click('#refreshTerminal');
+  await page.waitForFunction((id) => [...document.querySelectorAll('#terminal option')].some((o) => o.value === id), desk, { timeout: 10000 });
+  await page.selectOption('#terminal', desk);
+  await connected();
+  await type('echo DK-$P9_PHONE-END');
+  await shows('DK--END');
+
+  // T2: Paste reads the clipboard on the tap and the shell runs it.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server.origin });
+  await page.evaluate(() => navigator.clipboard.writeText('echo P9-PASTE-4""2'));
+  await page.click('[data-key="paste"]');
+  await shows('P9-PASTE-4""2');
+  await page.click('#screen');
+  await page.keyboard.press('Enter');
+  await shows('P9-PASTE-42');
+  // A clipboard the browser refuses says so; one that answers past 4 s asks for another tap and sends nothing.
+  await page.evaluate(() => { navigator.clipboard.readText = () => Promise.reject(new DOMException('denied', 'NotAllowedError')); });
+  await page.click('[data-key="paste"]');
+  await page.waitForFunction(() => document.querySelector('#termState').textContent.startsWith('Paste not allowed'), null, { timeout: 5000 });
+  await page.evaluate(() => { navigator.clipboard.readText = () => new Promise((resolve) => setTimeout(() => resolve('echo P9-LATE-4""2\r'), 4300)); });
+  await page.click('[data-key="paste"]');
+  await page.waitForFunction(() => document.querySelector('#termState').textContent === 'Paste took too long: tap Paste again', null, { timeout: 8000 });
+  await type('echo P9-AFTER-4""2');
+  await shows('P9-AFTER-42');
+  assert.ok(!(await screen()).includes('P9-LATE-42'), 'a paste read after 4 s reached the shell');
+});
+
+test('P9: the phone shows the agent\'s own pictures and real links, and loads nothing remote', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const remote = [];
+  page.on('request', (request) => { const url = request.url(); if (!url.startsWith(server.origin) && !url.startsWith('data:')) remote.push(url); });
+  await newChat(page, 'claude');
+  await send(page, 'images');
+  await page.waitForFunction(() => document.querySelectorAll('#events .agent-imgs img').length === 2, null, { timeout: 15000 });
+  const sources = await page.$$eval('#events .agent-imgs img', (list) => list.map((img) => [img.src.slice(0, 22), img.naturalWidth, img.naturalHeight]));
+  assert.deepEqual(sources, [['data:image/png;base64,', 320, 200], ['data:image/png;base64,', 120, 90]]);
+  // A tap opens it full screen; another tap closes it.
+  await page.click('#events .agent-imgs img >> nth=1');
+  assert.equal(await page.evaluate(() => document.querySelector('dialog.picture').open), true);
+  await page.click('dialog.picture');
+  assert.equal(await page.evaluate(() => document.querySelector('dialog.picture').open), false);
+
+  // The fake agent echoes the prompt: one web link becomes a real link with its host; the rest stay text.
+  await send(page, 'see [the docs](https://docs.example.test/p) [x](javascript:alert(1)) [f](file:///etc/passwd) [u](https://u:p@a.test/)');
+  await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes('echo:see')), null, { timeout: 15000 });
+  const links = await page.$$eval('#events a', (list) => list.map((a) => [a.getAttribute('href'), a.textContent, a.target, a.rel, a.nextElementSibling?.textContent ?? '']));
+  assert.deepEqual(links, [['https://docs.example.test/p', 'the docs', '_blank', 'noopener noreferrer', '(docs.example.test)']]);
+  // In the sentence, not the Mission hub's link card (a.link).
+  assert.equal(await page.$eval('#events .md a', (a) => getComputedStyle(a).display), 'inline', 'a reply link is drawn as a card');
+  await page.locator('#events .md a').last().scrollIntoViewIfNeeded();
+  await shot(page, 'phone-reply-link-image');
+  assert.deepEqual(remote, [], 'the phone loaded something remote');
+});
+
+test('P6: every mode on the phone; the loosened ones ask first in red; a chat made here starts in the last pick', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const id = await newChat(page, 'codex');
+  const labels = () => page.$$eval('#mode option', (list) => list.map((o) => o.textContent));
+  assert.deepEqual((await labels()).slice(1), ['Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review', 'Mode: Full access']);
+  // Cancel puts "as set" back and nothing is kept.
+  // A timeline of the warning and the select, printed if the pick is lost (Chromium closes a dialog a frame late).
+  await page.evaluate(() => { const log = window.p6log = [], dlg = document.querySelector('#looseDlg'), sel = document.querySelector('#mode');
+    const at = (what) => log.push([Math.round(performance.now()), what, dlg.open, dlg.returnValue, sel.value, sel.dataset.was]);
+    dlg.addEventListener('close', () => at('close')); sel.addEventListener('change', () => at('change'));
+    new MutationObserver(() => at('options')).observe(sel, { childList: true }); });
+  const p6dump = async () => JSON.stringify(await page.evaluate(() => window.p6log));
+  await page.selectOption('#mode', 'Full access');
+  await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
+  assert.equal(await page.textContent('#looseT'), 'Turn on Full access for Codex?');
+  assert.match(await page.textContent('#looseP'), /without a sandbox/);
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#looseDlg')).borderTopColor), 'rgb(255, 123, 139)');
+  await shot(page, 'phone-mode-warning');
+  // A redraw while the warning is open (the desktop sets Read-only) must not make the waiting pick the one Cancel keeps.
+  assert.equal((await server.desk('/chat/' + id + '/prompt', 'POST', { text: 'hi', mode: 'Read-only', op: crypto.randomUUID() })).status, 202);
+  await page.waitForFunction(() => document.querySelector('#mode option').textContent === 'Mode: Read-only', null, { timeout: 10000 });
+  await page.click('#looseDlg button[value="no"]');
+  assert.equal(await page.inputValue('#mode'), '');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-mode:codex')), null);
+  // Turn on: the prompt goes in Full access and the daemon's mode event names it in the label.
+  await page.selectOption('#mode', 'Full access');
+  await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
+  await page.click('#looseDlg button[value="yes"]');
+  await page.waitForFunction(() => document.querySelector('#mode').value === 'Full access', null, { timeout: 5000 }).catch(async (error) => { throw new Error('P6 timeline ' + await p6dump(), { cause: error }); });
+  await send(page, 'mode');
+  await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes('mode:agent-full-access')), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelector('#mode option').textContent === 'Mode: Full access', null, { timeout: 5000 });
+  // A new Codex chat made on this phone starts there; a Claude one does not (its own last pick: none yet).
+  await newChat(page, 'codex');
+  assert.equal(await page.inputValue('#mode'), 'Full access');
+  await newChat(page, 'claude');
+  assert.equal(await page.inputValue('#mode'), '');
+  assert.ok((await labels()).includes('Mode: Bypass permissions'));
+  // "Don't show again" is kept for that mode on this phone, past a reload.
+  await page.selectOption('#mode', 'Bypass permissions');
+  await page.waitForFunction(() => document.querySelector('#looseDlg').open, null, { timeout: 5000 });
+  await page.click('#looseDlg button[value="never"]');
+  await page.waitForFunction(() => document.querySelector('#mode').value === 'Bypass permissions', null, { timeout: 5000 });
+  await page.reload();
+  await newChat(page, 'claude');
+  assert.equal(await page.inputValue('#mode'), 'Bypass permissions');
+  await page.selectOption('#mode', 'Auto');
+  await page.selectOption('#mode', 'Bypass permissions');
+  assert.equal(await page.evaluate(() => document.querySelector('#looseDlg').open), false);
+});
+
+test('P10: an agent\'s question is answered or declined on the phone', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 });
+  await send(page, 'ask');
+  await page.waitForSelector('#events form[data-question] input[value="blue"]', { timeout: 15000 });
+  assert.equal(await page.isChecked('#events form[data-question] input[value=""]'), true, 'an optional choice starts on No answer');
+  await page.check('#events form[data-question] input[value="blue"]');
+  await page.click('#events form[data-question] button[type="submit"]');
+  await replied('ask:{"action":"accept","content":{"colour":"blue"}}');
+  await send(page, 'ask-text');
+  await page.waitForSelector('#events form[data-question] input[name="f0"][type="text"]', { timeout: 15000 });
+  await page.click('#events form[data-question] [data-decline]');
+  await replied('ask:{"action":"decline"}');
+  assert.equal(await page.locator('#events form[data-question]').count(), 0);
+});
+
+test('P10: effort and fast mode, slash commands and a recent chat\'s folder on the phone', { timeout: 90000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 });
+  assert.equal((await server.desk('/chat', 'POST', { provider: 'claude', folder: 'proj/sub' })).status, 201);
+  await page.reload();
+  await page.waitForSelector('#startIn option[value="proj/sub"]', { state: 'attached', timeout: 10000 });
+  assert.equal(await page.isVisible('#startIn'), true);
+  await page.selectOption('#startIn', 'proj/sub');
+  await newChat(page, 'claude');
+  await send(page, 'cwd');
+  await replied('/proj/sub');
+  await page.waitForSelector('#pickers select[data-config="effort"]', { timeout: 10000 });
+  await page.selectOption('#pickers select[data-config="effort"]', 'high');
+  await page.selectOption('#pickers select[data-config="fast"]', 'on');
+  await send(page, 'config');
+  await replied('effort=high,fast=on');
+  await page.fill('#prompt', '/re');
+  await page.waitForSelector('#slash:not([hidden]) [data-cmd="review"]', { timeout: 10000 });
+  assert.deepEqual(await page.$$eval('#slash [data-cmd]', (els) => els.map((el) => el.dataset.cmd)), ['review']);
+  await page.click('#slash [data-cmd="review"]');
+  assert.equal(await page.inputValue('#prompt'), '/review ');
+  assert.equal(await page.isHidden('#slash'), true);
+  await page.fill('#prompt', '/');
+  assert.equal(await page.locator('#slash [data-cmd]').count(), 3);
+  await page.fill('#prompt', 'hello');
+  assert.equal(await page.isHidden('#slash'), true);
+});
+
+test('P8: images attach on the phone from the + sheet or a paste, show as chips and reach the agent; refused ones say why', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', bytes = Buffer.from(png, 'base64');
+  const seen = `[image image/png ${bytes.length}]`;
+  const replied = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.trim() === w), want, { timeout: 15000 });
+  const chips = (n) => page.waitForFunction((k) => document.querySelectorAll('#attached .chip-img').length === k, n, { timeout: 10000 });
+  const noted = (want) => page.waitForFunction((w) => { const el = document.querySelector('#composerNote'); return !el.hidden && el.textContent.includes(w); }, want, { timeout: 10000 });
+  const paste = (count) => page.evaluate(([b64, k]) => {
+    const dt = new DataTransfer(), bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    for (let i = 0; i < k; i += 1) dt.items.add(new File([bin], 'pasted' + i + '.png', { type: 'image/png' }));
+    document.querySelector('#prompt').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, [png, count]);
+  const choose = async (pick, files) => {
+    await page.click('#attach');
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), page.click(`#attachSheet [data-pick="${pick}"]`)]);
+    await chooser.setFiles(files);
+    return page.$eval('#attachInput', (el) => [el.accept, el.getAttribute('capture')]);
+  };
+  await newChat(page, 'claude');
+  await page.click('#attach');
+  assert.deepEqual(await page.$$eval('#attachSheet:not([hidden]) [data-pick]', (els) => els.map((el) => el.textContent)), ['Photo library', 'Take photo', 'File']);
+  await page.click('#attach');
+  assert.equal(await page.isHidden('#attachSheet'), true);
+  // Each choice opens the phone's own picker: the camera asked for on Take photo, the four types on File.
+  assert.deepEqual(await choose('camera', [{ name: 'shot.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', 'environment']);
+  await chips(1);
+  assert.deepEqual(await choose('file', [{ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') }]), ['image/png,image/jpeg,image/gif,image/webp', null]);
+  await noted('Not attached: notes.txt: PNG, JPEG, GIF or WebP only.');
+  assert.deepEqual(await choose('library', [{ name: 'lib.png', mimeType: 'image/png', buffer: bytes }]), ['image/*', null]);
+  await chips(2);
+  await paste(1);
+  await chips(3);
+  const box = await page.locator('#attached .chip-img img').first().boundingBox();
+  assert.deepEqual([box.width, box.height], [48, 48]);
+  await page.locator('#composer').scrollIntoViewIfNeeded();
+  await shot(page, 'phone-composer-attach');
+  await page.click('#attached [aria-label="Remove pasted0.png"]');
+  await page.click('#attached [aria-label="Remove lib.png"]');
+  await chips(1);
+  await send(page, 'look');
+  await replied('echo:look' + seen);
+  await chips(0);
+  assert.equal(await page.isHidden('#attached'), true);
+  assert.equal(await page.isHidden('#composerNote'), true);
+  // The sent photo shows in its message, fetched from the daemon by hash.
+  await page.waitForSelector('#events .user-imgs img[src^="data:image/png;base64,"]', { timeout: 10000 });
+  // Four a message: the fifth is refused with the reason.
+  await paste(5);
+  await chips(4);
+  await noted('Not attached: four images a message at most.');
+  // Offline the text would queue; images are not queued, so nothing goes and the box keeps both.
+  await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => false, configurable: true }));
+  await send(page, 'later');
+  await noted('Not sent: images go only with a message sent now.');
+  assert.equal(await page.inputValue('#prompt'), 'later');
+  assert.equal(await page.isHidden('#queued'), true);
+  await chips(4);
+  await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }));
+  await send(page, 'look');
+  await replied('echo:look' + seen.repeat(4));
+});
