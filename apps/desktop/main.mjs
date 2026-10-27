@@ -8,6 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
+import { sendToServer } from './move.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -331,6 +332,8 @@ export async function createDesktop({ state, open } = {}) {
       additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
+  // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
+  window.maximize();
   if (watched) {
     window.on('session-end', quitting);
     const ready = new Promise(resolve => window.once('ready-to-show', resolve));
@@ -626,6 +629,19 @@ export async function createDesktop({ state, open } = {}) {
     await useServer(args[0]);
     setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
     return { ok: true };
+  });
+  // Send to server (D14, move.mjs): this computer's chat moves to the server used last. From Local only: in Server mode the
+  // chats are on the server already. One move per chat at a time.
+  const sending = new Set();
+  ipcMain.handle('p9:send-to-server', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
+    if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the server already.' } };
+    if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' } };
+    if (!localState || sending.has(args[0])) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
+    sending.add(args[0]);
+    try { return await sendToServer({ local: localState, id: args[0], host: serverLast, ssh: sshCommand }); }
+    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+    finally { sending.delete(args[0]); }
   });
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');

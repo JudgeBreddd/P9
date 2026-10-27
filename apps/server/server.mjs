@@ -109,7 +109,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
-  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state });
+  const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
@@ -338,6 +338,12 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     app.post('/devices/:id/lock', (c) => reply(c, auth.lock(c.req.param('id'), 'desktop')));
     app.post('/devices/:id/revoke', (c) => reply(c, auth.revoke(c.req.param('id'))));
   }
+  // Send to server (D14, threat model row 51, move.mjs): the desktop moves a chat; the phone never sees these routes.
+  app.post('/chat/:id/send-away', async (c) => reply(c, await chat.sendAway(c.req.param('id'))));
+  app.get('/chat/:id/move-part', async (c) => reply(c, await chat.part(c.req.param('id'), c.req.query('kind'), Number(c.req.query('offset')))));
+  app.post('/chat/:id/moved', async (c) => reply(c, await chat.moved(c.req.param('id'), await json(c))));
+  app.post('/chat-import/:id/part', async (c) => reply(c, await chat.take(c.req.param('id'), await json(c))));
+  app.post('/chat-import/:id', async (c) => reply(c, await chat.land(c.req.param('id'), await json(c))));
   // Threat model row 15: only the desktop turns the agent lock on or off; reading it is on the shared api.
   app.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   // Threat model row 4: file protection is read and changed by the desktop only; the phone just lives with it.
@@ -387,13 +393,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
   // AGENTS.md at the top, a needs-you or waiting folder. Links are never followed; at most three folders deep.
   const SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
+  // The folder names a workspace keeps what is waiting on its owner in (the kit's _tyler included; Mission Control labels come from the owner's own folder).
+  const WAITING_NAMES = new Set(['needs-you', '_needs-you', 'waiting', '_waiting', '_tyler']);
+  const byDepth = (a, b) => a.split('/').length - b.split('/').length;
   const existing = async () => {
     const found = {};
-    const agents = [];
+    const agents = [], registries = [], waits = [];
     const walk = async (relative, depth) => {
       const entries = await readdir(path.join(workspace, relative), { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
         if (entry.isFile() && entry.name === 'AGENTS.md') agents.push(relative ? relative + '/AGENTS.md' : 'AGENTS.md');
+        if (entry.isFile() && entry.name === 'registry.json') registries.push(relative ? relative + '/registry.json' : 'registry.json');
+        if (entry.isDirectory() && WAITING_NAMES.has(entry.name)) waits.push(relative ? relative + '/' + entry.name : entry.name);
         if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
         const child = relative ? relative + '/' + entry.name : entry.name;
         if (entry.name === 'workspace-hub' && !found.hub && await present(path.join(workspace, child, 'registry.json'))) found.hub = child;
@@ -406,18 +417,30 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       // Registry commands written relative to the folder above the workspace (the workspace is a folder inside a bigger one)
       // only resolve with scripts_root set there.
       const text = (await readAsset(path.join(workspace, found.registry), 'utf8').catch(() => '')).replace(/^﻿/, '');
-      const base = path.basename(workspace) + '/';
+      const base = path.basename(workspace) + '/', above = path.dirname(workspace);
       let records = [];
       try { const reg = JSON.parse(text); records = [...(reg.scripts ?? []), ...(reg.apps ?? [])]; } catch {}
-      if (path.basename(workspace) && records.some((r) => [r?.cwd, ...(Array.isArray(r?.cmd) ? r.cmd : [])].some((v) => typeof v === 'string' && v.startsWith(base)))) {
-        found.scripts_root = path.dirname(workspace);
-      }
+      // S2: an ssh record's paths name the other machine, and a path that is not there above the workspace proves nothing.
+      const local = records.filter((r) => Array.isArray(r?.cmd) && !/^ssh(\.exe)?$/i.test(path.basename(String(r.cmd[0]))));
+      const candidates = local.flatMap((r) => [r.cwd, ...r.cmd]).filter((v) => typeof v === 'string' && v.startsWith(base) && !v.includes('..'));
+      let proven = false;
+      for (const v of candidates.slice(0, 50)) if (await stat(path.join(above, v)).then(() => true, () => false)) { proven = true; break; }
+      if (path.basename(workspace) && proven) found.scripts_root = above;
     } else if (await present(path.join(workspace, STARTER_SETTINGS.registry))) found.registry = STARTER_SETTINGS.registry;
+    else {
+      // D6: a workspace with its own registry.json and no workspace-hub folder: the shallowest one that holds buttons, apps or pages.
+      for (const file of registries.sort(byDepth)) {
+        const reg = await readAsset(path.join(workspace, file), 'utf8').then((text) => JSON.parse(text.replace(/^\uFEFF/, ''))).catch(() => null);
+        if (reg && typeof reg === 'object' && ['scripts', 'apps', 'pages'].some((key) => Array.isArray(reg[key]))) { found.registry = file; break; }
+      }
+    }
     // primary: an AGENTS.md with the line Mission parses (**Main project: ...** (`path`)), else the top one.
     const mainLine = async (file) => /\*\*Main project: [^*]+\*\* \(`[^`]+`/.test(await readAsset(path.join(workspace, file), 'utf8').catch(() => ''));
     for (const file of agents.sort((a, b) => a.split('/').length - b.split('/').length)) if (!found.primary && await mainLine(file)) found.primary = file;
-    if (!found.primary && agents.includes('AGENTS.md')) found.primary = 'AGENTS.md';
+    // D6: no top AGENTS.md (the workspace's own sits in a folder such as Work/): the shallowest one.
+    if (!found.primary && agents.length) found.primary = agents.includes('AGENTS.md') ? 'AGENTS.md' : agents.sort(byDepth)[0];
     for (const folder of ['needs-you', 'waiting']) if (!found.waiting && await isFolder(folder)) found.waiting = folder;
+    if (!found.waiting && waits.length) found.waiting = waits.sort(byDepth)[0];
     // waiting: no such folder, so one whose own AGENTS.md first heading says it holds what is waiting on the owner.
     for (const file of agents.filter((name) => name !== 'AGENTS.md')) {
       if (found.waiting) break;

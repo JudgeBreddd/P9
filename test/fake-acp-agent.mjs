@@ -11,7 +11,7 @@
 // own (startedNewTurn) that answers "got:<text>" and reports no end. "limits <n>" ends the turn, then reports context and plan use at n% a second later.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -51,7 +51,16 @@ const png = (w, h) => {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 };
-let mode = 'unset', model = 'default', cwd = '', mcpServers = null;
+let mode = 'unset', model = 'default', cwd = '', mcpServers = null, folder = '';
+// claude-home (Send to server, D14): a transcript where Claude Code keeps one, <home>/.claude/projects/<folder>/<id>.jsonl,
+// and a resume only of a session whose transcript is there (claude-agent-acp's findTranscript searches every folder).
+// The home is the test's (XDG_STATE_HOME, which the daemon passes on); never HOME, so a test cannot write a real one.
+const projects = () => existsSync('claude-home') && process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, '.claude', 'projects') : null;
+const transcript = (sessionId) => {
+  const root = projects();
+  for (const dir of root && existsSync(root) ? readdirSync(root) : []) if (existsSync(path.join(root, dir, sessionId + '.jsonl'))) return path.join(root, dir, sessionId + '.jsonl');
+  return null;
+};
 const picked = { effort: 'medium', fast: 'off', sandbox: 'on' };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
@@ -89,11 +98,20 @@ const connection = new acp.AgentSideConnection(() => ({
     return { outcome: 'injected' };
   },
   async authenticate() { return {}; },
-  async newSession(params) { cwd = 'new:' + params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
+  async newSession(params) {
+    cwd = 'new:' + params.cwd; folder = params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`;
+    if (projects()) {
+      const dir = path.join(projects(), params.cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, sessionId + '.jsonl'), JSON.stringify({ type: 'session', cwd: params.cwd, sessionId }) + '\n');
+    }
+    commands(sessionId); return { sessionId, configOptions: configOptions() };
+  },
   async resumeSession(params) {
     // uuid-sessions: IDs shaped like the real Claude adapter's (Hand off types one into a shell, so it takes only those).
     if (!params.sessionId.startsWith('fake-') && !existsSync('uuid-sessions')) throw new Error('unknown session');
-    cwd = 'resume:' + params.cwd;
+    if (projects() && !transcript(params.sessionId)) throw new Error('No conversation found with session ID: ' + params.sessionId);
+    cwd = 'resume:' + params.cwd; folder = params.cwd;
     mcpServers = params.mcpServers;
     commands(params.sessionId);
     return { configOptions: configOptions() };
@@ -110,6 +128,8 @@ const connection = new acp.AgentSideConnection(() => ({
     // Like Claude Code's prompt queue: a prompt during the unprompted work is taken in at its next step.
     if (background.has(sessionId)) { await deliver(sessionId, textOf(params.prompt)); return { stopReason: 'end_turn' }; }
     turns.add(sessionId);
+    const file = transcript(sessionId);
+    if (file) appendFileSync(file, JSON.stringify({ type: 'user', text: textOf(params.prompt) }) + '\n');
     try { return await this.turn(params); } finally { await take(sessionId, say); turns.delete(sessionId); }
   },
   async turn(params) {
@@ -211,6 +231,20 @@ const connection = new acp.AgentSideConnection(() => ({
       return { stopReason: 'end_turn' };
     }
     // A reply that lands well after the prompt was accepted, so a client must keep listening to see it.
+    // claude-home: what the transcript holds (the messages before this one), and whether P9 said the chat moved.
+    if (text.endsWith('recall') && transcript(sessionId)) {
+      const lines = readFileSync(transcript(sessionId), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((line) => line.type === 'user').slice(0, -1);
+      await say('recall:' + lines.map((line) => line.text).join('|') + (text.startsWith('[P9: this chat moved') ? ' +note' : ''));
+      return { stopReason: 'end_turn' };
+    }
+    // An edit the way Claude's adapter reports one: kind edit, with the file's absolute path in locations.
+    if (text.startsWith('edit ')) {
+      const file = path.join(folder, text.slice(5));
+      writeFileSync(file, 'edited by the agent\n');
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-' + Date.now(), title: 'Write ' + text.slice(5), kind: 'edit', status: 'completed', locations: [{ path: file }] } });
+      await say('edited');
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {
       cancelled.delete(sessionId);
