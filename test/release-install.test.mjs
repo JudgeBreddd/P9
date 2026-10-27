@@ -204,9 +204,10 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
 
   // --headless (a server with no screen): the install skips postinstall, the step that downloads Electron.
+  // It still installs the editor server: Dev Focus in Server mode runs it on this server (c10, item 33).
   const headless = run({}, ['--headless', 'ws']);
   assert.equal(headless.status, 0, headless.stdout + headless.stderr);
-  assert.equal(headless.log, 'pnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
+  assert.equal(headless.log, 'pnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
   assert.match(headless.stdout, /P9 runs on this server/);
   assert.doesNotMatch(headless.stdout, /pnpm desktop/);
 
@@ -248,7 +249,8 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   const again = run();
   assert.equal(again.status, 0);
   assert.match(again.stdout, /already installed/);
-  assert.equal(again.log, '', 'an existing install is left alone');
+  // Issue #14: an existing install gets the editor server step only; install-editor.mjs leaves the pinned commit alone.
+  assert.equal(again.log, 'node scripts/install-editor.mjs\n', 'an existing install is left alone but for the editor server');
 });
 
 // The Windows installer carries every licence notice in resources/licenses (package-windows.mjs gathers them).
