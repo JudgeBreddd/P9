@@ -42,14 +42,26 @@ const until = async (check, what) => {
   throw new Error('timed out: ' + what);
 };
 const setOnline = (page, on) => page.evaluate((on) => { window.__on = on; dispatchEvent(new Event(on ? 'online' : 'offline')); }, on);
-// A new chat for `agent`, picked; returns its id.
+// Back to the Chats list from a chat (the tab bar is gone inside one).
+async function toList(page) {
+  if (await page.locator('[data-back]').count()) await page.click('[data-back]');
+  await page.waitForSelector('#chatList', { state: 'visible' });
+}
+// A new chat for `agent`: the + sheet makes it and the chat screen opens on it; returns its id.
 async function newChat(page, agent) {
+  await toList(page);
   const before = await page.inputValue('#conversation');
-  await page.click(`[data-new="${agent}"]`);
+  await page.click('#newChat'); await page.click(`#sheet [data-new="${agent}"]`);
   await page.waitForFunction((was) => { const v = document.querySelector('#conversation').value; return v && v !== was; }, before, { timeout: 10000 });
+  await page.waitForSelector('#composer', { state: 'visible' });
   return page.inputValue('#conversation');
 }
-const youCount = (page, text) => page.locator('#events article', { has: page.locator('b', { hasText: /^You$/ }) }).filter({ hasText: text }).count();
+// Opens chat `id` from the list, as a tap on its row.
+async function pick(page, id) {
+  await toList(page); await page.click(`[data-chat="${id}"]`);
+  await page.waitForSelector('#composer', { state: 'visible' });
+}
+const youCount = (page, text) => page.locator('#events article[data-kind=user]').filter({ hasText: text }).count();
 
 test('PH1: the link carries the chat id, the QR is drawn in the window, and the phone opens that chat', { timeout: 120000 }, async (t) => {
   const box = 'https://my-box.tail1.ts.net';
@@ -184,13 +196,13 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(first.searchParams.get('only'), live, 'the first read is narrowed to the chat that is not stopped');
     // The stopped chat has no events yet; picking it reads them, once, up to where the first read stopped.
     assert.equal(reads.some((url) => url.searchParams.get('only') === stopped), false);
-    await page.selectOption('#conversation', stopped);
+    await pick(page, stopped);
     await page.waitForSelector('#events article:has-text("echo:hello old chat")', { timeout: 10000 });
     const history = reads.filter((url) => url.searchParams.get('only') === stopped);
     assert.equal(history.length >= 1, true);
     assert.equal(history[0].searchParams.has('until'), true);
-    await page.selectOption('#conversation', live);
-    await page.selectOption('#conversation', stopped);
+    await pick(page, live);
+    await pick(page, stopped);
     await page.waitForSelector('#events article:has-text("echo:hello old chat")');
     assert.equal(reads.filter((url) => url.searchParams.get('only') === stopped).length, history.length, 'a loaded history is not read again');
     assert.equal(await youCount(page, 'hello old chat'), 1);
@@ -204,8 +216,12 @@ for (const agent of ['claude', 'codex']) {
     const id = await newChat(page, agent);
     const send = async (text) => { await page.fill('#prompt', text); await page.click('#composer button'); };
     await send('plan');
-    await page.waitForSelector('#pinned .plan li', { timeout: 15000 });
+    await page.waitForSelector('#pinned .plan li', { state: 'attached', timeout: 15000 });
     assert.deepEqual(await page.locator('#pinned .plan li').allTextContents(), ['✓Read the chat ledger', '▸Pin the plan above the composer', '○Check it on the phone']);
+    // P1: no 35vh strip over the chat; one chip row, and a tap opens the plan in a sheet.
+    assert.equal(await page.locator('#chips .chip').first().textContent(), 'Plan 1/3 ▸');
+    await page.click('#chips .chip'); await page.waitForSelector('#sheet[open] .plan li');
+    assert.equal(await page.locator('#sheet .plan li').count(), 3); await page.keyboard.press('Escape');
     // The agent's own MCP server (P9's) is how it pins; the fake agent hands over the command that starts it.
     await send('mcp');
     let entry;
@@ -220,10 +236,10 @@ for (const agent of ['claude', 'codex']) {
     assert.equal((await tool('unpin_card', { id: 'gone' })).unpinned, 'gone');
     const shown = async () => {
       const card = page.locator('#pinned [data-card="status"]');
-      await card.waitFor({ timeout: 15000 });
+      await card.waitFor({ state: 'attached', timeout: 15000 });
       assert.equal(await card.locator('.eyebrow').textContent(), 'status · markdown');
       assert.match(await card.textContent(), /<img src=x onerror="window\.pwned=1"> <b>not bold<\/b>/);
-      assert.equal(await card.locator('strong').innerText(), 'Build');
+      assert.equal(await card.locator('strong').textContent(), 'Build');
       assert.equal(await page.locator('#pinned img, #pinned b, #pinned script').count(), 0);
       assert.equal(await page.locator('#pinned [data-card="gone"]').count(), 0);
       assert.equal(await page.evaluate(() => window.pwned), undefined);
@@ -232,7 +248,7 @@ for (const agent of ['claude', 'codex']) {
     if (agent === 'claude') await shot(page, 'phone-plan-card');
     // Live: a pin shows at once, an unpin takes it away; a reload replays the ledger and shows the same strip.
     await tool('pin_card', { id: 'live', kind: 'table', text: '| check | state |\n|---|---|\n| lint | ok |' });
-    await page.waitForSelector('#pinned [data-card="live"] table', { timeout: 15000 });
+    await page.waitForSelector('#pinned [data-card="live"] table', { state: 'attached', timeout: 15000 });
     await tool('unpin_card', { id: 'live' });
     await page.waitForSelector('#pinned [data-card="live"]', { state: 'detached', timeout: 15000 });
     await page.evaluate(() => localStorage.removeItem('p9-cursor'));

@@ -15,18 +15,24 @@ import '../styles/phone.css';
   <body data-view="chat">
     <div id="app">
     <div id="stale" role="status" hidden>Offline: showing stale data</div>
-    <div id="gap" role="alert" hidden>History gap. Refresh to reload.</div>
+    <div id="gap" role="alert" hidden>History gap. Tap to reload.</div>
     <main>
       <section data-view="chat">
         <header class="bar" data-bar="chat"></header>
-        <div class="body" id="chatBody">
-          <label>Conversation<select id="conversation"></select></label>
-          <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button></div>
-          <div id="pinned" aria-live="polite"></div>
-          <div id="events" class="feed" aria-live="polite"></div>
+        <div id="chatList" class="scroll" aria-label="Chats"></div>
+        <div id="chatArea" hidden>
+          <div id="chips" class="chips" hidden></div>
+          <div class="scrollwrap">
+            <div class="scroll" id="chatBody">
+              <select id="conversation" hidden aria-label="Conversation"></select>
+              <div id="pinned" hidden></div>
+              <div id="events" aria-live="polite"></div>
+            </div>
+            <button type="button" id="jump" aria-label="Jump to the latest message" hidden></button>
+          </div>
         </div>
         <!-- COMPOSER SLOT (c2 builds the composer here): sits below the chat scroller, never scrolls away, rides the keyboard. Keep it one flex child; the queued list and the form are today's composer. -->
-        <div id="composerSlot">
+        <div id="composerSlot" hidden>
           <div id="queued" class="stack" aria-live="polite" hidden></div>
           <form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select></div><label for="prompt">Message</label><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><button type="submit">Send message</button></form>
         </div>

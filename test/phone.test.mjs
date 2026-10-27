@@ -88,7 +88,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   t.after(() => browser.close());
   const { page, context, session } = await signedInPage(browser, server);
 
-  await page.waitForSelector('h1:text("Chat")');
+  await page.waitForSelector('h1:text("Chats")');
   const usage = await server.remote('/usage', { session: (await enrollDevice(server, await passkeyDevice(browser, server, 'usage-reader'))) });
   assert.equal(usage.status, 200);
   assert.deepEqual(usage.body.totals, { inputTokens: 27600, outputTokens: 3820, cachedTokens: 19200, costUsd: 0.2768 });
@@ -105,8 +105,9 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.equal((await server.remote('/files', { method: 'POST', session: reader, body: { path: 'phone-made.txt', content: 'x' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
   // Conversations are labelled title · start time · state; New chat creates one and selects it.
   assert.match(await page.locator('#conversation option').first().innerText(), /^(claude|codex) · .+ · idle$/);
-  await page.click('[data-new="codex"]');
+  await page.click('#newChat'); await page.click('#sheet [data-new="codex"]');
   await page.waitForFunction(() => document.querySelectorAll('#conversation option').length === 3);
+  await page.waitForSelector('#composer', { state: 'visible' }); // the new chat opened (P1: the Chats list, then the chat screen)
   const picked = await page.locator('#conversation').evaluate((select) => select.selectedOptions[0].textContent);
   assert.match(picked, /^Codex · .+ · idle$/);
   await page.screenshot({ path: path.join(evidence, 'phone-chat.png') });
@@ -115,11 +116,11 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   // "No new recorded events." once the phone had a saved cursor).
   await page.fill('#prompt', 'late'); await page.click('#composer button');
   await page.waitForSelector('#events article:has-text("late reply")', { timeout: 10000 });
-  const labels = () => page.locator('#events article b').evaluateAll((items) => items.map((item) => item.textContent));
-  assert.deepEqual(await labels(), ['You', 'Agent']);
+  const labels = () => page.locator('#events > article').evaluateAll((items) => items.map((item) => item.dataset.kind));
+  assert.deepEqual(await labels(), ['user', 'agent']);
   await page.reload();
   await page.waitForSelector('#events article:has-text("late reply")');
-  assert.deepEqual(await labels(), ['You', 'Agent']);
+  assert.deepEqual(await labels(), ['user', 'agent']);
   await page.screenshot({ path: path.join(evidence, 'phone-chat-reply.png') });
   // Phase 17 row 2: the agent asks for approval; the phone shows the agent's options as buttons and the answer reaches it.
   await page.fill('#prompt', 'permission'); await page.click('#composer button');
@@ -129,13 +130,13 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.click('#events button[data-option="allow"]');
   await page.waitForSelector('#events article:has-text("permission:allow")', { timeout: 10000 });
   assert.equal(await page.locator('#events button[data-option]').count(), 0);
-  assert.deepEqual((await labels()).slice(-4), ['You', 'Approval needed', 'You answered', 'Agent']);
+  assert.deepEqual((await labels()).slice(-4), ['user', 'approval', 'answered', 'agent']);
   // Replies show as Markdown on the phone too, and markup in them stays text (threat model row 18).
   await page.fill('#prompt', 'x\n\n# Plan\n\n- **one**\n\n<img src=x onerror="window.pwned = 1"> <script>window.pwned = 2</script> [x](javascript:window.pwned=3)'); await page.click('#composer button');
-  const md = page.locator('#events article:last-child .md');
+  const md = page.locator('#events article:last-child.md');
   await md.locator('h1').waitFor({ timeout: 10000 });
   assert.deepEqual(await md.evaluate((m) => [!!m.querySelector('ul li strong'), m.querySelectorAll('script, img, iframe, a').length, m.textContent.includes('onerror'), window.pwned]), [true, 0, true, undefined]);
-  await md.locator('xpath=..').screenshot({ path: path.join(evidence, 'phone-markdown.png') });
+  await md.screenshot({ path: path.join(evidence, 'phone-markdown.png') });
   // Mode and Model from the phone (Builder, 2026-10-18): a picked mode reaches the agent, "as set" sends none (so it
   // stays), and the Model list is the agent's own.
   // Waits for this send's own reply (You + Agent added): the same text as the last reply would match at once and the
@@ -246,6 +247,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.deepEqual(ideaRefused, [409, 400]);
   assert.equal(await readFile(path.join(server.workspace, '_ideas', 'garage-shelf-plan.md'), 'utf8'), 'Two rows over the bench.\n');
 
+  await page.click('[data-back]'); await page.waitForSelector('#chatList', { state: 'visible' });
   await page.click('[data-nav="mission"]');
   await page.waitForSelector('#mission >> text=Main project');
   // Phase 16 short Mission: every section is a tile that opens a full-screen window and closes again.
@@ -470,7 +472,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.evaluate((value) => localStorage.setItem('p9-cursor', String(value)), cursor);
   await page.reload();
   await page.waitForSelector('#gap:not([hidden])');
-  await page.click('#refreshChat'); await page.waitForSelector('#gap', { state: 'hidden' });
+  await page.click('#gap'); await page.waitForSelector('#gap', { state: 'hidden' });
   console.log('PASS phase11 phone: guarded save/discard/conflict, offline refusal, cursor gap, stable retry ID, fresh ID after 401, recorded usage and four 390x844 screenshots');
 });
 
