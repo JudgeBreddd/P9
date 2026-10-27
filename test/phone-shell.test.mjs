@@ -26,13 +26,16 @@ async function phoneOn(t, server, browser) {
 }
 async function open(device, server, { fix = [], init } = {}) {
   const { page, session } = device;
-  let hits = 0;
   // The A/B: swap text in the served document, stylesheet and script so the old behaviour is back. The swap must hit.
+  const hit = fix.map(() => false), seen = fix.map(() => '');
   await page.route('**/*', async (route) => {
     if (!fix.length || !['document', 'stylesheet', 'script'].includes(route.request().resourceType())) return route.continue();
-    const response = await route.fetch();
+    const response = await route.fetch({ url: route.request().url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...route.request().headers(), host: server.host } });
     let body = await response.text();
-    for (const [from, to] of fix) if (body.includes(from)) { body = body.replace(from, to); hits++; }
+    for (const [index, [from, to]] of fix.entries()) {
+      if (typeof from === 'string' ? body.includes(from) : from.test(body)) { body = body.replace(from, to); hit[index] = true; }
+      else if (!seen[index] && typeof from === 'string') { const at = body.indexOf(from.slice(0, 14)); if (at >= 0) seen[index] = body.slice(at, at + 160); }
+    }
     await route.fulfill({ response, body });
   });
   if (init) await page.addInitScript(init);
@@ -40,7 +43,7 @@ async function open(device, server, { fix = [], init } = {}) {
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
   await page.reload();
   await page.setViewportSize({ width: 390, height: 844 });
-  return { page, hits: () => hits };
+  return { page, hits: () => hit.filter(Boolean).length, missed: () => fix.map((_, i) => hit[i] ? '' : 'patch ' + i + ' did not hit' + (seen[i] ? '; the served text reads: ' + seen[i] : '; its first 14 characters appear nowhere')).filter(Boolean).join(' | ') };
 }
 
 const checks = {
@@ -101,7 +104,7 @@ const checks = {
   },
 };
 const breaks = {
-  column: { fix: [['height:var(--vvh,100dvh);max-width:700px', 'max-width:700px']] },
+  column: { fix: [[/(#app\{[^}]*?)height:\s*var\(--vvh,\s*100dvh\)/, '$1height:300px']] },
   keyboard: { fix: [['body.kbd nav{display:none}', 'body.kbd nav{}']] },
   slot: { fix: [['id="composerSlot"', 'id="composerSlotGone"']] },
   sheet: { init: () => { HTMLDialogElement.prototype.close = function () {}; } },
@@ -111,11 +114,16 @@ test('P5 and the shell: a fixed column, a 44 px bar on every tab, the tab bar yi
   const server = await remoteDaemon(t, { setup, args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] });
   const browser = await chromium.launch();
   t.after(() => browser.close());
+  // Every check runs, and every failure is listed at the end: a run is too slow to find them one at a time.
+  const failures = [];
   for (const [name, check] of Object.entries(checks)) {
     const good = await open(await phoneOn(t, server, browser), server);
-    await check(good.page);
+    try { await check(good.page); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); continue; }
     const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
-    await assert.rejects(() => check(bad.page), undefined, name + ': the check must fail on the broken page');
-    if (breaks[name].fix) assert.ok(bad.hits() > 0, name + ': the patch to the served files hit');
+    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); continue; }
+    let broke = true;
+    try { await check(bad.page); broke = false; } catch { /* the check failed on the broken page, as it must */ }
+    if (!broke) failures.push(name + ' (A/B): the check passed on the broken page');
   }
+  assert.deepEqual(failures, []);
 });
