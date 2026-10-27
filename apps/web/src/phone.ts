@@ -7,11 +7,7 @@ type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
 type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | null; sevenDay: { usedPercent: number; resetsAt: number | null } | null; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
-const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-// The time alone today, the date alone before: for a title with little room.
-const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.toDateString() === new Date().toDateString()
-  ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
-const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
