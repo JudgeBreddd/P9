@@ -264,6 +264,7 @@ const openFirst = async (t, instance) => {
 };
 
 // One test per item, so one broken item fails only its own test and a single A/B run can break them all at once.
+const signedIn = async ({ directory }) => { await mkdir(path.join(directory, '.claude'), { recursive: true }); await writeFile(path.join(directory, '.claude', '.credentials.json'), '{}'); };
 const emptyFirst = async (t) => openFirst(t, await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] })));
 const openWelcome = async (page) => {
   await page.locator('#cards [data-key="welcome"] .open').click();
@@ -302,9 +303,10 @@ test('First launch D1: the welcome screen offers a P9 on another machine', { tim
 });
 
 test('First launch D3: the Mission step says what is created, what is not, and what the button does', { timeout: 60000 }, async (t) => {
-  const { page, shot } = await emptyFirst(t);
-  await openWelcome(page);
-  for (let next = 0; next < 4 && (await page.locator('#welT').textContent()) !== 'Mission Control'; next++) await page.locator('#welFoot [data-act="next"]').click();
+  // Signed in, so the Set up card opens at the first thing not done: Mission Control's files (Next stays off until an agent is signed in).
+  const { page, shot } = await openFirst(t, await daemon(t, undefined, false, async (where) => { await signedIn(where); return { args: ['--acp-override', fake] }; }));
+  await page.locator('#cards [data-key="welcome"] .open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
   await page.locator('#welT', { hasText: 'Mission Control' }).waitFor({ timeout: 10000 });
   const step = await page.locator('#welBody').innerText();
   assert.match(step, /control room[\s\S]*buttons for your scripts[\s\S]*A file that is already there is never changed or replaced/);
@@ -324,7 +326,6 @@ const layout = async ({ workspace }) => {
     scripts: [{ id: 'backup', title: 'Back up', group: 'Maintenance', cmd: ['true'] }], apps: [], pages: [] }));
   await writeFile(path.join(workspace, 'ICM/_waiting/alpha-question.md'), '# Which colour?\n\nA.\n');
 };
-const signedIn = async ({ directory }) => { await mkdir(path.join(directory, '.claude'), { recursive: true }); await writeFile(path.join(directory, '.claude', '.credentials.json'), '{}'); };
 
 test('First launch D6: the wizard finds the workspace\'s own layout and attaches it', { timeout: 90000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async (where) => { await layout(where); await signedIn(where); return { args: ['--acp-override', fake] }; });
