@@ -18,14 +18,14 @@ apt_file() {
     || printf 'FROM %s\nRUN apt-get update && apt-get install -y apt-file && apt-file update\n' "$UBUNTU" | docker build -q -t p9-bare-apt-file - >/dev/null
   docker run --rm p9-bare-apt-file apt-file search -l -x "^/(usr/)?lib/$(docker exec "$NAME" uname -m)-linux-gnu/$1\$" | head -1
 }
-as_p9() { docker exec -u p9 -w /home/p9/p9 -e XDG_RUNTIME_DIR=/run/user/1000 -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "$NAME" bash -lc "$1"; }
+as_p9() { docker exec -u p9 -w /srv/p9/p9 -e XDG_RUNTIME_DIR=/run/user/1000 -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "$NAME" bash -lc "$1"; }
 
 case "${1:-}" in
 boot)
   docker build -q -t p9-bare - <<EOF
 FROM $UBUNTU
 RUN apt-get update && apt-get install -y systemd systemd-sysv dbus-user-session sudo ca-certificates git \
- && (userdel -r ubuntu || true) && useradd -m -u 1000 -s /bin/bash p9 \
+ && (userdel -r ubuntu || true) && useradd -m -d /srv/p9 -u 1000 -s /bin/bash p9 \
  && echo 'p9 ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/p9 && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/p9
 CMD ["/sbin/init"]
 EOF
@@ -33,7 +33,7 @@ EOF
   docker run -d --name "$NAME" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock p9-bare >/dev/null
   for i in $(seq 1 100); do docker exec "$NAME" test -S /run/user/1000/bus 2>/dev/null && break; sleep 0.3; done
   docker exec "$NAME" test -S /run/user/1000/bus || { docker logs "$NAME" | tail -40; echo "BARE_NOT_BOOTED"; exit 1; }
-  git ls-files -z | tar --null -T - -cf - | docker exec -i "$NAME" bash -c 'mkdir -p /home/p9/p9 && tar -xf - -C /home/p9/p9 && chown -R p9:p9 /home/p9/p9'
+  git ls-files -z | tar --null -T - -cf - | docker exec -i "$NAME" bash -c 'mkdir -p /srv/p9/p9 && tar -xf - -C /srv/p9/p9 && chown -R p9:p9 /srv/p9/p9'
   as_p9 'git init -q && git add -A && git -c user.name=bare -c user.email=bare@localhost commit -qm clone'
   echo "BARE_BOOTED $(docker exec "$NAME" uname -m) $(as_p9 'systemctl --user is-system-running || true')"
   docker exec "$NAME" dpkg-query -W -f '${Package}\n' | sort > /tmp/p9-bare-before.txt
@@ -46,7 +46,7 @@ discover)
   for round in 1 2 3 4 5 6 7 8; do
     if as_p9 'bash scripts/install.sh --headless' > /tmp/p9-bare-install.log 2>&1; then status=0; else status=$?; fi
     cat /tmp/p9-bare-install.log
-    [ "$status" = 0 ] && { echo "BARE_INSTALLED round $round"; break; }
+    [ "$status" = 0 ] && { echo "BARE_INSTALLED round $round"; installed=1; break; }
     line=$(grep -m1 '^MISSING' /tmp/p9-bare-install.log || true)
     lib=$(grep -m1 -o 'error while loading shared libraries: [^:]*' /tmp/p9-bare-install.log | sed 's/.*: //' || true)
     if [ -n "$line" ]; then
@@ -92,15 +92,16 @@ discover)
   echo "BARE_USERNS_RESTRICTED $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
   # The packages discovery installed, against the same manifest.
   for p in "${needed[@]}"; do echo "BARE_NEEDED_ON_DESKTOP $p $(grep -qx "$p" /tmp/p9-bare-desktop.txt && echo on-ubuntu-desktop || echo NOT-on-ubuntu-desktop)"; done
+  [ -n "${installed:-}" ] || exit 1
   ;;
 tmux)
   out=$(realpath -m -- "${2:?output folder}"); mkdir -p -- "$out"
   curl -fsSLo "$out/tmux-$TMUX_VERSION.tar.gz" "https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz"
   echo "$TMUX_SHA256  $out/tmux-$TMUX_VERSION.tar.gz" | sha256sum -c -
   docker run --rm -v "$out:/w" -w /w "$ALPINE" sh -euc "apk add --no-cache build-base libevent-dev libevent-static ncurses-dev ncurses-static bison pkgconf >/dev/null
-    tar -xzf tmux-$TMUX_VERSION.tar.gz && cd tmux-$TMUX_VERSION && ./configure --enable-static --prefix=/usr >/dev/null && make -j4 >/dev/null
-    strip tmux && cp tmux /w/tmux && chown $(id -u):$(id -g) /w/tmux && apk info -v libevent-static ncurses-static musl > /w/tmux.versions"
-  rm -rf -- "$out/tmux-$TMUX_VERSION" "$out/tmux-$TMUX_VERSION.tar.gz"
+    mkdir /b && tar -xzf tmux-$TMUX_VERSION.tar.gz -C /b && cd /b/tmux-$TMUX_VERSION && ./configure --enable-static --prefix=/usr >/dev/null && make -j4 >/dev/null
+    strip tmux && cp tmux /w/tmux && chown $(id -u):$(id -g) /w/tmux && apk list --installed libevent-static ncurses-static musl > /w/tmux.versions"
+  rm -f -- "$out/tmux-$TMUX_VERSION.tar.gz"
   # The test P9's terminals need: a session with a shell, a typed command and its output, on bare Ubuntu.
   docker run --rm -v "$out/tmux:/usr/local/bin/tmux:ro" -e TERM=xterm-256color "$UBUNTU" bash -euc 'tmux -V
     tmux -S /tmp/s new-session -d -x 80 -y 24 "bash --norc"; sleep 0.5; tmux -S /tmp/s send-keys "echo ok-\$((40+2))" Enter; sleep 0.5
