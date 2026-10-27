@@ -23,7 +23,7 @@ function online() {
 }
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
-  if (response.status === 401) location.replace('/login');
+  if (response.status === 401) { forgetMission(); location.replace('/login'); }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
   return body;
@@ -46,6 +46,7 @@ async function mutate(path: string, body: Json) {
   keepPending(key, pending);
   const relogin = () => {
     keepPending(key, { ...pending, used: true });
+    forgetMission();
     location.replace('/login');
     return new Error('login-required');
   };
@@ -64,7 +65,7 @@ async function mutate(path: string, body: Json) {
 function show(view: string) {
   document.querySelectorAll<HTMLElement>('[data-view]').forEach((section) => { section.hidden = section.dataset.view !== view; });
   document.querySelectorAll<HTMLButtonElement>('[data-nav]').forEach((button) => button.setAttribute('aria-current', button.dataset.nav === view ? 'page' : 'false'));
-  if (view === 'mission') void loadMission();
+  if (view === 'mission') { if (!missionDrawn && lastMission) void loadMission(true); void loadMission(); }
   if (view === 'usage') void loadUsage();
   if (view === 'files' && !state.file) void loadFolder();
   if (view === 'terminal' && !term.open) void loadTerminals();
@@ -412,9 +413,16 @@ function keepOpen(render: () => void) {
   if (again && !again.open) again.showModal();
   rows(again).forEach((d) => { if (!d.open && expanded.has(title(d))) d.open = true; });
 }
-async function loadMission() {
+// T7: the last Mission and hub answers are kept here and in localStorage (threat model row 56; a 401 forgets them). A tap
+// on Mission draws them at once, then both routes refresh behind; before, the page waited on GET /mission, then emptied
+// #hub and waited on GET /mission/hub.
+const kept = (key: string) => { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } };
+const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }; // storage full: no cache
+const forgetMission = () => { try { localStorage.removeItem('p9-mission'); localStorage.removeItem('p9-mission-hub'); } catch {} };
+let lastMission: any = kept('p9-mission'), lastHub: Hub | null = kept('p9-mission-hub'), missionDrawn = false;
+async function loadMission(cached = false) {
   try {
-    const data = await request('/mission');
+    const data = cached ? lastMission : await request('/mission');
     mission = data;
     const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${escape(item.project)} · ${escape(item.age)}</small>`,
       `<pre>${escape(item.content)}</pre>` + (item.answerable
@@ -452,17 +460,22 @@ async function loadMission() {
       + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, 'scripts', (notes.get(group) ?? '') + rows.join(''))).join('')
       + win('pages', 'Pages', data.pages.length, 'links', `<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
-  } catch { one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
-  void loadHub();
+    missionDrawn = true;
+    if (!cached) { lastMission = data; keep('p9-mission', data); }
+  } catch { if (cached) lastMission = null; else if (!missionDrawn) one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
+  if (lastHub) void loadHub(true); // the redraw above emptied #hub: refill it from memory, not from the wire
+  if (!cached) void loadHub();
 }
 // The old workspace-hub sections. Each row's text loads when it is opened.
 const ago = (min: number) => min < 60 ? `${min} min` : min < 2880 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} d`;
 const lazy = (query: Record<string, string>) => `<pre data-text="${escape(new URLSearchParams(query).toString())}">Loading…</pre>`;
-async function loadHub() {
+async function loadHub(cached = false) {
   const target = document.querySelector<HTMLElement>('#hub');
   if (!target) return;
   let o: Hub;
-  try { o = await request('/mission/hub'); } catch { return; } // no hub folder in settings: these sections stay hidden
+  // No hub folder in settings (an answer, not a lost connection): these sections stay hidden, cached or not.
+  try { o = cached ? lastHub! : await request('/mission/hub'); } catch (error) { if ((error as { body?: unknown }).body) { lastHub = null; target.innerHTML = ''; try { localStorage.removeItem('p9-mission-hub'); } catch {} } return; }
+  if (!cached) { lastHub = o; keep('p9-mission-hub', o); }
   const notices = o.notices === null ? '<div class="empty">Checking scheduled jobs and setup…</div>'
     : o.notices.map((n) => `<article class="card warn"><h2>${n.kind === 'job' ? 'SILENT JOB' : 'SETUP'}</h2><p>${escape(n.text)}</p></article>`).join('') || '<div class="empty">Every scheduled job reported in.</div>';
   const open = o.incidents.filter((i) => !i.resolved);
@@ -481,7 +494,7 @@ async function loadHub() {
     + win('work', 'Workspace', o.ideas, `ideas · ${o.needs_done} punch-list · + New idea`, `<article class="card"><h2>Workspace</h2><p>${o.ideas} ideas not researched · ${o.needs_done} punch-list items</p>${audit}</article>`
     + row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>'))
     + win('logs', 'Logs', o.logs.length, o.logs[0] ? escape(o.logs[0].name) : 'No logs.', logs); });
-  if (o.notices === null) setTimeout(() => void loadHub(), 15000);
+  if (o.notices === null && !cached) setTimeout(() => void loadHub(), 15000);
 }
 one('#mission').addEventListener('click', (event) => {
   const target = event.target as Element;
