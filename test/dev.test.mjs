@@ -645,7 +645,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
 });
 
 // ---- Chunk 5: D11 (save only on Ctrl+S / Save, white dot while unsaved) and D12 (spell check) ----
-// The dev space has no editor server and no systemd user bus. There, the pinned release is unpacked from _private/fixtures
+// The dev space has no editor server and no systemd user bus. There, the pinned release is unpacked from the private fixtures folder
 // (untracked: the sprint put it there) and started through a stand-in systemd-run that only runs the command; on a machine
 // with the editor server and a user bus (the server itself, CI) the real ones are used.
 const fixtures = path.join(root, '_private', 'fixtures');
@@ -704,7 +704,7 @@ async function openDevFocus(t, editor, extra = {}) {
 
 test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot while unsaved', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
   const editor = await editorFor();
-  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or _private/fixtures/reh.tar.gz)');
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
   const { instance, dev, errors } = await openDevFocus(t, editor, { P9_SPELL_CHECK: 'off' });
   const plain = path.join(instance.workspace, 'plain.txt');
   await writeFile(plain, 'before\n');
@@ -744,7 +744,7 @@ test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot whi
 
 test('D12: Dev Focus underlines misspelled words (Code Spell Checker, installed once)', { skip: process.platform !== 'linux', timeout: 300000 }, logged(async t => {
   const editor = await editorFor();
-  if (!editor || !existsSync(path.join(fixtures, 'spell.vsix'))) return t.skip('needs the editor server and _private/fixtures/spell.vsix');
+  if (!editor || !existsSync(path.join(fixtures, 'spell.vsix'))) return t.skip('needs the editor server and the fixtures spell.vsix');
   const served = await readFile(path.join(fixtures, 'spell.vsix'));
   const { createServer } = await import('node:http');
   const server = createServer((_request, response) => response.end(served)).listen(0, '127.0.0.1');
