@@ -775,6 +775,12 @@ async function sendFiles() {
     if (!p.send) return xferShow('Nothing to send', where + ' already matches this computer (' + p.same.toLocaleString() + ' files the same).', '', xferClose), xferWire();
     return xferGo(p, null, false);
   }
+  xferAsk(p, (choice, deleteToo) => xferGo(p, choice, deleteToo));
+}
+// The prompt for a plan that asks: a Syncthing warning, the files that differ, the deletes. go(choice, deleteToo) runs on a choice;
+// moving: Send to server's prompt for the chat's folder, before the chat is frozen.
+function xferAsk(p, go, moving) {
+  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
   const list = (items, more) => '<ul class="mono sm" style="max-height:30vh;overflow:auto;margin:0;padding-left:18px">' + items.join('') + (more > 0 ? '<li class="muted">and ' + more.toLocaleString() + ' more</li>' : '') + '</ul>';
   const warn = sync.length ? '<div class="set-row" data-xfer-syncthing><span><strong>Syncthing already syncs this folder</strong><span class="muted sm">Two copiers on one folder fight: each undoes the other. Found .stfolder at '
     + sync.map(([side, d]) => esc(d === '..' ? 'a folder above the workspace' : d || 'the workspace') + ' (' + side + ')').join(', ') + '. Send only if Syncthing is off for it.</span></span></div>' : '';
@@ -787,11 +793,11 @@ async function sendFiles() {
   const choices = !p.asked ? [['go', 'default', 'Send']] : p.kind === 'first' ? [['laptop', 'default', 'Laptop wins'], ['newer', 'outline', 'Keep the newer of each']]
     : [['laptop', 'default', 'Keep the laptop\'s'], ['server', 'outline', 'Keep the server\'s'], ['newer', 'outline', 'Keep the newer of each']];
   xferShow(p.kind === 'first' ? 'First send to ' + p.host : p.kind === 'conflict' ? 'Files changed on both sides' : 'Send files to ' + p.host,
-    where + ': ' + p.send.toLocaleString() + ' file' + (p.send === 1 ? '' : 's') + ' to send (' + bytes(p.sendBytes) + ').',
+    where + ': ' + p.send.toLocaleString() + ' file' + (p.send === 1 ? '' : 's') + ' to send (' + bytes(p.sendBytes) + ').' + (moving ? ' The chat moves once they are there.' : ''),
     warn + asked + gone + '<p class="muted sm">Every file replaced or deleted, on either side, is kept in that computer\'s P9 recovery folder.</p>',
     '<button data-slot="button" data-variant="outline" data-xfer-close autofocus>Cancel</button>' + choices.map(([v, look, label]) => '<button data-slot="button" data-variant="' + look + '" data-xfer-choice="' + v + '">' + label + '</button>').join(''));
   xferWire();
-  $('#xferDlg').querySelectorAll('[data-xfer-choice]').forEach(c => c.onclick = () => xferGo(p, c.dataset.xferChoice === 'go' ? null : c.dataset.xferChoice, !!$('#xferDel')?.checked));
+  $('#xferDlg').querySelectorAll('[data-xfer-choice]').forEach(c => c.onclick = () => go(c.dataset.xferChoice === 'go' ? null : c.dataset.xferChoice, !!$('#xferDel')?.checked));
 }
 async function xferGo(p, choice, deleteToo) {
   xferShow('Sending to ' + p.host, (p.folder || 'The workspace') + '. Closing this leaves the send running.', '<progress id="xferBar" value="0" max="1" style="width:100%"></progress><p class="muted sm mono" id="xferNum"></p>', xferClose);
@@ -2368,8 +2374,26 @@ const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg
 const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending the chat to ' + h,
   landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
 const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+// The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
+// is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
 async function sendAway(s) {
-  const r = await window.p9.sendToServer(s.id).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  let files = [];
+  if (window.p9.xferPlan) {
+    const p = await window.p9.xferPlan(s.folder || '').catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+    if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (p.message || p.error) }); return renderChats(); }
+    if (!p.syncthing.laptop.length && !p.syncthing.server.length) {
+      const answer = !p.asked && !p.deletes ? [null, false] : await new Promise(done => {
+        xfer.id = p.id;
+        xferAsk(p, (choice, deleteToo) => { done([choice, deleteToo]); $('#xferDlg').close(); }, true);
+        $('#xferDlg').addEventListener('close', () => done(null), { once: true });
+      });
+      xfer.id = null;
+      if (!answer) return; // Cancel: nothing frozen, nothing sent
+      files = [p.id, ...answer];
+    }
+  }
+  const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  if (r.body?.error === 'limit') return xferRefused(r.body);
   // busy: main is moving it already (a window reloaded mid-move); its events draw it.
   if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
 }
