@@ -3,15 +3,16 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFile, chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
-import { createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { homedir } from 'node:os';
+import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from '../server/child-env.mjs';
 import { windowsJobCommand } from '../server/process-tree.mjs';
 
-const home = homedir(), win = process.platform === 'win32';
+// os.homedir(), not a named import: the server's test daemon swaps os.homedir for its fixture home (test/home-fixture.mjs).
+const home = os.homedir(), win = process.platform === 'win32';
 // Windows: per user under %LOCALAPPDATA%\P9 (no admin), beside the daemon's own state.
 export const EDITOR_DIR = win ? path.join(process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local'), 'P9') : path.join(home, '.local', 'share', 'p9');
 // The one VSCodium REH P9 is tested with (1.121.03429, README has the download and its SHA-256).
@@ -93,8 +94,9 @@ export async function hostWritable(data, file, kind = 'write') {
 }
 
 // The caller may pick the unit name first, so it can register the quit handler before the host exists.
+// socket: a Unix socket path instead of a loopback port (the daemon's editor for Server mode, reached through the tunnel).
 export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server'), address = LOOPBACK, data = path.join(EDITOR_DIR, 'editor'),
-  unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), timeout = 30000, signal, spell = false } = {}) {
+  unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), timeout = 30000, signal, spell = false, socket } = {}) {
   if (address !== LOOPBACK) throw new Error('editor-host-loopback-only');
   if (process.platform !== 'linux' && !win) throw new Error('editor-host-unsupported-platform');
   const commit = JSON.parse(await readFile(path.join(host, 'product.json'), 'utf8')).commit;
@@ -114,7 +116,7 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
   const server = win ? [path.join(host, 'node.exe'), path.join(host, 'out', 'server-main.js')]
     : ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=p9.slice', '--unit=' + unit, path.join(host, 'bin', 'codium-server')];
   const argv = [...server,
-    '--host', LOOPBACK, '--port', '0', '--connection-token-file', tokenFile, '--user-data-dir', path.join(data, 'data'),
+    ...(socket ? ['--socket-path', socket] : ['--host', LOOPBACK, '--port', '0']), '--connection-token-file', tokenFile, '--user-data-dir', path.join(data, 'data'),
     // Server state (workspaceStorage, which the Python extension writes on activation) defaults to ~/.vscodium-server, outside
     // the folder the dev view lets through; keep all of it in the owner-only data folder.
     '--server-data-dir', path.join(data, 'server'),
@@ -128,8 +130,8 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
     const timer = setTimeout(() => reject(new Error('editor-host-timeout')), timeout);
     child.stdout.on('data', chunk => {
       output += chunk;
-      const match = /Extension host agent listening on (\d+)/.exec(output);
-      if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      const match = /Extension host agent listening on (\S+)\s/.exec(output);
+      if (match) { clearTimeout(timer); resolve(socket ? null : Number(match[1])); }
     });
     child.stderr.on('data', chunk => { output += chunk; });
     child.once('error', error => { clearTimeout(timer); reject(error); });
@@ -138,7 +140,7 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
     .catch(error => { stopEditorHost(unit); throw error; });
   child.stdout.resume();
   child.stderr.resume();
-  return { port, token, commit, unit, data, stop: () => stopEditorHost(unit) };
+  return { port, socket, token, commit, unit, data, alive: () => child.exitCode === null && child.signalCode === null, stop: () => stopEditorHost(unit) };
 }
 
 // Why Dev Focus did not start, as the page names it: the editor server is missing, is another release, or (anything else)
@@ -150,6 +152,33 @@ export const editorDownload = (platform = process.platform, arch = process.arch)
   return platform === 'linux' ? EDITOR_DOWNLOADS[arch] ?? null : null;
 };
 
+// Server mode's Dev Focus (threat model row 50): the server's daemon runs one REH on an owner-only Unix socket in its state
+// folder, and the desktop reaches it through the tunnel's second forward. Its own data folder, so an editor the desktop app
+// runs on the same computer never shares its token file. One start or install at a time; a host that exited starts again.
+export function daemonEditor({ socket, unit, host, data = path.join(EDITOR_DIR, 'editor-server'), start = startEditorHost, install = installEditorHost }) {
+  let queue = Promise.resolve(), running = null;
+  const serial = job => (queue = queue.then(job, job));
+  return {
+    start: () => serial(async () => {
+      if (running?.alive()) return running;
+      // A daemon that died left its editor's scope and socket behind; the REH will not bind over a socket file.
+      if (running || existsSync(socket)) stopEditorHost(unit);
+      running = null;
+      await rm(socket, { force: true });
+      running = await start({ host, data, unit, socket, spell: process.env.P9_SPELL_CHECK !== 'off' });
+      // The REH binds with the daemon's umask; owner-only like daemon.sock (the state folder is 0700 as well).
+      await chmod(socket, 0o600);
+      return running;
+    }),
+    install: () => serial(async () => {
+      if (running?.alive()) throw new Error('editor-running');
+      return install();
+    }),
+    writable: async (file, kind) => Boolean(running?.alive()) && hostWritable(data, file, kind),
+    stop: () => { if (running) stopEditorHost(unit); running = null; },
+  };
+}
+
 // Installs the pinned REH into dir/codium-server: download to a temp folder inside dir, check the SHA-256 while writing,
 // unpack with tar (no shell), check product.json's commit, then move any old folder aside (kept) and rename the new one in.
 // Any failure leaves the existing install as it was and no temp folder behind.
@@ -160,10 +189,12 @@ export async function installEditorHost({ dir = EDITOR_DIR, download = editorDow
   const temp = await mkdtemp(path.join(dir, '.editor-download-'));
   try {
     const file = path.join(temp, 'reh.tar.gz'), hash = createHash('sha256');
-    const response = await fetch(url, { signal: AbortSignal.timeout(timeout) }).catch(() => null);
-    if (!response?.ok || !response.body) throw new Error('editor-download-failed');
+    // An absolute path is the copy the AppImage carries (item 16): read from disk, checked the same way as a download.
+    const source = path.isAbsolute(url) ? createReadStream(url)
+      : await fetch(url, { signal: AbortSignal.timeout(timeout) }).then(response => response.ok && response.body ? Readable.fromWeb(response.body) : null, () => null);
+    if (!source) throw new Error('editor-download-failed');
     let size = 0;
-    await pipeline(Readable.fromWeb(response.body), async function* (chunks) {
+    await pipeline(source, async function* (chunks) {
       for await (const chunk of chunks) {
         if ((size += chunk.length) > max) throw new Error('editor-download-too-big');
         hash.update(chunk);

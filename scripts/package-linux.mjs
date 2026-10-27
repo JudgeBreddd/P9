@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { REPO } from '../apps/server/anymouse.mjs';
 import { bundleDaemon } from './bundle-daemon.mjs';
+import { EDITOR_DOWNLOADS } from '../apps/desktop/editor-host.mjs';
 
 // The Linux AppImage, the same steps as package-windows.mjs: a pinned Node for the daemon, the notices, the daemon bundle,
 // then electron-builder. x64 only. ponytail: an arm64 AppImage needs an arm64 runner and Node's linux-arm64 pin.
@@ -36,6 +37,18 @@ if (!(await exists(path.join(runtime, 'bin', 'node'))) || !(await exists(path.jo
   }
   run('tar', ['-xzf', archive, '-C', runtime, '--strip-components=1', `${nodeName}/bin/node`, `${nodeName}/LICENSE`]);
 }
+// Item 16: Dev Focus's editor server, the pinned x64 REH (threat model row 52), carried whole; the app installs it from this
+// copy into ~/.local/share/p9/codium-server on its first start, checking the same SHA-256 again (main.mjs editorCopy).
+const editorArchive = path.join(build, 'editor', 'reh.tar.gz'), [editorUrl, editorHash] = EDITOR_DOWNLOADS.x64;
+const editorBytes = await readFile(editorArchive).catch(() => null);
+if (!editorBytes || createHash('sha256').update(editorBytes).digest('hex') !== editorHash) {
+  const response = await fetch(editorUrl);
+  if (!response.ok) throw new Error(`editor-download-${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (createHash('sha256').update(bytes).digest('hex') !== editorHash) throw new Error('editor-download-hash-mismatch');
+  await mkdir(path.dirname(editorArchive), { recursive: true });
+  await writeFile(editorArchive, bytes);
+}
 // nodejs.org's binary carries its debug info: strip takes it from 149.7 MB to 116.4 MB (about 7.5 MB less compressed).
 // The dynamic symbols native addons link against stay. Outside the block so an older unstripped copy in .build is stripped too.
 run('strip', [path.join(runtime, 'bin', 'node')]);
@@ -46,6 +59,11 @@ const licenses = path.join(build, 'licenses');
 await mkdir(path.join(licenses, 'fonts'), { recursive: true });
 for (const file of ['LICENSE', 'LICENSES.md', 'third-party/DUWOP-LICENSE.md']) await copyFile(path.join(root, file), path.join(licenses, path.basename(file)));
 await copyFile(path.join(runtime, 'LICENSE'), path.join(licenses, 'node-LICENSE'));
+// The REH has no licence file of its own at its top; its node_modules carry theirs inside the archive.
+await writeFile(path.join(licenses, 'editor-server-NOTICE.md'), '# Dev Focus editor server\n\nresources/editor/reh.tar.gz is VSCodium\'s remote '
+  + 'extension host, unchanged, from ' + editorUrl + ' (SHA-256 ' + editorHash + '). VSCodium and Code - OSS are released under the MIT '
+  + 'licence: https://github.com/VSCodium/vscodium/blob/master/LICENSE and https://github.com/microsoft/vscode/blob/main/LICENSE.txt. '
+  + 'The licences of the packages it includes are inside the archive, beside each package.\n');
 const fonts = Object.keys(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).devDependencies).filter((name) => name.startsWith('@fontsource'));
 for (const font of fonts) await copyFile(path.join(root, 'node_modules', font, 'LICENSE'), path.join(licenses, 'fonts', font.slice(1).replace('/', '-') + '-LICENSE'));
 const daemonExtra = path.join(build, 'daemon-extra');

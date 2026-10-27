@@ -10,7 +10,12 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { execFileSync } from 'node:child_process';
+import { createReadStream, existsSync } from 'node:fs';
+import { createServer, request } from 'node:http';
 import { connectServer, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
+import { daemonRequest } from '../scripts/teh.mjs';
+import { EDITOR_COMMIT, EDITOR_DOWNLOADS } from '../apps/desktop/editor-host.mjs';
+import { editorFor } from './editor-fixture.mjs';
 
 const skip = process.platform === 'win32' ? 'Unix sockets and sh; Windows OpenSSH is checked on a Windows desktop' : false;
 const mode = async file => (await stat(file)).mode & 0o777;
@@ -58,6 +63,11 @@ test('Server mode: the forward, its files and the ssh it runs', { skip }, async 
   await server.close();
   assert.ok(await gone(server.state));
   assert.equal(dropped, false);
+  // editor: false (the move's tunnel) forwards the daemon's socket only.
+  const move = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: path.join(s.local, 'move'), editor: false });
+  t.after(() => move.close());
+  const moved = (await s.calls()).filter(c => c.argv.includes('-N')).at(-1);
+  assert.deepEqual(moved.argv.filter(arg => arg === '-L').length, 1, JSON.stringify(moved.argv));
 });
 
 test('Server mode: host names ssh would read as options are refused before ssh runs', { skip }, async () => {
@@ -244,4 +254,143 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   await page.locator('#fMission [data-idea]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-sprint]').count(), 0, 'a Sprint tile in Local with no status file here');
   console.log('PASS desktop sprint: tile and rings from the server file, start confirmed and ran there, no tile in Local');
+});
+
+// ---- Item 33: Dev Focus in Server mode (threat model row 50). The server's daemon starts its editor server on editor.sock;
+// the tunnel's second forward carries it, and a loopback relay on the laptop hands it to the same Dev Focus page as Local's.
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// A screenshot: saved under P9_EVIDENCE, else printed into the log (the dev space keeps no files).
+const evidence = async (page, name) => {
+  const png = await page.screenshot();
+  if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await writeFile(path.join(process.env.P9_EVIDENCE, name + '.png'), png); }
+  else if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+};
+// GET over a Unix socket, answering the status (the REH's token check: 403 without the token).
+const socketGet = (socketPath, route) => new Promise((resolve, reject) => {
+  const req = request({ socketPath, path: route, headers: { host: 'localhost' }, timeout: 10000 }, res => { res.resume(); resolve(res.statusCode); });
+  req.on('error', reject); req.on('timeout', () => req.destroy(new Error('timeout'))); req.end();
+});
+const refused = async (socketPath, ms = 15000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await socketGet(socketPath, '/').then(() => false, () => true)) return true;
+  return false;
+};
+// A daemon set up as the server: the editor server (the fixture, or the real one) on its PATH and P9_EDITOR_HOST.
+const editorDaemon = (t, editor, env = { P9_EDITOR_HOST: editor.host }) => daemon(t, undefined, false, async () => ({ path: editor.path, env: { P9_SPELL_CHECK: 'off', ...env } }));
+
+test('Server mode Dev Focus: the server\'s daemon runs one editor on editor.sock, the tunnel forwards it, the daemon\'s stop ends it', { skip, timeout: 120000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const instance = await editorDaemon(t, editor), s = await stage(instance);
+  const server = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local });
+  t.after(() => server.close());
+  // One ssh, two forwards: the daemon's socket and the editor's, both into the owner-only folder.
+  const tunnel = (await s.calls()).find(c => c.argv.includes('-N'));
+  assert.deepEqual(tunnel.argv.flatMap((arg, i) => (arg === '-L' ? [tunnel.argv[i + 1]] : [])), [
+    path.join(server.state, 'daemon.sock') + ':' + path.join(s.server, 'p9-foundation', 'daemon.sock'),
+    path.join(server.state, 'editor.sock') + ':' + path.join(s.server, 'p9-foundation', 'editor.sock')]);
+  // Desktop only and exact: the route takes {} and nothing else.
+  assert.equal((await daemonRequest(server.state, 'POST', '/dev/editor', { path: '/' })).status, 400);
+  const started = await daemonRequest(server.state, 'POST', '/dev/editor', {}, undefined, 60000);
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal(started.body.commit, EDITOR_COMMIT);
+  assert.match(started.body.token, /^[0-9a-f]{64}$/);
+  assert.equal(await mode(path.join(instance.state, 'editor.sock')), 0o600, 'the editor socket on the server is owner-only');
+  // Through the forward, the editor's own token check: refused without it, served with it.
+  const forwarded = path.join(server.state, 'editor.sock');
+  assert.equal(await socketGet(forwarded, '/'), 403);
+  assert.notEqual(await socketGet(forwarded, '/?tkn=' + started.body.token), 403);
+  // One editor per daemon: asking again gets the same one; Install is refused while it runs.
+  assert.equal((await daemonRequest(server.state, 'POST', '/dev/editor', {}, undefined, 60000)).body.token, started.body.token);
+  assert.equal((await daemonRequest(server.state, 'POST', '/dev/editor/install', {})).status, 409);
+  // The dev view's writes into the editor's data folder are checked on the server: inside it yes, the workspace no.
+  const writable = (file, kind = 'write') => daemonRequest(server.state, 'POST', '/dev/editor/writable', { path: file, kind }).then(r => r.body.ok);
+  assert.equal(await writable(path.join(started.body.data, 'settings.json')), true);
+  assert.equal(await writable(path.join(instance.workspace, 'note.txt')), false);
+  assert.equal((await daemonRequest(server.state, 'POST', '/dev/editor/writable', { path: '/x', kind: 'write', more: 1 })).status, 400);
+  // The editor runs in its own scope, so it would outlive the daemon: the daemon's stop ends it.
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  assert.ok(await refused(path.join(instance.state, 'editor.sock')), 'the editor server still answers after the daemon stopped');
+  console.log('PASS server editor: two forwards, one editor on a 0600 socket, token checked through the tunnel, writable checked there, ended with the daemon');
+});
+
+test('Dev Focus in Server mode, in the window: the unavailable page names the server, Install there, then the server\'s files open and save', { skip, timeout: 300000 }, async (t) => {
+  const editor = await editorFor(), tarball = path.join(root, '_private', 'fixtures', 'reh.tar.gz');
+  if (!editor || !existsSync(tarball) || process.arch !== 'x64') return t.skip('needs the fixtures reh.tar.gz (x64) and the editor server');
+  // The download Install fetches, from loopback: the pinned x64 file itself.
+  const files = createServer((req, res) => createReadStream(tarball).pipe(res)).listen(0, '127.0.0.1');
+  await once(files, 'listening');
+  t.after(() => files.close());
+  // The server has no editor server yet (no P9_EDITOR_HOST: its own ~/.local/share/p9/codium-server, which is missing).
+  const remote = await editorDaemon(t, editor, { P9_EDITOR_SERVER_URL: 'http://127.0.0.1:' + files.address().port + '/reh.tar.gz', P9_EDITOR_SERVER_SHA256: EDITOR_DOWNLOADS.x64[1] });
+  const local = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  await writeFile(path.join(remote.workspace, 'on-server.txt'), 'before\n');
+  // This computer's editor server would be "missing" too: a Dev Focus that worked here could only be the server's.
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here'), P9_SPELL_CHECK: 'off' };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor({ timeout: 20000 });
+  const devPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+  let opened = devPage();
+  await shell.keyboard.press('Control+2');
+  let dev = await opened;
+  // Missing on the server: the page says where, and Install acts there.
+  await dev.locator('#cause').waitFor({ timeout: 60000 });
+  assert.match(await dev.locator('#cause').textContent(), /not installed on the server test-host\. It belongs in .*\.local\/share\/p9\/codium-server\./);
+  assert.equal(await dev.locator('#install').textContent(), 'Install the editor server on the server');
+  await evidence(dev, 'c10-server-unavailable');
+  opened = devPage();
+  await dev.locator('#install').click();
+  dev = await opened;
+  const errors = []; dev.on('pageerror', error => errors.push(error.stack ?? error.message));
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
+  assert.equal(await dev.locator('#cause').count(), 0, await dev.locator('#cause').textContent().catch(() => ''));
+  const config = await dev.evaluate(() => window.p9dev.config());
+  assert.equal(config.server, 'test-host');
+  assert.equal(config.workspace, remote.workspace);
+  assert.ok(existsSync(path.join(remote.directory, '.local', 'share', 'p9', 'codium-server', 'product.json')), 'installed in the server\'s ~/.local/share/p9');
+  // The server's file opens, and Ctrl+S saves it on the server, through the guarded save over the tunnel.
+  await dev.evaluate(async () => {
+    const { v, open } = window.devFocus, editor = await open('on-server.txt');
+    await editor.edit(edit => edit.insert(new v.Position(0, 0), 'typed '));
+  });
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.focusActiveEditorGroup'));
+  await dev.keyboard.press('Control+s');
+  const saved = path.join(remote.workspace, 'on-server.txt');
+  for (let i = 0; i < 60 && (await readFile(saved, 'utf8')) === 'before\n'; i++) await sleep(250);
+  assert.equal(await readFile(saved, 'utf8'), 'typed before\n', 'Ctrl+S saved the server\'s file');
+  await evidence(dev, 'c10-server-dev-focus');
+  assert.deepEqual(errors.filter(error => !/EAI_AGAIN|ENOTFOUND|ECONNREFUSED/.test(error)), []);
+  console.log('PASS server Dev Focus in the window: missing names the server, Install there, the server\'s file opened and saved');
+});
+
+test('Dev Focus\'s page when the editor server cannot start: no systemd user session says what to do', { skip, timeout: 120000 }, async (t) => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const local = await daemon(t), dir = await mkdtemp(path.join(os.tmpdir(), 'p9-nobus-'));
+  // What systemd-run prints with no user manager to talk to (su, sudo, an ssh login on a server without lingering).
+  await writeFile(path.join(dir, 'systemd-run'), '#!/bin/sh\necho "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined" >&2\nexit 1\n', { mode: 0o755 });
+  const env = { ...process.env, HOME: dir, PATH: dir + ':' + process.env.PATH, P9_EDITOR_HOST: editor.host, P9_SPELL_CHECK: 'off' };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + path.join(dir, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#cards .card').first().waitFor();
+  const opened = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+  await shell.keyboard.press('Control+2');
+  const dev = await opened;
+  await dev.locator('#cause').waitFor({ timeout: 60000 });
+  const cause = await dev.locator('#cause').textContent();
+  assert.match(cause, /this computer has no systemd user session/);
+  assert.match(cause, /loginctl enable-linger/);
+  assert.equal(await dev.locator('#install').count(), 0, 'Install would not fix a missing user session');
+  await evidence(dev, 'c10-no-user-session');
+  console.log('PASS unavailable page: no user session named, with what to do, and no Install button');
 });

@@ -21,7 +21,7 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
     return ok ? { status: 200, body: { moved: true, host } } : { status: 409, body: { error: 'move-failed', message } };
   };
   let tunnel;
-  try { tunnel = await connectServer({ host, ssh, runtime: path.join(runtime, 'p9-move-' + id.slice(0, 8)) }); }
+  try { tunnel = await connectServer({ host, ssh, runtime: path.join(runtime, 'p9-move-' + id.slice(0, 8)), editor: false }); }
   catch (error) { return settle(false, 'Could not reach the server (' + error.message + '). The chat stays here.'); }
   const server = (route, body) => daemonRequest(tunnel.state, 'POST', route, body, undefined, LONG);
   try {
