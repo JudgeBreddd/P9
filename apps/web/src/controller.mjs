@@ -20,6 +20,8 @@ const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], histo
   audit: { run: 'none yet', ticked: 0, total: 0, contradictions: 0 }, logs: { host: '', incidents: [], rows: [] }, solo: { when: 'none yet', txt: '' },
   stats: [['Work in flight (HANDOFF.md)', 0], ['Ideas not researched', 0], ['Punch-list items', 0]], apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
 const lifetime = new AbortController(), timers = new Set(), observers = [];
+// The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
+const SP = { on: false, data: null, error: '', timer: 0 };
 const addEventListener = (type, listener) => window.addEventListener(type, listener, { signal: lifetime.signal });
 const removeEventListener = (type, listener) => window.removeEventListener(type, listener);
 const setTimeout = (fn, delay) => { const id = window.setTimeout(() => { timers.delete(id); fn(); }, delay); timers.add(id); return id; };
@@ -263,8 +265,8 @@ function renderCards() {
 // nothing: drafts live on the session or item, S.resume remembers the card view, and list scroll is kept.
 // Closing puts the caret back in the field you were typing in before the card took you away.
 const mdl = $('#mdl');
-const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560] }; // defaults; your resize wins, per type
-const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script' })[k] || 'list';
+const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560], sprint: [760, 560] }; // defaults; your resize wins, per type
+const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script', sprint: 'sprint' })[k] || 'list';
 let lastEdit = null;
 addEventListener('focusout', e => { const t = e.target; if (t.matches?.('textarea, input[type=text]') && !t.closest('dialog')) lastEdit = { pane: t.closest('.pane')?.dataset.id, id: t.id, sel: [t.selectionStart, t.selectionEnd] }; });
 addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .rail') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
@@ -842,8 +844,25 @@ async function loadMission() {
     return renderMission();
   }
   applyOverview(r.body);
-  renderMission(); renderTabs(); loadHub(); loadArt();
+  renderMission(); renderTabs(); loadHub(); loadArt(); loadSprint();
 }
+// Sprint tracker: the button shows while the connected machine has a sprint status file (the sprint skill writes it each
+// wake-up). 404 = no sprint; any other answer keeps the button and the window says why.
+async function loadSprint() {
+  clearTimeout(SP.timer);
+  const r = await window.p9.mission('sprint').catch(() => ({ status: 503 }));
+  if (lifetime.signal.aborted) return;
+  const on = r.status !== 404 && r.status !== 503, before = JSON.stringify([SP.on, SP.data]);
+  SP.on = on; SP.data = r.status === 200 ? r.body : null; SP.error = on && r.status !== 200 ? (r.body?.reason || r.body?.error || String(r.status)) : '';
+  if (before !== JSON.stringify([SP.on, SP.data])) renderMission(); // the tile shows merged/total
+  if (mdl.open && S.modal?.kind === 'sprint') { if (on) renderModal(); else closeModal(); }
+  SP.timer = setTimeout(loadSprint, 30000);
+}
+const SPRINT_STATE = { running: 'running', waiting: 'waiting', merged: 'merged', blocked: 'blocked', unknown: 'unknown' };
+const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
+// The modal's buttons: each is a registry script (asks first, like any script), found by its fixed id.
+const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
+const scriptById = id => Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
 let lastArt = '';
 async function loadArt() {
@@ -1006,7 +1025,7 @@ const missionIntro = () => '<div class="sm" data-mission-intro role="note"><h4>W
   + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
 function renderMission() {
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
@@ -1024,6 +1043,7 @@ function renderMission() {
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
+  $('#fMission').querySelectorAll('[data-sprint]').forEach(b => b.onclick = () => openModal({ kind: 'sprint' }));
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
 }
@@ -1209,6 +1229,19 @@ function missionModal(m, body, row) {
       const r = await window.p9.mission('fix', { host: m.req.host, name: m.req.name });
       if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation, back: m });
       else toast({ kind: 'chat', txt: 'Fix with Claude: ' + (r.body?.error || r.status), level: 'bad' }, true);
+    };
+  } else if (m.kind === 'sprint') {
+    const d = SP.data;
+    $('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
+    body.innerHTML = `<div class="review" data-sprint-body>${d ? `<p class="sm muted">Updated ${esc(d.updatedAt || 'unknown')}${d.cutoff ? ' · cutoff ' + esc(d.cutoff) : ''} · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</p>${sprintRings(d)}`
+      : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
+    $('#mdlFoot').innerHTML = SPRINT_SCRIPTS.map(([id, label]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${id}"${scriptById(id) ? '' : ` disabled title="Add a ${id} button to the registry"`}>${label}</button>`).join('')
+      + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
+    $('#mdlFoot').querySelectorAll('[data-sprint-run]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: scriptById(b.dataset.sprintRun), back: m }));
+    $('#mdlFoot [data-sprint-tmux]').onclick = async () => {
+      const r = await window.p9.mission('sprintTmux');
+      if (r.status === 201) { closeModal(); showTerminal(r.body.terminal); }
+      else { m.hint = 'Open tmux: ' + (r.body?.error || r.status); renderModal(); }
     };
   } else if (m.kind === 'idea') {
     // workspace-hub's New idea box: the daemon names the file and refuses to replace one.
