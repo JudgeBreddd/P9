@@ -566,7 +566,9 @@ async function loadTerminals() {
     const list = ((await request('/terminals')).terminals ?? []) as Json[];
     const select = one<HTMLSelectElement>('#terminal'), was = select.value;
     const running = list.filter((item) => item.state === 'running').reverse();
-    select.innerHTML = running.map((item) => `<option value="${escape(item.id)}" data-short="${escape('Terminal · ' + clock(item.created))}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
+    // The bar's title: 24-hour today ("Terminal · 14:35"; with AM/PM it is cut at 390 wide), the date before.
+    const short = (ms: unknown) => new Date(Number(ms)).toDateString() === new Date().toDateString() ? new Date(Number(ms)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : clock(ms);
+    select.innerHTML = running.map((item) => `<option value="${escape(item.id)}" data-short="${escape('Terminal · ' + short(item.created))}">${escape('Terminal · ' + when(item.created))}</option>`).join('') || '<option value="">No terminals yet</option>';
     if (running.some((item) => item.id === was)) select.value = was;
     attach();
   } catch (error) {
