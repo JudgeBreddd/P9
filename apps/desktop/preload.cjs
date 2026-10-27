@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   removePet: (name) => ipcRenderer.invoke('p9:pet-remove', name),
   server: (...host) => ipcRenderer.invoke('p9:server', ...host), // none: mode and ssh hosts; null: Local; a host: that server
   sendToServer: (id) => ipcRenderer.invoke('p9:send-to-server', id),
+  xferPlan: (folder) => ipcRenderer.invoke('p9:xfer', 'plan', folder), // Send files: a workspace folder ('' is all of it)
+  xferRun: (id, choice, deleteToo) => ipcRenderer.invoke('p9:xfer', 'run', id, choice, deleteToo),
+  onXfer: (callback) => { ipcRenderer.on('p9:xfer', (_event, progress) => callback(progress)); },
   pickFolder: (kind) => ipcRenderer.invoke('p9:pick-folder', ...(kind === undefined ? [] : [kind])),
   onFocus: (callback) => { ipcRenderer.on('p9:focus', (_event, focus) => callback(focus)); },
   terminal: (action, payload) => ipcRenderer.invoke('p9:terminal', action, payload),

@@ -47,7 +47,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // Case 4: the handler itself, called as the shell's own frame, refuses every other shape and writes nothing.
   const refused = await app.evaluate(async ({ ipcMain, BrowserWindow }, PETS) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, handler = ipcMain._invokeHandlers.get('p9:settings');
-    const event = { sender, senderFrame: sender.mainFrame }, good = { zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS, name: 'Sam', startLast: false };
+    const event = { sender, senderFrame: sender.mainFrame }, good = { zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS, name: 'Sam', startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } };
     const chat = (change) => ({ ...good, pet: { ...good.pet, chat: { ...good.pet.chat, ...change } } });
     const bad = [{ ...good, extra: 1 }, { ...good, zoom: '2' }, { ...good, zoom: 4 }, { ...good, zoom: 0.1 }, { ...good, zoom: NaN },
       { ...good, closeOnSend: 1 }, { ...good, focus: { chat: true, dev: true } }, { ...good, focus: { chat: false, dev: false, mission: false } },
@@ -55,13 +55,16 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
       { ...good, pet: null }, { ...good, pet: 'good-pet' }, { ...good, pet: { claude: null, codex: null, system: null } }, { ...good, pet: { ...good.pet, x: good.pet.chat } },
       { ...good, pet: { chat: good.pet.chat, dev: good.pet.dev } }, chat({ codex: '../x' }), chat({ x: null }), chat({ size: 23 }), chat({ size: 129 }), chat({ size: 48.5 }),
       chat({ on: 1 }), chat({ top: [0.5] }), chat({ top: [2, 0] }), chat({ pane: 'x' }), chat({ pane: [0.1, NaN] }), chat({ top: { 0: 0.1, 1: 0.1, length: 2 } }),
-      { ...good, name: 'x'.repeat(41) }, { ...good, name: 'Sam\u0007' }, { ...good, name: 'Sam\u200b' }, { ...good, name: 7 }, { ...good, startLast: 'yes' }, (({ name, ...rest }) => rest)(good)];
+      { ...good, name: 'x'.repeat(41) }, { ...good, name: 'Sam\u0007' }, { ...good, name: 'Sam\u200b' }, { ...good, name: 7 }, { ...good, startLast: 'yes' }, (({ name, ...rest }) => rest)(good),
+      // Send files' limits (item 23): whole numbers from 1 to each ceiling, all three.
+      { ...good, xfer: { ...good.xfer, fileMiB: 0 } }, { ...good, xfer: { ...good.xfer, fileMiB: 65537 } }, { ...good, xfer: { ...good.xfer, files: 1.5 } },
+      { ...good, xfer: { fileMiB: 512, files: 20000 } }, (({ xfer, ...rest }) => rest)(good)];
     const out = [];
     for (const value of bad) out.push(await handler(event, value).then(() => 'accepted', (error) => error.message));
     out.push(await handler(event, good, good).then(() => 'accepted', (error) => error.message));
     return out;
   }, PETS);
-  assert.deepEqual(refused, [...Array(35).fill('settings-refused'), 'ipc-sender-refused']);
+  assert.deepEqual(refused, [...Array(40).fill('settings-refused'), 'ipc-sender-refused']);
   await assert.rejects(readFile(file), { code: 'ENOENT' });
 
   // Close on send: a chat opened from its card closes once the message is sent.
@@ -127,15 +130,15 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // The name is the account's (main.mjs accountName), so the test reads it back rather than guessing it.
   const kept = JSON.parse(await readFile(file, 'utf8'));
   assert.match(kept.name, /^[^\p{Cc}\p{Cf}]{0,40}$/u);
-  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false });
+  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } });
   assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [], 'a removed Skipper is not put back');
   // Phase 18 review: saves in flight together (Ctrl = held down) all succeed, and the file ends on the last one.
   const saves = await page.evaluate((pet) => Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
-    window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false }))), PETS);
+    window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } }))), PETS);
   assert.deepEqual(saves.map((s) => s.status), Array(20).fill('fulfilled'));
   assert.equal(JSON.parse(await readFile(file, 'utf8')).zoom, 1.2);
   assert.equal(await zoomOf(app), 1.2);
-  console.log('PASS settings: 36 bad IPC shapes refused, nothing written; zoom 1.2, close on send, Mission off, agent lock via the daemon, docs and Anymouse; all kept after a restart; 20 saves at once all kept in order');
+  console.log('PASS settings: 41 bad IPC shapes refused, nothing written; zoom 1.2, close on send, Mission off, agent lock via the daemon, docs and Anymouse; all kept after a restart; 20 saves at once all kept in order');
 });
 
 // A petdex-shaped sheet: 8 x 9 frames of 192 x 208, with `filled[row]` opaque frames in each row.
