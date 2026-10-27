@@ -4,6 +4,7 @@
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFile, lstat, mkdir, readdir, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -25,6 +26,22 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp
 const imagesOk = (images) => Array.isArray(images) && images.length <= MAX_IMAGES && images.every((image) => image && typeof image === 'object'
   && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data));
 const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }, MAX_STORED = 200 * 1024 * 1024;
+// Item 26: before it, photos were kept in <state>/images. The Windows state folder (%LOCALAPPDATA%\P9\runtime) is never
+// emptied, so that folder made every later start refuse (state-directory-not-empty, main.mjs). Called before that check:
+// the photos (plain files named <sha256>.<ext>) move to <ownership>/images; anything else stays and the start still refuses.
+export async function keepOldPhotos(state, ownership) {
+  const old = path.join(state, 'images');
+  if (!(await lstat(old).catch(() => null))?.isDirectory()) return;
+  const dir = path.join(ownership, 'images');
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  for (const name of await readdir(old)) {
+    const from = path.join(old, name), to = path.join(dir, name);
+    if (!/^[0-9a-f]{64}\.(?:png|jpg|gif|webp)$/.test(name) || !(await lstat(from)).isFile()) continue;
+    // A state folder on another disk (Linux's RAM one): copy, then delete. The same name is the same photo.
+    await rename(from, to).catch(async (error) => { if (error.code !== 'EXDEV') throw error; await copyFile(from, to); await unlink(from); });
+  }
+  await rmdir(old).catch(() => {});
+}
 // A start holds the Stop All barrier, so an adapter that never answers the handshake must not hold it forever.
 const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
