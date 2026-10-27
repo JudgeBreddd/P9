@@ -197,7 +197,8 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
 
   const ok = run();
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
-  assert.equal(ok.log, 'pnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
+  // D5: then Dev Focus's editor server, through the same pinned install the Dev Focus button uses.
+  assert.equal(ok.log, 'pnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
   assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
 
   assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
@@ -221,7 +222,7 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(oldNode.status, 0, oldNode.stdout + oldNode.stderr);
   assert.match(oldNode.log, new RegExp('^curl -fsSL -o \\S+/node\\.tar\\.gz https://nodejs\\.org/dist/v26\\.10\\.0/node-v26\\.10\\.0-linux-x64\\.tar\\.gz\n'
     + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\npnpm install --frozen-lockfile\npnpm build\n'
-    + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\n$'));
+    + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\np9node scripts/install-editor\\.mjs\n$'));
   assert.deepEqual(readdirSync(share), ['node-v26.10.0-linux-x64'], 'temp folder removed');
   assert.ok(oldNode.stdout.includes('export PATH="' + path.join(ownNode, 'bin') + ':$PATH"'), 'PATH line printed');
   const cached = run({ FAKE_NODE: 'v24.19.0' });
