@@ -147,7 +147,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     await page.waitForFunction(([n, w]) => { const a = document.querySelectorAll('#events article'); return a.length >= n + 2 && a[a.length - 1].textContent.includes(w); }, [before, want], { timeout: 10000 })
       .catch(async (e) => { throw new Error(`no ${want}; last: ${(await page.locator('#events article').allInnerTexts()).slice(-3).join(' | ')}`, { cause: e }); });
   };
-  assert.deepEqual(await page.locator('#mode option').allInnerTexts(), ['Mode: as set', 'Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review']);
+  // The first row names the mode the daemon set as the chat started; Full access is listed, behind its warning (P6).
+  assert.deepEqual(await page.locator('#mode option').allInnerTexts(), ['Mode: Auto review', 'Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review', 'Mode: Full access']);
   assert.equal(await page.inputValue('#mode'), '', 'the phone picked a mode by itself');
   // The mode is picked from the composer's pill, which opens the Mode sheet (P4).
   const pickMode = async (value) => { await page.click('#modePill'); await page.click(`#sheet[open] [data-mode="${value}"]`); };
