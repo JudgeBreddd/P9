@@ -235,8 +235,10 @@ document.addEventListener('pointerdown', e => {
 });
 // Running chats not waiting on you, as robot heads in the rail (Builder, 2026-10-17); a click opens the chat. Waiting ones stay cards.
 function renderBots() {
+  // D10: each head carries its chat's number (its place among the tabs) and the title, so several look different.
   const bots = S.sessions.filter(s => s.state === 'running' && !s.pending), say = s => names[s.agent] + ' · ' + (busy(s) ? 'working' : 'idle');
-  setHTML($('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${busy(s) ? ' data-busy' : ''} title="${esc(s.title)} · ${esc(say(s))}" aria-label="${esc(s.title)} · ${esc(say(s))}">${svg.bot}</button>`).join(''));
+  const num = s => S.sessions.filter(x => !x.hidden).findIndex(x => x.id === s.id) + 1, label = s => (num(s) ? '#' + num(s) + ' ' : '') + s.title + ' · ' + say(s);
+  setHTML($('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${num(s) ? ` data-n="${num(s)}"` : ''}${busy(s) ? ' data-busy' : ''} title="${esc(label(s))}" aria-label="${esc(label(s))}">${svg.bot}</button>`).join(''));
   $('#rBots').querySelectorAll('[data-bot]').forEach(b => b.onclick = () => { const k = 'run' + b.dataset.bot; openModal(S.resume[k] || { kind: 'chat', id: b.dataset.bot }, k); });
 }
 function renderCards() {
@@ -498,7 +500,9 @@ function shown(s) {
 }
 function pane(s, i, bare) {
   const working = busy(s);
-  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…' }[s.state];
+  // D14: a chat on its way to the server, or gone there, takes no messages here.
+  const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away;
+  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to server…', moved: 'Moved to ' + (s.movedTo || 'the server') }[s.state];
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
@@ -511,12 +515,15 @@ function pane(s, i, bare) {
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
-      ${s.live && s.agent === 'claude' && s.session ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
+      ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
+      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host ? (s.agent === 'claude'
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>`
+        : `<button data-slot="button" data-variant="ghost" data-size="sm" disabled title="Codex chats cannot move to the server yet: their history lives in Codex's own files. Claude chats can.">Send to server</button>`) : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !s.readonly ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the server') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' ? 'Moving to the server…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
@@ -571,7 +578,7 @@ function paint(root, ss, only) {
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
-    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
+    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved') return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
     const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
@@ -591,6 +598,13 @@ function paint(root, ss, only) {
       const r = await liveChat.call('handoff', { id: s.id });
       if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
       showTerminal(r.body.terminal);
+    });
+    // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
+    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const r = await window.p9.sendToServer(s.id).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+      if (r.status !== 200 && r.body?.error !== 'move-failed') { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
+      b.disabled = false;
     });
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
     p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome(2));
@@ -880,11 +894,13 @@ const pollMission = () => { refreshMission(); setTimeout(pollMission, 20000); };
 // _tyler/ items a chat makes get their card when its turn ends (Builder, 2026-10-17); otherwise the queue is read at start.
 let queueTimer = 0;
 const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { lastOverview = JSON.stringify(r.body); applyOverview(r.body); renderMission(); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
+// D4 / #14: the chip on a waiting item says who it waits on: the owner's own name from Settings, else "needs you".
+const needsLabel = () => settings.name ? 'needs ' + settings.name : 'needs you';
 function applyQueue(o) {
   const drafts = Object.fromEntries(S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
   S.reviews = o.queue.map(q => { const file = live.waiting + '/' + q.name; if (S.docs[file]?.saved !== q.content) S.docs[file] = { text: q.content, saved: q.content, sel: [0, 0], top: 0 };
-    return { proj: q.project, kind: 'tyler', txt: q.title, file, age: q.age, updated: q.updated, name: q.name, hash: q.hash, live: true, draft: drafts[q.name]?.draft, sel: drafts[q.name]?.sel }; });
+    return { proj: q.project, kind: needsLabel(), txt: q.title, file, age: q.age, updated: q.updated, name: q.name, hash: q.hash, live: true, draft: drafts[q.name]?.draft, sel: drafts[q.name]?.sel }; });
   // ponytail: "already waiting" means present at the first load, so a reload also quiets items a chat made before it.
   if (!S.queueSeen) { S.queueSeen = true; for (const r of S.reviews) S.quiet.add(r.file); }
   // Someone else answered (or removed) an item Builder was writing: keep his text visible, marked, so nothing is lost.
@@ -993,10 +1009,19 @@ const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
 // opens the full window.
 const PANELS = ['mlogs', 'musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
+// D9: an empty Mission (no buttons, apps, pages or waiting items yet) says what it is and how to set it up.
+const missionEmpty = () => window.p9?.mission && !sampleView && !Object.keys(M.scripts).length && !M.apps.length && !M.pages.length && !S.reviews.length
+  && (live.on || /not set up/.test(live.note));
+const missionIntro = () => '<div class="sm" data-mission-intro role="note"><h4>What is Mission Control?</h4>'
+  + '<p>Your control room: one place for the buttons that run your scripts, shortcuts to your apps and pages, and a list of what is waiting on you.</p>'
+  + '<p class="muted">It reads three things from your workspace: a main project file, a file of buttons, apps and pages, and a folder with one .md file for each item waiting on you. Set up lets you point P9 at the ones you already have, or makes empty ones to start from.</p>'
+  + '<div class="set-row">' + (window.p9?.chat ? '<button data-slot="button" data-variant="default" data-mission-setup>Set up Mission Control</button>' : '')
+  + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
 function renderMission() {
   const groups = Object.entries(M.scripts);
   setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
+    + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
@@ -1006,6 +1031,8 @@ function renderMission() {
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
+  $('#fMission').querySelectorAll('[data-mission-setup]').forEach(b => b.onclick = () => welcome('mission'));
+  $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
@@ -1844,10 +1871,10 @@ const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict
 const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
 async function welcome(at) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null });
   W.s = await loadSetup();
   const d = W.s && setupDone(W.s);
-  W.i = at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
+  W.i = typeof at === 'string' ? Math.max(0, wizSteps().indexOf(at)) : at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
   // BL5: every 10 s (was 2 s) while a check fails or a sign-in runs; wizRefresh stops it once neither is so, and starts it again.
   clearInterval(W.timer); W.timer = setInterval(wizRefresh, 10000);
   await wizRefresh();
@@ -1890,6 +1917,14 @@ const WIZ_ERR = {
   'server-mode-local-only': ["That changes this computer's P9, and this window is working on a server.", 'Switch to Local (the top-bar badge or Settings > Server), then try again.'],
   'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
+// The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
+function wizRemote(btn) {
+  const h = W.hosts, hosts = h?.hosts || [], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
+  return '<div data-wiz-remote>' + (hosts.length
+    ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">Its Host name from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
+    : `<p class="muted sm">No Host lines in ~/.ssh/config yet. Add the machine there, check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
+    + (W.note.remote?.error ? `<p class="warn sm" role="alert">Could not connect (${esc(W.note.remote.error)}). Settings > Server shows why and switches back to this computer.</p>` : '') + '</div>';
+}
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
   W.i = steps.indexOf(key);
@@ -1901,8 +1936,11 @@ function wizRender() {
   let title, body, next = btn('next', 'Next', 'default');
   if (!s && key !== 'welcome') { title = 'Setup'; body = fail('daemon-unavailable'); }
   else if (key === 'welcome') {
-    title = 'Welcome to Event Horizon'; next = btn('next', 'Start', 'default');
-    body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's starter files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`;
+    title = 'Welcome to Event Horizon'; next = btn('next', window.p9?.server ? 'Set up this computer' : 'Start', 'default');
+    // D1: P9 can also be this window onto a P9 that runs on another machine (Server mode, Settings > Server).
+    body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`
+      + (window.p9?.server ? row('Already run P9 on another machine?', 'Use this window on that machine\'s P9 instead, over ssh (the way VS Code Remote-SSH works). Chats there keep running when you close this window.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a P9 on another machine')) : '')
+      + (W.remote ? wizRemote(btn) : '');
   } else if (key === 'workspace') {
     title = 'Your workspace';
     body = row('Folder', `<span class="mono" id="welWs">${esc(s.workspace)}</span>`, yes(s.writable, 'P9 can write here', 'P9 cannot write here'))
@@ -1931,11 +1969,11 @@ function wizRender() {
     // A folder with things in it keeps them (needs-done p9-wizard-respects-existing-workspace): the paths are what P9 found
     // there, shown and editable, and the list says exactly what Create adds. Nothing that is there is replaced.
     const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
-    const creates = d.mission ? [] : [...(s.creates || []), ...(s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
+    const starters = d.mission ? [] : (s.creates || []).filter(Boolean), creates = [...starters, ...(d.mission || s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
     // RH2 (the owner, 2026-10-24: B, and how to set them up when there are none yet).
     const none = choosing && !found && !s.settingsPresent;
-    body = `<p class="muted sm">Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
-      + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create these makes a starter set you can change any time:</p><ul>'
+    body = `<p class="muted sm">Mission Control is P9's control room: buttons for your scripts, shortcuts to your apps and pages, and a list of what is waiting on you. Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} A file that is already there is never changed or replaced.</p>`
+      + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create the starter files makes an empty set you can change any time:</p><ul>'
         + '<li><strong>Main project file</strong>: names your main project, in plain words. Your agents read it; Mission Control shows it as the Main Project card.</li>'
         + '<li><strong>Buttons, apps and pages file</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
         + '<li><strong>Folder of items waiting on you</strong>: one .md file for each thing waiting on you.</li></ul>'
@@ -1943,10 +1981,10 @@ function wizRender() {
       + (choosing ? '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
         + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
       + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
-      + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
-      + (creates.length ? `<p class="sm">Create adds: <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
-      + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then Use these. Your old settings file is kept as settings.json.bak.</p>` : '')
-      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', creates.length ? 'Create these' : 'Use these', 'default')}</div>`)
+      + row('Mission Control files', 'Your main project file and your buttons, apps and pages file', yes(s.agentsFile && s.registryFile, 'There', 'Not there yet'))
+      + (creates.length ? `<p class="sm">${starters.length ? 'Create the starter files' : 'Use these files'} adds only this (nothing that exists changes): <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
+      + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then press Use these files. Your old settings file is kept as settings.json.bak.</p>` : '')
+      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', starters.length ? 'Create the starter files' : 'Use these files', 'default')}<span class="muted sm">${starters.length ? 'Makes the files listed above, empty, and points P9 at them.' : 'Makes no project files; it only saves the settings so P9 uses the files named above.'}</span></div>`)
       + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
       + (note?.error ? fail(note.error, note.detail) : '')
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
@@ -1985,13 +2023,20 @@ $('#welDlg').addEventListener('click', async e => {
   }
   if (act === 'close') return $('#welDlg').close();
   if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
+  if (act === 'remote' || act === 'remote-retry') { W.remote = act === 'remote-retry' || !W.remote; if (W.remote) W.hosts = await window.p9.server().catch(() => null); return wizRender(); }
+  if (act === 'connect') {
+    const host = $('#welHost')?.value;
+    const r = await run(() => window.p9.server(host).catch(() => ({ error: 'ipc-refused' }))); // main reloads the window onto that P9
+    W.note.remote = r?.ok ? null : { error: r?.error || 'refused' };
+    return wizRender();
+  }
   if (act === 'tour') { W.then = tour; return $('#welDlg').close(); }
   if (act === 'pets') { W.then = null; $('#welDlg').close(); await $('#setBtn').onclick(); return [...$('#setBody').querySelectorAll('legend')].find(l => l.textContent === 'Pets')?.scrollIntoView(); }
   if (act === 'retry') W.note = {};
   if (act === 'change') {
     const r = await run(() => window.p9.workspaceChange().catch(() => ({ error: 'daemon-unavailable' })));
     W.note.workspace = r.error ? r : null;
-    if (!r.error) { files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder
+    if (!r.error) { W.paths = null; files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder; paths typed for the old folder are dropped
   }
   if (act === 'pick') {
     const picked = await window.p9.pickFolder(kind).catch(() => undefined);
@@ -2122,6 +2167,10 @@ function applyChat(ev) {
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
+    case 'moving': settle(); s.state = 'moving'; notice('Moving to the server: this chat is paused here.'); break;
+    case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Server mode (the title-bar badge) and open it.'); break;
+    case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;
+    case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
     case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
@@ -2177,7 +2226,7 @@ async function loadChat() {
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
   while (!lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
     const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
@@ -2207,7 +2256,7 @@ async function loadChat() {
       S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
       // running (the phone may have resumed it) and gets its tab back.
-      for (const s of S.sessions) { s.hidden = s.state === 'stopped'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
+      for (const s of S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
       closedChats.clear(); localStorage.removeItem('eh-closed-chats');
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
@@ -2220,6 +2269,8 @@ async function loadChat() {
 }
 
 addEventListener('focus', () => renderChats());
+// Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); }, () => {});
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
