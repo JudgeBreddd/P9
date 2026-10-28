@@ -33,6 +33,7 @@ import 'vscode/localExtensionHost';
 import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-typescript-basics-default-extension';
 import '@codingame/monaco-vscode-python-default-extension';
+import '@codingame/monaco-vscode-markdown-basics-default-extension';
 import EditorWorker from '@codingame/monaco-vscode-editor-api/esm/vs/editor/editor.worker?worker';
 import TextmateWorker from '@codingame/monaco-vscode-textmate-service-override/worker?worker';
 
