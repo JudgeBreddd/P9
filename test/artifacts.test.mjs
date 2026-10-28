@@ -249,4 +249,19 @@ test('artifacts: the phone opens an artifact in the full sheet and sends a comme
   await page.locator('#events article[data-kind="user"]', { hasText: 'Comments on "Phone page"' }).waitFor({ timeout: 10000 });
   assert.match(await page.locator('#events article[data-kind="user"]').last().textContent(), /> Comment on me\.\s+Shorter, please\./);
   assert.equal(await page.inputValue('#prompt'), 'my draft', 'the composer keeps what was typed');
+  // An artifact that navigates its own frame away (the phone has no will-frame-navigate or request block): nothing
+  // reaches the other page, the frame is put back on /frame/, and the panel says so.
+  let hits = 0; const other = createServer((_q, s) => { hits++; s.end('<h1>not P9</h1>'); }); await new Promise(r => other.listen(0, '127.0.0.1', r)); t.after(() => other.close());
+  await page.keyboard.press('Escape'); await page.waitForSelector('#sheet:not([open])', { state: 'attached', timeout: 5000 });
+  await page.fill('#prompt', 'Again:\n' + F + 'html artifact Away\n<p>leaving</p><script>location.href = "http://127.0.0.1:' + other.address().port + '/?text=" + encodeURIComponent(document.body.textContent)</script>\n' + F);
+  await page.click('#composer button[type="submit"]');
+  const away = page.locator('#events article[data-kind="agent"] .artifact-chip', { hasText: 'Away' });
+  await away.waitFor({ timeout: 15000 }); await away.click();
+  await page.waitForSelector('#sheet.full[open]', { timeout: 5000 });
+  for (const end = Date.now() + 5000; Date.now() < end && !hits && !await page.locator('#sheet .art[data-rendered="error"]').count();) await sleep(100);
+  await sleep(500); // a late request or load still has time to show
+  assert.equal(hits, 0, 'the frame reached the other page');
+  const g = await (await page.locator('#sheet .art-frame').elementHandle()).contentFrame();
+  assert.equal(g.url(), server.origin + '/frame/', 'the frame is back on the frame page');
+  assert.equal(await page.locator('#sheet .art').getAttribute('data-rendered'), 'error', 'the panel says the artifact left its frame');
 });

@@ -51,6 +51,11 @@ export function frameDoc(a) {
 // The frame: an <iframe sandbox="allow-scripts"> of the frame page (desktop p9://frame/, phone /frame/), which has its own
 // CSP. This page and the frame talk only by postMessage, and each side checks the other's window and the message's shape.
 // The frame's messages are treated as text and never as markup: an artifact can forge them, and gets nothing by it.
+// Navigation: the frame page's CSP cannot stop the artifact sending its own frame elsewhere. The desktop refuses it
+// (will-frame-navigate, the subframe request block); the phone has only this page's frame-src 'self', which the browser
+// applies to the frame's own navigations too (a page on the phone's own server still loads, without its cookies). So a
+// second load here (one is expected) means the artifact left: the frame goes back to the frame page, renders nothing
+// more, and the panel says so.
 const runtimes = new Map();
 const runtime = (base, name) => {
   if (!runtimes.has(name)) runtimes.set(name, fetch(base + name + '.js').then(r => r.ok ? r.text() : Promise.reject(new Error('The ' + name + ' runtime did not load (' + r.status + ')')))
@@ -62,10 +67,16 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState }) {
   frame.setAttribute('sandbox', 'allow-scripts'); // no allow-same-origin, allow-forms, allow-popups or allow-top-navigation
   frame.className = 'art-frame'; frame.title = a.title; frame.src = src;
   const scripts = Promise.all(need.map(name => runtime(base, name)));
+  let loads = 0, left = false;
+  frame.addEventListener('load', () => {
+    if (++loads < 2 || left) return;
+    left = true; frame.src = src;
+    onState?.('error', 'The artifact tried to open another page in its frame. P9 stopped it.');
+  });
   const hear = event => {
     if (!frame.isConnected) return removeEventListener('message', hear);
     const m = event.data;
-    if (event.source !== frame.contentWindow || !m || m.p9 !== 'frame' || typeof m.kind !== 'string') return;
+    if (left || event.source !== frame.contentWindow || !m || m.p9 !== 'frame' || typeof m.kind !== 'string') return;
     const text = typeof m.text === 'string' ? m.text : '';
     if (m.kind === 'ready') scripts.then(list => frame.contentWindow?.postMessage({ p9: 'render', html, scripts: list }, '*'), error => onState?.('error', error.message));
     else if (m.kind === 'selection') onSelection?.(text.slice(0, 4000));
