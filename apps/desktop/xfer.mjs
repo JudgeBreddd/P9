@@ -132,8 +132,9 @@ export async function planFolder({ local, host, folder, userData, ssh = 'ssh', r
 }
 
 // Carries one file's pieces from one daemon to the other. A 409 with a size is the target saying how much it has.
-async function copy(from, to, id, file, counted) {
+async function copy(from, to, id, file, counted, signal) {
   for (let offset = 0; offset < file.size;) {
+    if (signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
     const piece = await from('GET', '/xfer/file?path=' + encodeURIComponent(file.path) + '&offset=' + offset);
     if (piece.status !== 200 || !piece.body.bytes) throw Object.assign(new Error('read'), { file: file.path, code: piece.body.error ?? 'changed' });
     const sent = await to('POST', '/xfer/' + id + '/part', { path: file.path, offset, data: piece.body.data });
@@ -144,11 +145,11 @@ async function copy(from, to, id, file, counted) {
 }
 
 // Sends the files one way and commits them in batches. Returns what landed and what changed meanwhile.
-async function oneWay(from, to, files, deletes, onBytes) {
+async function oneWay(from, to, files, deletes, onBytes, signal) {
   const id = randomUUID(), landed = { written: [], removed: [], changed: [], replaced: [] };
   try {
     for (let round = 0; ; round++) {
-      for (const f of files) await copy(from, to, id, f.source, onBytes);
+      for (const f of files) await copy(from, to, id, f.source, onBytes, signal);
       const mismatch = [];
       for (let i = 0; i < Math.max(files.length, deletes.length); i += BATCH) {
         const body = { files: files.slice(i, i + BATCH).map((f) => ({ path: f.source.path, size: f.source.size, sha256: f.source.sha256, expect: f.expect })),
@@ -170,8 +171,9 @@ async function oneWay(from, to, files, deletes, onBytes) {
   } finally { await to('POST', '/xfer/' + id + '/abort', {}).catch(() => {}); }
 }
 
-// Runs a resolved plan. onProgress({ total, sent }) as bytes are acknowledged by the receiving daemon.
-export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), onProgress = () => {} }) {
+// Runs a resolved plan. onProgress({ total, sent }) as bytes are acknowledged by the receiving daemon. signal: a move's Cancel,
+// checked before each piece; what was committed already stays.
+export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), onProgress = () => {}, signal }) {
   if (process.platform === 'win32' && (work.toLaptop.length || work.laptopDeletes.length)) {
     return { error: 'unsupported-platform', message: 'Taking the server\'s copies onto a Windows computer is not built yet. Choose the laptop\'s copies, or cancel.' };
   }
@@ -188,13 +190,13 @@ export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh
     for (const { path: name, sha256 } of p.same) record[name] = sha256;
     for (const item of work.forget) delete record[item.path];
     const up = await oneWay(link.laptopCall, link.serverCall, work.toServer.map((i) => ({ source: i.laptop, expect: i.server?.sha256 ?? null })),
-      work.serverDeletes.map((i) => ({ path: i.path, expect: i.server.sha256 })), counted);
+      work.serverDeletes.map((i) => ({ path: i.path, expect: i.server.sha256 })), counted, signal);
     for (const name of up.written) record[name] = work.toServer.find((i) => i.path === name).laptop.sha256;
     for (const name of up.removed) delete record[name];
     Object.assign(result, { sent: up.written, deletedOnServer: up.removed, changed: up.changed });
     result.recovery.server = up.replaced;
     const down = await oneWay(link.serverCall, link.laptopCall, work.toLaptop.map((i) => ({ source: i.server, expect: i.laptop?.sha256 ?? null })),
-      work.laptopDeletes.map((i) => ({ path: i.path, expect: i.laptop.sha256 })), counted);
+      work.laptopDeletes.map((i) => ({ path: i.path, expect: i.laptop.sha256 })), counted, signal);
     for (const name of down.written) record[name] = work.toLaptop.find((i) => i.path === name).server.sha256;
     for (const name of down.removed) delete record[name];
     Object.assign(result, { received: down.written, deletedHere: down.removed, changed: [...result.changed, ...down.changed] });

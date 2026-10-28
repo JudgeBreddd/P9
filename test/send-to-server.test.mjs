@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { sendToServer } from '../apps/desktop/move.mjs';
+import { planFolder, resolve } from '../apps/desktop/xfer.mjs';
 
 const skip = process.platform === 'win32' ? 'Unix sockets and sh; the move is the same code on Windows' : false;
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -312,4 +313,38 @@ test('Move progress: a refusal ends in failed and move-failed; Cancel deletes th
   assert.equal((await move(other.id)).status, 200);
   assert.equal((await call(server, '/chat-import/' + other.id + '/cancel', 'POST', {})).error, 'already-here');
   assert.equal((await listed(server, other.id)).state, 'stopped');
+});
+
+// Item 23 (Builder, 2026-10-27): outside a Syncthing folder the move sends the chat's folder over its own tunnel first, so the
+// server never waits for a sync; its bytes are in the move's total (specs/move-progress-events.md). The page's prompt and the
+// Syncthing check are main's and the window's (remote.test.mjs).
+test('Send to server with the chat folder: the edited file goes over P9\'s tunnel first, no Syncthing wait, its bytes counted', { skip, timeout: 60000 }, async (t) => {
+  const { laptop, server, directory, ssh, local, move } = await pair(t);
+  const { id } = await chat(laptop, 'hello', 'edit moved-notes.md');
+  const userData = path.join(directory, 'user-data');
+  const got = await planFolder({ local: laptop.state, host: 'test-host', folder: '', userData, ssh, runtime: local });
+  assert.equal(got.error, undefined, JSON.stringify(got));
+  assert.deepEqual(got.plan.send.map((i) => i.path), ['moved-notes.md']);
+  const files = { userData, plan: got.plan, work: resolve(got.plan, null, false) }, size = statSync(path.join(laptop.workspace, 'moved-notes.md')).size;
+  // A plan for another folder is refused once frozen, and the chat is runnable here again.
+  const wrong = await move(id, { files: { ...files, plan: { ...got.plan, folder: 'elsewhere' } } });
+  assert.match(wrong.body.message, /not this chat's folder/);
+  assert.equal((await listed(laptop, id)).state, 'stopped');
+  // Cancel while the files go: nothing lands, the chat stays here.
+  const stopped = await move(id, { files, signal: AbortSignal.abort() });
+  assert.equal(stopped.body.cancelled, true, JSON.stringify(stopped));
+  assert.equal(existsSync(path.join(server.workspace, 'moved-notes.md')), false);
+  assert.equal(await listed(server, id), undefined);
+  // The move: the file first, then the chat. A 60 s sync wait would show as syncing; there is none.
+  const seen = [], start = Date.now();
+  const moved = await move(id, { files, syncWait: 60000, onProgress: (e) => seen.push(e) });
+  assert.deepEqual(moved, { status: 200, body: { moved: true, host: 'test-host' } });
+  assert.ok(Date.now() - start < 30000);
+  assert.equal(await readFile(path.join(server.workspace, 'moved-notes.md'), 'utf8'), await readFile(path.join(laptop.workspace, 'moved-notes.md'), 'utf8'));
+  assert.deepEqual(phases(seen), ['stopping', 'connecting', 'uploading', 'landing', 'done']);
+  const total = seen.at(-1).bytes.total;
+  assert.ok(seen.every((e) => e.bytes.total === total) && total > size, JSON.stringify(seen.map((e) => e.bytes)));
+  assert.ok(seen.some((e) => e.phase === 'uploading' && e.bytes.sent === size), 'the file\'s bytes, acknowledged, before the chat\'s');
+  assert.ok(seen.filter((e) => e.phase === 'uploading').every((e) => e.percent === Math.floor(99 * e.bytes.sent / total)));
+  assert.equal((await listed(server, id)).state, 'stopped');
 });
