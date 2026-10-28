@@ -5,12 +5,14 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { daemonRequest } from './teh.mjs';
+import { childEnv } from '../apps/server/child-env.mjs';
 
 const workspace = process.argv[2];
 if (!workspace || !path.isAbsolute(workspace)) throw new Error('absolute-workspace-required');
 if (!(await stat(workspace)).isDirectory()) throw new Error('workspace-must-be-a-directory');
 if (!process.env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR-unset: run this from your own login session');
-try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); }
+// The PATH P9's own children get, so a tmux in P9's bin folder (deps.mjs placeTmux) counts.
+try { execFileSync('tmux', ['-V'], { stdio: 'ignore', env: childEnv() }); }
 catch { throw new Error('tmux-required'); }
 const main = fileURLToPath(new URL('../apps/server/main.mjs', import.meta.url));
 function quote(value) {
