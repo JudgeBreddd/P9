@@ -139,3 +139,36 @@ test('T2: a tap on the phone terminal focuses a writable input and typing reache
   assert.equal((await sent(page)).slice(mark), 'echo kbd', 'what was typed after the tap did not reach the program');
   console.log('PASS T2: a touch tap focused ' + got.tag + ' (' + got.cls + '), writable, and typing reached the program');
 });
+
+// Item 4: the phone's Paste is a bracketed paste when the program asked for one (a shell, Claude Code), plain text when not.
+test('Item 4: Paste wraps in the bracketed-paste markers only when the program turned them on, and cannot close the bracket early', { timeout: 120000 }, async (t) => {
+  await mkdir(evidence, { recursive: true });
+  const server = await remoteDaemon(t, {});
+  const { page } = await phone(t, server);
+  await page.click('[data-nav="terminal"]');
+  await page.click('#newTerminal');
+  await connected(page);
+  const clip = (text) => page.evaluate((value) => { navigator.clipboard.readText = async () => value; }, text);
+  const pasted = async (text) => {
+    await clip(text);
+    const mark = (await sent(page)).length;
+    await page.click('[data-key="paste"]');
+    await page.waitForTimeout(400);
+    return (await sent(page)).slice(mark);
+  };
+  // What a program does: sets bracketed paste (DEC mode 2004) on or off and keeps the terminal (cat just echoes, so nothing
+  // pasted here runs). A shell is no good for "off": its line editor turns the mode back on at every prompt.
+  const program = async (mode) => {
+    await page.click('#screen'); await page.keyboard.press('Control+c');
+    await page.keyboard.type("printf '\\033[?2004" + mode + "'; cat"); await page.keyboard.press('Enter');
+    await page.waitForTimeout(500);
+  };
+  const two = 'first line\nsecond line';
+  await program('l');
+  assert.equal(await pasted(two), 'first line\rsecond line', 'mode off: plain text, newline as Enter');
+  await program('h');
+  assert.equal(await pasted(two), '\x1b[200~first line\rsecond line\x1b[201~', 'mode on: one bracketed paste');
+  const hostile = await pasted('safe\x1b[201~rm -rf /tmp/x');
+  assert.equal(hostile, '\x1b[200~saferm -rf /tmp/x\x1b[201~', 'the pasted text closed the bracket early');
+  console.log('PASS Item 4: mode off sent ' + JSON.stringify('first line\rsecond line') + '; mode on wrapped it in 200~/201~; an embedded end marker was dropped');
+});
