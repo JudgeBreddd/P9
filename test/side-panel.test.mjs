@@ -210,6 +210,43 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     assert.ok((await panes())[1] >= 279, 'the right chat keeps 280 px: ' + (await panes())[1]);
   });
 
+  await t.test('10. Chat Focus full: the artifact ends above the chat text box, which is visible and takes typing (desktop and phone width)', async () => {
+    await reset();
+    const [minW, minH] = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getMinimumSize());
+    t.after(() => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setMinimumSize(w, h), [minW, minH]).catch(() => {}));
+    for (const [name, w, h] of [['desktop', 1400, 900], ['phone', 390, 844]]) {
+      await app.evaluate(({ BrowserWindow }, [w, h]) => { const win = BrowserWindow.getAllWindows()[0]; win.setMinimumSize(1, 1); win.setContentSize(w, h); }, [w, h]);
+      const extras = page.locator('#chats > .pane').first().locator('.pinned .plan, .meters');
+      assert.equal(await extras.count(), 2, name + ': the sample chat has a plan card and meters (so the hidden check below is not empty)');
+      assert.ok(await extras.first().isVisible() && await extras.last().isVisible(), name + ': both show before the artifact opens');
+      await page.evaluate(() => window.__side.open('artifact', { title: 'Artifact', mode: 'full', render: b => { b.textContent = 'artifact'; } }));
+      await page.waitForFunction(() => document.querySelector('.stage').dataset.sideMode === 'full');
+      await frames();
+      assert.equal((await extras.evaluateAll(l => l.filter(e => e.checkVisibility({ visibilityProperty: true })).length)), 0, name + ': full mode hides the plan card and the meters');
+      const ta = page.locator('#chats > .pane textarea').first();
+      assert.ok(await ta.isVisible(), name + ': the text box is visible under the full-screen artifact');
+      assert.ok(await ta.evaluate(el => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el; }), name + ': nothing covers the text box');
+      const side = await box('#side'), tb = await ta.boundingBox();
+      assert.ok(side.y + side.height <= tb.y + 1, `${name}: the artifact ends at ${side.y + side.height}, the text box starts at ${tb.y}`);
+      assert.ok(side.height > 100, name + ': the artifact still has room: ' + side.height);
+      assert.ok(tb.y - (side.y + side.height) <= 20, `${name}: only the text box sits below the artifact (gap ${tb.y - (side.y + side.height)} px)`);
+      await ta.click(); await page.keyboard.type('still typing');
+      assert.equal(await ta.inputValue(), 'still typing', name + ': the box takes typing');
+      await shot(name + '-chat-full');
+      await ta.fill(''); await page.evaluate(() => window.__side.close('artifact'));
+    }
+    // Two chats side by side: both boxes show and the artifact ends above them.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+    await page.click('#rSplit'); await page.waitForFunction(() => document.querySelector('#chats').dataset.split === 'true');
+    await page.evaluate(() => window.__side.open('artifact', { title: 'Artifact', mode: 'full', render: b => { b.textContent = 'artifact'; } }));
+    await page.waitForFunction(() => document.querySelector('.stage').dataset.sideMode === 'full'); await frames();
+    const boxes = page.locator('#chats > .pane textarea'), tops = [], side = await box('#side');
+    assert.equal(await boxes.count(), 2, 'split: two chats');
+    for (let i = 0; i < 2; i++) { assert.ok(await boxes.nth(i).isVisible(), 'split: text box ' + i + ' is visible'); tops.push((await boxes.nth(i).boundingBox()).y); }
+    assert.ok(side.y + side.height <= Math.min(...tops) + 1, `split: the artifact ends at ${side.y + side.height}, the first text box starts at ${Math.min(...tops)}`);
+    await shot('split-chat-full');
+  });
+
   await t.test('9. what the overlay view costs: this reports the memory of its renderer', async () => {
     await reset();
     const metrics = () => app.evaluate(({ app }) => app.getAppMetrics().map(m => ({ pid: m.pid, type: m.type, name: m.name ?? '', ws: m.memory.workingSetSize, priv: m.memory.privateBytes ?? 0 })));
