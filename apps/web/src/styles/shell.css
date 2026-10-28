@@ -177,6 +177,10 @@ html,body{height:100%;overflow:hidden}
 .lvl[data-l="bad"]{background:var(--destructive)}.lvl[data-l="warn"]{background:var(--warn)}.lvl[data-l="ok"]{background:var(--ok)}
 /* Popups: bottom right, under the card gutter; fade unless hovered (D07) */
 .toasts{position:fixed;right:14px;bottom:34px;width:var(--card-w,232px);display:flex;flex-direction:column;gap:8px;z-index:40}
+/* Desktop item 1: a failure toast shows its whole reason, never cut to one line */
+.toast.bad .truncate{white-space:normal;overflow:visible;text-overflow:clip}
+/* D7: a popover so a toast shows above an open modal (a modal sits in the top layer, over any z-index) */
+.toasts:popover-open{inset:auto 14px 34px auto;margin:0;padding:0;border:0;background:none;color:inherit;overflow:visible}
 :root{--toast-life:6s}
 .toast{display:grid;grid-template-columns:auto 1fr;gap:2px 9px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--popover) 92%,transparent);backdrop-filter:blur(8px);color:var(--foreground);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;animation:pop .2s ease,toast-out .5s ease var(--toast-life) forwards}
 .toast:hover{animation-play-state:paused}

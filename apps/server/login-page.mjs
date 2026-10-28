@@ -30,13 +30,16 @@ function encode(credential) {
 function done(result) {
   if (result.status >= 300) return status('Refused (' + (result.body.error ?? result.status) + ')');
   sessionStorage.setItem('p9-csrf', result.body.csrf);
-  // The phone keeps it for the session's 12 hours, so a reopened app is still signed in (phone.ts csrfToken).
+  // The phone keeps it as long as the session can last, so a reopened app is still signed in (phone.ts csrfToken).
   localStorage.setItem('p9-csrf', JSON.stringify({ token: result.body.csrf, at: Date.now() }));
+  sessionStorage.removeItem('p9-ended');
   status('Logged in.');
   // A "Continue on phone" link that met sign-in keeps its chat; only an exact #chat=<uuid>, so the page bounces nowhere else.
   const chat = /^#chat=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(location.hash) ? location.hash : '';
   location.replace('/phone/' + chat);
 }
+// P2: the phone app sent us here because its session ended; say so, and that nothing typed was lost.
+if (sessionStorage.getItem('p9-ended')) status('Your sign-in ended. Log in again: what you typed is kept.');
 document.getElementById('login').onclick = async () => {
   const start = await post('/auth/login/options');
   if (start.status !== 200) return status('Refused (' + (start.body.error ?? start.status) + ')');
