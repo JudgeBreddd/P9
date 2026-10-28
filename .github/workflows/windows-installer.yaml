@@ -924,7 +924,8 @@ jobs:
           mkdir -p "$home"
           HOME="$home" APPIMAGE="$image" XDG_CONFIG_HOME= XDG_DATA_HOME= xvfb-run -a "$RUNNER_TEMP/squashfs-root/AppRun" --no-sandbox > "$RUNNER_TEMP/first-start.log" 2>&1 &
           product="$home/.local/share/p9/codium-server/product.json"
-          for i in $(seq 120); do test -f "$product" && break; sleep 1; done
+          placed="$home/.local/share/p9/service-install.log"
+          for i in $(seq 120); do test -f "$product" && grep -q 'tmux from the AppImage' "$placed" 2>/dev/null && break; sleep 1; done
           pkill -f "$RUNNER_TEMP/squashfs-root" || true
           cat "$RUNNER_TEMP/first-start.log"
           ls -l "$home/.local/share/p9" "$home/.local/share/p9/codium-server/bin"
