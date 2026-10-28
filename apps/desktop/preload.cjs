@@ -31,7 +31,8 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   importPets: () => ipcRenderer.invoke('p9:pet-import'),
   installPets: text => ipcRenderer.invoke('p9:pet-install', String(text)),
   removePet: (name) => ipcRenderer.invoke('p9:pet-remove', name),
-  server: (...host) => ipcRenderer.invoke('p9:server', ...host), // none: mode and ssh hosts; null: Local; a host: that server
+  server: (...host) => ipcRenderer.invoke('p9:server', ...host), // none: mode, remotes and ssh hosts; null: Local; a host: that remote
+  remotes: (action, host) => ipcRenderer.invoke('p9:remotes', action, host), // 'add' or 'remove', one host name
   // With a Send files plan for the chat's folder: its id and the prompt's answer (item 23).
   sendToServer: (id, plan, choice, deleteToo) => plan ? ipcRenderer.invoke('p9:send-to-server', id, plan, choice, deleteToo) : ipcRenderer.invoke('p9:send-to-server', id),
   cancelMove: (id) => ipcRenderer.invoke('p9:move-cancel', id),

@@ -75,7 +75,7 @@ test('Item 15: scripts/deps.mjs exits 3 only when P9 cannot run without what is 
   const run = (...args) => spawnSync(process.execPath, ['scripts/deps.mjs', '--headless', ...args], { cwd: root, env: { PATH: empty, HOME: empty } });
   const missing = run();
   assert.equal(missing.status, 3, missing.stderr.toString());
-  assert.match(missing.stdout.toString(), /^- tmux: P9's terminals run inside tmux[^\n]*\n- ssh: Server mode[^\n]*\n$/);
+  assert.match(missing.stdout.toString(), /^- tmux: P9's terminals run inside tmux[^\n]*\n- ssh: Remote mode[^\n]*\n$/);
   const command = run('--command').stdout.toString().trim();
   assert.ok(command === '' || /^sudo .*install.* tmux .*openssh/.test(command), command);
   // Only ssh missing: P9 still runs, so the install goes on (0) after asking.

@@ -137,7 +137,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   };
   await status({ status: 'ok', mode: 'server', host: 'test-host' });
   assert.equal(JSON.parse(await readFile(path.join(forward, 'desktop.json'), 'utf8')).cookie, remote.credentials.cookie);
-  await page.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor();
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor();
   // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
     await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused'))]),
@@ -147,7 +147,64 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
-  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host' });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [] });
+});
+
+// D20: while the remote is not answering yet the window shows the connecting layer, not a blank page; once it answers the
+// layer goes and the window is on the remote.
+test('Remote mode connecting: a turning black hole and the reason until the remote answers, then the remote', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(null);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const layer = page.locator('dialog#connecting[open]');
+  await layer.waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
+  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there. Install P9 on it first/, 'D15: says P9 must be installed there, not that connecting installs it');
+  await page.waitForTimeout(600); // a turn of the ring in the shot
+  await evidence(page, 'd20-connecting');
+  // P9 starts on the remote: the next try connects, the layer goes, the window is on the remote.
+  await symlink(remote.state, path.join(s.server, 'p9-foundation'));
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 45000 });
+  await page.locator('dialog#connecting[open]').waitFor({ state: 'detached', timeout: 45000 });
+  assert.equal(await page.locator('dialog#connecting[open]').count(), 0);
+  await evidence(page, 'd20-connected');
+  console.log('PASS remote connecting: the layer while not answering, gone once on the remote');
+});
+
+// D3: Settings > Remote lists only what this person has: the remotes added here and their own ~/.ssh/config Hosts, none built
+// in. Add remote takes a name ssh cannot read as an option; Remove takes it off again, in p9-server.json too.
+test('Remote list in Settings: nothing built in, Add remote refuses an option, adds, removes', { skip, timeout: 60000 }, async (t) => {
+  const local = await daemon(t), s = await stage(null);
+  const profile = path.join(s.directory, 'profile'), home = path.join(s.directory, 'home');
+  await mkdir(profile); await mkdir(path.join(home, '.ssh'), { recursive: true });
+  await writeFile(path.join(home, '.ssh', 'config'), 'Host from-config\n  HostName 192.0.2.1\n');
+  const env = { ...process.env, HOME: home, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor({ timeout: 20000 });
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+  const listed = () => page.locator('#setRemote li strong').allTextContents();
+  assert.deepEqual(await listed(), ['from-config'], 'only the ~/.ssh/config Host, nothing built in');
+  await page.fill('#setRemoteName', '-oProxyCommand=x'); await page.locator('#setRemoteAdd button').click();
+  await page.locator('#setRemoteErr:not([hidden])').waitFor();
+  assert.deepEqual(await listed(), ['from-config']);
+  await page.fill('#setRemoteName', 'test-host'); await page.locator('#setRemoteAdd button').click();
+  await page.locator('#setRemote li', { hasText: 'test-host' }).locator('text=Added here').waitFor({ timeout: 10000 });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).remotes, ['test-host']);
+  await page.locator('#setRemote').scrollIntoViewIfNeeded();
+  await evidence(page, 'd3-remote-list');
+  await page.locator('[data-remote-remove="test-host"]').click();
+  await page.locator('#setRemote li', { hasText: 'test-host' }).waitFor({ state: 'detached', timeout: 10000 });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).remotes, []);
+  console.log('PASS remote list: nothing built in, an option refused, added and removed');
 });
 
 // Send to server (D14) in the window: the button beside Hand off, then the pane frozen as moved. Screenshots go to the log (P9_SHOT).
@@ -218,7 +275,7 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   const page = await app.firstWindow();
   await page.setViewportSize({ width: 1280, height: 800 });
   const shot = async name => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
-  await page.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor({ timeout: 20000 });
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
   await page.locator('#rMission').click();
   const tile = page.locator('#fMission [data-sprint]');
   await tile.waitFor({ timeout: 15000 });
@@ -308,14 +365,14 @@ test('xfer window: the first-send and conflict prompts ask in words, and a limit
   assert.equal(await title.innerText(), 'First send to test-host');
   const asked = await page.locator('[data-xfer-asked]').innerText();
   assert.match(asked, /2 files differ between the two/);
-  assert.match(asked, /1 newer on the laptop, 1 newer on the server/);
-  assert.match(asked, /docs\/a\.md different on the two; the server's copy is newer \([^)]*1:40[^)]*\) than the laptop's \([^)]*11:02[^)]*\)/);
+  assert.match(asked, /1 newer on the laptop, 1 newer on the remote/);
+  assert.match(asked, /docs\/a\.md different on the two; the remote's copy is newer \([^)]*1:40[^)]*\) than the laptop's \([^)]*11:02[^)]*\)/);
   assert.deepEqual(await dialog.locator('[data-xfer-choice]').allInnerTexts(), ['Laptop wins', 'Keep the newer of each']);
   assert.equal(await dialog.locator('[data-xfer-syncthing]').count(), 0);
   await shot('xfer-first-send');
   await dialog.locator('[data-xfer-choice="newer"]').click();
   for (const end = Date.now() + 20000; (await title.innerText()) !== 'Sent'; await new Promise((resolve) => setTimeout(resolve, 100))) assert.ok(Date.now() < end, 'sent: ' + await dialog.innerText());
-  assert.match(await page.locator('#xferP').innerText(), /2 sent, 1 taken from the server, 2 old copies kept in recovery/);
+  assert.match(await page.locator('#xferP').innerText(), /2 sent, 1 taken from the remote, 2 old copies kept in recovery/);
   const read = (box, name) => readFile(path.join(box.workspace, name), 'utf8');
   assert.deepEqual([await read(laptop, 'docs/a.md'), await read(server, 'docs/plan.md'), await read(server, 'src/new.js')], ['# A, the server\'s', 'plan, laptop', 'new']);
   await dialog.locator('[data-xfer-close]').click();
@@ -331,16 +388,16 @@ test('xfer window: the first-send and conflict prompts ask in words, and a limit
   await send();
   assert.equal(await title.innerText(), 'Files changed on both sides');
   assert.match(await page.locator('[data-xfer-asked]').innerText(),
-    /docs\/a\.md changed on both since your last send; the server's copy is newer \([^)]*1:40[^)]*\) than the laptop's \([^)]*11:02[^)]*\)/);
-  assert.match(await page.locator('[data-xfer-asked]').innerText(), /0 newer on the laptop, 1 newer on the server/);
-  assert.match(await page.locator('[data-xfer-deletes]').innerText(), /Delete on the server too\s*1 file was deleted on the laptop since your last send/);
+    /docs\/a\.md changed on both since your last send; the remote's copy is newer \([^)]*1:40[^)]*\) than the laptop's \([^)]*11:02[^)]*\)/);
+  assert.match(await page.locator('[data-xfer-asked]').innerText(), /0 newer on the laptop, 1 newer on the remote/);
+  assert.match(await page.locator('[data-xfer-deletes]').innerText(), /Delete on the remote too\s*1 file was deleted on the laptop since your last send/);
   assert.match(await page.locator('[data-xfer-syncthing]').innerText(), /Syncthing already syncs this folder.*docs \(server\)/s);
-  assert.deepEqual(await dialog.locator('[data-xfer-choice]').allInnerTexts(), ['Keep the laptop\'s', 'Keep the server\'s', 'Keep the newer of each']);
+  assert.deepEqual(await dialog.locator('[data-xfer-choice]').allInnerTexts(), ['Keep the laptop\'s', 'Keep the remote\'s', 'Keep the newer of each']);
   await page.check('#xferDel');
   await shot('xfer-conflict');
   await dialog.locator('[data-xfer-choice="server"]').click();
   for (const end = Date.now() + 20000; (await title.innerText()) !== 'Sent'; await new Promise((resolve) => setTimeout(resolve, 100))) assert.ok(Date.now() < end, 'sent: ' + await dialog.innerText());
-  assert.match(await page.locator('#xferP').innerText(), /1 taken from the server, 1 deleted on the server, 2 old copies kept in recovery/);
+  assert.match(await page.locator('#xferP').innerText(), /1 taken from the remote, 1 deleted on the remote, 2 old copies kept in recovery/);
   assert.equal(await read(laptop, 'docs/a.md'), '# A, server edit');
   await assert.rejects(stat(path.join(server.workspace, 'src/new.js')));
   await dialog.locator('[data-xfer-close]').click();
@@ -525,15 +582,15 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
   const devPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   let opened = devPage();
   await shell.keyboard.press('Control+2');
   let dev = await opened;
   // Missing on the server: the page says where, and Install acts there.
   await dev.locator('#cause').waitFor({ timeout: 60000 });
-  assert.match(await dev.locator('#cause').textContent(), /not installed on the server test-host\. It belongs in .*\.local\/share\/p9\/codium-server\./);
-  assert.equal(await dev.locator('#install').textContent(), 'Install the editor server on the server');
+  assert.match(await dev.locator('#cause').textContent(), /not installed on the remote test-host\. It belongs in .*\.local\/share\/p9\/codium-server\./);
+  assert.equal(await dev.locator('#install').textContent(), 'Install the editor server on the remote');
   await evidence(dev, 'c10-server-unavailable');
   opened = devPage();
   await dev.locator('#install').click();

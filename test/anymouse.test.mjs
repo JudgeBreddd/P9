@@ -35,14 +35,14 @@ const call = (instance, body) => http({ socketPath: path.join(instance.state, 'd
 test('Anymouse through the daemon: token files an issue, no token returns the prefilled page', async (t) => {
   const gh = await fakeGitHub(t);
   const withToken = await daemon(t, undefined, false, () => ({ env: { P9_GITHUB_TOKEN: TOKEN, P9_GITHUB_API: gh.api } }));
-  const filed = await call(withToken, { kind: 'bug', text: 'Save button @tyler\nsecond line', page: 'chat' });
+  const filed = await call(withToken, { kind: 'bug', text: 'Save button @sam\nsecond line', page: 'chat' });
   assert.deepEqual(filed, { status: 200, body: { ok: true, number: 7, url: 'https://github.com/' + REPO + '/issues/7' } });
   assert.equal(gh.seen.length, 1);
   const [req] = gh.seen;
   assert.equal(req.url, '/repos/' + REPO + '/issues');
   assert.equal(req.auth, 'Bearer ' + TOKEN);
   assert.deepEqual(req.body.labels, ['bug']);
-  assert.equal(req.body.title, 'Bug: Save button @​tyler');
+  assert.equal(req.body.title, 'Bug: Save button @​sam');
   assert.match(req.body.body, /Sent with Anymouse from P9 \(chat\)/);
   assert.equal(JSON.stringify(filed).includes(TOKEN), false);
   assert.equal((await call(withToken, { kind: 'idea', text: '   ' })).status, 400);
