@@ -369,7 +369,7 @@ addEventListener('focusout', e => { const t = e.target; if (t.matches?.('textare
 addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .rail') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
 // A chat opens at its newest message (Builder, 2026-10-17: it opened at the first); paint ran while the dialog was closed.
 function openModal(m, card) { const seen = m.kind === 'chat' && S.sessions.find(s => s.id === m.id && s.done); if (seen) seen.done = false; m.card = card || m.card || m.back?.card; if (m.card) S.resume[m.card] = m; S.modal = m; if (m.kind === 'chat') delete view['mdlBody:' + m.id]; renderModal();
-  if (!mdl.open && S.modal) { mdl.showModal(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
+  if (!mdl.open && S.modal) { mdl.showModal(); raiseToasts(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
   if (m.kind === 'chat') $('#mdlBody .hist')?.scrollTo({ top: 1e6, behavior: 'instant' });
   if (seen) renderCards(); }
 function renderModal() {
@@ -471,8 +471,10 @@ function toast(a, done) {
   el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
   el.onclick = () => { el.remove(); if (!done) openModal({ kind: 'alert', a }); };
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
-  $('#toasts').append(el); renderCards();
+  $('#toasts').append(el); raiseToasts(); renderCards();
 }
+// D7: a modal sits in the top layer over any z-index, so the toast list is a popover put back on top after each toast or modal.
+const raiseToasts = () => { const box = $('#toasts'); if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); } };
 function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
@@ -953,7 +955,26 @@ function wireEditor(root, name, after, save = () => saveDoc(name)) {
   ta.onscroll = () => { d.top = gut.scrollTop = ta.scrollTop; };
   observe(() => fitGut(ta, gut)).observe(ta);
   ta.onselect = ta.onkeyup = ta.onclick = () => { d.sel = [ta.selectionStart, ta.selectionEnd]; };
-  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); after(); } };
+  edSave = { root, save, after };
+}
+// D7: Ctrl+S saves the editor on screen wherever the focus is in its window: a Save click re-renders the modal and drops the
+// focus to the page, which used to leave Ctrl+S doing nothing at all.
+let edSave = null;
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's' || !edSave?.root.isConnected) return;
+  const host = edSave.root.closest('dialog') || edSave.root, at = document.activeElement;
+  if (!host.checkVisibility() || (at && at !== document.body && !host.contains(at))) return; // a closed modal never saves
+  e.preventDefault(); edSave.save(); edSave.after();
+});
+// D7: why a save failed, in words; the daemon's code word stays at the end for a bug report.
+function saveWhy(r) {
+  const code = r.body?.error || r.body?.code || String(r.status);
+  const words = { 'registry-read-only': 'P9 keeps this file read-only (it holds Mission Control button commands)',
+    'request-refused': 'P9 refused it: a locked or protected name, or not a text file',
+    'daemon-unavailable': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' did not answer; check the connection and try again',
+    EACCES: 'no permission to write it', EPERM: 'no permission to write it', EROFS: 'the disk is read-only', ENOSPC: 'the disk is full',
+    EDQUOT: 'the disk quota is full', EBUSY: 'the file is busy; try again', ENOENT: 'its folder is gone' }[code];
+  return (words || 'P9 could not write it') + ' (' + code + ')';
 }
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
@@ -1133,7 +1154,7 @@ async function answerLive(r) {
   // Builder, 2026-10-21: an item with Q1:/Q2: lines and no A. line said "changed on disk" for days, so he kept retrying
   else if (res.body?.error === 'no-empty-answer-line') toast({ kind: 'not saved', txt: r.file + ' has no empty A. line, so P9 cannot write your answer. Ask an agent to add one; your answer is still here.', level: 'bad' }, true);
   else if (res.status === 409) toast({ kind: 'not saved', txt: r.file + ' changed on disk since you opened it. Reloaded it; your answer is still here.', level: 'warn' }, true);
-  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ' (' + (res.body?.error || res.status) + ')', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ': ' + saveWhy(res) + '. Your answer is still here.', level: 'bad' }, true);
   await loadMission();
   if (S.modal?.kind === 'review') { if (S.reviews.length) renderModal(); else closeModal(); }
 }
@@ -1327,7 +1348,7 @@ async function saveLive(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad' }, true);
   if (S.modal === m) renderModal();
 }
 // One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
@@ -1391,7 +1412,7 @@ async function saveNote(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad' }, true);
   if (S.modal === m) renderModal();
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch

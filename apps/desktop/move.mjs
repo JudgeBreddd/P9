@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { daemonRequest } from '../../scripts/teh.mjs';
 import { connectServer } from './remote.mjs';
-import { runPlan } from './xfer.mjs';
+import { runPlan, tagSide } from './xfer.mjs';
 
 const LONG = 120_000; // a 4 MiB piece over a slow link, or the server hashing a long transcript
 const SYNC_WAIT = 120_000, SYNC_EVERY = 2000; // Syncthing catching up with the files the chat changed
@@ -34,7 +34,7 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
   try { return await move(); } finally { clearInterval(beat); }
 
   async function move() {
-    const away = await daemonRequest(local, 'POST', `/chat/${id}/send-away`);
+    const away = await tagSide('local', daemonRequest(local, 'POST', `/chat/${id}/send-away`));
     if (away.status !== 200) return away; // refused before the freeze: the answer says why, and nothing is drawn
     const { status: _, ...manifest } = away.body;
     const work = files?.work, fileBytes = work ? [...work.toServer.map((i) => i.laptop.size), ...work.toLaptop.map((i) => i.server.size)].reduce((a, b) => a + b, 0) : 0;

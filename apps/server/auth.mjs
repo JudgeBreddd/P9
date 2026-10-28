@@ -6,7 +6,10 @@ import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthe
 
 const APPROVAL_MS = 10 * 60 * 1000;
 const CHALLENGE_MS = 2 * 60 * 1000;
-const SESSION_MS = 12 * 3600 * 1000;
+// P2 (v0.1.6): a session lasts 12 h from its last use, never more than 7 days from its login; a device (one passkey) keeps up to
+// MAX_SESSIONS of them, one per browser it signs in from, so a login in one browser no longer ends the others.
+export const SESSION_MS = 12 * 3600 * 1000, SESSION_MAX_MS = 7 * 24 * 3600 * 1000;
+const MAX_SESSIONS = 4;
 const WINDOW_MS = 5 * 60 * 1000;
 const MAX_FAILURES = 10;
 const MAX_PENDING = 3;
@@ -24,6 +27,8 @@ export function createAuth({ ledger, rpID, origin, now = Date.now,
     CREATE TABLE IF NOT EXISTS enrollments (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL, state TEXT NOT NULL,
       challenge TEXT, user TEXT NOT NULL, created INTEGER NOT NULL, approved INTEGER);
     CREATE TABLE IF NOT EXISTS audit (at INTEGER NOT NULL, event TEXT NOT NULL, device TEXT, detail TEXT);`);
+  // P2: a session made before 0.1.6 has no login time; it counts from 12 h before its end.
+  if (!db.prepare('PRAGMA table_info(sessions)').all().some((column) => column.name === 'created')) db.exec('ALTER TABLE sessions ADD COLUMN created INTEGER');
   const challenges = new Map();
   const failures = [];
   const noise = [];
@@ -51,12 +56,14 @@ export function createAuth({ ledger, rpID, origin, now = Date.now,
     if (noise.length < MAX_FAILURES) { noise.push(now()); audit(event, null, detail); }
   }
   const close = (device) => { for (const closer of closers) closer(device); };
-  function issue(device) {
-    // Rotation: a login or enrollment replaces every earlier session of that device and closes its sockets.
-    db.prepare('DELETE FROM sessions WHERE device = ?').run(device);
-    close(device);
+  function issue(device, unlock = false) {
+    // A login or enrollment adds a session for this browser (P2): the device's other browsers stay signed in. Only the
+    // oldest beyond MAX_SESSIONS goes. An unlock starts clean: no session from before the lock comes back with it.
+    if (unlock) { db.prepare('DELETE FROM sessions WHERE device = ?').run(device); close(device); }
+    db.prepare('DELETE FROM sessions WHERE device = ? AND expires < ?').run(device, now());
+    db.prepare('DELETE FROM sessions WHERE hash IN (SELECT hash FROM sessions WHERE device = ? ORDER BY COALESCE(created, expires - ?) DESC, rowid DESC LIMIT -1 OFFSET ?)').run(device, SESSION_MS, MAX_SESSIONS - 1);
     const token = randomBytes(32).toString('base64url'), csrf = randomBytes(32).toString('base64url');
-    db.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?)').run(hash(token), device, csrf, now() + SESSION_MS);
+    db.prepare('INSERT INTO sessions (hash, device, csrf, expires, created) VALUES (?, ?, ?, ?, ?)').run(hash(token), device, csrf, now() + SESSION_MS, now());
     return { token, csrf };
   }
   // Review #11: the deadline counts from the approval once there is one, so a phone that waited 9 minutes for the
@@ -158,14 +165,20 @@ export function createAuth({ ledger, rpID, origin, now = Date.now,
       }
       bump(device.id);
       audit(device.state === 'locked' ? 'unlocked' : 'login', device.id);
-      return { status: 200, device: device.id, ...issue(device.id) };
+      return { status: 200, device: device.id, ...issue(device.id, device.state === 'locked') };
     },
     // Every remote request: 0 with the session, or 401 / 423.
     session(token) {
       if (typeof token !== 'string' || !token) return { status: 401 };
-      const row = db.prepare('SELECT s.device, s.csrf, s.expires, d.state FROM sessions s JOIN devices d ON d.id = s.device WHERE s.hash = ?').get(hash(token));
+      const row = db.prepare('SELECT s.device, s.csrf, s.expires, s.created, d.state FROM sessions s JOIN devices d ON d.id = s.device WHERE s.hash = ?').get(hash(token));
       if (!row || row.expires < now() || row.state === 'revoked') return { status: 401 };
       if (row.state === 'locked') return { status: 423, device: row.device };
+      // Sliding (P2): use in the second half of the 12 h moves the end to 12 h from now, capped at 7 days from the login.
+      const end = Math.min(now() + SESSION_MS, (row.created ?? row.expires - SESSION_MS) + SESSION_MAX_MS);
+      if (end - row.expires > SESSION_MS / 2) {
+        db.prepare('UPDATE sessions SET expires = ? WHERE hash = ?').run(end, hash(token));
+        return { status: 0, device: row.device, csrf: row.csrf, expires: end, renewed: true };
+      }
       return { status: 0, device: row.device, csrf: row.csrf, expires: row.expires };
     },
     lock(device, by) {

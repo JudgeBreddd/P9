@@ -85,14 +85,22 @@ window.visualViewport?.addEventListener('resize', fit); window.visualViewport?.a
 fit();
 // L1: sign-in is the one place this page is thrown away, so what is unsent goes to storage first (the draft: label()) and
 // the chat is named in the address, which the login page hands back (an exact #chat=<uuid>).
+// P2: the file editor's unsaved text goes too (p9-file-draft, put back by keptFile() after the login), and so do Mission
+// answers and the new idea not sent yet (p9-mission-draft, put back by keptMission()); the login page is told why it is
+// shown (p9-ended), so a session that ended says so instead of a bare passkey page.
 function toLogin() {
   forgetMission(); localStorage.removeItem('p9-csrf');
+  try {
+    if (dirty()) localStorage.setItem('p9-file-draft', JSON.stringify({ ...state.file, disk: undefined, text: editor.state.doc.toString() }));
+    holdTyped(); if (Object.keys(typed.answers).length || typed.idea) localStorage.setItem('p9-mission-draft', JSON.stringify(typed));
+    sessionStorage.setItem('p9-ended', '1');
+  } catch {}
   location.replace('/login' + (openId ? '#chat=' + encodeURIComponent(openId) : ''));
 }
 // L1: the CSRF token outlives a closed or discarded tab (sessionStorage does not, and a phone drops it when the app is
-// swiped away while the 12-hour cookie lives on), so a reopened app does not sign in again. It is kept no longer than the
-// session itself (auth.mjs SESSION_MS), and a 401 or a login drops it.
-const CSRF_MS = 12 * 3600 * 1000;
+// swiped away while the cookie lives on), so a reopened app does not sign in again. It is kept no longer than a session can
+// last (auth.mjs SESSION_MAX_MS, 7 days; P2: the daemon ends it sooner when unused for 12 h), and a 401 or a login drops it.
+const CSRF_MS = 7 * 24 * 3600 * 1000;
 function csrfToken() {
   const tab = sessionStorage.getItem('p9-csrf'); if (tab) return tab;
   try {
@@ -955,7 +963,7 @@ function keepOpen(render: () => void) {
   const title = (d: HTMLDetailsElement) => d.querySelector('summary')!.firstChild?.textContent;
   const windowNow = () => openWindow ? document.getElementById('w-' + openWindow) : null;
   if (windowNow()) expanded = new Set(rows(windowNow()).filter((d) => d.open).map(title));
-  render();
+  holdTyped(); render(); putTyped();
   const again = windowNow() as HTMLDialogElement | null;
   if (again && !again.open) again.showModal();
   rows(again).forEach((d) => { if (!d.open && expanded.has(title(d))) d.open = true; });
@@ -965,6 +973,60 @@ function keepOpen(render: () => void) {
 // #hub and waited on GET /mission/hub.
 const kept = (key: string) => { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } };
 const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }; // storage full: no cache
+// P2: Mission text typed and not sent. A redraw (Refresh, the hub's retry, a save) rebuilds the forms, so keepOpen() reads
+// it before and puts it back after; toLogin() keeps the same record through a sign-in. An answer is matched by its item's
+// name (its place in the list can change); a sent answer or a saved idea leaves the record.
+type MissionDraft = { answers: Record<string, string>; idea: { name: string; text: string; needs: boolean } | null };
+const typed: MissionDraft = { answers: {}, idea: null };
+const answerForms = () => [...document.querySelectorAll<HTMLFormElement>('#mission form[data-answer]')].map((form) => ({ form, name: mission.queue[Number(form.dataset.answer)]?.name, box: form.querySelector('textarea')! }));
+const ideaField = (form: HTMLFormElement, name: string) => form.elements.namedItem(name) as HTMLInputElement;
+function holdTyped() {
+  for (const { name, box } of answerForms()) if (name) { if (box.value.trim()) typed.answers[name] = box.value; else delete typed.answers[name]; }
+  const form = document.querySelector<HTMLFormElement>('#mission form[data-idea]');
+  if (form) typed.idea = ideaField(form, 'name').value.trim() || ideaField(form, 'text').value.trim()
+    ? { name: ideaField(form, 'name').value, text: ideaField(form, 'text').value, needs: ideaField(form, 'needs').checked } : null;
+}
+function putTyped() { // the row holding text put back opens, so the text is in sight
+  const opened = (form: HTMLFormElement) => { const row = form.closest('details'); if (row) row.open = true; };
+  for (const { form, name, box } of answerForms()) if (name && typed.answers[name] && !box.value) { box.value = typed.answers[name]; opened(form); }
+  const form = document.querySelector<HTMLFormElement>('#mission form[data-idea]');
+  if (form && typed.idea && !ideaField(form, 'name').value && !ideaField(form, 'text').value) {
+    ideaField(form, 'name').value = typed.idea.name; ideaField(form, 'text').value = typed.idea.text; ideaField(form, 'needs').checked = typed.idea.needs; opened(form);
+  }
+}
+function keptMission(part: 'answers' | 'idea') {
+  const draft = kept('p9-mission-draft');
+  if (!draft || typeof draft !== 'object') return;
+  const shown = (form: HTMLFormElement) => {
+    form.querySelector<HTMLElement>('[data-note]')!.textContent = 'Kept through sign-in, not sent';
+    const dialog = form.closest('dialog') as HTMLDialogElement, row = form.closest('details');
+    if (row) { row.open = true; expanded.add(row.querySelector('summary')!.firstChild?.textContent); }
+    openWindow = dialog.id.slice(2); if (!dialog.open) dialog.showModal();
+  };
+  if (part === 'answers') {
+    const answers: Record<string, unknown> = draft.answers && typeof draft.answers === 'object' ? draft.answers : {};
+    document.querySelectorAll<HTMLFormElement>('#mission form[data-answer]').forEach((form) => {
+      const name = mission.queue[Number(form.dataset.answer)]?.name ?? '', text = answers[name];
+      if (typeof text === 'string') { form.querySelector('textarea')!.value = text; delete answers[name]; shown(form); }
+    });
+    // An item answered or removed elsewhere meanwhile has no box: its text is shown to copy, not dropped.
+    const left = Object.entries(answers).filter(([, text]) => typeof text === 'string');
+    const queue = document.querySelector<HTMLDialogElement>('#w-queue');
+    if (left.length && queue) {
+      queue.querySelector('.wbody')!.insertAdjacentHTML('afterbegin', '<article class="card" data-kept><h2>Kept from before sign-in</h2><p class="muted">Answered or removed elsewhere since; copy your text if you still need it.</p>'
+        + left.map(([name, text]) => `<p><b>${escape(name)}</b></p><pre>${escape(String(text))}</pre>`).join('') + '</article>');
+      openWindow = 'queue'; if (!queue.open) queue.showModal();
+    }
+    draft.answers = {};
+  } else {
+    const form = document.querySelector<HTMLFormElement>('#mission form[data-idea]'), idea = draft.idea;
+    if (!form || !idea || typeof idea.name !== 'string' || typeof idea.text !== 'string') return;
+    const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement;
+    field('name').value = idea.name; field('text').value = idea.text; field('needs').checked = idea.needs === true;
+    shown(form); draft.idea = null;
+  }
+  try { if (draft.idea) localStorage.setItem('p9-mission-draft', JSON.stringify(draft)); else localStorage.removeItem('p9-mission-draft'); } catch {}
+}
 const forgetMission = () => { try { localStorage.removeItem('p9-mission'); localStorage.removeItem('p9-mission-hub'); } catch {} };
 let lastMission: any = kept('p9-mission'), lastHub: Hub | null = kept('p9-mission-hub'), missionDrawn = false;
 async function loadMission(cached = false) {
@@ -1013,7 +1075,7 @@ async function loadMission(cached = false) {
       + win('pages', 'Pages', data.pages.length, escape(data.pages.map((item: Item) => item.title).join(' · ')) || 'No pages.',`<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
     missionDrawn = true;
-    if (!cached) { lastMission = data; keep('p9-mission', data); }
+    if (!cached) { lastMission = data; keep('p9-mission', data); keptMission('answers'); }
   } catch { if (cached) lastMission = null; else if (!missionDrawn) one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
   if (lastHub) void loadHub(true); // the redraw above emptied #hub: refill it from memory, not from the wire
   if (!cached) void loadHub();
@@ -1080,6 +1142,7 @@ async function loadHub(cached = false) {
     + win('work', 'Workspace', o.ideas, `ideas · ${o.needs_done} punch-list · + New idea`, `<article class="card"><h2>Workspace</h2><p>${o.ideas} ideas not researched · ${o.needs_done} punch-list items</p>${audit}</article>`
     + row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>'))
     + win('logs', 'Logs', o.logs.length, o.logs[0] ? escape(o.logs[0].name) : 'No logs.', logs); });
+  if (!cached) keptMission('idea');
   if (o.notices === null && !cached) setTimeout(() => void loadHub(), 15000);
 }
 one('#mission').addEventListener('click', (event) => {
@@ -1140,7 +1203,7 @@ one('#mission').addEventListener('submit', async (event) => {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
     note.textContent = result.status === 201 ? `Saved ${result.body.path}.` : `Not saved: ${result.body.error ?? result.status}`;
-    if (result.status === 201) setTimeout(() => void loadHub(), 900);
+    if (result.status === 201) { form.reset(); typed.idea = null; setTimeout(() => void loadHub(), 900); }
   } else if (form.dataset.decide !== undefined) {
     const choice = ((event as SubmitEvent).submitter as HTMLButtonElement)?.value, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/hub/decide', { name: form.dataset.decide, choice });
@@ -1149,7 +1212,7 @@ one('#mission').addEventListener('submit', async (event) => {
   } else if (form.dataset.answer !== undefined) {
     const item = mission.queue[Number(form.dataset.answer)], note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/answer', { name: item.name, hash: item.hash, answer: form.querySelector('textarea')!.value.replace(/\s+/g, ' ').trim() });
-    if (result.status === 200) { note.textContent = 'Answer saved.'; setTimeout(() => void loadMission(), 900); }
+    if (result.status === 200) { note.textContent = 'Answer saved.'; form.querySelector('textarea')!.value = ''; delete typed.answers[item.name]; setTimeout(() => void loadMission(), 900); }
     else note.textContent = result.status === 409 ? 'The file changed since it loaded. Refresh and answer again.' : `Not saved: ${result.body.error ?? result.status}`;
   }
 });
@@ -1366,6 +1429,24 @@ addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
 // L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
 online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+// P2: coming back to the app asks the daemon at once, so a session that ended meanwhile goes to the login now (request()),
+// with the drafts kept, not on the next Save, Send or Stop.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && navigator.onLine) void request('/agent-lock').catch(() => {}); });
+// P2: the file text kept by toLogin() comes back in the editor over the version it was read as, so Save still refuses
+// to overwrite a file that changed on disk meanwhile.
+void (async function keptFile() {
+  let kept: { path?: unknown; root?: unknown; hash?: unknown; content?: unknown; text?: unknown } | null = null;
+  try { kept = JSON.parse(localStorage.getItem('p9-file-draft') ?? 'null'); } catch {}
+  if (!kept || typeof kept.path !== 'string' || typeof kept.hash !== 'string' || typeof kept.text !== 'string') return;
+  const root = typeof kept.root === 'string' ? kept.root : undefined;
+  if (!await openFile(kept.path, root)) return;
+  localStorage.removeItem('p9-file-draft');
+  state.file = { path: kept.path, hash: kept.hash, content: typeof kept.content === 'string' ? kept.content : '', root };
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: kept.text } });
+  one('#fileState').textContent = 'Kept through sign-in, not saved'; show('files');
+})();
+if (localStorage.getItem('p9-mission-draft')) show('mission'); // P2: put back by keptMission() when Mission draws
+
 void first.then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');
 // Item 19 (threat model row 65): on the phone an artifact opens in the full-screen sheet, the side panel's phone form

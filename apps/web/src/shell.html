@@ -70,6 +70,11 @@
   <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
 </div>
 
+<!-- D20: while this window connects to a remote, a black hole turning instead of a blank window. Shell.tsx opens and closes it. -->
+<dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"></div>
+  <h2 id="connT">Connecting</h2><p id="connWhy" class="muted" role="status" aria-live="polite"></p>
+  <button data-slot="button" data-variant="outline" data-size="sm" id="connLocal">Use this computer instead</button></dialog>
+
 <!-- Landing page (Builder, plan.md "Landing page"): the black hole intro, then a greeting, the focus modes and the pets. -->
 <dialog id="land" class="land" tabindex="-1" aria-labelledby="landHi" data-stage="intro" data-pending>
   <canvas id="landSky" aria-hidden="true"></canvas>
@@ -177,7 +182,7 @@
     <div class="dlg-foot"><button type="button" data-slot="button" data-variant="outline" id="amClose">Close</button><button type="button" data-slot="button" data-variant="outline" id="amWeb" hidden>Open on GitHub</button><button type="submit" data-slot="button" data-variant="default" id="amSend" disabled>Send</button></div>
   </form>
 </dialog>
-<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="toasts" id="toasts" popover="manual" aria-live="polite"></div>
 <dialog id="picDlg" class="pic" aria-label="Picture"><img alt=""></dialog>
 <dialog id="phoneDlg" aria-labelledby="phoneT">
   <div class="dlg-head"><div><h2 id="phoneT">Continue on phone</h2></div></div>
