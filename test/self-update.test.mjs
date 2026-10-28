@@ -430,7 +430,7 @@ test('update: --update-root, --update-archive and --update-turn-ms outside the t
 
 // K4: a path becomes its name; a URL in the same line stays whole.
 test('update steps: paths become file names, URLs stay whole', () => {
-  assert.deepEqual(names(["rename '/home/a/p9/source.new-x' failed", '/srv/p9/next gone, see https://github.com/x/y/issues/1']),
+  assert.deepEqual(names(["rename '/srv/a/p9/source.new-x' failed", '/srv/p9/next gone, see https://github.com/x/y/issues/1']),
     ["rename 'source.new-x' failed", 'next gone, see https://github.com/x/y/issues/1']);
 });
 
