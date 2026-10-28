@@ -1,4 +1,4 @@
-// Send to server (D14, threat model row 51): a Claude chat moves, between turns, from this computer's P9 to a server's P9.
+// Send to server (D14, threat model row 51): a Claude or Codex chat moves, between turns, from this computer's P9 to a server's P9.
 // The sending daemon: sendAway freezes the chat (state moving; prompts, Stop and Hand off are refused), stages its P9
 // history and says what the move needs; part hands the transcript and history out in pieces; moved settles it, moved for
 // good or back to stopped. The receiving daemon: take appends the pieces, land checks them and the files the chat
@@ -16,10 +16,17 @@ const KINDS = ['transcript', 'events'];
 // Raw bytes a piece: as base64 in JSON it stays well under the daemon's 12 MiB body limit.
 export const PIECE = 4 * 1024 * 1024;
 const MAX_PART = 512 * 1024 * 1024, MAX_FILES = 500;
+// An upload nobody finished (app quit, lost link) is swept after this long (Builder, 2026-10-27: 6 h); the sweep runs at
+// daemon start and every hour.
+export const ABANDONED = 6 * 3600_000;
+const SWEEP_EVERY = 3600_000;
+// The sender's old folder, as the moved note puts it in the agent's prompt: an absolute path (POSIX or Windows), at most
+// 1024 characters, with no control or format character and no ']' (the note's own end), so it cannot add instructions.
+const fromOk = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && (path.posix.isAbsolute(value) || path.win32.isAbsolute(value))
+  && !/[\p{Cc}\p{Cf}\]]/u.test(value);
 // The Hand off host check (remote.mjs HOST), for the host named in a moved event.
 const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
 const refused = (status, error, extra) => ({ status, error, ...extra });
-const CODEX = 'Codex chats cannot move to the server yet: their history lives in Codex\'s own files. Claude chats can.';
 const BUSY = 'Finish or stop the turn first, then send the chat to the server.';
 const sha256 = (file) => new Promise((resolve, reject) => {
   const hash = createHash('sha256');
@@ -32,14 +39,30 @@ const projects = () => path.join(process.env.P9_TEST_HOME || os.homedir(), '.cla
 // The folder Claude Code keeps a working directory's sessions in: every non-alphanumeric made '-' (the Agent SDK's rule).
 // ponytail: past 200 characters the SDK adds a hash; claude-agent-acp's resume searches every project folder, so it still resumes.
 const projectFolder = (cwd) => cwd.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
-// A session's transcript in any project folder, as claude-agent-acp's findTranscript looks it up.
-async function transcriptOf(session) {
+// Codex's own folder (item 10): agents get no CODEX_HOME (child-env.mjs), so it is HOME's .codex. Codex keeps a chat as
+// sessions/YYYY/MM/DD/rollout-<time>-<session>.jsonl and resumes it by id: its state database first, then by file name
+// under sessions/, so a rollout put back at the same place on the server resumes there.
+const codexSessions = () => path.join(process.env.P9_TEST_HOME || os.homedir(), '.codex', 'sessions');
+const ROLLOUT = /^(\d{4})\/(\d{2})\/(\d{2})\/rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f-]{36})\.jsonl$/;
+// A session's transcript: Claude's in any project folder, as claude-agent-acp's findTranscript looks it up; Codex's
+// rollout by its name in the day folders, newest first.
+// ponytail: walks every day folder Codex has; a few thousand stats on a years-old ~/.codex, once per move.
+async function transcriptOf(session, provider = 'claude') {
+  if (provider === 'codex') {
+    const root = codexSessions(), names = async (dir) => (await readdir(dir).catch(() => [])).filter((n) => /^\d+$/.test(n)).sort().reverse();
+    for (const y of await names(root)) for (const m of await names(path.join(root, y))) for (const d of await names(path.join(root, y, m))) {
+      const name = (await readdir(path.join(root, y, m, d)).catch(() => [])).find((n) => ROLLOUT.exec(y + '/' + m + '/' + d + '/' + n)?.[4] === session);
+      if (name && (await stat(path.join(root, y, m, d, name)).catch(() => null))?.isFile()) return path.join(root, y, m, d, name);
+    }
+    return null;
+  }
   for (const folder of await readdir(projects()).catch(() => [])) {
     const file = path.join(projects(), folder, session + '.jsonl');
     if ((await stat(file).catch(() => null))?.isFile()) return file;
   }
   return null;
 }
+const AGENT = { claude: 'Claude Code', codex: 'Codex' };
 // A workspace-relative path a manifest names: no absolute path, no '..', no empty or '.' part.
 const relative = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !value.includes('\0') && !path.isAbsolute(value)
   && value.split(/[\\/]/).every((part) => part && part !== '.' && part !== '..');
@@ -50,6 +73,41 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
   const cwdOf = (conversation) => conversation.folder ? path.join(workspace, conversation.folder) : workspace;
   const unfreeze = (id) => db.prepare("UPDATE conversations SET state = 'stopped' WHERE id = ? AND state = 'moving'").run(id).changes > 0;
   const appending = new Set();
+
+  // Abandoned uploads (item 6, row 51): an upload here older than the limit whose chat never landed, the sender's staged
+  // history of a chat that is no longer moving, and a file send's staging (item 23) older than the limit. A piece being
+  // appended is never touched. Each removal is logged without its path.
+  async function sweep(now = Date.now()) {
+    if (!moves) return;
+    const gone = async (file, kind) => {
+      const info = await stat(file).catch(() => null);
+      if (!info) return;
+      await rm(file, { force: true });
+      console.error(JSON.stringify({ event: 'P9_MOVE_SWEPT', kind, bytes: info.size }));
+    };
+    for (const name of await readdir(moves).catch(() => [])) {
+      const file = staged(name), incoming = /^in-([0-9a-f-]{36})\.(transcript|events)$/.exec(name), outgoing = /^([0-9a-f-]{36})\.events$/.exec(name);
+      if (incoming && ID.test(incoming[1]) && !appending.has(file) && !row(incoming[1])) {
+        const info = await stat(file).catch(() => null);
+        if (info && now - info.mtimeMs > ABANDONED && !appending.has(file)) await gone(file, 'upload');
+      } else if (outgoing && ID.test(outgoing[1]) && row(outgoing[1])?.state !== 'moving') await gone(file, 'staged');
+    }
+    // Send files' staging (xfer.mjs, by its own upload id): a piece being appended touches only its own file, not the
+    // folder, so the folder goes only when it and every piece in it are older than the limit.
+    const xfer = path.join(ownership, 'xfer');
+    for (const name of await readdir(xfer).catch(() => [])) {
+      if (!/^in-[0-9a-f-]{36}$/.test(name)) continue;
+      const dir = path.join(xfer, name), pieces = await readdir(dir).catch(() => null);
+      const infos = pieces && await Promise.all([dir, ...pieces.map((piece) => path.join(dir, piece))].map((file) => stat(file).catch(() => null)));
+      if (!infos?.[0] || infos.some((info) => info && now - info.mtimeMs <= ABANDONED)) continue;
+      await rm(dir, { force: true, recursive: true });
+      console.error(JSON.stringify({ event: 'P9_MOVE_SWEPT', kind: 'files', bytes: infos.slice(1).reduce((n, info) => n + (info?.size ?? 0), 0) }));
+    }
+  }
+  if (moves) {
+    recovered?.then(() => sweep()).catch(() => {});
+    setInterval(() => sweep().catch(() => {}), SWEEP_EVERY).unref();
+  }
 
   // The files the chat changed: its edit, delete and move tool calls' locations (ACP), workspace-relative, each with its
   // sha256 here (null: not a file here now, so it must not be one on the server either). Files outside the workspace
@@ -78,12 +136,12 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       await recovered;
       const conversation = ID.test(id) && row(id);
       if (!conversation) return refused(404, 'unknown-conversation');
-      if (conversation.provider !== 'claude') return refused(409, 'move-unavailable', { message: CODEX });
-      if (!ID.test(conversation.session ?? '')) return refused(409, 'move-unavailable', { message: 'This chat has no Claude session yet. Send it a message first.' });
+      if (!AGENT[conversation.provider]) return refused(409, 'move-unavailable');
+      if (!ID.test(conversation.session ?? '')) return refused(409, 'move-unavailable', { message: 'This chat has no ' + AGENT[conversation.provider] + ' session yet. Send it a message first.' });
       if (!moves) return refused(503, 'move-unavailable', { message: 'This P9 cannot stage a move.' });
       if (conversation.state === 'turn') return refused(409, 'turn-running', { message: BUSY });
       if (conversation.state === 'moved') return refused(409, 'moved', { message: 'This chat has moved already.' });
-      if (!await transcriptOf(conversation.session)) return refused(409, 'transcript-missing', { message: 'Claude Code\'s transcript of this chat is not on this computer, so it cannot move.' });
+      if (!await transcriptOf(conversation.session, conversation.provider)) return refused(409, 'transcript-missing', { message: AGENT[conversation.provider] + '\'s history of this chat is not on this computer, so it cannot move.' });
       // moving already: a retry after a lost answer; the chat is frozen and nothing has changed since.
       if (conversation.state !== 'moving') {
         if (!['idle', 'running', 'stopped'].includes(conversation.state)) return refused(409, conversation.state, { message: 'The chat is ' + conversation.state + '. Try again in a moment.' });
@@ -103,9 +161,11 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
           try { lines.push(JSON.stringify({ type: event.type, at: event.at, data: JSON.parse(event.data) })); } catch {}
         }
         await writeFile(staged(id + '.events'), lines.join('\n') + '\n', { mode: 0o600 });
-        const transcript = await transcriptOf(conversation.session);
+        const transcript = await transcriptOf(conversation.session, conversation.provider);
         const part = async (file) => ({ bytes: (await stat(file)).size, sha256: await sha256(file) });
-        return { status: 200, session: conversation.session, title: conversation.title, folder: conversation.folder, created: conversation.created, from: cwdOf(conversation),
+        // Codex: where the rollout goes on the server, the same day folder and name (no path of this computer's).
+        const rollout = conversation.provider === 'codex' ? path.relative(codexSessions(), transcript).split(path.sep).join('/') : undefined;
+        return { status: 200, provider: conversation.provider, ...(rollout && { rollout }), session: conversation.session, title: conversation.title, folder: conversation.folder, created: conversation.created, from: cwdOf(conversation),
           parts: { transcript: await part(transcript), events: await part(staged(id + '.events')) }, ...files };
       } catch (error) { console.error(JSON.stringify({ event: 'P9_MOVE_STAGE_FAILED', code: error.code })); return refused(500, 'move-stage-failed'); }
     },
@@ -114,7 +174,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       const conversation = ID.test(id) && row(id);
       if (!conversation || conversation.state !== 'moving') return refused(409, 'not-moving');
       if (!KINDS.includes(kind) || !Number.isSafeInteger(offset) || offset < 0) return refused(400, 'request-refused');
-      const file = kind === 'events' ? staged(id + '.events') : await transcriptOf(conversation.session);
+      const file = kind === 'events' ? staged(id + '.events') : await transcriptOf(conversation.session, conversation.provider);
       const handle = file && await open(file, 'r').catch(() => null);
       if (!handle) return refused(409, 'move-stage-missing');
       try {
@@ -142,8 +202,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
           || typeof body.data !== 'string' || body.data.length > Math.ceil(PIECE / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       if (row(id)) return refused(409, 'already-here');
-      // ponytail: an abandoned upload (moves/in-<id>.*, up to 512 MiB per kind) is removed only by a later land of the
-      // same id; there is no sweep. Fine while only the user's own desktop, over ssh, can send one.
+      // An abandoned upload (moves/in-<id>.*, up to 512 MiB per kind) goes with Cancel, a later land of the same id, or the sweep.
       const file = staged('in-' + id + '.' + body.kind);
       if (appending.has(file)) return refused(409, 'busy');
       appending.add(file);
@@ -156,10 +215,25 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         return { status: 200, size: size + bytes.length };
       } finally { appending.delete(file); }
     },
+    // Cancel during the upload: what the server has of it goes at once. A chat already here is not touched.
+    // Named apart from chat.mjs's cancel (a turn's), which this object is spread beside.
+    async cancelUpload(id) {
+      if (!ID.test(id)) return refused(400, 'request-refused');
+      if (!moves) return refused(503, 'move-unavailable');
+      if (row(id)) return refused(409, 'already-here');
+      const files = KINDS.map((kind) => staged('in-' + id + '.' + kind));
+      if (files.some((file) => appending.has(file))) return refused(409, 'busy');
+      await Promise.all(files.map((file) => rm(file, { force: true })));
+      return { status: 200, cancelled: true };
+    },
+    sweep,
     async land(id, body) {
       const part = (value) => value && Number.isSafeInteger(value.bytes) && value.bytes >= 0 && value.bytes <= MAX_PART && HASH.test(value.sha256);
+      // Codex (item 10): a provider of the two, and its rollout's day folder and name, which must name this session.
+      const provider = body?.provider ?? 'claude';
+      if (!AGENT[provider] || (provider === 'codex' ? typeof body.rollout !== 'string' || ROLLOUT.exec(body.rollout)?.[4] !== body.session : body.rollout !== undefined)) return refused(400, 'request-refused');
       if (!ID.test(id) || !ID.test(body?.session ?? '') || typeof body.title !== 'string' || body.title.length > 120 || typeof body.folder !== 'string'
-          || typeof body.from !== 'string' || body.from.length > 4096 || !Number.isSafeInteger(body.created) || !KINDS.every((kind) => part(body.parts?.[kind]))
+          || !fromOk(body.from) || !Number.isSafeInteger(body.created) || !KINDS.every((kind) => part(body.parts?.[kind]))
           || !Array.isArray(body.files) || body.files.length > MAX_FILES || !body.files.every((f) => relative(f?.path) && (f.sha256 === null || HASH.test(f.sha256)))) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       const here = row(id);
@@ -194,11 +268,13 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         events.push(event);
       }
       const cwd = body.folder ? path.join(workspace, body.folder) : workspace;
-      // The transcript goes where Claude Code keeps this folder's sessions. One already here for this session is never replaced.
-      const existing = await transcriptOf(body.session);
+      // The transcript goes where Claude Code keeps this folder's sessions, a rollout in the same day folder Codex had it in.
+      // One already here for this session is never replaced.
+      const existing = await transcriptOf(body.session, provider);
       if (existing && await sha256(existing) !== body.parts.transcript.sha256) return refused(409, 'session-here');
       if (!existing) {
-        const folder = path.join(projects(), projectFolder(cwd)), target = path.join(folder, body.session + '.jsonl');
+        const target = provider === 'codex' ? path.join(codexSessions(), ...body.rollout.split('/')) : path.join(projects(), projectFolder(cwd), body.session + '.jsonl');
+        const folder = path.dirname(target);
         await mkdir(folder, { recursive: true, mode: 0o700 });
         await copyFile(files.transcript, target + '.p9-tmp');
         await chmod(target + '.p9-tmp', 0o600);
@@ -209,8 +285,8 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       const insert = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
       db.exec('BEGIN');
       try {
-        db.prepare("INSERT INTO conversations (id, provider, title, session, state, created, folder) VALUES (?, 'claude', ?, ?, 'stopped', ?, ?)")
-          .run(id, body.title, body.session, body.created, body.folder);
+        db.prepare("INSERT INTO conversations (id, provider, title, session, state, created, folder) VALUES (?, ?, ?, ?, 'stopped', ?, ?)")
+          .run(id, provider, body.title, body.session, body.created, body.folder);
         for (const event of events) insert.run(id, event.type, JSON.stringify(event.data), event.at);
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -222,14 +298,14 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
 }
 
 // The first prompt after a move: the transcript names this chat's old folder, so the agent is told where it is now.
-// The old folder is the sender's own word, put in the prompt as-is: trusted only because the sender is the user's own
-// desktop over ssh (row 51).
+// The old folder is the sender's word, checked by land (fromOk) and again here for a row stored before that check.
+// chat.mjs keeps the note in the message's user event, so the history shows what the agent was told.
 export function movedNote(db, id) {
   const last = db.prepare("SELECT type, data FROM events WHERE conversation = ? AND type IN ('moved-in', 'user') ORDER BY cursor DESC LIMIT 1").get(id);
   if (last?.type !== 'moved-in') return null;
   let data;
   try { data = JSON.parse(last.data); } catch { return null; }
-  if (typeof data?.from !== 'string' || typeof data.to !== 'string' || data.from === data.to) return null;
+  if (!fromOk(data?.from) || typeof data.to !== 'string' || data.from === data.to) return null;
   return `[P9: this chat moved here from another computer. Its working folder there was ${data.from}; here it is ${data.to}. `
     + `A path under ${data.from} is at the same place under ${data.to}.]\n\n`;
 }

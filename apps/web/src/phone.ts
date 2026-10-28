@@ -9,6 +9,11 @@ type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | nul
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+// L1: the message in the box is kept in this phone's storage (label() runs on every change of it), so a reload or a sign-in
+// does not eat it. "restored" is the one kept from before this page loaded, waiting for its chat to open (route()).
+let restored: { id: string; text: string } | null = (() => {
+  try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
+})();
 const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
@@ -68,9 +73,27 @@ function fit() {
 }
 window.visualViewport?.addEventListener('resize', fit); window.visualViewport?.addEventListener('scroll', fit); addEventListener('resize', fit); addEventListener('orientationchange', () => { tallest = 0; fit(); });
 fit();
+// L1: sign-in is the one place this page is thrown away, so what is unsent goes to storage first (the draft: label()) and
+// the chat is named in the address, which the login page hands back (an exact #chat=<uuid>).
+function toLogin() {
+  forgetMission(); localStorage.removeItem('p9-csrf');
+  location.replace('/login' + (openId ? '#chat=' + encodeURIComponent(openId) : ''));
+}
+// L1: the CSRF token outlives a closed or discarded tab (sessionStorage does not, and a phone drops it when the app is
+// swiped away while the 12-hour cookie lives on), so a reopened app does not sign in again. It is kept no longer than the
+// session itself (auth.mjs SESSION_MS), and a 401 or a login drops it.
+const CSRF_MS = 12 * 3600 * 1000;
+function csrfToken() {
+  const tab = sessionStorage.getItem('p9-csrf'); if (tab) return tab;
+  try {
+    const kept = JSON.parse(localStorage.getItem('p9-csrf') ?? 'null');
+    if (typeof kept?.token === 'string' && Date.now() - Number(kept.at) < CSRF_MS) { sessionStorage.setItem('p9-csrf', kept.token); return kept.token; }
+  } catch {}
+  return null;
+}
 async function request(path: string) {
   const response = await fetch(path, { cache: 'no-store' });
-  if (response.status === 401) { forgetMission(); location.replace('/login'); }
+  if (response.status === 401) toLogin();
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(String(body.error ?? response.status)), { body });
   return body;
@@ -93,12 +116,11 @@ async function mutate(path: string, body: Json) {
   keepPending(key, pending);
   const relogin = () => {
     keepPending(key, { ...pending, used: true });
-    forgetMission();
-    location.replace('/login');
+    toLogin();
     return new Error('login-required');
   };
-  // A reopened app keeps its cookie but not sessionStorage's CSRF token: log in again for a fresh one (release r1 R1-4).
-  const csrf = sessionStorage.getItem('p9-csrf');
+  // A reopened app keeps its cookie and, for the session's 12 hours, its CSRF token (csrfToken); with neither, log in again for a fresh one.
+  const csrf = csrfToken();
   if (!csrf) throw relogin();
   let response: Response;
   try { response = await fetch(path, { method: path.startsWith('/files') ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
@@ -268,6 +290,8 @@ function build(picked: string) {
   for (const event of state.events) {
     if (event.conversation !== picked) continue;
     const data = (event.data && typeof event.data === 'object' ? event.data : {}) as Json, kind = String(event.type), last = blocks.at(-1);
+    // A moved chat's first message also carried P9's note about the folder: shown, so the history has what the agent was told.
+    if (kind === 'user' && typeof data.note === 'string') add('note', 'P9 told the agent · ' + data.note.trim());
     if (kind === 'user') add('user', data.text, { sent: (Array.isArray(data.images) ? data.images : []).map((image: Json) => String(image?.hash)).filter((hash: string) => /^[0-9a-f]{64}$/.test(hash)) });
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
@@ -397,7 +421,7 @@ let barSig = '';
 function chatBar(id: string, run: string) {
   const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
-  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div><span class="run" data-run="${run}" role="img" aria-label="${run === 'working' ? 'Working' : run === 'needs' ? 'Needs you' : 'Stopped'}"></span><span class="sync" role="img" aria-label="Live"></span>`;
+  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '<span class="run" data-run="idle" role="img" aria-label="Stopped"></span>' : `<button type="button" class="run" id="stopTurn" data-run="${run}" aria-label="Stop"></button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
   barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
 }
@@ -414,6 +438,9 @@ function route(id: string) {
   if (!id) { pushed = false; mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] }); online(); renderList(); return; }
   if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one<HTMLElement>('#jump').hidden = true; }
   render();
+  // L1: the unsent message from before the page was last thrown away (a sign-in, a reload) goes back in its own chat's box.
+  const box = one<HTMLTextAreaElement>('#prompt');
+  if (restored?.id === id && !box.value) { box.value = restored.text; label(); }
 }
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
 function back() { if (pushed) window.history.back(); else { window.history.replaceState(null, '', location.pathname + location.search); route(''); } }
@@ -452,13 +479,24 @@ one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
 one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 one<HTMLElement>('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
 one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
+// L3: a turn that runs can be stopped from the top bar, where its status ring is (the composer's send button turns into Stop
+// only when the box is empty and nothing is queued). The route is the composer's and the desktop's: POST /chat/:id/cancel.
+async function stopChat(id: string) {
+  if (!id) return;
+  const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+  if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
+  await fetchEvents(); render();
+}
 one('[data-bar="chat"]').addEventListener('click', (event) => {
   const button = (event.target as Element).closest('button'); if (!button) return;
   if (button.dataset.back !== undefined) back();
+  else if (button.id === 'stopTurn') stopChat(openId);
   else if (button.id === 'newChat') openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>${startIn()}`);
   else if (button.id === 'modelBtn') {
     const model = one<HTMLSelectElement>('#model'), options = [...model.options];
     openSheet('Model', options.length ? options.map((option) => `<button type="button" class="opt" data-model="${escape(option.value)}" aria-checked="${option.selected}">${escape(option.textContent)}</button>`).join('') : '<div class="empty">This agent lists no models.</div>');
+    // L4: Send to server is desktop-only by design (a chat on this phone already runs on the server), so say where it lives.
+    one('#sheetBody').insertAdjacentHTML('beforeend', '<p class="empty">Send to server is in the desktop app, on a chat that runs on that computer. A chat here is already on the server.</p>');
   }
 });
 one('#sheetBody').addEventListener('click', async (event) => {
@@ -470,7 +508,9 @@ one('#sheetBody').addEventListener('click', async (event) => {
     sheet.close();
     const result = await mutate('/chat', { provider: make.dataset.new, ...(folder && { folder }) });
     if (result.status !== 201) return;
-    const last = localStorage.getItem('p9-mode:' + make.dataset.new); if (last) startPick.set(String(result.body.conversation), last);
+    // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
+    const last = localStorage.getItem('p9-mode:' + make.dataset.new);
+    if (last && (!(last in LOOSE) || localStorage.getItem('p9-mode-ok:' + last))) startPick.set(String(result.body.conversation), last);
     await loadChat(); openChat(String(result.body.conversation));
   }
 });
@@ -566,6 +606,10 @@ function label() {
   const local = !navigator.onLine || asking(id) || queued(id).length > 0, busy = !local && running(id);
   const empty = !one<HTMLTextAreaElement>('#prompt').value.trim() && !(attached.get(id) ?? []).length;
   const box = one<HTMLTextAreaElement>('#prompt');
+  if (!restored || box.value) {
+    restored = null;
+    try { if (box.value.trim()) localStorage.setItem('p9-draft', JSON.stringify({ id, text: box.value })); else localStorage.removeItem('p9-draft'); } catch {}
+  }
   box.placeholder = 'Message ' + (provider(id) === 'codex' ? 'Codex' : 'Claude');
   // The box grows with its text from one line to six (phone.css caps it), then scrolls; every change of the text ends
   // here. ponytail: by hand, as iOS Safari has no field-sizing.
@@ -647,7 +691,7 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { input.value = ''; note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
+  if (result.status === 202) { input.value = ''; label(); note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
   else note(`Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
@@ -846,11 +890,20 @@ one<HTMLButtonElement>('[data-key="paste"]').onclick = async (event) => {
   let text: string;
   try { text = await navigator.clipboard.readText(); } catch { return termState('Paste not allowed: the browser did not share the clipboard', term.open); }
   if (performance.now() - at > 4000) return termState('Paste took too long: tap Paste again', term.open);
-  if (text) term.sendKeys(text, at);
+  if (text) term.paste(text, at);
   term.focus();
 };
-// T1: a tap on the terminal opens the keyboard.
+// T2: a tap on the terminal opens the keyboard. A finger's touchend on xterm's screen never becomes a click (the click this
+// line used to wait for did not come), so a tap is read from the touch itself: lifted within 10 px and 600 ms of going down.
+// Focus has to happen inside that event for a phone to raise its keyboard. The click stays for a mouse.
 one('#screen').addEventListener('click', () => term.focus());
+let tapFrom: { x: number; y: number; at: number } | null = null;
+one('#screen').addEventListener('touchstart', (event) => { const touch = (event as TouchEvent).touches[0]; tapFrom = (event as TouchEvent).touches.length === 1 ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp } : null; }, { passive: true });
+one('#screen').addEventListener('touchend', (event) => {
+  const touch = (event as TouchEvent).changedTouches[0];
+  if (tapFrom && Math.hypot(touch.clientX - tapFrom.x, touch.clientY - tapFrom.y) < 10 && event.timeStamp - tapFrom.at < 600) term.focus();
+  tapFrom = null;
+}, { passive: true });
 addEventListener('resize', term.fit); window.visualViewport?.addEventListener('resize', term.fit); // the screen fills the column, which follows a keyboard
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
 termState('No terminal open');
@@ -1199,5 +1252,7 @@ one<HTMLButtonElement>('#loadDisk').onclick = () => {
 
 addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
-online(); void loadChat().then(listen); void loadUsage();
+// L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
+online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+void first.then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');

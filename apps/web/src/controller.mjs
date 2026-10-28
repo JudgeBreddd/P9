@@ -87,7 +87,9 @@ function pickerSelects(s) {
 // picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
 // D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
 const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent].includes(m) ? m : ''; };
-const startMode = agent => { const m = defaultMode(agent) || localStorage.getItem('p9-mode:' + agent); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
+// A loosened last pick carries to a new chat only after "don't show again" (review #2): a plain "Turn on" was for that chat.
+// The D2 default was confirmed in Settings for new chats, so it holds as set.
+const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
 const looseOk = (agent, m) => new Promise(done => {
   const d = $('#looseDlg'); $('#looseT').textContent = `Turn on ${m} for ${names[agent]}?`; $('#looseP').textContent = LOOSE[m]; d.returnValue = '';
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
@@ -97,6 +99,8 @@ const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startM
   focus: 'chat', termOpen: { chat: false, dev: false, mission: false }, termMode: { chat: 'float', dev: 'drawer', mission: 'float' },
   snoozed: new Set(), quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
   docs: {}, dev: { tabs: [], active: null } };
+// Send to server's drawing (items 24, 25; below with the black hole): pull is the pane pulled into it.
+const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
 const names = { claude: 'Claude', codex: 'Codex' };
 const focusNames = { chat: 'Chat Focus', dev: 'Dev Focus', mission: 'Mission Control' };
 /* icons */
@@ -507,7 +511,7 @@ function pane(s, i, bare) {
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
-  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''} aria-label="${names[s.agent]} chat">
+  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''}${FX.pull === s.id ? ' data-pulled' : ''} aria-label="${names[s.agent]} chat">
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span><span class="name">${names[s.agent]}</span>
       <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
       <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
@@ -517,9 +521,8 @@ function pane(s, i, bare) {
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
-      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host ? (s.agent === 'claude'
-        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>`
-        : `<button data-slot="button" data-variant="ghost" data-size="sm" disabled title="Codex chats cannot move to the server yet: their history lives in Codex's own files. Claude chats can.">Send to server</button>`) : ''}
+      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
@@ -601,12 +604,7 @@ function paint(root, ss, only) {
       showTerminal(r.body.terminal);
     });
     // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
-    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => {
-      b.disabled = true;
-      const r = await window.p9.sendToServer(s.id).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
-      if (r.status !== 200 && r.body?.error !== 'move-failed') { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
-      b.disabled = false;
-    });
+    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => { b.disabled = true; await sendAway(s); b.disabled = false; });
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
     p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome(2));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
@@ -738,11 +736,81 @@ function renderTree() {
     $('#tree').innerHTML = `<p class="where muted mono truncate" title="${esc(root || 'Workspace')}">${esc(root || 'Workspace')}</p>${liveTree(root, 0, q, cur)}`;
     $('#tree').querySelectorAll('[data-ldir]').forEach(b => b.onclick = () => { const p = b.dataset.ldir; files.open.has(p) ? files.open.delete(p) : files.open.add(p); renderTree(); });
     $('#tree').querySelectorAll('[data-lfile]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.lfile, live: true }));
+    $('#xferBtn').hidden = !window.p9?.xferPlan || !!serverInfo?.host;
+    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your server (Settings > Server)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
     return;
   }
   $('#tree').innerHTML = tree(M.files, 0, q, S.modal?.kind === 'file' && mdl.open ? S.modal.name : null);
   $('#tree').querySelectorAll('[data-file]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.file }));
 }
+// Send files (item 23; main's p9:xfer, desktop/xfer.mjs): the files panel's folder goes to the same folder on the server.
+// Main plans and keeps the plan; this asks what the plan cannot settle alone (Builder, 2026-10-27: one choice for the whole
+// list; a delete is asked; a Syncthing folder warns; a limit names its Setting), then shows the send. A plan with nothing
+// to ask sends at once: one button press.
+const XFER_SETTINGS = { fileMiB: ['Largest file to send', 'MiB', 65536], files: ['Most files in one send', 'files', 200000], sendGiB: ['Most data in one send', 'GiB', 1024] }; // desktop/xfer.mjs XFER_LIMITS
+const bytes = n => n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GiB' : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(1) + ' MiB' : Math.ceil(n / 1024) + ' KiB';
+const xfer = { id: null };
+window.p9?.onXfer?.(p => { if (p.id !== xfer.id || !$('#xferDlg').open) return; const bar = $('#xferBar'); if (bar) { bar.max = p.total || 1; bar.value = p.sent; $('#xferNum').textContent = bytes(p.sent) + ' of ' + bytes(p.total); } });
+function xferShow(title, note, body, foot) {
+  $('#xferT').textContent = title; $('#xferP').textContent = note; $('#xferBody').innerHTML = body; $('#xferFoot').innerHTML = foot;
+  if (!$('#xferDlg').open) $('#xferDlg').showModal();
+}
+const xferClose = '<button data-slot="button" data-variant="outline" data-xfer-close>Close</button>';
+function xferWire() { $('#xferDlg').querySelectorAll('[data-xfer-close]').forEach(b => b.onclick = () => { xfer.id = null; $('#xferDlg').close(); }); }
+// A refusal: a limit links its Setting.
+function xferRefused(r) {
+  xferShow('Not sent', r.message || r.error || 'No answer.', '', (r.setting ? '<button data-slot="button" data-variant="default" id="xferSetting">Open Settings</button>' : '') + xferClose);
+  xferWire();
+  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); input?.scrollIntoView({ block: 'center' }); input?.focus(); };
+}
+async function sendFiles() {
+  const folder = fileRoot(), b = $('#xferBtn');
+  b.disabled = true; b.textContent = 'Checking…';
+  const p = await window.p9.xferPlan(folder).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+  b.disabled = false; b.textContent = 'Send files to server';
+  if (p.error) return xferRefused(p);
+  xfer.id = p.id;
+  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
+  if (!p.asked && !p.deletes && !sync.length) {
+    if (!p.send) return xferShow('Nothing to send', where + ' already matches this computer (' + p.same.toLocaleString() + ' files the same).', '', xferClose), xferWire();
+    return xferGo(p, null, false);
+  }
+  xferAsk(p, (choice, deleteToo) => xferGo(p, choice, deleteToo));
+}
+// The prompt for a plan that asks: a Syncthing warning, the files that differ, the deletes. go(choice, deleteToo) runs on a choice;
+// moving: Send to server's prompt for the chat's folder, before the chat is frozen.
+function xferAsk(p, go, moving) {
+  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
+  const list = (items, more) => '<ul class="mono sm" style="max-height:30vh;overflow:auto;margin:0;padding-left:18px">' + items.join('') + (more > 0 ? '<li class="muted">and ' + more.toLocaleString() + ' more</li>' : '') + '</ul>';
+  const warn = sync.length ? '<div class="set-row" data-xfer-syncthing><span><strong>Syncthing already syncs this folder</strong><span class="muted sm">Two copiers on one folder fight: each undoes the other. Found .stfolder at '
+    + sync.map(([side, d]) => esc(d === '..' ? 'a folder above the workspace' : d || 'the workspace') + ' (' + side + ')').join(', ') + '. Send only if Syncthing is off for it.</span></span></div>' : '';
+  const asked = p.asked ? '<div data-xfer-asked><p><strong>' + (p.kind === 'first' ? 'Nothing was sent to this folder from here before, and ' + p.asked.toLocaleString() + ' file' + (p.asked === 1 ? ' differs' : 's differ') + ' between the two.'
+    : p.asked.toLocaleString() + ' file' + (p.asked === 1 ? '' : 's') + ' changed on both sides since your last send.') + '</strong><br><span class="muted sm">'
+    + p.summary.laptopNewer.toLocaleString() + ' newer on the laptop, ' + p.summary.serverNewer.toLocaleString() + ' newer on the server.</span></p>'
+    + list(p.list.map(i => '<li><span>' + esc(i.path) + '</span> <span class="muted">' + esc(i.text) + '</span></li>'), p.asked - p.list.length) + '</div>' : '';
+  const gone = p.deletes ? '<label class="set-row" data-xfer-deletes><input type="checkbox" id="xferDel"><span><strong>Delete on the server too</strong><span class="muted sm">' + p.deletes.toLocaleString() + ' file'
+    + (p.deletes === 1 ? ' was' : 's were') + ' deleted on the laptop since your last send. Unticked, the server keeps ' + (p.deletes === 1 ? 'it' : 'them') + '.</span></span></label>' + list(p.deleteList.map(d => '<li>' + esc(d) + '</li>'), p.deletes - p.deleteList.length) : '';
+  const choices = !p.asked ? [['go', 'default', 'Send']] : p.kind === 'first' ? [['laptop', 'default', 'Laptop wins'], ['newer', 'outline', 'Keep the newer of each']]
+    : [['laptop', 'default', 'Keep the laptop\'s'], ['server', 'outline', 'Keep the server\'s'], ['newer', 'outline', 'Keep the newer of each']];
+  xferShow(p.kind === 'first' ? 'First send to ' + p.host : p.kind === 'conflict' ? 'Files changed on both sides' : 'Send files to ' + p.host,
+    where + ': ' + p.send.toLocaleString() + ' file' + (p.send === 1 ? '' : 's') + ' to send (' + bytes(p.sendBytes) + ').' + (moving ? ' The chat moves once they are there.' : ''),
+    warn + asked + gone + '<p class="muted sm">Every file replaced or deleted, on either side, is kept in that computer\'s P9 recovery folder.</p>',
+    '<button data-slot="button" data-variant="outline" data-xfer-close autofocus>Cancel</button>' + choices.map(([v, look, label]) => '<button data-slot="button" data-variant="' + look + '" data-xfer-choice="' + v + '">' + label + '</button>').join(''));
+  xferWire();
+  $('#xferDlg').querySelectorAll('[data-xfer-choice]').forEach(c => c.onclick = () => go(c.dataset.xferChoice === 'go' ? null : c.dataset.xferChoice, !!$('#xferDel')?.checked));
+}
+async function xferGo(p, choice, deleteToo) {
+  xferShow('Sending to ' + p.host, (p.folder || 'The workspace') + '. Closing this leaves the send running.', '<progress id="xferBar" value="0" max="1" style="width:100%"></progress><p class="muted sm mono" id="xferNum"></p>', xferClose);
+  xferWire();
+  const r = await window.p9.xferRun(p.id, choice, deleteToo).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+  if (r.error === 'limit' || r.error && !r.sent && !r.received && !r.deletedOnServer && !r.deletedHere) return xferRefused(r);
+  const said = [r.sent && r.sent.toLocaleString() + ' sent', r.received && r.received.toLocaleString() + ' taken from the server', r.deletedOnServer && r.deletedOnServer.toLocaleString() + ' deleted on the server',
+    r.deletedHere && r.deletedHere.toLocaleString() + ' deleted here', r.kept && r.kept.toLocaleString() + ' old cop' + (r.kept === 1 ? 'y' : 'ies') + ' kept in recovery'].filter(Boolean);
+  xferShow(r.error ? 'Partly sent' : 'Sent', (said.join(', ') || 'Nothing needed sending') + '.', r.message ? '<p>' + esc(r.message) + '</p>' : '', xferClose);
+  xferWire();
+  files.dirs = {}; renderTree();
+}
+$('#xferBtn').onclick = sendFiles;
 // One doc per file, shared by the Chat file modal and Dev Focus. text is the draft, saved is what
 // is on disk; they differ until an explicit Save (D04: a draft never silently overwrites the file).
 function doc(name) {
@@ -1522,7 +1590,7 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
+let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 async function saveSettings(next) {
   try { settings = window.p9?.setSettings ? await window.p9.setSettings(next) : (localStorage.setItem('p9-settings', JSON.stringify(next)), next); }
   catch { toast({ kind: 'settings', txt: 'Settings not saved', level: 'bad' }, true); }
@@ -1671,12 +1739,16 @@ function renderSettings() {
     + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor (Dev Focus, here and on your phone) cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
     + (missionFiles?.settings ? missionGroup() : '')
     + (serverInfo ? serverRow() : '')
+    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to server (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'settings')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
     + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
   $('#setName').value = settings.name || '';
   $('#setName').onchange = e => saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) });
   $('#setStartLast').onchange = e => saveSettings({ ...settings, startLast: e.target.checked });
+  $('#setBody').querySelectorAll('[data-xfer-limit]').forEach(el => { el.onchange = () => { const k = el.dataset.xferLimit, n = Math.round(Number(el.value));
+    if (!Number.isFinite(n)) { el.value = settings.xfer[k]; return; }
+    saveSettings({ ...settings, xfer: { ...settings.xfer, [k]: Math.min(XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
   $('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
     const a = el.dataset.defaultMode, m = el.value;
@@ -2184,7 +2256,7 @@ function applyChat(ev) {
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -2286,11 +2358,135 @@ async function loadChat() {
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
       for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+      moveReloaded();
     }
     // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
     else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
     try { renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
+}
+
+/* ---------- Send to server: the black hole and the switch (items 24, 25, specs/move-progress-events.md) ---------- */
+// Drawn from main's p9:move stream only; the ledger's moving, moved and move-failed events stay the record. The overlay sits
+// over the moving chat's pane, not in it (panes are morphed on every paint), and in its dialog when the pane is in one.
+// ponytail: one move drawn at a time; another chat's events while one is drawn are not drawn (its ledger events still show).
+const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
+const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending ' + (fxFiles === FX.id ? 'the files and the chat' : 'the chat') + ' to ' + h,
+  landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
+const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+// The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
+// is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
+let fxFiles = null; // the chat whose move sends its folder first, for the uploading words
+async function sendAway(s) {
+  let files = [];
+  if (window.p9.xferPlan) {
+    const p = await window.p9.xferPlan(s.folder || '').catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+    if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (p.message || p.error) }); return renderChats(); }
+    if (!p.syncthing.laptop.length && !p.syncthing.server.length) {
+      const answer = !p.asked && !p.deletes ? [null, false] : await new Promise(done => {
+        xfer.id = p.id;
+        xferAsk(p, (choice, deleteToo) => { done([choice, deleteToo]); $('#xferDlg').close(); }, true);
+        $('#xferDlg').addEventListener('close', () => done(null), { once: true });
+      });
+      xfer.id = null;
+      if (!answer) return; // Cancel: nothing frozen, nothing sent
+      files = [p.id, ...answer];
+    }
+  }
+  fxFiles = files.length ? s.id : null;
+  const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  if (r.body?.error === 'limit') return xferRefused(r.body);
+  // busy: main is moving it already (a window reloaded mid-move); its events draw it.
+  if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
+}
+function fxPlace() {
+  const pane = [...document.querySelectorAll('.pane[data-id]')].find(p => p.dataset.id === FX.id);
+  if (!pane) return;
+  // The pull scales and turns the pane about its centre: the centre stays, the size is its layout size (not the shrunk box).
+  const home = pane.closest('dialog') || document.body, r = pane.getBoundingClientRect(), w = pane.offsetWidth, h = pane.offsetHeight;
+  if (fx.parentElement !== home) home.append(fx);
+  Object.assign(fx.style, { left: r.left + r.width / 2 - w / 2 + 'px', top: r.top + r.height / 2 - h / 2 + 'px', width: w + 'px', height: h + 'px' });
+}
+function fxFrame(now) {
+  FX.raf = requestAnimationFrame(fxFrame);
+  if (now - FX.drawn < 33) return;
+  const dt = FX.drawn ? Math.min(0.1, (now - FX.drawn) / 1000) : 0, k = Math.min(1, (now - FX.t0) / 2400), e = 1 - (1 - k) ** 5;
+  FX.drawn = now;
+  // The landing intro's ignition (30 -> 22), here driven by the move's percent: the hole draws closer as the chat goes in.
+  FX.dist += (30 - 8 * FX.pct / 100 - FX.dist) * Math.min(1, dt * 2);
+  FX.spin += dt * (0.8 + FX.pct / 100);
+  fxPlace();
+  fxSky.size(0.6);
+  fxSky.set({ uDist: FX.dist, uShift: 0, uIgnite: e, uStars: e, uDim: 1 - 0.38 * e, uSpin: FX.spin, uTime: now / 1000 });
+  fxSky.frame();
+}
+function fxStart(m) {
+  Object.assign(FX, { id: m.id, pull: m.id, host: m.host, t0: performance.now(), drawn: 0, spin: 0, dist: 30, pct: 0 });
+  renderChats();
+  fx.hidden = false; fxPlace();
+  requestAnimationFrame(() => fx.toggleAttribute('data-on', true));
+  if (!still && fxSky.ok) FX.raf = requestAnimationFrame(fxFrame);
+  // Three missed heartbeats (5 s each): the move is not touched, the label says so.
+  FX.tick = setInterval(() => { fxPlace(); if (performance.now() - FX.at > 15000 && !fx.hasAttribute('data-wait')) { fx.toggleAttribute('data-wait', true); $('#moveWhat').textContent = 'Waiting for the server…'; } }, 1000);
+}
+function fxEnd() {
+  cancelAnimationFrame(FX.raf); clearInterval(FX.tick);
+  fx.hidden = true; fx.removeAttribute('data-on'); fx.removeAttribute('data-wait');
+  Object.assign(FX, { id: null, pull: null, raf: 0, tick: 0 });
+  renderChats();
+}
+function onMove(m) {
+  if (!m?.id || (FX.id && FX.id !== m.id)) return;
+  if (!FX.id) fxStart(m);
+  FX.at = performance.now(); fx.removeAttribute('data-wait');
+  if (Number.isFinite(m.percent)) FX.pct = m.percent;
+  $('#moveWhat').textContent = FX_WHAT[m.phase]?.(m.host) || 'Moving the chat to ' + m.host;
+  $('.move-bar').style.setProperty('--p', FX.pct + '%'); $('.move-bar').setAttribute('aria-valuenow', FX.pct);
+  $('#movePct').textContent = FX.pct + '%';
+  $('#moveBytes').textContent = m.bytes?.total ? ' · ' + mb(m.bytes.sent) + ' of ' + mb(m.bytes.total) : '';
+  $('#moveCancel').hidden = !['stopping', 'connecting', 'uploading'].includes(m.phase);
+  if (m.phase === 'done') afterMove(m);
+  // failed: the ledger's move-failed notice says why. unknown: the pane's "press to finish" button stays, with main's words.
+  if (m.phase === 'failed') fxEnd();
+  if (m.phase === 'unknown') { const s = S.sessions.find(x => x.id === m.id); if (s && m.message) s.events.push({ t: 'notice', text: m.message }); fxEnd(); }
+}
+$('#moveCancel').onclick = () => { $('#moveCancel').hidden = true; $('#moveWhat').textContent = 'Cancelling…'; window.p9.cancelMove(FX.id).catch(() => {}); };
+window.p9?.onMove?.(onMove);
+// "Open it on <host>?" and "Finish the move?": Enter takes the switch from anywhere in the box (a form's Enter would take
+// its first button, Stay); Esc is no.
+function moveAsk({ title, text, yes, no, never }) {
+  $('#moveT').textContent = title; $('#moveP').textContent = text; $('#moveYes').textContent = yes; $('#moveNo').textContent = no;
+  $('#moveNeverRow').hidden = !never; $('#moveNever').checked = false;
+  moveDlg.returnValue = '';
+  moveDlg.showModal();
+  return new Promise(done => moveDlg.addEventListener('close', () => done({ yes: moveDlg.returnValue === 'yes', never: !!never && $('#moveNever').checked }), { once: true }));
+}
+moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.matches('button')) { e.preventDefault(); moveDlg.close('yes'); } });
+// Item 24. "Don't show again" keeps the answer it was ticked with: always open on the server, or always stay.
+async function afterMove(m) {
+  let kept = null; try { kept = localStorage.getItem('p9-after-move-ask'); } catch {}
+  const pick = kept === 'open' || kept === 'stay' ? { yes: kept === 'open' } : await moveAsk({ title: 'Open it on ' + m.host + '?', yes: 'Open it', no: 'Stay here', never: true,
+    text: 'The chat is on ' + m.host + ' now. Opening it switches this window to the server; your chats on this computer stay here for when you switch back.' });
+  if (pick.never) localStorage.setItem('p9-after-move-ask', pick.yes ? 'open' : 'stay');
+  if (!pick.yes) return fxEnd();
+  localStorage.setItem('p9-after-move', JSON.stringify({ id: m.id }));
+  const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the server's P9
+  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Server switches by hand.' }); renderChats(); }
+}
+// After the first replay. The chat a move took here opens in the pane (on the server it is stopped, here it is moved).
+// A chat left moving by a reload: no stream event within 6 s means main is not moving it, so ask to finish.
+function moveReloaded() {
+  let after = null; try { after = JSON.parse(localStorage.getItem('p9-after-move'))?.id; localStorage.removeItem('p9-after-move'); } catch {}
+  const landed = after && S.sessions.find(s => s.id === after && s.state !== 'moved');
+  if (landed) focus(landed.id);
+  const left = S.sessions.find(s => s.live && s.state === 'moving');
+  if (!left || !window.p9?.sendToServer) return;
+  setTimeout(async () => {
+    if (FX.id || left.state !== 'moving' || serverInfo?.host || moveDlg.open) return;
+    const r = await moveAsk({ title: 'Finish the move?', yes: 'Finish the move', no: 'Not now',
+      text: '"' + (left.title || 'This chat') + '" was moving to ' + (serverInfo?.last || 'the server') + ' when the window closed. It stays paused here until the move finishes; its Send to server button finishes it later.' });
+    if (r.yes) sendAway(left);
+  }, 6000);
 }
 
 addEventListener('focus', () => renderChats());

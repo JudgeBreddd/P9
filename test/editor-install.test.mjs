@@ -83,6 +83,26 @@ test('D5: install checks the SHA-256 and the commit, keeps an old install, and l
   assert.equal(await readFile(path.join(dir, names[1], 'mine.txt'), 'utf8'), 'kept');
 });
 
+// Item 16: the AppImage carries the pinned file (resources/editor/reh.tar.gz) and installs it from disk on its first start; the
+// same checks as a download, and no network.
+test('Item 16: the AppImage\'s own copy installs through the same SHA-256 and commit checks', { skip: !linux, timeout: 60000 }, async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-editor-copy-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const good = await standIn(t), copy = path.join(dir, 'resources', 'editor', 'reh.tar.gz'), target = path.join(dir, 'share');
+  await mkdir(path.dirname(copy), { recursive: true });
+  await writeFile(copy, good.bytes);
+  // A copy that is not the pinned file, or no copy at all: nothing installed, no temp folder.
+  await assert.rejects(installEditorHost({ dir: target, download: [copy, 'f'.repeat(64)] }), /editor-download-mismatch/);
+  assert.deepEqual(await readdir(target), []);
+  await assert.rejects(installEditorHost({ dir: target, download: [copy + '.gone', good.sha256] }), /editor-download-failed/);
+  assert.deepEqual(await readdir(target), []);
+  assert.deepEqual(await installEditorHost({ dir: target, download: [copy, good.sha256] }), { installed: path.join(target, 'codium-server') });
+  assert.equal(JSON.parse(await readFile(path.join(target, 'codium-server', 'product.json'), 'utf8')).commit, EDITOR_COMMIT);
+  // The AppImage build ships it under that name, beside the daemon's node.
+  const linuxBuild = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).build.linux.extraResources;
+  assert.ok(linuxBuild.some(each => each.from === '.build/editor/reh.tar.gz' && each.to === 'editor/reh.tar.gz'));
+});
+
 // The desktop on a fresh Linux install: no editor server. Dev Focus names it and offers Install; Install downloads the
 // stand-in (loopback, its SHA-256 given through the test-only variables), and Dev Focus opens again past "not installed".
 test('D5: Dev Focus without the editor server names it and installs it with one button', { skip: !linux, timeout: 60000 }, async t => {
@@ -132,7 +152,8 @@ test('D5: Dev Focus without the editor server names it and installs it with one 
   const installed = path.join(home, '.local', 'share', 'p9', 'codium-server');
   assert.equal(JSON.parse(await readFile(path.join(installed, 'product.json'), 'utf8')).commit, EDITOR_COMMIT);
   // The stand-in server exits at once, so Dev Focus now says it did not start: no longer "not installed", no button.
-  assert.match(await dev.locator('#cause').innerText(), /the editor server did not start/);
+  // With no systemd user session (a container) issue #14's page names that cause instead.
+  assert.match(await dev.locator('#cause').innerText(), /the editor server on this computer did not start|this computer has no systemd user session/);
   assert.equal(await dev.locator('#install').count(), 0);
   await shot('d5-dev-focus-after-install', dev);
 });

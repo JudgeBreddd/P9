@@ -15,6 +15,7 @@ import { parseSettings } from './mission.mjs';
 import { drainSaves } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
 import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+import { keepOldPhotos } from './chat.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
@@ -98,13 +99,15 @@ if (windows) {
     throw new Error(ownership.status === 1 ? 'daemon-already-running' : 'workspace-lock-unavailable');
   }
 }
+await keepOldPhotos(state, ownershipDirectory);
 const stateEntries = await readdir(state);
 if (windows) {
   if (stateEntries.some((name) => name !== 'desktop.json')) throw new Error('state-directory-not-empty');
   await unlink(path.join(state, 'desktop.json')).catch((error) => { if (error.code !== 'ENOENT') throw error; });
 } else {
   const socketName = path.basename(socketPath);
-  if (stateEntries.some((name) => !['desktop.json', socketName].includes(name))) throw new Error('state-directory-not-empty');
+  // editor.sock: Server mode's Dev Focus editor (server.mjs /dev/editor), left by a daemon that died; the next start replaces it.
+  if (stateEntries.some((name) => !['desktop.json', socketName, 'editor.sock'].includes(name))) throw new Error('state-directory-not-empty');
   await unlink(path.join(state, 'desktop.json')).catch((error) => { if (error.code !== 'ENOENT') throw error; });
   await unlink(socketPath).catch((error) => { if (error.code !== 'ENOENT') throw error; });
 }
@@ -177,6 +180,7 @@ function stop() {
   // A stuck request or filesystem must not keep systemctl stop waiting indefinitely.
   setTimeout(() => { server.closeAllConnections(); process.exit(1); }, 10000).unref();
   if (server.remote) { server.remote.close(); server.remote.closeAllConnections(); }
+  server.editor?.stop(); // Server mode's editor runs in its own systemd scope, so it would outlive the daemon
   // Agents stop first, alongside the request drain: an open long poll would otherwise hold server.close for 8 s.
   // The woken polls answer, then sit idle on keep-alive; close them once the agents are down.
   const work = Promise.all([server.chat.shutdown(), server.mission.stopAll()]).then((result) => { server.closeIdleConnections(); return result; });
