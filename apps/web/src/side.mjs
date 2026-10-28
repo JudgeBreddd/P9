@@ -60,13 +60,14 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
     // A draggable tab: released across the divider, the two panes change sides. which: 'side' | 'main'.
     tab(tab, which) {
       let from = null;
-      tab.addEventListener('pointerdown', e => { if (e.button || e.target.closest('button')) return; from = e.clientX; tab.setPointerCapture?.(e.pointerId); stage.classList.add('tabdrag'); }, { signal });
+      // Heard on the window, like dragBar: pointer capture was lost mid-drag in Electron while the editor view moved beside the bar.
+      const stop = () => { from = null; stage.classList.remove('tabdrag'); removeEventListener('pointerup', end); removeEventListener('pointercancel', stop); };
       const end = e => {
-        if (from === null) return; const moved = Math.abs(e.clientX - from) > 12; from = null; stage.classList.remove('tabdrag');
+        if (from === null) return; const moved = Math.abs(e.clientX - from) > 12; stop();
         const x = bar.getBoundingClientRect().left + bar.getBoundingClientRect().width / 2, left = (which === 'main') === (edge() === 'right');
         if (moved && shown() && (left ? e.clientX > x : e.clientX < x)) api.swap();
       };
-      tab.addEventListener('pointerup', end, { signal }); tab.addEventListener('pointercancel', () => { from = null; stage.classList.remove('tabdrag'); }, { signal });
+      tab.addEventListener('pointerdown', e => { if (e.button || e.target.closest('button')) return; from = e.clientX; stage.classList.add('tabdrag'); addEventListener('pointerup', end); addEventListener('pointercancel', stop); }, { signal });
     },
   };
   head.querySelector('[data-side-swap]')?.addEventListener('click', api.swap, { signal });
