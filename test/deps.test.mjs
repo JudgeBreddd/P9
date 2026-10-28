@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { dependencies, profileText, sandboxDependency, PROFILE } from '../apps/server/deps.mjs';
@@ -16,7 +16,7 @@ const restricted = (profile) => async (file) => {
   throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
 };
 
-test('Item 15 (row 61): the sandbox rule names this Electron only, and its command prints exactly that rule', { skip: !linux, timeout: 60000 }, async () => {
+test('Item 15 (row 61): the sandbox rule names this Electron only, and its command prints exactly that rule', { skip: !linux, timeout: 60000 }, async (t) => {
   for (const electron of ['/srv/p9/p9/node_modules/electron/dist/electron', "/opt/it's p9/my copy/node_modules/electron/dist/electron"]) {
     const missing = await sandboxDependency({ electron, read: restricted() });
     assert.deepEqual([missing.id, missing.ok, missing.admin], ['sandbox', false, true]);
@@ -32,10 +32,27 @@ test('Item 15 (row 61): the sandbox rule names this Electron only, and its comma
     assert.equal((await sandboxDependency({ electron, read: restricted(profileText('/elsewhere/electron')), loaded: on })).ok, false);
     assert.equal((await sandboxDependency({ electron, read: async () => '0\n' })).command, null, 'a kernel that does not restrict userns needs no rule');
   }
-  for (const electron of ['/a"b/electron', '/a\\b/electron', '/a\nb/electron', '/a\rb/electron', '/a\x00b/electron']) {
+  for (const electron of ['/a"b/electron', '/a\\b/electron', '/a\nb/electron', '/a\rb/electron', '/a\x00b/electron',
+    '/a*b/electron', '/a?b/electron', '/a[b]/electron', '/a{b}/electron', '/a^b/electron']) {
     assert.throws(() => profileText(electron), /profile-path-refused/, JSON.stringify(electron));
   }
-  console.log('PASS item 15 sandbox rule: two paths round-trip through sh exactly; five unquotable paths refused');
+  // pnpm's layout: node_modules/electron is a link, and AppArmor attaches by the real path (CI run 40614561848). The rule
+  // names the clone's real folder (here reached through a link, as a clone under a linked home is) and pnpm's real
+  // layout, its version a glob, and it is the same before Electron is downloaded (a new install asks first) and after.
+  const top = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-pnpm-')));
+  t.after(() => rm(top, { recursive: true, force: true }));
+  const clone = path.join(top, 'clone'), linked = path.join(top, 'linked');
+  await mkdir(path.join(clone, 'node_modules'), { recursive: true });
+  await symlink(clone, linked);
+  const electron = path.join(linked, 'node_modules/electron/dist/electron');
+  const before = profileText(electron);
+  assert.match(before, new RegExp('^profile p9-electron "' + clone + '/node_modules/\\.pnpm/electron@\\*/node_modules/electron/dist/electron" ', 'm'));
+  const dist = path.join(clone, 'node_modules/.pnpm/electron@44.7.2/node_modules/electron/dist');
+  await mkdir(dist, { recursive: true });
+  await writeFile(path.join(dist, 'electron'), '');
+  await symlink('.pnpm/electron@44.7.2/node_modules/electron', path.join(clone, 'node_modules/electron'));
+  assert.equal(profileText(electron), before, 'the downloaded Electron needs no new rule');
+  console.log('PASS item 15 sandbox rule: two paths round-trip through sh exactly; ten unquotable paths refused; a pnpm link names the real file');
 });
 
 test('Item 15: dependencies() gives each missing system package its reason and its manager\'s command; Windows has none', { timeout: 60000 }, async (t) => {
