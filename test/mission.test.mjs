@@ -413,6 +413,22 @@ test('Windows: hub notices run no shell script', async (t) => {
   assert.equal(await access(marker).then(() => true, () => false), false, 'a shell script ran');
 });
 
+// c19: the hub's queue walk (HANDOFF.md) does not read inside dependency or build output (packages/files HEAVY).
+test('hub queue: a HANDOFF.md inside node_modules, dist or the other HEAVY folders is not listed', { timeout: 30000 }, async (t) => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const { createHub } = await import('../apps/server/hub.mjs');
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'p9-hub-'));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  for (const dir of ['projects/a', 'node_modules/x', 'dist/x', 'build', 'venv', '.venv', '__pycache__', '.cache', '.astro']) {
+    await mkdir(path.join(workspace, dir), { recursive: true });
+    await writeFile(path.join(workspace, dir, 'HANDOFF.md'), '# handoff');
+  }
+  const hub = createHub({ workspace, settings: { hub: 'hub' } });
+  const seen = (await hub.overview()).handoffs.map((row) => row.project);
+  assert.deepEqual(seen, ['projects/a']);
+});
+
 // Release r2 R2-7: decide re-checks the phone's session after its read, lands the line by rename, and refuses a file
 // the server's review changed after the read.
 test('release r2 R2-7: hub decide is revocable, atomic, and refuses a changed file', async (t) => {
@@ -517,7 +533,7 @@ test('M5: the daemon refuses with the reason and starts nothing; choices come ba
 // workspace-hub's "Gate check a plan" button: choices "plans" is every plan.md under the scripts root, still strict.
 test('choices "plans": every plan.md outside skipped folders, and nothing else is accepted', { timeout: 30000 }, async (t) => {
   const instance = await start(t, TEAMMATE, [{ id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }]);
-  for (const dir of ['a', 'b/c', 'node_modules/x', '_archive', '.git', 'agent_skills/s', '_private']) {
+  for (const dir of ['a', 'b/c', 'node_modules/x', 'dist/x', 'build', 'venv', '.venv', '__pycache__', '.cache', '.astro', '_archive', '.git', 'agent_skills/s', '_private']) {
     await mkdir(path.join(instance.workspace, dir), { recursive: true });
     await writeFile(path.join(instance.workspace, dir, 'plan.md'), '# plan');
   }
