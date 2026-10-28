@@ -12,6 +12,7 @@ import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
+import { createUpdate } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
 import { SETTINGS } from './mission-fields.mjs';
 import { createHub } from './hub.mjs';
@@ -108,12 +109,13 @@ async function onPath(name) {
   return false;
 }
 
-export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse() }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
+  const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
@@ -224,7 +226,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   for (const route of ['/mission', '/mission/*', '/scripts/*', '/runs/*', '/apps/*', '/pages/*']) {
     api.use(route, async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); });
   }
-  api.get('/mission', async (c) => c.json({ ...(await mission.overview()), settingsError, restart: restart() }));
+  api.get('/mission', async (c) => c.json({ ...(await mission.overview()), settingsError, restart: restart(), update: update.brief() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
   api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
   // A space log view rides the hub text route, so both clients open it like any other log.
@@ -367,6 +369,11 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.post('/xfer/:id/part', async (c) => reply(c, await xfer.part(c.req.param('id'), await json(c))));
   app.post('/xfer/:id/commit', async (c) => reply(c, await xfer.commit(c.req.param('id'), await json(c))));
   app.post('/xfer/:id/abort', async (c) => reply(c, await xfer.abort(c.req.param('id'))));
+  // The server updates itself on connect (item 14, update.mjs, threat model row 62): the desktop only, never the phone.
+  app.post('/update/:id/part', async (c) => reply(c, await update.part(c.req.param('id'), await json(c))));
+  app.post('/update/:id/commit', async (c) => reply(c, await update.commit(c.req.param('id'), await json(c))));
+  app.post('/update/fetch', async (c) => reply(c, await update.fetch(await json(c))));
+  app.get('/update/status', async (c) => reply(c, await update.status()));
   // Threat model row 15: only the desktop turns the agent lock on or off; reading it is on the shared api.
   app.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   // Threat model row 4: file protection is read and changed by the desktop only; the phone just lives with it.

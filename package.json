@@ -130,6 +130,8 @@
       "scripts/teh.mjs",
       "apps/server/process-tree.mjs",
       "apps/server/windows.mjs",
+      "apps/server/update.mjs",
+      "apps/server/pieces.mjs",
       "package.json",
       "!node_modules/@openai/**",
       "!node_modules/@anthropic-ai/**",

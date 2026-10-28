@@ -1998,6 +1998,7 @@ const WIZ_ERR = {
   'terminal-start-failed': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
   'terminal-unavailable': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
   'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
+  updating: ['P9 is updating and restarts in a moment.', 'Send again in a minute.'],
   'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
@@ -2452,6 +2453,27 @@ function onMove(m) {
 }
 $('#moveCancel').onclick = () => { $('#moveCancel').hidden = true; $('#moveWhat').textContent = 'Cancelling…'; window.p9.cancelMove(FX.id).catch(() => {}); };
 window.p9?.onMove?.(onMove);
+// The server updates itself on connect (item 14, apps/desktop/server-update.mjs): each step as a toast; the end, and a
+// server newer than this app, as an alert that stays until opened.
+function onServerUpdate(u) {
+  if (!u) return;
+  const on = 'P9 on ' + u.host, missing = (u.missing ?? []).map(m => m.id + ' (' + m.why + '): ' + m.command).join('; ');
+  const say = {
+    downloading: [on + ' is downloading ' + u.version + ' from GitHub Releases.', 'ok'],
+    building: [on + ' is building ' + u.version + ' beside the running copy.', 'ok'],
+    'waiting-turns': [on + ' will update to ' + u.version + ': waiting for ' + u.turns + ' chat' + (u.turns === 1 ? '' : 's') + ' to finish ' + (u.turns === 1 ? 'its' : 'their') + ' turn.', 'ok'],
+    restarting: [on + ' is restarting on ' + u.version + '.', 'ok'],
+    done: [on + ' is now ' + u.version + '.', 'ok', true],
+    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the server.'), 'bad', true],
+    failed: [on + ' was not updated to ' + u.version + ' (' + u.error + '). It runs on as before.', 'bad', true],
+    'app-older': ['The server runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
+    unsupported: [on + ' cannot update itself (it is not a source checkout run by systemd). It stays on ' + u.server + '.', 'bad', true],
+  }[u.phase];
+  if (!say) return;
+  toast({ kind: 'server update', txt: say[0] + (missing ? ' Missing on the server: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1] }, !say[2]);
+}
+window.p9?.onServerUpdate?.(onServerUpdate);
+window.p9?.serverUpdate?.().then(onServerUpdate, () => {});
 // "Open it on <host>?" and "Finish the move?": Enter takes the switch from anywhere in the box (a form's Enter would take
 // its first button, Stay); Esc is no.
 function moveAsk({ title, text, yes, no, never }) {

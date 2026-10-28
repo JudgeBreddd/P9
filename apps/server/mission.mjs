@@ -375,7 +375,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   async function run(id, body) {
     await recovered;
     const release = lifecycle.begin();
-    if (!release) return { status: 503, error: 'stop-all-running' };
+    if (!release) return { status: 503, error: lifecycle.refusal() };
     try {
     const target = await resolve('scripts', id, body, ['args', 'confirm']);
     if (target.error) return target;
@@ -449,7 +449,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
   async function launch(kind, id, body) {
     const release = lifecycle.begin();
-    if (!release) return { status: 503, error: 'stop-all-running' };
+    if (!release) return { status: 503, error: lifecycle.refusal() };
     try {
     if (kind === 'pages') {
       if (typeof id !== 'string' || !ID.test(id) || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'confirm')) {

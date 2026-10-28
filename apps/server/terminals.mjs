@@ -107,7 +107,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
     try { await ready(); } catch (error) { if (error.message === 'tmux-not-found') return { status: 503, error: 'tmux-not-found' }; throw error; }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
-    if (!release) return { status: 503, error: 'stop-all-running' };
+    if (!release) return { status: 503, error: lifecycle.refusal() };
     const id = randomUUID();
     try {
       stillAuthorized();
@@ -237,7 +237,7 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
   async function create(body, start = {}) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
-    if (!release) return { status: 503, error: 'stop-all-running' };
+    if (!release) return { status: 503, error: lifecycle.refusal() };
     const id = randomUUID();
     try {
       stillAuthorized();

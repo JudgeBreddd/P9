@@ -20,7 +20,9 @@ import { keepOldPhotos } from './chat.mjs';
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
 const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
-  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' } } });
+  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' },
+  // The checkout a server update rebuilds, and where a packaged app's version is downloaded from (update.mjs); tests point them elsewhere.
+  'update-root': { type: 'string' }, 'update-archive': { type: 'string' } } });
 if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbsolute(values[key]))) {
   throw new Error('absolute-workspace-state-and-recovery-required');
 }
@@ -147,7 +149,8 @@ delete process.env.P9_GITHUB_TOKEN;
 // ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
-const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
+const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
+  ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'] });
 try {
   await new Promise((resolve, reject) => {
     server.once('error', reject);
