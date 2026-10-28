@@ -186,3 +186,18 @@ test('D6: Settings is wide, its sections sit side by side, and a page selector s
   assert.ok(await page.locator('#setBody>.set-group:visible').count() >= 5, 'All shows every section');
   console.log('PASS D6');
 });
+
+test('K11: the Mission page makes room for the cards; no card covers a Mission panel', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.click('#rMission'); await page.locator('#fMission [data-panel]').first().waitFor({ timeout: 10000 });
+    await page.locator('#cards .card').first().waitFor({ timeout: 10000 }); await page.waitForTimeout(300);
+    const cards = await page.locator('#cards .card').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()));
+    const panels = await page.locator('#fMission [data-panel]').evaluateAll((els) => els.map((e) => ({ name: e.dataset.panel, ...e.getBoundingClientRect().toJSON() })));
+    assert.ok(cards.length > 0 && panels.length > 0);
+    for (const p of panels) for (const c of cards) assert.ok(!overlap(p, c), theme + ': a card covers the ' + p.name + ' panel');
+    await shot('c23-k11-mission-' + theme);
+  }
+  console.log('PASS K11');
+});
