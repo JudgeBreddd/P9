@@ -126,7 +126,8 @@ export async function readImage(file) {
   if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
   return { mimeType, data, name: file.name };
 }
-export const limitLine = (name, limits, now = Date.now()) => {
+export const limitLine = (name, limits, now = Date.now(), signedOut = false) => {
+  if (signedOut) return { name, text: name + ' not logged in', stale: true };
   if (!limits) return { name, text: 'no plan limits recorded yet', stale: true };
   const when = at => new Date(at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
   const part = (label, w) => !w ? label + ' n/a' : w.resetsAt && w.resetsAt < now ? label + ' new window' : `${label} ${Math.round(w.usedPercent)}%` + (w.resetsAt ? ` (resets ${when(w.resetsAt)})` : '');

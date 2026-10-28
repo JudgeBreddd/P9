@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, mkdtemp, readFile, writeFile, mkdir, utimes } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, writeFile, mkdir, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
@@ -154,6 +154,12 @@ test('plan limits and the welcome check read CODEX_HOME and CLAUDE_CONFIG_DIR wh
   assert.deepEqual([limits.codex.fiveHour.usedPercent, limits.claude.fiveHour.usedPercent], [44, 55]);
   const setup = await get('/setup');
   assert.deepEqual([setup.claude, setup.codex], [true, true], 'the credential files in the moved folders count');
+  // P8: Codex signed out (no auth.json): its old sessions give no figure, and Usage says not logged in.
+  await rm(path.join(dirs.codex, 'auth.json'));
+  const out = (await get('/usage')).limits;
+  assert.deepEqual([out.codex, out.signedOut, out.claude.fiveHour.usedPercent], [null, ['codex'], 55]);
+  assert.deepEqual(limitLine('Codex', out.codex, undefined, out.signedOut.includes('codex')), { name: 'Codex', text: 'Codex not logged in', stale: true });
+  assert.deepEqual(limits.signedOut, [], 'signed in, nothing is named signed out');
   // Unset (or empty), the defaults under home.
   assert.deepEqual(agentDirs('/h', {}), { claudeDir: '/h/.claude', claudeJson: '/h/.claude.json', codexHome: '/h/.codex' });
   assert.deepEqual(agentDirs('/h', { CLAUDE_CONFIG_DIR: '', CODEX_HOME: '' }), agentDirs('/h', {}));

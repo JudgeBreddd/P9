@@ -12,7 +12,7 @@ import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
 type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | null; sevenDay: { usedPercent: number; resetsAt: number | null } | null; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -1323,7 +1323,7 @@ async function loadUsage() {
   try {
     const data = await request('/usage') as Usage;
     // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two bars under the text.
-    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
+    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
     const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
     if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>'; return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
