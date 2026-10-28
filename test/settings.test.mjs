@@ -584,7 +584,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
       await shot('walkthrough-9-empty.png');
     }
     if (now.focus === 'dev') {
-      const views = () => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0], z = w.webContents.getZoomFactor(); return w.contentView.children.filter((v) => v.getVisible()).map((v) => { const b = v.getBounds(); return [b.x / z, b.y / z, (b.x + b.width) / z, (b.y + b.height) / z]; }); });
+      const views = () => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0], z = w.webContents.getZoomFactor(); return w.contentView.children.filter((v) => v.getVisible() && !v.webContents.getURL().startsWith('p9://cards')).map((v) => { const b = v.getBounds(); return [b.x / z, b.y / z, (b.x + b.width) / z, (b.y + b.height) / z]; }); });
       const over = (v) => v[0] < now.rect[2] && v[2] > now.rect[0] && v[1] < now.rect[3] && v[3] > now.rect[1];
       let shownViews = await views();
       for (let i = 0; i < 30 && (!shownViews.length || shownViews.some(over)); i++) { await page.waitForTimeout(100); shownViews = await views(); }
@@ -1350,7 +1350,7 @@ test('Chat folder: Start in offers the workspace, recent folders and Choose fold
   console.log('PASS chat folder: outside, linked-out and cancelled picks give nothing; a chosen folder reaches the daemon and the welcome; kept as a recent folder after a reload');
 });
 
-test('Chat file browser: each scope lists its real folder, a file opens read-only with its text, ../, links and locked names are refused (threat model row 23)', { timeout: 120000 }, async (t) => {
+test('Chat file browser: each scope lists its real folder, a file opens in the editor with its text, ../, links and locked names are refused (threat model row 23)', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async (paths) => {
     const w = paths.workspace;
     for (const dir of ['_tyler', '_ideas', '_private', 'hub', 'proj/sub']) await mkdir(path.join(w, dir), { recursive: true });
@@ -1382,12 +1382,12 @@ test('Chat file browser: each scope lists its real folder, a file opens read-onl
   await listed('proj'); assert.deepEqual(await names(), ['sub', 'notes.md'], 'main project');
   await page.locator('#tree [data-ldir="proj/sub"]').click();
   await page.locator('#tree [data-lfile="proj/sub/deep.md"]').waitFor({ timeout: 5000 });
-  // A file opens with its text, read-only: no editor and no Make Primary.
+  // A file opens with its text in the editor (Save is tested in file-edit.test.mjs); no Make Primary.
   await page.locator('#tree [data-lfile="proj/notes.md"]').click();
-  await page.locator('#mdlBody .fileview', { hasText: 'line two' }).waitFor({ timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#mdlBody textarea')?.value.includes('line two'), null, { timeout: 5000 });
   if (process.env.P9_EVIDENCE) { await page.waitForTimeout(400); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'chat-files-view.png') }); }
   assert.equal(await page.locator('#mdlT').innerText(), 'proj/notes.md');
-  assert.equal(await page.locator('#mdlBody textarea').count(), 0);
+  assert.equal(await page.locator('#mdlBody textarea').count(), 1);
   assert.equal(await page.locator('#mdlPrimary').isHidden(), true);
   await page.keyboard.press('Escape');
   await scope('Workspace', 'Workspace');
@@ -1402,7 +1402,7 @@ test('Chat file browser: each scope lists its real folder, a file opens read-onl
   await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
   await page.locator('#newPop [data-new="claude"]').first().click();
   await listed('proj/sub'); assert.deepEqual(await names(), ['deep.md']);
-  // Only list and read, one string path each; the daemon refuses ../, links and locked names as on every file route.
+  // List and read take one string path each (save is tested in file-edit.test.mjs); the daemon refuses ../, links and locked names as on every file route.
   const ask = (action, payload) => page.evaluate(([a, p]) => window.p9.mission(a, p), [action, payload]);
   const refused = { status: 400, body: { error: 'request-refused' } };
   for (const [action, payload] of [['list', { path: 7 }], ['read', {}], ['read', { path: ['proj/notes.md'] }], ['list', { path: '../' }], ['list', { path: 'out' }],
@@ -1411,7 +1411,7 @@ test('Chat file browser: each scope lists its real folder, a file opens read-onl
   }
   assert.equal((await ask('read', { path: 'proj/notes.md' })).body.content, 'project notes\nline two\n');
   await assert.rejects(ask('write', { path: 'proj/notes.md', content: 'x' }), /ipc-sender-refused/);
-  console.log('PASS chat file browser: four scopes list their folders, Current project follows the chat shown, files open read-only, bad paths refused');
+  console.log('PASS chat file browser: four scopes list their folders, Current project follows the chat shown, files open in the editor, bad paths refused');
 });
 
 test('Turn finished: a live turn-end nobody watches makes one notice (P9 words only) and a card; opening the chat clears it; replay makes none (threat model row 21)', { timeout: 120000 }, async (t) => {

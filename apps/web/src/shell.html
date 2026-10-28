@@ -8,6 +8,7 @@
     <div class="tabs" id="devTabs" role="tablist" data-in="dev"></div>
     <button data-slot="button" data-variant="ghost" data-size="icon" id="newBtn" data-in="chat" aria-haspopup="menu" aria-expanded="false" title="New session"></button>
     <div class="pop" id="newPop" hidden style="top:44px;left:0"></div>
+    <button data-slot="button" data-variant="ghost" data-size="icon" id="sideToggle" data-in="dev" aria-pressed="false" title="Chat beside the editor: on or off"></button>
     <div class="spacer"></div>
     <button data-slot="button" data-variant="outline" data-size="sm" id="serverBadge" hidden></button>
     <span class="agent-ind" id="agentInd" role="status" hidden><span class="glyph" id="indGlyph" aria-hidden="true"></span><span id="indText"></span><span id="indPets"></span></span>
@@ -44,11 +45,19 @@
           <main class="content"><div class="chats" id="chats" data-split="false"></div></main>
         </section>
         <section class="fpane" id="fDev" data-focus="dev" aria-label="Dev Focus" inert>
+          <div class="dtab" id="devTab"><span class="stab" title="Drag to the other side to swap">Editor</span></div>
           <aside class="explorer" aria-label="Explorer"><div class="hd">Explorer <span class="muted">workspace</span></div><div class="tree" id="devTree"></div></aside>
           <main class="editor" id="devMain"></main>
         </section>
         <section class="fpane" id="fMission" data-focus="mission" aria-label="Mission Control" inert></section>
       </div>
+      <aside class="side" id="side" hidden aria-label="Side panel">
+        <div class="handle-v" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize side panel (arrow keys)"></div>
+        <div class="sidebox">
+          <div class="shead"><span class="stab" title="Drag to the other side to swap"><span class="stitle"></span></span><span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" data-side-swap title="Swap sides" aria-label="Swap sides">⇄</button><button data-slot="button" data-variant="ghost" data-size="icon-sm" data-side-close title="Close" aria-label="Close side panel">×</button></div>
+          <div class="sbody" id="sideBody"></div>
+        </div>
+      </aside>
       <div class="cards" id="cards" aria-label="Needs you and active sessions"></div>
       <section class="dock float" id="dock" aria-label="Terminal" hidden>
         <div class="grip" id="grip" tabindex="0" role="separator" aria-orientation="horizontal" aria-label="Resize terminal (arrow keys)"></div>

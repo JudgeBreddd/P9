@@ -155,6 +155,17 @@ const checks = {
     assert.notEqual(ring.style, 'none', 'a keyboard user still sees where focus is');
     assert.ok(ring.above <= 0, 'the ring reaches ' + ring.above + ' px above the screen it is drawn in: ' + JSON.stringify(ring));
   },
+  // The side panel's phone form (specs/side-panel.md check 5): an artifact opens the sheet with full: it fills the viewport, and the next ordinary sheet does not keep it.
+  async sheetFull(page) {
+    await page.waitForSelector('h1:text("Chats")');
+    await page.evaluate(() => dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Artifact', html: '<p>body</p>', full: true } })));
+    await page.waitForSelector('#sheet.full[open]');
+    await page.waitForFunction(() => !document.querySelector('#sheet').getAnimations().length); // it slides in 24 px first
+    assert.deepEqual(await page.locator('#sheet').evaluate(d => { const r = d.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.height), innerHeight]; }), [0, 844, 844]);
+    await shot(page, 'phone-sheet-full');
+    await page.evaluate(() => { document.querySelector('#sheet').close(); dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Pick one', html: '<p>x</p>' } })); });
+    await page.waitForSelector('#sheet[open]:not(.full)');
+  },
 };
 const breaks = {
   column: { fix: [[/(#app\{[^}]*?)height:\s*var\(--vvh,\s*100dvh\)/, '$1height:300px']] },
@@ -164,6 +175,7 @@ const breaks = {
   sheet: { init: () => { HTMLDialogElement.prototype.close = function () {}; } },
   kbdGap: { pre: [[/env\(safe-area-inset-bottom\)/g, '34px']], fix: [[/(#composerSlot\{[^}]*?)padding:8px 0;/, '$1padding:8px 0 42px;']] },
   backFocus: { fix: [['.bar .back:focus-visible{', '.bar .back:focus-visibleX{']] },
+  sheetFull: { fix: [['dialog.sheet.full{', 'dialog.sheet.fullx{']] },
 };
 
 test('P5 and the shell: a fixed column, a 44 px bar on every tab, the tab bar yields to a short viewport, a composer slot, a shared sheet (A/B)', { timeout: 300000 }, async (t) => {
