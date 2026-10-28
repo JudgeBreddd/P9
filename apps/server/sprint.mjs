@@ -7,7 +7,9 @@ import path from 'node:path';
 export const sprintFile = () => path.join(os.homedir(), '.local', 'state', 'sprint', 'status.json');
 const MAX = 256 * 1024;
 const STATES = new Set(['running', 'waiting', 'merged', 'blocked']);
+const ACTIVITIES = new Set(['testing', 'in line', 'needs you', 'building', 'idle', 'done']);
 const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : '');
+const percentOf = value => Math.round(Math.min(100, Math.max(0, value)));
 
 // 404 while there is no sprint (the button hides); 422 when the file is there but unreadable (the button stays, the
 // window says why); else only the known fields, cut to size, so nothing else in the file reaches a client.
@@ -27,10 +29,17 @@ export async function readSprint(file = sprintFile()) {
     try { data = JSON.parse(buffer.toString('utf8')); } catch { return { status: 422, error: 'status-unreadable', reason: 'not-json' }; }
     if (!data || typeof data !== 'object' || Array.isArray(data)) return { status: 422, error: 'status-unreadable', reason: 'not-an-object' };
     const chunks = (Array.isArray(data.chunks) ? data.chunks : []).slice(0, 30).filter(c => c && typeof c === 'object').map(c => {
-      const percent = Number.isFinite(c.percent) ? Math.round(Math.min(100, Math.max(0, c.percent))) : 0;
-      return { id: text(c.id, 40), title: text(c.title, 200), state: STATES.has(c.state) ? c.state : 'unknown', percent, waitingOn: text(c.waitingOn, 300) };
+      const percent = Number.isFinite(c.percent) ? percentOf(c.percent) : 0;
+      const out = { id: text(c.id, 40), title: text(c.title, 200), state: STATES.has(c.state) ? c.state : 'unknown', percent, waitingOn: text(c.waitingOn, 300) };
+      // The feed script's fields (status-feed.py): left out when missing or wrong, so an old file draws as before.
+      const steps = text(c.steps, 16);
+      if (/^\d+\/\d+$/.test(steps)) out.steps = steps;
+      if (ACTIVITIES.has(c.activity)) out.activity = c.activity;
+      return out;
     });
-    return { status: 200, sprint: text(data.sprint, 200), updatedAt: text(data.updatedAt, 64), cutoff: text(data.cutoff, 64), chunks };
+    const out = { status: 200, sprint: text(data.sprint, 200), updatedAt: text(data.updatedAt, 64), cutoff: text(data.cutoff, 64), chunks };
+    if (Number.isFinite(data.overall)) out.overall = percentOf(data.overall);
+    return out;
   } finally { await handle.close(); }
 }
 

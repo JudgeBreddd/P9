@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, sprintTimes, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
@@ -692,7 +692,7 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
   if (result.status === 202) { input.value = ''; label(); note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
-  else note(`Not sent: ${result.body.error ?? result.status}`);
+  else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
 function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }
@@ -990,7 +990,8 @@ async function loadMission(cached = false) {
       : `<li><button type="button" class="link" data-open-page="${escape(item.id)}" data-url="${escape(item.url)}">${escape(item.title)} (opens on the laptop)</button></li>`)).join('');
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
-    keepOpen(() => { one('#mission').innerHTML = (data.restart?.needed ? `<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
+    // Item 14: a laptop is updating this server's P9; it restarts once no chat is mid-turn (apps/server/update.mjs).
+    keepOpen(() => { one('#mission').innerHTML = (data.update ? `<article class="card warn" data-update><h2>P9 is updating to ${escape(data.update.version)}</h2><p>${data.update.phase === 'waiting-turns' ? `It restarts when ${data.update.turns} chat${data.update.turns === 1 ? ' finishes its' : 's finish their'} turn. New messages wait until it is back.` : data.update.phase === 'restarting' ? 'It is restarting now; this page reconnects by itself.' : 'Building the new version beside the running one. Chats keep working.'}</p></article>` : '') + (data.restart?.needed ?`<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
       + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
@@ -1007,7 +1008,7 @@ async function loadMission(cached = false) {
 }
 // Sprint tracker: a tile while the computer has a sprint status file (404 = none, so no tile); one ring per chunk, the
 // sprint scripts (registry ids sprint-start, sprint-close, sprint-heavy; they ask first like any script) and Open tmux.
-type Sprint = { sprint: string; updatedAt: string; cutoff: string; chunks: { id: string; title: string; state: string; percent: number; waitingOn: string }[] };
+type Sprint = { sprint: string; updatedAt: string; cutoff: string; overall?: number; chunks: { id: string; title: string; state: string; percent: number; waitingOn: string; steps?: string; activity?: string }[] };
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
 async function loadSprint() {
   const target = document.querySelector<HTMLElement>('#sprint');
@@ -1019,13 +1020,14 @@ async function loadSprint() {
     error = body.reason ?? body.error ?? 'unreadable';
   }
   const rings = data ? data.chunks.map((c) => `<div class="spr" data-state="${escape(['running', 'waiting', 'merged', 'blocked'].includes(c.state) ? c.state : 'unknown')}"><div class="ring" role="img" aria-label="${escape(c.id)} ${escape(c.state)} ${c.percent}%" style="--p:${Number(c.percent)}"><b>${Number(c.percent)}%</b></div>`
-    + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
+    + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}${c.activity ? ` · <span data-activity="${escape(c.activity)}">${escape(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${escape(c.steps)}</span>` : ''}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
+  const overall = data && Number.isFinite(data.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${Number(data.overall)}%" style="--p:${Number(data.overall)}" data-overall><b>${Number(data.overall)}%</b></div><div class="spt"><b>Whole sprint</b><small class="muted">${data.chunks.filter((c) => c.state === 'merged').length} of ${data.chunks.length} merged</small></div></div>` : '';
   const scripts = SPRINT_SCRIPTS.map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
     return index < 0 ? `<p class="muted">${label}: add a ${id} button to the registry.</p>` : `<form data-run="${index}"><button type="submit">${label} (asks first)</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`; }).join('');
   const merged = data ? data.chunks.filter((c) => c.state === 'merged').length : 0;
   keepOpen(() => { target.innerHTML = win('sprint', data ? 'Sprint · ' + escape(data.sprint || 'unnamed') : 'Sprint', data ? `${merged}/${data.chunks.length}` : '!',
     data ? `merged · updated ${escape(data.updatedAt || 'unknown')}` : 'status file unreadable',
-    (data ? `<p class="muted">Updated ${escape(data.updatedAt || 'unknown')}${data.cutoff ? ' · cutoff ' + escape(data.cutoff) : ''}</p><div class="springs">${rings}</div>`
+    (data ? `${overall}<p class="muted" data-sprint-times>${escape(sprintTimes(data))}</p><div class="springs">${rings}</div>`
       : `<article class="card warn"><p>The sprint status file is there but P9 cannot read it (${escape(error)}).</p></article>`)
     + `<div class="sprint-acts">${scripts}<button type="button" class="quiet" data-sprint-tmux>Open tmux</button><p class="muted" data-tmux-note></p></div>`, !data); });
 }
