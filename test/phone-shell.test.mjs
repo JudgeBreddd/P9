@@ -9,7 +9,7 @@ import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
 
 // The dev space keeps no files: the picture goes out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
-const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+const shot = async (page, name, clip) => { const png = await page.screenshot(clip ? { clip } : undefined); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 async function setup(paths) {
   await mkdir(path.join(paths.workspace, 'hub'), { recursive: true });
   await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
@@ -124,6 +124,37 @@ const checks = {
     await page.mouse.click(195, 20);
     await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 3000 });
   },
+  // N1 (Builder 2026-10-27, 17:04): with the keyboard open the composer sits on it with no gap. Chromium has no safe-area inset, so
+  // the page is served with env(safe-area-inset-bottom) as 34px (an iPhone's home indicator): the old rule then leaves 42 px under the box.
+  async kbdGap(page, side) {
+    await page.waitForSelector('h1:text("Chats")');
+    await newChat(page);
+    const gap = () => page.evaluate(() => innerHeight - document.querySelector('#box').getBoundingClientRect().bottom);
+    await shot(page, 'phone-kbd-gap-844-' + side);
+    const closed = await gap();
+    await page.setViewportSize({ width: 390, height: 500 });
+    await page.waitForFunction(() => document.body.classList.contains('kbd'));
+    await shot(page, 'phone-kbd-gap-500-' + side);
+    const open = await gap();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(open <= 12, 'keyboard open: the composer box is ' + open + ' px above the keyboard');
+    assert.ok(closed <= 12, 'keyboard closed: ' + closed + ' px');
+  },
+  // N2 (Builder 2026-10-27, 17:47): the focus ring of the top-left back button was cut off at the top. It must still show for a
+  // keyboard user, and lie inside the scrolling screen.
+  async backFocus(page, side) {
+    await page.waitForSelector('h1:text("Chats")');
+    await newChat(page);
+    for (let i = 0; i < 20 && !(await page.evaluate(() => document.activeElement?.matches('.bar .back'))); i++) await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('.bar .back')), true, 'Tab reaches the back button');
+    await shot(page, 'phone-back-focus-' + side, { x: 0, y: 0, width: 390, height: 120 });
+    const ring = await page.evaluate(() => {
+      const b = document.activeElement, c = getComputedStyle(b), r = b.getBoundingClientRect(), top = b.closest('section').getBoundingClientRect().top;
+      return { style: c.outlineStyle, width: parseFloat(c.outlineWidth), offset: parseFloat(c.outlineOffset), above: top - (r.top - parseFloat(c.outlineOffset) - parseFloat(c.outlineWidth)) };
+    });
+    assert.notEqual(ring.style, 'none', 'a keyboard user still sees where focus is');
+    assert.ok(ring.above <= 0, 'the ring reaches ' + ring.above + ' px above the screen it is drawn in: ' + JSON.stringify(ring));
+  },
   // The side panel's phone form (specs/side-panel.md check 5): an artifact opens the sheet with full: it fills the viewport, and the next ordinary sheet does not keep it.
   async sheetFull(page) {
     await page.waitForSelector('h1:text("Chats")');
@@ -142,6 +173,8 @@ const breaks = {
   inchat: { fix: [['body.inchat nav{display:none}', 'body.inchat nav{}']] },
   slot: { fix: [['id="composerSlot"', 'id="composerSlotGone"']] },
   sheet: { init: () => { HTMLDialogElement.prototype.close = function () {}; } },
+  kbdGap: { pre: [[/env\(safe-area-inset-bottom\)/g, '34px']], fix: [[/(#composerSlot\{[^}]*?)padding:8px 0;/, '$1padding:8px 0 42px;']] },
+  backFocus: { fix: [['.bar .back:focus-visible{', '.bar .back:focus-visibleX{']] },
   sheetFull: { fix: [['dialog.sheet.full{', 'dialog.sheet.fullx{']] },
 };
 
@@ -152,13 +185,14 @@ test('P5 and the shell: a fixed column, a 44 px bar on every tab, the tab bar yi
   // Every check runs, and every failure is listed at the end: a run is too slow to find them one at a time.
   const failures = [];
   for (const [name, check] of Object.entries(checks)) {
-    const good = await open(await phoneOn(t, server, browser), server);
-    try { await check(good.page); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0] + (error.actual === undefined ? '' : ' actual ' + JSON.stringify(error.actual))); await good.page.context().close(); continue; }
+    const pre = breaks[name].pre ?? [];
+    const good = await open(await phoneOn(t, server, browser), server, { fix: pre });
+    try { await check(good.page, 'after'); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0] + (error.actual === undefined ? '' : ' actual ' + JSON.stringify(error.actual))); await good.page.context().close(); continue; }
     await good.page.context().close();
-    const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
-    if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); await bad.page.context().close(); continue; }
+    const bad = await open(await phoneOn(t, server, browser), server, { ...breaks[name], fix: [...pre, ...(breaks[name].fix ?? [])] });
+    if ((breaks[name].fix || pre.length) && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); await bad.page.context().close(); continue; }
     let broke = true;
-    try { await check(bad.page); broke = false; } catch { /* the check failed on the broken page, as it must */ }
+    try { await check(bad.page, 'before'); broke = false; } catch { /* the check failed on the broken page, as it must */ }
     await bad.page.context().close();
     if (!broke) failures.push(name + ' (A/B): the check passed on the broken page');
   }
