@@ -650,3 +650,37 @@ test('Dev Focus\'s page when the editor server cannot start: no systemd user ses
   await evidence(dev, 'c10-no-user-session');
   console.log('PASS unavailable page: no user session named, with what to do, and no Install button');
 });
+
+// D13: the first start after an update says so: the version, one line per change, and the full list's link (the release
+// commit). Close closes it and a reload does not bring it back.
+test('What is new: after an update the window lists the changes and links the full list', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), directory = await mkdtemp(path.join(os.tmpdir(), 'p9-news-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const profile = path.join(directory, 'profile'), opened = path.join(directory, 'opened');
+  const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-version.txt'), '0.1.5');
+  await writeFile(path.join(directory, 'open'), '#!/bin/sh\necho "$1" > ' + JSON.stringify(opened) + '\n', { mode: 0o755 });
+  const env = { ...process.env, P9_OPEN_URL: path.join(directory, 'open') }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#mdlBody .review.news').waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#mdlT').innerText(), 'Updated to ' + version);
+  assert.match(await page.locator('#mdlBody').innerText(), new RegExp('P9 went from 0\\.1\\.5 to ' + version.replace(/\./g, '\\.') + '\\. What changed:'));
+  const { WHATS_NEW } = await import('../apps/web/src/whats-new.mjs');
+  assert.deepEqual(await page.locator('#mdlBody .review.news li').allTextContents(), WHATS_NEW.changes);
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)));
+  await evidence(page, 'd13-whats-new');
+  await page.locator('#mdlFoot [data-full]').click();
+  for (const end = Date.now() + 10000; Date.now() < end && !existsSync(opened); await new Promise((resolve) => setTimeout(resolve, 100)));
+  assert.equal((await readFile(opened, 'utf8')).trim(), 'https://github.com/JudgeBreddd/p9/commit/v' + version);
+  await page.locator('#mdlFoot [data-dismiss]').click();
+  await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+  assert.equal(await page.evaluate(() => document.querySelector('#mdl').open), false);
+  assert.equal(await readFile(path.join(profile, 'p9-version.txt'), 'utf8'), version);
+  await page.reload();
+  await page.locator('#rChat').waitFor();
+  assert.equal(await page.evaluate(() => window.p9.whatsNew()), null);
+});

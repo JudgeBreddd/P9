@@ -4,6 +4,7 @@ const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
 import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
+import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
@@ -422,6 +423,15 @@ function renderModal() {
     body.innerHTML = !snoozed.length && !S.alerts.length ? '<p class="empty">Nothing waiting on you.</p>'
       : `<ul class="mlist">${snoozed.map((c, i) => row('c' + i, c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}"></span>`, esc(c.title), (c.quiet ? '' : 'snoozed · ') + esc(c.sub))).join('')}${S.alerts.map((a, i) => row('a' + i, `<span class="lvl" data-l="${esc(a.level)}"></span>`, esc(a.txt), esc(a.kind))).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
+  } else if (m.kind === 'whats-new') {
+    // D13: after an update. The list ships with the app; the full list is the release commit's message.
+    const w = m.w, changes = WHATS_NEW.version === w.version ? WHATS_NEW.changes : [];
+    $('#mdlT').textContent = 'Updated to ' + w.version;
+    body.innerHTML = `<div class="review news"><p>P9 went from ${w.from ? esc(w.from) : 'an earlier version'} to ${esc(w.version)}.${changes.length ? ' What changed:' : ''}</p>`
+      + (changes.length ? '<ul>' + changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>' : '') + '</div>';
+    $('#mdlFoot').innerHTML = `<button data-slot="button" data-variant="outline" data-full>Full list of changes</button><span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Close</button>`;
+    $('#mdlFoot [data-full]').onclick = () => window.p9.openLink(w.link);
+    $('#mdlFoot [data-dismiss]').onclick = () => closeModal();
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
     body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
@@ -2726,6 +2736,7 @@ function onServerUpdate(u) {
   if (steps) openModal({ kind: 'alert', a });
 }
 window.p9?.onServerUpdate?.(onServerUpdate);
+window.p9?.whatsNew?.().then(w => { if (w) openModal({ kind: 'whats-new', w }); }, () => {});
 window.p9?.serverUpdate?.().then(onServerUpdate, () => {});
 // "Open it on <host>?" and "Finish the move?": Enter takes the switch from anywhere in the box (a form's Enter would take
 // its first button, Stay); Esc is no.
