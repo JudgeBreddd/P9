@@ -2278,14 +2278,19 @@ function wizRender() {
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
     const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
-    body = '<p class="muted sm">Chats need at least one agent signed in. Sign in opens your browser at its sign-in page; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
-      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].filter(([a]) => shown.includes(a)).map(([a, name, sub]) => {
+    body = '<p class="muted sm">Chats need at least one agent signed in. Sign in starts the agent\'s own sign-in; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
+      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account. P9 shows a one-time code to enter on OpenAI\'s sign-in page.']].filter(([a]) => shown.includes(a)).map(([a, name, sub]) => {
         const l = W.login[a] || {}, on = s[a] && W.stale !== a, ended = !on && !l.running && l.exit !== null && l.exit !== undefined;
         // D17: a login that expired still reads as signed in here, so Sign in again is always offered.
-        return row(name, sub, l.running ? '<span class="muted sm">Waiting for the browser…</span>' : on ? yes(true, 'Signed in') : yes(false, '', s[a] ? 'Sign-in expired' : 'Not signed in'),
-          l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : on ? 'Sign in again' : 'Sign in', on ? undefined : 'default'))
+        // D8: Codex signs in with a one-time code on OpenAI's page, which P9 opens when asked (nothing opens by itself).
+        const device = a === 'codex';
+        return row(name, sub, l.running ? `<span class="muted sm">${device ? (l.code ? '' : 'Getting a code…') : 'Waiting for the browser…'}</span>` : on ? yes(true, 'Signed in') : yes(false, '', s[a] ? 'Sign-in expired' : 'Not signed in'),
+          l.running ? (l.url ? btn('open:' + a, device ? 'Open the sign-in page' : "Browser didn't open?", device ? 'default' : undefined) : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : on ? 'Sign in again' : 'Sign in', on ? undefined : 'default'))
+          + (l.running && device && l.code ? `<div class="set-row" data-device-code><span class="muted sm">Your one-time code, for 15 minutes</span><span class="spacer"></span><code style="font:600 18px ui-monospace,monospace;letter-spacing:.08em;user-select:all">${esc(l.code)}</code></div>` : '')
+          + (l.running && W.note[a]?.info ? `<p class="muted sm">${esc(W.note[a].info)}</p>` : '')
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
-          + (ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
+          + (l.unsupported && !l.running ? '<p class="warn sm">This Codex has no sign-in with a code (P9 was built with Codex 0.159.3, which has one). Use Sign in in a terminal below and follow what Codex prints there.</p>'
+            : ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
           // D8: its own sign-in command in a P9 terminal, run by the CLI P9 ships (item 15). Nothing runs before Enter.
           + (s[a + 'Cli'] && !on && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
           + (W.note[a]?.error ? fail(W.note[a].error, W.note[a].detail) : '');
@@ -2408,9 +2413,10 @@ $('#welDlg').addEventListener('click', async e => {
   }
   if (['start', 'open', 'code', 'stop'].includes(act)) {
     const r = await run(() => (act === 'code' ? window.p9.agentLogin('code', agent, W.code.trim()) : window.p9.agentLogin(act, agent)).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
-    W.note[agent] = r.status >= 400 ? { error: r.body?.error || String(r.status) } : null;
+    // D8: the window says a page opened only when main opened it.
+    W.note[agent] = r.status >= 400 ? { error: r.body?.error || String(r.status) } : act === 'open' && r.body?.opened ? { info: 'Opened the sign-in page in your browser. Sign in there, then enter the code.' } : null;
     if (act === 'code' && r.status < 400) W.code = '';
-    if (act === 'start' && r.status < 400) W.began = agent;
+    if (act === 'start' && r.status < 400) { W.began = agent; for (const ms of [1500, 4000]) setTimeout(wizRefresh, ms); } // the page and code come a moment after
   }
   await wizRefresh();
 });

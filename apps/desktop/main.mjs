@@ -507,6 +507,8 @@ export async function createDesktop({ state, open } = {}) {
   // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
   // and claude.com@evil.example fail). The page sees whether a URL exists, never the URL or any other output.
   const SIGN_IN_ORIGINS = { claude: ['https://claude.com', 'https://claude.ai', 'https://console.anthropic.com'], codex: ['https://auth.openai.com'] };
+  // D8: Codex's one-time code is shown in this window only, and only when it has exactly a code's shape.
+  const DEVICE_CODE = /^[A-Z0-9]{4,8}-[A-Z0-9]{4,8}$/;
   const vendorUrl = (agent, text) => { try { const url = new URL(text); return SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; } };
   ipcMain.handle('p9:agent-login', async (event, ...args) => {
     const [action, agent, code] = args;
@@ -522,7 +524,8 @@ export async function createDesktop({ state, open } = {}) {
       if (result.status !== 200) return result;
       if (action === 'state') return { status: 200, body: Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map(name => [name,
         { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && vendorUrl(name, result.body[name].url) !== null,
-          exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
+          code: name === 'codex' && typeof result.body[name]?.code === 'string' && DEVICE_CODE.test(result.body[name].code) ? result.body[name].code : null,
+          unsupported: result.body[name]?.unsupported === true, exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
       const open = typeof result.body[agent]?.url === 'string' ? vendorUrl(agent, result.body[agent].url) : null;
       if (!open) return { status: 409, body: { error: 'no-sign-in-page' } };
       if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});

@@ -376,7 +376,7 @@ test('Setup wizard sign-in: the daemon runs only the fixed login of the bundled 
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).status, 202);
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).body.error, 'login-running', 'one login per agent');
   const state = await until(async () => { const s = (await call(instance, '/setup/login')).body; return s.claude.url && s; }, 'the CLI URL');
-  assert.deepEqual(state, { claude: { running: true, url: 'https://claude.com/cai/oauth/authorize?fake=1', exit: null }, codex: { running: false, url: null, exit: null } });
+  assert.deepEqual(state, { claude: { running: true, url: 'https://claude.com/cai/oauth/authorize?fake=1', code: null, unsupported: false, exit: null }, codex: { running: false, url: null, code: null, unsupported: false, exit: null } });
   assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['claude', '--cli', 'auth', 'login', '--claudeai']);
   // At most 512 printable characters, one line: never a second line, a second command or an argument.
   for (const code of ['a\nwhoami', 'a\rb', 'x'.repeat(513), '', 7]) assert.equal((await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code })).status, 400, JSON.stringify(code));
@@ -392,7 +392,23 @@ test('Setup wizard sign-in: the daemon runs only the fixed login of the bundled 
   assert.equal(await until(async () => { const s = (await call(instance, '/setup/login')).body.claude; return s.exit !== null && String(s.exit); }, 'the exit'), '0');
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
   await until(() => readFile(at('fake-login-argv'), 'utf8').then((text) => JSON.parse(text)[0] === 'codex').catch(() => false), 'the codex start'); // the fake's writeFileSync can be read mid-write
-  assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['codex', 'cli', 'login']);
+  assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['codex', 'cli', 'login', '--device-auth']);
+  // D8: Codex's page and one-time code are kept (colour codes stripped); output that is not a code shape is not.
+  const codex = async () => until(async () => { const s = (await call(instance, '/setup/login')).body.codex; return (s.code || s.exit !== null) && s; }, 'the codex code');
+  assert.deepEqual(await codex(), { running: true, url: 'https://auth.openai.com/codex/device', code: 'ABCD-12345', unsupported: false, exit: null });
+  for (const shape of ['<b>x</b>', 'ABC-12', 'abcd-12345']) {
+    await call(instance, '/setup/login/stop', 'POST', { agent: 'codex' });
+    await writeFile(at('fake-login-device'), shape);
+    assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
+    await until(async () => (await call(instance, '/setup/login')).body.codex.url, 'the codex page');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal((await call(instance, '/setup/login')).body.codex.code, null, shape);
+  }
+  // A codex without the flag exits 2 naming it: unsupported, so the wizard can say why.
+  await call(instance, '/setup/login/stop', 'POST', { agent: 'codex' });
+  await writeFile(at('fake-login-device'), 'unsupported');
+  assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
+  assert.deepEqual(await codex(), { running: false, url: null, code: null, unsupported: true, exit: 2 });
 });
 
 test('Setup wizard sign-in: main opens only the vendor sign-in page, by parsed origin, and the page never sees the URL (threat model row 31)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {

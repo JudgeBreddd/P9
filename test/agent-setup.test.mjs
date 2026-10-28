@@ -5,7 +5,8 @@
 // and no test presses Enter in a terminal.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -107,7 +108,7 @@ test('D7/D8: Chat Focus "Sign in" opens the agents step with the chat\'s agent; 
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'auth-required' })).status, 202);
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d7-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(home, { recursive: true }));
   const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
@@ -223,7 +224,7 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   const deadline = Date.now() + 55000, left = () => Math.max(1000, deadline - Date.now());
   const { instance, tmux } = await start(t, [], { without: ['ssh'] });
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c13-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(home, { recursive: true }));
   const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
@@ -307,7 +308,7 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'auth-required' })).status, 202);
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d17-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(home, { recursive: true }));
   const opened = path.join(home, 'opened.txt'), opener = path.join(home, 'open.sh');
   await writeFile(opener, '#!/bin/sh\nprintf "%s\\n" "$1" >> "' + opened + '"\n', { mode: 0o755 });
   const env = { ...process.env, HOME: home, P9_OPEN_URL: opener }; delete env.ELECTRON_RUN_AS_NODE;
@@ -364,7 +365,7 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   const { instance } = await start(t, [], { without: ['ssh'] });
   const bin = path.join(instance.directory, '.local', 'share', 'p9', 'bin');
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d16-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(home, { recursive: true }));
   const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
@@ -397,6 +398,64 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   await shot('d16-on-to-sign-in', page.locator('#welDlg'));
   assert.deepEqual(errors, []);
   console.log('PASS D16: Continue on the pick step; a failed setup says why and Continue without it reaches sign-in');
+});
+
+// D8: Codex signs in with its one-time code (codex login --device-auth): the step shows the code and opens OpenAI's page
+// only when asked, and says it opened only after main opened it. A codex without the flag is named, with the terminal way.
+test('D8: Codex sign-in shows its one-time code, opens the page on request only, and names a codex with no code sign-in', { skip: !linux, timeout: 90000 }, async (t) => {
+  const deadline = Date.now() + 85000, left = () => Math.max(1000, deadline - Date.now());
+  const { instance } = await start(t, [], { without: ['ssh'] });
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d8-')), opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
+  t.after(() => rm(home, { recursive: true }));
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" >> ' + opened + '\n');
+  await chmod(browser, 0o755);
+  const env = { ...process.env, HOME: home, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  const title = () => page.locator('#welT').innerText();
+  const body = page.locator('#welBody'), foot = page.locator('#welFoot');
+  await page.locator('#cards [data-key="welcome"] .open').click({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#welDlg')?.open, null, { timeout: left() });
+  for (let i = 0; i < 4 && await title() !== 'Claude, Codex or both?'; i++) await foot.locator('[data-act="next"]').click({ timeout: left() });
+  await body.locator('[data-act="choose:codex"]').click();
+  await foot.locator('[data-act="install"]').click();
+  await page.waitForFunction(() => document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
+  await body.locator('[data-act="start:codex"]').click();
+  const code = body.locator('[data-device-code] code');
+  await code.waitFor({ timeout: left() });
+  assert.equal(await code.innerText(), 'ABCD-12345');
+  assert.equal(await body.locator('[data-act="open:codex"]').innerText(), 'Open the sign-in page');
+  assert.doesNotMatch(await body.innerText(), /Opened the sign-in page/, 'nothing claims a page opened before one did');
+  assert.equal(await readFile(opened, 'utf8').catch(() => ''), '', 'nothing opens by itself');
+  await shot('d8-codex-code', page.locator('#welDlg'));
+  await body.locator('[data-act="open:codex"]').click();
+  await body.getByText('Opened the sign-in page in your browser.').waitFor({ timeout: left() });
+  assert.equal((await readFile(opened, 'utf8')).trim(), 'https://auth.openai.com/codex/device');
+  await body.locator('[data-act="stop:codex"]').click();
+  // A later codex without the flag exits 2 naming it: the step says so and how to sign in instead.
+  await writeFile(path.join(instance.workspace, 'fake-login-device'), 'unsupported');
+  await body.locator('[data-act="start:codex"]').click();
+  await body.getByText('This Codex has no sign-in with a code').waitFor({ timeout: left() });
+  assert.match(await body.innerText(), /P9 was built with Codex 0\.159\.3/);
+  assert.equal(await body.locator('[data-act="term:codex:login"]').count(), 1, 'the terminal way is offered');
+  await shot('d8-codex-unsupported', page.locator('#welDlg'));
+  assert.deepEqual(errors, []);
+  console.log('PASS D8: the code shows, the page opens on request only, and a codex without the flag is named');
+});
+
+// D8: the flag is hidden in codex's help, so the codex P9 ships is pinned: the lockfile's version, and its login takes it.
+test('D8: the codex P9 ships is 0.159.3 and its login takes --device-auth', { timeout: 30000 }, async () => {
+  const lock = await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8');
+  assert.deepEqual([...new Set([...lock.matchAll(/^ {2}'@openai\/codex@([0-9.]+)':/gm)].map((m) => m[1]))], ['0.159.3'], 'a new codex: check its login still has --device-auth, then move this pin');
+  const pkg = createRequire(await realpath(path.join(root, 'node_modules/@agentclientprotocol/codex-acp/package.json'))).resolve('@openai/codex/package.json'); // pnpm: from the adapter's real folder
+  assert.equal(JSON.parse(await readFile(pkg, 'utf8')).version, '0.159.3');
+  const help = await new Promise((resolve) => execFile(process.execPath, [path.join(path.dirname(pkg), 'bin/codex.js'), 'login', '--help'], { timeout: 20000 }, (error, stdout, stderr) => resolve(stdout + stderr)));
+  assert.match(help, /--device-auth/);
 });
 
 // D16: a daemon older than the app answers a route it lacks with a plain-text 404; the desktop names that as out of date
