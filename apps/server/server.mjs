@@ -1,10 +1,11 @@
 import { createServer } from 'node:http';
+import { execFile } from 'node:child_process';
 import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, existsSync } from 'node:fs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
@@ -12,7 +13,7 @@ import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
-import { createUpdate } from './update.mjs';
+import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
 import { SETTINGS } from './mission-fields.mjs';
 import { createHub } from './hub.mjs';
@@ -64,7 +65,7 @@ const STARTER_AGENTS = '# My workspace\n\nAgents working in this folder read thi
 const STARTER_WAITING = '# Needs you\n\nAgents put a note here when they need your answer or your OK. Each .md file in this folder shows\n'
   + 'on Mission Control as an item that needs you, until it is moved or deleted.\n';
 const webRoot = fileURLToPath(new URL('../web/dist/', import.meta.url));
-const types = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
+const types = { '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2' };
 
 export function authorize(headers, method, transport, credentials) {
   // The desktop check. The remote listener never accepts desktop credentials, proxy headers or source IP.
@@ -107,6 +108,22 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
   const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive });
+  // Rebuild + reload (remoteApp /rebuild): source checkouts only, as on the desktop (main.mjs source). A bundled daemon has no
+  // lockfile or web sources; P9_PACKAGED=1 lets a test see what one answers. Fixed argv, no shell, 10 minutes, one at a
+  // time; the error carries only the last 3 lines of stderr, at most 300 characters. P9_BUILD is the tests' stand-in.
+  const checkout = fileURLToPath(new URL('../../', import.meta.url));
+  const buildable = () => process.env.P9_PACKAGED !== '1'
+    && ['package.json', 'pnpm-lock.yaml', 'apps/web/src/pages/phone.astro'].every((name) => existsSync(path.join(checkout, name)));
+  let building = null;
+  const rebuild = (device) => new Promise((resolve) => {
+    const [command, args] = process.env.P9_BUILD ? [process.env.P9_BUILD, []] : ['pnpm', ['build']];
+    const started = Date.now();
+    console.error(JSON.stringify({ event: 'P9_REBUILD_STARTED', device, command: [path.basename(command), ...args].join(' ') }));
+    execFile(command, args, { cwd: checkout, timeout: 600_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, PATH: toolPath() } }, (error, _stdout, stderr) => {
+      console.error(JSON.stringify({ event: 'P9_REBUILD_DONE', device, ok: !error, ms: Date.now() - started }));
+      resolve(error ? { status: 500, error: 'build-failed', detail: String(stderr).trim().split('\n').slice(-3).join('\n').slice(0, 300) } : { status: 200, rebuilt: true });
+    });
+  });
   const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
@@ -773,7 +790,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     remoteApp.use('*', async (c, next) => {
       await next();
       // img-src data: (threat model row 26, v0.1.6 P9): an agent's own images and attachment chips; a data: image makes no request.
-      c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+      // font-src 'self' (c18): the theme picker's fonts, the same bundled files the desktop loads.
+      c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
       c.header('Referrer-Policy', 'no-referrer');
     });
     const login = (c, { status, token, csrf, ...result }) => {
@@ -801,6 +819,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       { 'content-type': types['.webmanifest'] }));
     remoteApp.get('/sw.js', async (c) => c.body(await readAsset(path.join(webRoot, 'sw.js')), 200,
       { 'content-type': types['.js'], 'service-worker-allowed': '/' }));
+    // The theme's boot script (DuwopBoot): puts the phone's saved look on the page before it paints.
+    remoteApp.get('/duwop-boot.js', async (c) => c.body(await readAsset(path.join(webRoot, 'duwop-boot.js')), 200,
+      { 'content-type': types['.js'] }));
     remoteApp.get('/p9-icon.png', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.png')), 200,
       { 'content-type': 'image/png' }));
     remoteApp.get('/p9-icon.svg', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.svg')), 200,
@@ -816,6 +837,17 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       const socket = c.env.incoming.socket, device = c.get('device');
       if (busy.get(socket)?.get(device) === 1) open.get(device)?.delete(socket);  // not when another request of it runs there
       return reply(c, auth.lock(device, 'self'));
+    });
+    // Rebuild + reload (c18, threat model row 64): the desktop's p9:rebuild for the phone. The UI build runs in the checkout
+    // this daemon serves the phone from; the phone page and its files are read from disk per request, so the next load
+    // gets the new build. Chats keep running and nothing restarts. The phone only, as the desktop has its own.
+    remoteApp.get('/rebuild', (c) => c.json({ available: buildable(), running: !!building }));
+    remoteApp.post('/rebuild', async (c) => {
+      if (!['', '{}'].includes((await c.req.text()).trim())) return c.json({ error: 'request-refused' }, 400);
+      if (!buildable()) return c.json({ error: 'rebuild-unsupported' }, 403);
+      if (building || update.brief()) return c.json({ error: building ? 'rebuild-running' : 'update-running' }, 409);
+      building = rebuild(c.get('device')).finally(() => { building = null; });
+      return reply(c, await building);
     });
     remoteApp.route('/', api);
     const remoteServer = createServer(options, getRequestListener(remoteApp.fetch));

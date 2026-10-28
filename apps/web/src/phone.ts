@@ -2,6 +2,10 @@ import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, sprintTimes, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
+import { svg as desktopIcons } from './helpers.mjs';
+import { MAINTENANCE } from './maintenance.mjs';
+import { DUWOP } from './theme-picker';
+import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
@@ -41,7 +45,7 @@ const topBar = (o: BarOptions) => (o.back ? `<button type="button" class="back" 
   + `<div class="title"><h1>${o.title}</h1>${o.sub !== undefined || o.subId ? `<small${o.subId ? ` id="${o.subId}"` : ''}>${o.sub ?? ''}</small>` : ''}</div><span class="sync" role="img" aria-label="Live"></span>`
   + (o.acts ?? []).map((a) => `<button type="button"${a.id ? ` id="${a.id}"` : ''} aria-label="${a.label}"${a.attrs ? ' ' + a.attrs : ''}>${a.icon}</button>`).join('');
 const mountBar = (name: string, o: BarOptions) => { one(`[data-bar="${name}"]`).innerHTML = topBar(o); };
-mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] });
+mountBar('chat', chatsBar());
 // Terminal (spec §6): the title is the picker, + starts one, ■ stops the open one; #termState is the line under the title.
 mountBar('terminal', { title: `<button type="button" id="pickTerminal" class="pick" aria-label="Choose terminal"><span id="termTitle">Terminal</span>${ICON.chevron}</button>`, sub: 'No terminal open', subId: 'termState',
   acts: [{ id: 'newTerminal', label: 'New terminal', icon: ICON.plus }, { id: 'stopTerminal', label: 'Stop terminal', icon: ICON.stop }, { id: 'refreshTerminal', label: 'Refresh', icon: ICON.refresh }] });
@@ -58,6 +62,7 @@ one('main').addEventListener('scroll', (event) => { const box = event.target as 
 const sheet = one<HTMLDialogElement>('#sheet');
 function openSheet(title: string, html: string) { one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
 sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
+sheet.addEventListener('close', () => sheet.classList.remove('full')); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
 addEventListener('p9-sheet', (event) => { const { title, html, full } = (event as CustomEvent).detail; sheet.classList.toggle('full', full === true); openSheet(String(title), String(html)); }); // ponytail: the one door into the sheet for code outside this file and for its test; callers pass trusted HTML
 // The app is a column the size of the visible viewport: when a keyboard opens, visualViewport shrinks (iOS Safari leaves
 // the layout viewport alone and offsets the visual one), the column follows it, and the composer rides the keyboard. The
@@ -435,7 +440,7 @@ function route(id: string) {
   one<HTMLElement>('#chatList').hidden = !!id; one<HTMLElement>('#chatArea').hidden = !id; one<HTMLElement>('#composerSlot').hidden = !id;
   document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
   barSig = '';
-  if (!id) { pushed = false; mountBar('chat', { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus }] }); online(); renderList(); return; }
+  if (!id) { pushed = false; mountBar('chat', chatsBar()); online(); renderList(); return; }
   if (changed) { one('#events').replaceChildren(); windowSize = 60; seenItems = 0; stuck = true; one<HTMLElement>('#jump').hidden = true; }
   render();
   // L1: the unsent message from before the page was last thrown away (a sign-in, a reload) goes back in its own chat's box.
@@ -1251,6 +1256,47 @@ one<HTMLButtonElement>('#loadDisk').onclick = () => {
   editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: disk.content } });
   one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true; if (!one<HTMLElement>('#rendered').hidden) preview(true);
 };
+
+// ---- c18: the theme picker, Settings and Rebuild + reload, as on the desktop ----
+// The Chats list's page-level actions, as the desktop's top bar has them: New chat, Theme and Settings (its icons, its ids).
+function chatsBar(): BarOptions {
+  return { title: 'Chats', acts: [{ id: 'newChat', label: 'New chat', icon: ICON.plus },
+    { id: 'themeBtn', label: 'Theme', icon: desktopIcons.palette }, { id: 'setBtn', label: 'Settings', icon: desktopIcons.gear }] };
+}
+// The look is DUWOP's, saved on this phone (localStorage p9-look) the way the desktop saves its own, so each keeps its pick.
+// The browser's own bar follows it: theme-color takes a plain colour and the themes are oklch, so it is read back from a canvas.
+function paintBar() {
+  const ctx = document.createElement('canvas').getContext('2d'); if (!ctx) return;
+  ctx.fillStyle = '#080b10'; ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--background').trim() || '#080b10'; ctx.fillRect(0, 0, 1, 1);
+  one<HTMLMetaElement>('meta[name="theme-color"]').content = '#' + [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3).map((n) => n.toString(16).padStart(2, '0')).join('');
+}
+DUWOP.init(); paintBar(); onLookChange(paintBar);
+function openTheme() { openSheet('Theme', '<div id="themeMenu"></div>'); DUWOP.menu(one('#themeMenu')); }
+// Settings: what the daemon owns, and Maintenance. Rebuild + reload is offered only when the daemon runs from a source checkout.
+const REBUILD = MAINTENANCE.find((item) => item.id === 'mtRebuild')!;
+async function openSettings() {
+  openSheet('Settings', '<div id="phoneSettings" class="stack"><p class="muted">Loading…</p></div>');
+  const build = await request('/rebuild').catch(() => null) as { available: boolean; running: boolean } | null;
+  const box = document.getElementById('phoneSettings'); if (!box) return;
+  box.innerHTML = '<h2 class="eyebrow">Maintenance</h2>' + (build?.available
+    ? `<button type="button" class="quiet" id="mtRebuild"${build.running ? ' disabled' : ''}>${build.running ? 'Rebuilding…' : REBUILD.label}</button>`
+      + '<p class="muted" id="mtRebuildNote" role="status">Source checkouts only: rebuilds P9\'s pages from the server\'s code (pnpm build), then reloads this page with the new build. Chats keep running; nothing restarts.</p>'
+    : '<p class="muted">Rebuild + reload is for a P9 that runs from its source code. This server runs an installed build.</p>');
+  const button = document.getElementById('mtRebuild') as HTMLButtonElement | null;
+  if (button) button.onclick = () => void rebuildUi(button);
+}
+// The desktop's mtRebuild: the button says Rebuilding… until the daemon answers, then the page loads the new build.
+async function rebuildUi(button: HTMLButtonElement) {
+  button.disabled = true; button.textContent = 'Rebuilding…';
+  const result = await mutate('/rebuild', {}).catch((error: Error) => ({ status: 0, body: { error: error.message } as Record<string, unknown> }));
+  if (result.status === 200 && result.body.rebuilt) { location.reload(); return; }
+  button.disabled = false; button.textContent = REBUILD.label;
+  one('#mtRebuildNote').textContent = 'Could not rebuild P9 (' + String(result.body.error ?? 'no-answer') + (result.body.detail ? ': ' + String(result.body.detail) : '') + ')';
+}
+one('[data-bar="chat"]').addEventListener('click', (event) => {
+  const id = (event.target as Element).closest('button')?.id;
+  if (id === 'themeBtn') openTheme(); else if (id === 'setBtn') void openSettings();
+});
 
 addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
