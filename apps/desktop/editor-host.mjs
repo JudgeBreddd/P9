@@ -1,7 +1,7 @@
 // Dev Focus editor host: VSCodium's remote extension host (REH), started by the desktop on loopback only.
 // It runs extensions, terminals and language servers as you; their direct disk writes are "runs as you, not guarded" (SECURITY.md surface 5).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFile, chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -24,11 +24,6 @@ export const EDITOR_DOWNLOADS = {
   x64: [REH + 'x64-1.121.03429.tar.gz', '9b27e6957f7cca9b52686eb9866db131e75d37d180ea5ba0f6cdf44b799f75d9'],
   arm64: [REH + 'arm64-1.121.03429.tar.gz', '30713cc768ac2727731484d6fcc93b56a1cc0a102dc4c9bc92eff1d7c4d37282'],
 };
-// D12 (threat model row 56): Dev Focus draws its own text, so Electron's spellchecker never sees it; an extension does the job.
-// Code Spell Checker 4.10.0 from Open VSX (3.2 MB, English dictionaries inside, no network once installed). The SHA-256 is of the
-// file Open VSX served on 2026-10-27 (it publishes none). P9_SPELL_URL is for tests only; it gives no more than P9_EDITOR_HOST does.
-export const SPELL_CHECKER = ['https://open-vsx.org/api/streetsidesoftware/code-spell-checker/4.10.0/file/streetsidesoftware.code-spell-checker-4.10.0.vsix',
-  '0b587a38c4c78887a782158f727bbdaddfab2deae3ce0d80efbab40d56475638'];
 export const OPEN_LOG = win ? path.join(EDITOR_DIR, 'state', 'open-in-vscode.jsonl') : path.join(home, '.local', 'state', 'p9', 'open-in-vscode.jsonl');
 const LOOPBACK = '127.0.0.1';
 
@@ -96,14 +91,13 @@ export async function hostWritable(data, file, kind = 'write') {
 // The caller may pick the unit name first, so it can register the quit handler before the host exists.
 // socket: a Unix socket path instead of a loopback port (the daemon's editor for Server mode, reached through the tunnel).
 export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server'), address = LOOPBACK, data = path.join(EDITOR_DIR, 'editor'),
-  unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), timeout = 30000, signal, spell = false, socket } = {}) {
+  unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), timeout = 30000, signal, socket } = {}) {
   if (address !== LOOPBACK) throw new Error('editor-host-loopback-only');
   if (process.platform !== 'linux' && !win) throw new Error('editor-host-unsupported-platform');
   const commit = JSON.parse(await readFile(path.join(host, 'product.json'), 'utf8')).commit;
   if (commit !== EDITOR_COMMIT) throw new Error('editor-host-commit-mismatch');
   await mkdir(data, { recursive: true, mode: 0o700 });
   if (win) userOnly(data, true); else await chmod(data, 0o700);
-  if (spell) await installSpellChecker({ host, data }).then(result => { if (!/^(installed|present|offered-before)$/.test(result)) console.error('p9: spell checker not installed: ' + result); });
   // The token goes in an owner-only file: any local user can read a process's argv. A new file each start, so an old
   // file's looser mode never carries over.
   const token = randomBytes(32).toString('hex'), tokenFile = path.join(data, 'connection-token');
@@ -165,7 +159,7 @@ export function daemonEditor({ socket, unit, host, data = path.join(EDITOR_DIR, 
       if (running || existsSync(socket)) stopEditorHost(unit);
       running = null;
       await rm(socket, { force: true });
-      running = await start({ host, data, unit, socket, spell: process.env.P9_SPELL_CHECK !== 'off' });
+      running = await start({ host, data, unit, socket });
       // The REH binds with the daemon's umask; owner-only like daemon.sock (the state folder is 0700 as well).
       await chmod(socket, 0o600);
       return running;
@@ -213,36 +207,6 @@ export async function installEditorHost({ dir = EDITOR_DIR, download = editorDow
     if (existsSync(final)) await rename(final, final + '.replaced-' + Date.now());
     await rename(target, final);
     return { installed: final };
-  } finally {
-    await rm(temp, { recursive: true, force: true });
-  }
-}
-
-// Installs the spell checker into the editor host's extensions folder, once: download to a temp folder inside data, check the
-// SHA-256, hand the file to the host's own --install-extension (no shell). A marker file means "offered", so an extension the
-// user later removes stays removed. Never throws: offline, or any failure, leaves Dev Focus as it was and returns why (no marker,
-// so the next start tries again). ponytail: the download holds the editor's start for up to the timeout on a stalled network.
-export async function installSpellChecker({ host, data, download = [process.env.P9_SPELL_URL ?? SPELL_CHECKER[0], SPELL_CHECKER[1]], timeout = 20000, max = 20 * 1024 * 1024 }) {
-  const marker = path.join(data, 'spell-checker-offered'), extensions = path.join(data, 'extensions');
-  if (existsSync(marker)) return 'offered-before';
-  const offered = () => writeFile(marker, new Date().toISOString() + '\n', { mode: 0o600 });
-  if ((await readdir(extensions).catch(() => [])).some(name => name.startsWith('streetsidesoftware.code-spell-checker-'))) { await offered(); return 'present'; }
-  const temp = await mkdtemp(path.join(data, '.spell-download-'));
-  try {
-    const response = await fetch(download[0], { signal: AbortSignal.timeout(timeout) }).catch(() => null);
-    if (!response?.ok) return 'download-failed';
-    const bytes = Buffer.from(await response.arrayBuffer().catch(() => Buffer.alloc(0)));
-    if (!bytes.length || bytes.length > max) return 'download-failed';
-    if (createHash('sha256').update(bytes).digest('hex') !== download[1]) return 'checksum-mismatch';
-    const file = path.join(temp, 'spell-checker.vsix');
-    await writeFile(file, bytes, { mode: 0o600 });
-    const server = win ? [path.join(host, 'node.exe'), path.join(host, 'out', 'server-main.js')] : [path.join(host, 'bin', 'codium-server')];
-    const code = await new Promise(resolve => spawn(server[0], [...server.slice(1), '--install-extension', file, '--extensions-dir', extensions,
-      '--user-data-dir', path.join(data, 'data'), '--server-data-dir', path.join(data, 'server'), '--accept-server-license-terms'],
-      { shell: false, stdio: 'ignore', env: childEnv(), timeout: 120000, killSignal: 'SIGKILL' }).once('error', () => resolve(-1)).once('exit', resolve));
-    if (code !== 0) return 'install-failed';
-    await offered();
-    return 'installed';
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

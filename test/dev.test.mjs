@@ -206,7 +206,7 @@ test('Phase 8: Dev Focus edits real files through the guarded save', { skip, tim
     '--extensions-dir', path.join(hostData, 'extensions')], { encoding: 'utf8', env: { ...process.env, ...homeEnv }, timeout: 120000 });
   assert.match(installed.stdout, /'ms-python\.debugpy' v2026\.6\.0 was successfully installed/, installed.stderr);
   const hostsBefore = new Set(win ? [] : editorScopes());
-  const env = { ...process.env, ...homeEnv, P9_EDITOR_HOST: host, P9_SPELL_CHECK: 'off', P9_CODE: fakeCode }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ...homeEnv, P9_EDITOR_HOST: host, P9_CODE: fakeCode }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -573,7 +573,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   await mkdir(path.join(instance.workspace, 'src'));
   await writeFile(path.join(outside, 'a.txt'), 'outside before\n');
   await writeFile(path.join(instance.workspace, 'src', 'b.txt'), 'inside before\n');
-  const env = { ...process.env, ...(win ? { LOCALAPPDATA: home } : { HOME: home }), P9_EDITOR_HOST: host, P9_SPELL_CHECK: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ...(win ? { LOCALAPPDATA: home } : { HOME: home }), P9_EDITOR_HOST: host }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -645,7 +645,7 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   console.log('PASS Open Folder: inside at once, outside after one question, saves there guarded, a folder holding the workspace refused, p9 edit back to the workspace');
 });
 
-// ---- Chunk 5: D11 (save only on Ctrl+S / Save, white dot while unsaved) and D12 (spell check) ----
+// ---- Chunk 5: D11 (save only on Ctrl+S / Save, white dot while unsaved) ----
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fixtures = path.join(root, '_private', 'fixtures');
 // The dev space prints a failure's detail only when the whole run ends; print it where it happens too.
@@ -678,7 +678,7 @@ async function openDevFocus(t, editor, extra = {}) {
 test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot while unsaved', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
   const editor = await editorFor();
   if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
-  const { instance, dev, errors } = await openDevFocus(t, editor, { P9_SPELL_CHECK: 'off' });
+  const { instance, dev, errors } = await openDevFocus(t, editor, {});
   const plain = path.join(instance.workspace, 'plain.txt');
   await writeFile(plain, 'before\n');
   assert.equal(await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('files').get('autoSave')), 'off');
@@ -714,62 +714,3 @@ test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot whi
   assert.equal(await readFile(plain, 'utf8'), 'again typed before\n', 'Save writes the edit');
   assert.deepEqual(online(errors), []);
 }));
-
-test('D12: Dev Focus underlines misspelled words (Code Spell Checker, installed once)', { skip: process.platform !== 'linux', timeout: 300000 }, logged(async t => {
-  const editor = await editorFor();
-  if (!editor || !existsSync(path.join(fixtures, 'spell.vsix'))) return t.skip('needs the editor server and the fixtures spell.vsix');
-  const served = await readFile(path.join(fixtures, 'spell.vsix'));
-  const { createServer } = await import('node:http');
-  const server = createServer((_request, response) => response.end(served)).listen(0, '127.0.0.1');
-  t.after(() => server.close());
-  await new Promise(resolve => server.once('listening', resolve));
-  const { instance, home, dev, errors } = await openDevFocus(t, editor, { P9_SPELL_URL: 'http://127.0.0.1:' + server.address().port + '/spell.vsix' });
-  await writeFile(path.join(instance.workspace, 'note.txt'), 'The quikc brwon fox jumps over the lazzy dog.\n');
-  const found = await dev.evaluate(async () => {
-    const { v, open } = window.devFocus, editor = await open('note.txt');
-    const deadline = Date.now() + 120000;
-    while (Date.now() < deadline) {
-      const spelling = v.languages.getDiagnostics(editor.document.uri).filter(item => /cspell/i.test(String(item.source)));
-      if (spelling.length) return spelling.map(item => editor.document.getText(item.range));
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    return [];
-  });
-  assert.ok(['quikc', 'brwon', 'lazzy'].every(word => found.includes(word)), 'misspellings underlined: ' + JSON.stringify(found));
-  assert.ok(!found.includes('fox') && !found.includes('dog') && !found.includes('jumps'), 'correct words left alone: ' + JSON.stringify(found));
-  assert.ok(existsSync(path.join(home, '.local', 'share', 'p9', 'editor', 'spell-checker-offered')));
-  await shot(dev, 'd12-spelling');
-  assert.deepEqual(online(errors), []);
-}));
-
-test('D12: the spell checker is installed once, from a pinned download', { timeout: 60000 }, async t => {
-  const { createServer } = await import('node:http');
-  const { SPELL_CHECKER, installSpellChecker } = await import('../apps/desktop/editor-host.mjs');
-  const { createHash } = await import('node:crypto');
-  const body = Buffer.from('not really an extension');
-  const server = createServer((_request, response) => response.end(body)).listen(0, '127.0.0.1');
-  t.after(() => server.close());
-  await new Promise(resolve => server.once('listening', resolve));
-  const url = 'http://127.0.0.1:' + server.address().port + '/x.vsix', good = createHash('sha256').update(body).digest('hex');
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-spell-')), data = path.join(dir, 'data'), fake = path.join(dir, 'host');
-  await mkdir(data); await mkdir(path.join(fake, 'bin'), { recursive: true });
-  await writeFile(path.join(fake, 'bin', 'codium-server'), '#!/bin/sh\nprintf "%s\\n" "$@" > ' + path.join(dir, 'args') + '\nexit 0\n', { mode: 0o755 });
-  assert.match(SPELL_CHECKER[0], /^https:\/\/open-vsx\.org\//);
-  // A download that is not the pinned file installs nothing and leaves no marker or temp folder.
-  assert.equal(await installSpellChecker({ host: fake, data, download: [url, '0'.repeat(64)] }), 'checksum-mismatch');
-  assert.deepEqual((await readdir(data)).sort(), []);
-  assert.equal(existsSync(path.join(dir, 'args')), false, 'the host was not asked to install it');
-  // The pinned file goes to the host's own --install-extension, then the offer is marked and not repeated.
-  assert.equal(await installSpellChecker({ host: fake, data, download: [url, good] }), 'installed');
-  const args = (await readFile(path.join(dir, 'args'), 'utf8')).split('\n');
-  assert.equal(args[0], '--install-extension');
-  assert.ok(args.includes('--extensions-dir') && args.includes(path.join(data, 'extensions')));
-  assert.deepEqual((await readdir(data)).sort(), ['spell-checker-offered']);
-  await rm(path.join(dir, 'args'));
-  assert.equal(await installSpellChecker({ host: fake, data, download: [url, good] }), 'offered-before');
-  assert.equal(existsSync(path.join(dir, 'args')), false);
-  // Offline: a failed download is reported, never thrown, and the next start tries again (no marker).
-  const dead = await mkdtemp(path.join(os.tmpdir(), 'p9-spell-'));
-  assert.equal(await installSpellChecker({ host: fake, data: dead, download: ['http://127.0.0.1:1/x.vsix', good] }), 'download-failed');
-  assert.deepEqual(await readdir(dead), []);
-});

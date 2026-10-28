@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
 import { stillAuthorized } from './authority.mjs';
-import { readFile } from '../../packages/files/index.mjs';
+import { readFile, HEAVY } from '../../packages/files/index.mjs';
 
 const HOST = /^[\w.-]{1,64}$/;
 const LOG = /^(?:[\w-]+\/)?[\w.-]+\.log$/; // <host>/<job>.log = a log another machine sends here
@@ -24,8 +24,8 @@ const INC_FILE = /^\d{4}-\d\d-\d\d-(.+?)(?:-\d{6})?\.md$/;
 const STAMP = /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/;
 const AUDIT_RUN = /^\d{4}-\d{2}-\d{2}$/;
 const BREAK = /\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/; // the line breaks Python's splitlines() knows
-// Folders the hub's queue never looks in (mission_control.py SKIP).
-const SKIP = new Set(['_archive', '_private', 'node_modules', '.venv', 'recommended-delete', '_intake', '_templates', 'templates']);
+// Folders the hub's queue never looks in (mission_control.py SKIP, plus the HEAVY dependency and build folders).
+const SKIP = new Set([...HEAVY, '_archive', '_private', 'recommended-delete', '_intake', '_templates', 'templates']);
 // One ssh call each: every server log's name, change time and last line; every server incident's name, first line and
 // Resolved line (tabs in a line become spaces).
 const SERVER_LS = "cd ~/icm-logs 2>/dev/null && for f in *.log; do [ -f \"$f\" ] && printf '%s\\t%s\\t%s\\n' \"$f\" "

@@ -819,7 +819,7 @@ export async function createDesktop({ state, open } = {}) {
     app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
     // An install in progress (the AppImage's first start) finishes first, so Dev Focus opens instead of saying missing.
     await editorInstall?.catch(() => {});
-    return startEditorHost({ unit, signal: quit.signal, spell: process.env.P9_SPELL_CHECK !== 'off' });
+    return startEditorHost({ unit, signal: quit.signal });
   })().catch(error => { editorHost = null; throw error; });
   // Server mode (threat model row 50): the server's daemon runs the editor (POST /dev/editor) and the tunnel forwards its socket to
   // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the
