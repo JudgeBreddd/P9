@@ -13,6 +13,8 @@ import '../styles/phone.css';
     <title>P9 phone</title>
   </head>
   <body data-view="chat">
+    <!-- L2: the P9 mark (p9-icon.svg) moving from first paint until the chat list has loaded, so the page never looks frozen. -->
+    <div id="boot" role="status" aria-label="Loading"><svg viewBox="0 0 512 512" aria-hidden="true"><circle class="ring" cx="256" cy="256" r="132" /><path class="p" d="M178 332V180h92c69 0 103 31 103 83 0 51-35 81-104 81h-43v-40h42c38 0 56-13 56-41 0-29-18-43-55-43h-43v112z" /></svg></div>
     <div id="app">
     <div id="stale" role="status" hidden>Offline: showing stale data</div>
     <div id="gap" role="alert" hidden>History gap. Tap to reload.</div>
