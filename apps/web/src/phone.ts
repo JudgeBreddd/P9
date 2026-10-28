@@ -893,8 +893,17 @@ one<HTMLButtonElement>('[data-key="paste"]').onclick = async (event) => {
   if (text) term.sendKeys(text, at);
   term.focus();
 };
-// T1: a tap on the terminal opens the keyboard.
+// T2: a tap on the terminal opens the keyboard. A finger's touchend on xterm's screen never becomes a click (the click this
+// line used to wait for did not come), so a tap is read from the touch itself: lifted within 10 px and 600 ms of going down.
+// Focus has to happen inside that event for a phone to raise its keyboard. The click stays for a mouse.
 one('#screen').addEventListener('click', () => term.focus());
+let tapFrom: { x: number; y: number; at: number } | null = null;
+one('#screen').addEventListener('touchstart', (event) => { const touch = (event as TouchEvent).touches[0]; tapFrom = (event as TouchEvent).touches.length === 1 ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp } : null; }, { passive: true });
+one('#screen').addEventListener('touchend', (event) => {
+  const touch = (event as TouchEvent).changedTouches[0];
+  if (tapFrom && Math.hypot(touch.clientX - tapFrom.x, touch.clientY - tapFrom.y) < 10 && event.timeStamp - tapFrom.at < 600) term.focus();
+  tapFrom = null;
+}, { passive: true });
 addEventListener('resize', term.fit); window.visualViewport?.addEventListener('resize', term.fit); // the screen fills the column, which follows a keyboard
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
 termState('No terminal open');
