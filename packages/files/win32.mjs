@@ -2,7 +2,8 @@
 // neither, so each component opens with NtCreateFile relative to its parent's handle and FILE_OPEN_REPARSE_POINT
 // (a junction or symlink opens as itself and is refused), and the opened handle's final path must be the expected one
 // (this also refuses case and 8.3 short-name variants). Reads, writes, renames and deletes go through the same handles.
-// ponytail: node:ffi is experimental in Node 26.10 and these calls are synchronous; files are capped at MAX_BYTES (2 MiB).
+// ponytail: node:ffi is experimental in Node 26.10 and these calls are synchronous; editor files are capped at MAX_BYTES
+// (2 MiB), and the tunnel send's bigger files go 1 MiB a call with a turn for other requests between (index.mjs pieces).
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 

@@ -388,6 +388,8 @@ async function* pieces(file) {
     if (!bytesRead) return;
     yield { piece: buffer.subarray(0, bytesRead), at };
     at += bytesRead;
+    // win32.mjs's calls are synchronous: give the daemon's other requests a turn between pieces of a big file.
+    if (win) await new Promise(setImmediate);
   }
 }
 const handleHash = async (file) => {
