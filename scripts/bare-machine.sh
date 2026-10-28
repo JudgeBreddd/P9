@@ -18,14 +18,14 @@ apt_file() {
     || printf 'FROM %s\nRUN apt-get update && apt-get install -y apt-file && apt-file update\n' "$UBUNTU" | docker build -q -t p9-bare-apt-file - >/dev/null
   docker run --rm p9-bare-apt-file apt-file search -l -x "^/(usr/)?lib/$(docker exec "$NAME" uname -m)-linux-gnu/$1\$" | head -1
 }
-as_p9() { docker exec -u p9 -w /home/p9/p9 -e XDG_RUNTIME_DIR=/run/user/1000 -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "$NAME" bash -lc "$1"; }
+as_p9() { docker exec -u p9 -w /srv/p9/p9 -e XDG_RUNTIME_DIR=/run/user/1000 -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "$NAME" bash -lc "$1"; }
 
 case "${1:-}" in
 boot)
   docker build -q -t p9-bare - <<EOF
 FROM $UBUNTU
 RUN apt-get update && apt-get install -y systemd systemd-sysv dbus-user-session sudo ca-certificates git \
- && (userdel -r ubuntu || true) && useradd -m -u 1000 -s /bin/bash p9 \
+ && (userdel -r ubuntu || true) && useradd -m -d /srv/p9 -u 1000 -s /bin/bash p9 \
  && echo 'p9 ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/p9 && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/p9
 CMD ["/sbin/init"]
 EOF
@@ -33,7 +33,7 @@ EOF
   docker run -d --name "$NAME" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock p9-bare >/dev/null
   for i in $(seq 1 100); do docker exec "$NAME" test -S /run/user/1000/bus 2>/dev/null && break; sleep 0.3; done
   docker exec "$NAME" test -S /run/user/1000/bus || { docker logs "$NAME" | tail -40; echo "BARE_NOT_BOOTED"; exit 1; }
-  git ls-files -z | tar --null -T - -cf - | docker exec -i "$NAME" bash -c 'mkdir -p /home/p9/p9 && tar -xf - -C /home/p9/p9 && chown -R p9:p9 /home/p9/p9'
+  git ls-files -z | tar --null -T - -cf - | docker exec -i "$NAME" bash -c 'mkdir -p /srv/p9/p9 && tar -xf - -C /srv/p9/p9 && chown -R p9:p9 /srv/p9/p9'
   as_p9 'git init -q && git add -A && git -c user.name=bare -c user.email=bare@localhost commit -qm clone'
   echo "BARE_BOOTED $(docker exec "$NAME" uname -m) $(as_p9 'systemctl --user is-system-running || true')"
   docker exec "$NAME" dpkg-query -W -f '${Package}\n' | sort > /tmp/p9-bare-before.txt

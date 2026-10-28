@@ -670,18 +670,35 @@ export async function createDesktop({ state, open } = {}) {
   // chats are on the server already. One move per chat at a time; each has its Cancel.
   // Its progress goes to the window on p9:move (specs/move-progress-events.md, threat row 3): phase, percent, bytes and the
   // host main chose, never a path or a credential. Only for drawing; the ledger events stay the record.
+  // With a Send files plan (item 23): id, plan id, choice, deleteToo, as the page answered the prompt for the chat's folder. The
+  // folder goes over first, a Syncthing folder's not at all (Builder, 2026-10-27: "Keep today's wait"). Limits refuse before the freeze.
   const sending = new Map();
+  let xferPlan = null, xferBusy = false; // Send files' plan and its one-at-a-time, below; a move with files takes them too
   ipcMain.handle('p9:send-to-server', async (event, ...args) => {
-    if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
+    const [id, planId, choice, deleteToo] = args;
+    const ok = uuid(id) && (args.length === 1 || args.length === 4 && uuid(planId) && (choice === null || ['laptop', 'server', 'newer'].includes(choice)) && typeof deleteToo === 'boolean');
+    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
     if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the server already.' } };
     if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' } };
-    if (!localState || sending.has(args[0])) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
+    if (!localState || sending.has(id)) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
+    let files = null;
+    if (planId) {
+      if (xferBusy) return { status: 409, body: { error: 'busy', message: 'A send is running already.' } };
+      if (xferPlan?.id !== planId || xferPlan.host !== serverLast) return { status: 409, body: { error: 'stale', message: 'That check of the files is gone: press Send to server again.' } };
+      const { plan: p } = xferPlan, work = resolveXfer(p, choice, deleteToo);
+      if (!work) return { status: 409, body: { error: 'choice', message: 'Pick how to settle the files that differ.' } };
+      const limit = overLimit(work, settings.xfer, p.truncated);
+      if (limit) return { status: 409, body: limit };
+      xferPlan = null;
+      if (!p.syncthing.laptop.length && !p.syncthing.server.length) files = { userData: app.getPath('userData'), plan: p, work };
+    }
     const stop = new AbortController();
-    sending.set(args[0], stop);
+    sending.set(id, stop);
+    if (files) xferBusy = true;
     const onProgress = move => { if (!window.isDestroyed()) window.webContents.send('p9:move', move); };
-    try { return await sendToServer({ local: localState, id: args[0], host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal }); }
+    try { return await sendToServer({ local: localState, id, host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal, files }); }
     catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
-    finally { sending.delete(args[0]); }
+    finally { sending.delete(id); if (files) xferBusy = false; }
   });
   ipcMain.handle('p9:move-cancel', (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
@@ -691,7 +708,6 @@ export async function createDesktop({ state, open } = {}) {
   // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
   // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
   // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
-  let xferPlan = null, xferBusy = false;
   const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
   ipcMain.handle('p9:xfer', async (event, ...args) => {
     const [action, a, b, c] = args;
