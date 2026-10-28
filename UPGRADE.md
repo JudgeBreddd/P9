@@ -45,7 +45,8 @@ Installing restarts the background service, which ends a chat turn in progress.
   the reason before it asks for your admin password for anything else. Without it, Dev Focus offers an *Install the
   editor server* button.
 - **A server that runs P9:** a server still on 0.1.5 does not update itself (0.1.5 has no update route). Update it by
-  hand once: the README's Update section, or run install.sh there. After that, connecting from a newer P9 updates it.
+  hand once, as a source checkout (the README's Update steps: git pull, build, restart), then run
+  `bash scripts/install.sh` there, as the source checkout bullet above says. After that, connecting from a newer P9 updates it.
   A server you reach another way updates as a source checkout does.
 - **Windows:** nothing. The update keeps your workspace and the `P9 Foundation` task.
 

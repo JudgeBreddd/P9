@@ -430,8 +430,10 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   newer (compared by version number), it sends its source, builds beside the running copy, waits until no chat
   is mid-turn, swaps and restarts. A failed build leaves the running copy as it was; a restart that does not
   answer puts the previous copy back. A server still on 0.1.5 has no update route and does not update itself:
-  update it by hand once, with the steps in this section or by running install.sh there. A source checkout sends its last commit (uncommitted work is not sent); the installed app asks the
-  server to fetch this version's source from GitHub. The old copy stays on the server as `source.previous`.
+  update it once as a source checkout (the steps below: git pull, build, restart), then run
+  `bash scripts/install.sh` there. `install.sh` alone does not pull. From a source checkout, the update sends
+  its last commit (uncommitted work is not sent); the installed app asks the server to fetch this version's
+  source from GitHub. The old copy stays on the server as `source.previous`.
 
 A source checkout never updates itself:
 
