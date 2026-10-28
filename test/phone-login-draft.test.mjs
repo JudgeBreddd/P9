@@ -64,3 +64,53 @@ test('P2: a 401 on Save keeps the file edit through the sign-in, and the login p
   assert.equal(await readFile(path.join(server.workspace, 'note.txt'), 'utf8'), 'on disk\n');
   console.log('PASS P2: the file edit came back after sign-in, unsaved, and the login page said why');
 });
+
+// P2 (v0.1.6): Mission answers and a new idea typed on the phone survive a sign-in: back in their boxes, unsent; an answer
+// whose item went away during the sign-in is shown to copy, not dropped.
+test('P2: a 401 on Send answer keeps the typed Mission answers and the new idea through the sign-in', { timeout: 120000 }, async (t) => {
+  const { writeFile, mkdir, unlink } = await import('node:fs/promises');
+  const path = await import('node:path');
+  const server = await remoteDaemon(t, { setup: async (paths) => {
+    for (const dir of ['hub', '_tyler', '_ideas/needs-done', 'projects']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
+    await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+    await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(paths.workspace, '_tyler', 'p9-color.md'), '# Pick a color\n\nQ. Which one?\n\nA.\n');
+    await writeFile(path.join(paths.workspace, '_tyler', 'p9-size.md'), '# Pick a size\n\nQ. How big?\n\nA.\n');
+    const settings = path.join(paths.directory, 'settings.json');
+    await writeFile(settings, JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler', hub: 'hub' }));
+    return { args: ['--settings', settings] };
+  } });
+  const { page } = await phone(t, server, { touchScreen: false });
+  await page.click('[data-nav="mission"]');
+  await page.click('[data-open="work"]', { timeout: 15000 });
+  await page.click('#w-work summary:text("+ New idea")');
+  await page.fill('#w-work form[data-idea] [name="name"]', 'kept-idea');
+  await page.fill('#w-work form[data-idea] [name="text"]', 'an idea typed before the session ended');
+  await page.check('#w-work form[data-idea] [name="needs"]');
+  await page.click('#w-work [data-close]');
+  await page.click('[data-open="queue"]');
+  for (const [title, text] of [['Pick a size', 'large, typed before the session ended'], ['Pick a color', 'blue, typed before the session ended']]) {
+    await page.click(`#w-queue summary:text("${title}")`);
+    await page.fill(`#w-queue details:has(summary:text("${title}")) textarea`, text);
+  }
+  await page.route('**/mission/answer', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"login-required"}' }), { times: 1 });
+  await page.click('#w-queue details:has(summary:text("Pick a color")) button[type="submit"]');
+  await page.waitForURL(/\/login/, { timeout: 10000 });
+  await unlink(path.join(server.workspace, '_tyler', 'p9-size.md')); // answered elsewhere while this phone signs in
+  await page.click('#login');
+  await page.waitForURL(/\/phone\//, { timeout: 15000 });
+  // Both windows open, stacked: the idea on top, Back shows the answers under it.
+  const idea = page.locator('#w-work form[data-idea]');
+  await idea.locator('[data-note]:text("Kept through sign-in, not sent")').waitFor({ timeout: 15000 });
+  assert.deepEqual([await idea.locator('[name="name"]').inputValue(), await idea.locator('[name="text"]').inputValue(), await idea.locator('[name="needs"]').isChecked()],
+    ['kept-idea', 'an idea typed before the session ended', true]);
+  console.log('P9_SHOT p2-idea-kept ' + (await page.screenshot()).toString('base64'));
+  await page.click('#w-work [data-close]');
+  const color = page.locator('#w-queue details:has(summary:text("Pick a color"))');
+  await color.locator('[data-note]:text("Kept through sign-in, not sent")').waitFor({ timeout: 15000 });
+  assert.equal(await color.locator('textarea').inputValue(), 'blue, typed before the session ended');
+  assert.match(await page.locator('#w-queue [data-kept]').innerText(), /p9-size\.md[\s\S]*large, typed before the session ended/, 'the gone item\'s answer is shown to copy');
+  console.log('P9_SHOT p2-mission-kept ' + (await page.screenshot()).toString('base64'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-mission-draft')), null, 'nothing left in storage once all is back');
+  console.log('PASS P2: Mission answers and the new idea came back unsent; the gone item\'s answer is shown to copy');
+});
