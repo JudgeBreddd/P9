@@ -568,6 +568,7 @@ function pane(s, i, bare) {
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
 // state a person owns lives in S or is carried across: draft in s.draft, images in s.images,
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
+const bottoms = observe(() => $('.stage').style.setProperty('--chat-bottom', Math.max(0, ...[...$('#chats').querySelectorAll(':scope > .pane > .bottom')].map(b => b.offsetHeight)) + 'px')); // Chat Focus full: the artifact ends above the text box
 const wiredBars = new WeakSet(), view = {}; // 'container:session id' -> { top, pinned, selection }
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
 function renderChats(only) {
@@ -577,6 +578,7 @@ function renderChats(only) {
   $('#chats').dataset.split = String(S.split && ss.length > 1);
   for (const s of [...ss, mdl.open && S.modal?.kind === 'chat' && S.sessions.find(x => x.id === S.modal.id)]) if (s?.stub) history(s);
   paint($('#chats'), ss, only);
+  bottoms.disconnect(); $('#chats').querySelectorAll(':scope > .pane > .bottom').forEach(b => bottoms.observe(b));
   if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
   renderSideChat(only);
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
