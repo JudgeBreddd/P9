@@ -408,7 +408,9 @@ test('xfer window move: the prompt comes before the freeze, the folder goes firs
   await page.waitForTimeout(500);
   assert.notEqual((await listed(laptop, id)).state, 'moving', 'Cancel froze it');
   assert.equal(await listed(server, id), undefined);
-  // Laptop wins: the folder goes, then the chat; no Syncthing wait.
+  // Laptop wins: the folder goes, then the chat; no Syncthing wait. Every label the move shows is kept, to check the uploading words.
+  const said = () => page.evaluate(() => window.__said.splice(0));
+  await page.evaluate(() => { window.__said = []; new MutationObserver(() => window.__said.push(document.querySelector('#moveWhat').textContent)).observe(document.querySelector('#moveWhat'), { childList: true, characterData: true, subtree: true }); });
   await press(id);
   await dialog.waitFor({ timeout: 20000 });
   await dialog.locator('[data-xfer-choice="laptop"]').click();
@@ -417,6 +419,9 @@ test('xfer window move: the prompt comes before the freeze, the folder goes firs
   assert.deepEqual([await read(server, 'docs/a.md'), await read(server, 'moved-notes.md')], ['laptop', await read(laptop, 'moved-notes.md')]);
   await page.locator('#moveDlg[open]').waitFor({ timeout: 20000 });
   await page.click('#moveNo');
+  const words = await said();
+  assert.ok(words.includes('Sending the files and the chat to test-host'), words.join(' | '));
+  assert.ok(!words.includes('Waiting for the files…'), words.join(' | '));
   console.log('PASS xfer window move: the prompt came before the freeze, Cancel froze nothing, Laptop wins sent the folder and then the chat');
 
   // A Syncthing folder: no prompt and no files, though docs/a.md differs again; the chat moves once the server has its file.
@@ -428,6 +433,7 @@ test('xfer window move: the prompt comes before the freeze, the folder goes firs
   await until(async () => (await listed(laptop, synced))?.state === 'moved', 'the Syncthing chat moved');
   assert.equal(await dialog.isVisible(), false, 'no prompt for a Syncthing folder');
   assert.equal(await read(server, 'docs/a.md'), 'laptop', 'no files sent into a Syncthing folder');
+  assert.ok((await said()).includes('Sending the chat to test-host'));
   console.log('PASS xfer window move: a Syncthing folder moved with no prompt and no files');
 });
 
