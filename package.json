@@ -46,6 +46,7 @@
     "@agentclientprotocol/codex-acp": "2.1.1",
     "@agentclientprotocol/sdk": "1.8.0",
     "@codingame/monaco-vscode-explorer-service-override": "33.0.9",
+    "@codingame/monaco-vscode-markdown-basics-default-extension": "33.0.9",
     "@hono/node-server": "2.1.4",
     "@simplewebauthn/server": "14.0.3",
     "electron-updater": "6.8.9",

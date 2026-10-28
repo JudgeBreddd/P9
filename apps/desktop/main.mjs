@@ -819,7 +819,7 @@ export async function createDesktop({ state, open } = {}) {
   // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
   // devServing: the folder the loaded page was given (its saves go there).
   let cardsView = null, cardsItems = [], cardsHide = null;
-  let dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
+  let devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   const startHost = () => editorHost ??= (async () => {
     // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
@@ -918,6 +918,7 @@ export async function createDesktop({ state, open } = {}) {
       config = { error: error.message };
     }
     await devView.webContents.loadURL(DEV_URL);
+    devFailed = !!config.error;
     if (config.error) dev = null;
     return config;
   })().catch(error => { dev = null; throw error; });
@@ -993,7 +994,10 @@ export async function createDesktop({ state, open } = {}) {
         || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))) throw new Error('ipc-sender-refused');
     if (!b.visible) { devView?.setVisible(false); return { ok: true }; }
     const shown = devView?.getVisible();
-    openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
+    // D11 (Builder, 2026-10-28: the editor side "flash white really fast" while sliding, only when not connected): a failed start
+    // left dev unset, so each placement (every frame of a drag) built a new view. Shown and failed, a placement only moves it; coming
+    // back to Dev Focus tries again, as the page says.
+    if (!(shown && devFailed)) openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });

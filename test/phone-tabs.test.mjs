@@ -206,8 +206,8 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
 
   await page.click('[data-nav="usage"]');
   await page.waitForSelector('#usage .sum', { timeout: 10000 });
-  // Spec §6: "27,600 in · 3,820 out · $0.28 recorded"; the fixture's cost is $0.2768.
-  await soft('Cost in cents', async () => assert.match(await page.locator('#usage .sum').innerText(), /^27,600 in · 3,820 out · \$0\.28 recorded/));
+  // Spec §6, P5: "27,600 in · 3,820 out · $0.28 at API prices"; the fixture's cost is $0.2768.
+  await soft('Cost in cents', async () => assert.match(await page.locator('#usage .sum').innerText(), /^27,600 in · 3,820 out · \$0\.28 at API prices/));
   await soft('Details has a chevron', async () => {
     const chevron = () => page.evaluate(() => { const after = getComputedStyle(document.querySelector('#usage details.more summary'), '::after'); return after.content !== 'none' && after.width === '8px' ? after.transform : 'none'; });
     const closed = await chevron();
@@ -216,6 +216,12 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
     assert.notEqual(await chevron(), closed, 'the chevron turns when Details opens');
     await page.click('#usage details.more summary');
   });
+  // P5: each plan window is a ring with its % inside and when it resets under it (phone.test.mjs Phase 11 holds the
+  // same check, but stops early with no network).
+  const ring = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .uring'), b = r.getBoundingClientRect(), pct = r.querySelector('b').getBoundingClientRect(), under = r.parentElement.querySelector('small');
+    return { inside: pct.left >= b.left && pct.right <= b.right && pct.top >= b.top && pct.bottom <= b.bottom, below: under.getBoundingClientRect().top >= b.bottom - 1, under: under.textContent, round: getComputedStyle(r, '::before').borderRadius }; });
+  assert.match(ring.under, /^resets \w{3} \d{1,2}:\d\d\s?[AP]M$/);
+  assert.deepEqual({ ...ring, under: 'resets' }, { inside: true, below: true, under: 'resets', round: '50%' });
   await shot(page, 'tab-usage');
 
   await page.click('[data-nav="files"]');
@@ -240,5 +246,10 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]');
   assert.equal(await page.locator('#rendered').isVisible(), true);
   assert.equal(await page.locator('#editor').isHidden(), true);
+  // P17: the editor's text is the preview's size (14 px mono beside 15 px text), not 16 px.
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-content')).fontSize), '14px');
+  // P10: closed, then up a folder: the title is the folder shown and nothing else.
+  await page.click('#closeFile'); await page.click('#up'); await page.waitForSelector('#dirPath:text("Workspace")');
+  assert.equal(await page.locator('[data-bar="files"] h1').innerText(), 'Workspace');
   assert.deepEqual(misses, []);
 });

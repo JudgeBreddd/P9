@@ -150,5 +150,11 @@ export function createTerminal({ screen, state, connect, open }) {
       show(event.code === 4408 ? 'Closed: keys arrived late and were dropped; press Refresh' : 'Closed: press Refresh to reconnect');
     };
   }
-  return { attach, close, fit, sendKeys, paste, show, focus: () => term.view?.focus(), get open() { return Boolean(term.socket); } };
+  // The last 500 lines, scrollback included, trailing blank lines dropped (the phone's copy sheet, P13).
+  function text() {
+    const buffer = term.view?.buffer.active; if (!buffer) return '';
+    const lines = []; for (let i = Math.max(0, buffer.length - 500); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) ?? '');
+    return lines.join('\n').replace(/\s+$/, '');
+  }
+  return { attach, close, fit, sendKeys, paste, show, text, focus: () => term.view?.focus(), get open() { return Boolean(term.socket); } };
 }

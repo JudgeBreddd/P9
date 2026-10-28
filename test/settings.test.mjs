@@ -283,8 +283,9 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // Each chat keeps its own spot, and a chat window's spot is its own (Builder, 2026-10-19).
   const petSpots = () => page.evaluate(() => JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'));
   assert.deepEqual(Object.keys(await petSpots()), ['mdlBody:' + codex], 'only the dragged chat window kept a spot');
+  // D2: the spot is kept from the message box, in px, so it moves with the box.
   const dragged = (await petSpots())['mdlBody:' + codex];
-  assert.ok(Math.abs(dragged[0] - 0.25) < 0.02 && Math.abs(dragged[1] - 1 / 3) < 0.02, String(dragged));
+  assert.ok(Array.isArray(dragged.box) && dragged.box.every(Number.isInteger) && dragged.box[1] < 0, JSON.stringify(dragged));
   // The top pets do not drag (they keep their place in the top bar).
   const top = await page.locator('#indPets canvas').first().boundingBox();
   await page.mouse.move(top.x + top.width / 2, top.y + top.height / 2); await page.mouse.down();
@@ -1865,10 +1866,10 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   await app.evaluate(({ dialog }) => { globalThis.asked = []; dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.title); return { response: 0 }; }; });
   await settingsOpen(page);
   // ST3: Docs, Anymouse and Setup come first.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody').firstElementChild.querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody .set-row').querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
   // HI1: every top-level row, every group's legend and every Maintenance row has an "i" with a tip, and each opens a guide
   // section main allows and docs/guide.md has.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > .set-row, #setBody legend, #setBody fieldset:last-child .set-row')]
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > .set-group:first-child > .set-row, #setBody legend, #setBody fieldset:last-child .set-row')]
     .filter((row) => !row.querySelector(':scope > .info[title]:not([title=""])')).map((row) => row.textContent.slice(0, 40))), []);
   const sections = await page.evaluate(() => [...new Set([...document.querySelectorAll('#setBody [data-docs]')].map((b) => b.dataset.docs))]);
   const allowed = JSON.parse(/GUIDE_SECTIONS = Object\.freeze\((\[[^\]]*\])\)/.exec(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'))[1].replaceAll("'", '"'));

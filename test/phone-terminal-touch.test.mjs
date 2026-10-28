@@ -43,6 +43,8 @@ async function phone(t, server, { touchScreen = true } = {}) {
 }
 
 const connected = (page) => page.waitForFunction(() => document.querySelector('#termState').textContent === 'Connected', null, { timeout: 15000 });
+// The dev space keeps no files: pictures go out in the log as "P9_SHOT <name> <base64>".
+const shot = async (page, name, options = {}) => { const png = await page.screenshot(options); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 const sent = (page) => page.evaluate(() => window.p9sent.join(''));
 // A finger drag on the screen: down at the first point, moves through the rest, up at the last.
 async function drag(page, touch, from, to, steps = 12) {
@@ -171,4 +173,37 @@ test('Item 4: Paste wraps in the bracketed-paste markers only when the program t
   const hostile = await pasted('safe\x1b[201~rm -rf /tmp/x');
   assert.equal(hostile, '\x1b[200~saferm -rf /tmp/x\x1b[201~', 'the pasted text closed the bracket early');
   console.log('PASS Item 4: mode off sent ' + JSON.stringify('first line\rsecond line') + '; mode on wrapped it in 200~/201~; an embedded end marker was dropped');
+});
+
+test('P13, P14: a press and hold or a double tap opens the terminal text to copy; not connected is red and written over the screen', { timeout: 120000 }, async (t) => {
+  await mkdir(evidence, { recursive: true });
+  const server = await remoteDaemon(t, {});
+  const { page, touch } = await phone(t, server);
+  await page.click('[data-nav="terminal"]');
+  await page.click('#newTerminal');
+  await connected(page);
+  await page.click('#screen'); await page.keyboard.type('echo held-c23'); await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#screen .xterm-rows')?.textContent.includes('held-c23'), null, { timeout: 10000 });
+  // P14: the colour of the state line, against the theme's red.
+  const stateIsRed = () => page.evaluate(() => { const probe = document.createElement('i'); probe.style.color = getComputedStyle(document.body).getPropertyValue('--red').trim(); document.body.append(probe);
+    const want = getComputedStyle(probe).color; probe.remove(); return getComputedStyle(document.querySelector('#termState')).color === want; });
+  assert.equal(await stateIsRed(), false, 'Connected is shown in red');
+  const box = await page.locator('#screen').boundingBox(), at = [box.x + box.width / 2, box.y + box.height / 2];
+  const sheetText = () => page.waitForFunction(() => document.querySelector('dialog[open] #sheetTitle')?.textContent === 'Copy from terminal' && document.querySelector('#sheetBody .termcopy')?.textContent.includes('held-c23'), null, { timeout: 5000 });
+  // A press and hold (half a second).
+  await touch('touchStart', [at]); await page.waitForTimeout(700); await touch('touchEnd', []);
+  await sheetText();
+  await shot(page, 'c23-phone-terminal-copy');
+  await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+  // A double tap.
+  for (let i = 0; i < 2; i++) { await touch('touchStart', [at]); await touch('touchEnd', []); await page.waitForTimeout(80); }
+  await sheetText();
+  await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.querySelector('dialog[open]'));
+  // P14: the shell exits, the socket closes: the state is red and the screen says it is not connected.
+  await page.click('#screen'); await page.keyboard.type('exit'); await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('section[data-view="terminal"]')?.dataset.live === 'no', null, { timeout: 10000 });
+  assert.equal(await stateIsRed(), true, 'the state is not red');
+  assert.match(await page.evaluate(() => getComputedStyle(document.querySelector('#screen'), '::after').content), /Not connected/);
+  await shot(page, 'c23-phone-terminal-off');
+  console.log('PASS P13 P14');
 });

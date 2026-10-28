@@ -90,6 +90,15 @@ export const agentDirs = (home, env = process.env) => ({
   claudeDir: env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), claudeJson: path.join(env.CLAUDE_CONFIG_DIR || home, '.claude.json'),
   codexHome: env.CODEX_HOME || path.join(home, '.codex') });
 
+// P5: Claude Code compacts a chat once it holds CLAUDE_CODE_AUTO_COMPACT_WINDOW tokens when that is set (in its own
+// environment or its settings.json "env"), so that is the chat's real window; the agent reports the model's full one.
+// Only the number leaves this function.
+export async function claudeWindow(claudeDir, env = process.env) {
+  const tokens = (value) => { const n = Number(value); return Number.isSafeInteger(n) && n > 0 ? n : null; };
+  if (tokens(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)) return tokens(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW);
+  try { return tokens(JSON.parse(await readFile(path.join(claudeDir, 'settings.json'), 'utf8'))?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW); } catch { return null; }
+}
+
 export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null }) {
   const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive), codex(codexHome)]);
   return { claude: claudeLimits, codex: codexLimits };

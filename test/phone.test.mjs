@@ -366,8 +366,14 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.waitForSelector('#usage >> text=$0.28');
   assert.match(await page.locator('#usage').innerText(), /context[\s\S]*%[\s\S]*of [\d,]+ tokens/i);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
-  assert.match(phoneLimits, /Claude plan\s+5 h 42% \(resets [^)]+\) · week 17%[^\n]*just now/);
-  assert.match(phoneLimits, /Codex plan\s+5 h new window · week 33%[^\n]*3 h old/);
+  // P5: each window is a ring with its % inside and when it resets under it; the plan says how old its numbers are.
+  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+42%\s+5 h\s+resets \w{3} \d{1,2}:\d\d\s?[AP]M\s+17%\s+week\s+resets /);
+  assert.match(phoneLimits, /Codex plan\s+Last read 3 h ago\s+0%\s+5 h\s+new window\s+33%\s+week/);
+  const ring = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .uring'), b = r.getBoundingClientRect(), pct = r.querySelector('b').getBoundingClientRect(), under = r.parentElement.querySelector('small').getBoundingClientRect();
+    return { inside: pct.left >= b.left && pct.right <= b.right && pct.top >= b.top && pct.bottom <= b.bottom, below: under.top >= b.bottom - 1, round: getComputedStyle(r, '::before').borderRadius }; });
+  assert.deepEqual(ring, { inside: true, below: true, round: '50%' });
+  // P5: each context bar names its chat (the fixture's chats are titled by their agent).
+  assert.match(await page.locator('#usage .ctxs').innerText(), /^claude\b/);
   await page.screenshot({ path: path.join(evidence, 'phone-usage.png') });
 
   // The browser lists the workspace (folders first, locked names hidden) and taps through folders; no typed path.
@@ -382,11 +388,16 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.click('#fileList button[data-name="inner.md"]'); await page.waitForSelector('#fileState:text("Loaded")');
   assert.equal(await page.locator('.cm-content').textContent(), 'inside');
   await page.click('#closeFile'); await page.click('#up'); await page.waitForSelector('#dirPath:text("Workspace")');
+  // P10: the title is the folder shown; the closed file's name is not left beside it.
+  assert.equal(await page.locator('[data-bar="files"] h1').innerText(), 'Workspace');
   await page.click('#fileList button[data-name="note.txt"]');
   await page.waitForSelector('#fileState:text("Loaded")');
   // Phase 15: iOS zooms into any focused field under 16px.
-  const small = await page.evaluate(() => [...document.querySelectorAll('input, select, textarea, .cm-content')].map((el) => (el.id || el.name || el.className) + ' ' + getComputedStyle(el).fontSize).filter((entry) => parseFloat(entry.split(' ').pop()) < 16));
+  const small = await page.evaluate(() => [...document.querySelectorAll('input, select, textarea')].map((el) => (el.id || el.name || el.className) + ' ' + getComputedStyle(el).fontSize).filter((entry) => parseFloat(entry.split(' ').pop()) < 16));
   assert.deepEqual(small, []);
+  // P17: the editor's text is the size of the preview's (14 px mono beside 15 px text); on an iPhone the viewport stops
+  // the focus zoom instead (phone-c23.test.mjs).
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-content')).fontSize), '14px');
   const edit = async (text) => { await page.locator('.cm-content').click(); await page.keyboard.press('Control+A'); await page.keyboard.type(text); };
   await edit('saved from phone'); await page.click('#save'); await page.waitForSelector('#fileState:text("Saved")');
   assert.equal(await readFile(path.join(server.workspace, 'note.txt'), 'utf8'), 'saved from phone');

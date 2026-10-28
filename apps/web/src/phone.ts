@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, sprintTimes, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, sprintTimes, md, mdReply, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { artifactView, chipArtifact } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
@@ -12,7 +12,7 @@ import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
 type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | null; sevenDay: { usedPercent: number; resetsAt: number | null } | null; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -22,7 +22,7 @@ const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char
 let restored: { id: string; text: string } | null = (() => {
   try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
 })();
-const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
+const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
@@ -55,17 +55,18 @@ mountBar('terminal', { title: `<button type="button" id="pickTerminal" class="pi
   acts: [{ id: 'newTerminal', label: 'New terminal', icon: ICON.plus }, { id: 'stopTerminal', label: 'Stop terminal', icon: ICON.stop }, { id: 'refreshTerminal', label: 'Refresh', icon: ICON.refresh }] });
 one('#termState').setAttribute('role', 'status');
 mountBar('mission', { title: 'Mission', acts: [{ id: 'refreshMission', label: 'Refresh', icon: ICON.refresh }] });
-mountBar('usage', { title: 'Usage', acts: [{ id: 'refreshUsage', label: 'Refresh', icon: ICON.refresh }] });
+mountBar('usage', { title: 'Usage', subId: 'usageWhen', sub: '', acts: [{ id: 'refreshUsage', label: 'Refresh', icon: ICON.refresh }] });
 // Files: one bar for the folder list and for an open file (the CSS shows one set), so #fileState, #up and #closeFile stay single elements.
 one('[data-bar="files"]').innerHTML = `<button type="button" id="up" class="back" aria-label="Up one folder" disabled>${ICON.back}</button><button type="button" id="closeFile" class="back" aria-label="Back">${ICON.back}</button>`
   + '<div class="title"><h1><span id="dirPath">Workspace</span><span id="openPath"></span></h1><small id="fileState">Not loaded</small></div><span class="sync" role="img" aria-label="Live"></span>'
-  + `<button type="button" id="save" disabled>Save</button><button type="button" id="moreFile" aria-label="More">${svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>')}</button>`;
+  + `<button type="button" id="pickFolder" aria-label="Change folder">${ICON.folder}</button><button type="button" id="save" disabled>Save</button><button type="button" id="moreFile" aria-label="More">${svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>')}</button>`;
 // The hairline under a top bar shows only once its screen has scrolled.
 one('main').addEventListener('scroll', (event) => { const box = event.target as HTMLElement; box.closest('section')?.querySelector(':scope > .bar')?.classList.toggle('ruled', box.scrollTop > 0); }, true);
 // Bottom sheet: one shared <dialog>. Fill the body with .opt rows (or anything); a tap on the backdrop closes it.
 const sheet = one<HTMLDialogElement>('#sheet');
 let artSending: string | null = null, artEntries: string[][] = []; // item 19 (the artifact functions at the end of this file)
-function openSheet(title: string, html: string) { one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
+// K10: the Mode sheet borrows #more; a sheet opened over it would wipe them with its HTML, so they go home first.
+function openSheet(title: string, html: string) { const more = one('#more'); if (!one('#modeHome').contains(more)) one('#modeHome').append(more); one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
 sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
 sheet.addEventListener('close', () => sheet.classList.remove('full')); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
 addEventListener('p9-sheet', (event) => { const { title, html, full } = (event as CustomEvent).detail; sheet.classList.toggle('full', full === true); openSheet(String(title), String(html)); }); // ponytail: the one door into the sheet for code outside this file and for its test; callers pass trusted HTML
@@ -73,6 +74,9 @@ addEventListener('p9-sheet', (event) => { const { title, html, full } = (event a
 // the layout viewport alone and offsets the visual one), the column follows it, and the composer rides the keyboard. The
 // tab bar hides while a keyboard is up: the visible height under 75% of the tallest this window has been.
 // ponytail: a desktop window dragged much shorter reads as a keyboard too; the phone page never does that.
+// P17: iOS zooms the page into a field under 16 px when it takes focus (the editor's text is 14 px, as the preview's);
+// maximum-scale stops that, and iOS still lets a pinch zoom.
+if (/iP(hone|ad|od)/.test(navigator.userAgent)) { const viewport = one<HTMLMetaElement>('meta[name="viewport"]'); viewport.content += ', maximum-scale=1'; }
 let tallest = innerHeight;
 function fit() {
   const vv = window.visualViewport, height = vv?.height ?? innerHeight;
@@ -141,7 +145,7 @@ async function mutate(path: string, body: Json) {
   const csrf = csrfToken();
   if (!csrf) throw relogin();
   let response: Response;
-  try { response = await fetch(path, { method: path.startsWith('/files') ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
+  try { response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
   catch (error) { throw error; }
   const result = await response.json().catch(() => ({}));
   if (response.status === 401) throw relogin();
@@ -181,7 +185,7 @@ function fillPicker() {
   const select = one<HTMLSelectElement>('#conversation'), was = select.value;
   const option = (item: Json) => `<option value="${escape(item.id)}">${escape(`${item.title || item.provider} · ${when(item.created)} · ${item.state}`)}</option>`;
   const group = (label: string, items: Json[]) => items.length ? `<optgroup label="${label}">${items.map(option).join('')}</optgroup>` : '';
-  select.innerHTML = group('Open', state.conversations.filter((item) => item.state !== 'stopped')) + group('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
+  select.innerHTML = group('Open', state.conversations.filter(isOpen)) + group('History', state.conversations.filter((item) => !isOpen(item) && item.sent))
     || '<option value="">No conversations yet</option>';
   // An open chat stays picked even when it left the list (stopped before its first message, or closed): the select's
   // fallback to its first (newest) option sent that chat's composer to another chat. On the list the newest is the default.
@@ -224,7 +228,7 @@ const gapAfter = (next?: Json) => { if (state.seen > 0 && next && Number(next.cu
 // loads when it is shown. Before this the phone read the whole ledger, stopped chats included, on every launch.
 // ponytail: over 100 such chats it replays everything, as the desktop does (their IDs go in the URL).
 async function replay() {
-  const ids = state.conversations.filter((item) => item.state !== 'stopped').map((item) => String(item.id));
+  const ids = state.conversations.filter(isOpen).map((item) => String(item.id));
   let scoped = ids.length <= 100;
   for (;;) {
     // P20: a chat that is not stopped starts with its newest blocks only; Load earlier reads the ones before.
@@ -241,7 +245,7 @@ async function replay() {
   state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
   // A chat made during the read is open, not history: the list reads its state from its events (P7), so they load now.
   // Left a stub, a chat started while the phone loads showed idle until it was opened.
-  await Promise.all(state.conversations.filter((item) => item.state !== 'stopped' && state.stubs.has(String(item.id))).map((item) => history(String(item.id))));
+  await Promise.all(state.conversations.filter((item) => isOpen(item) && state.stubs.has(String(item.id))).map((item) => history(String(item.id))));
 }
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }
@@ -280,6 +284,8 @@ function history(id: string) {
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
 type Block = { kind: string; text: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[] };
+// K8: Open lists chats this server runs; one moving or moved to another machine is history here.
+function isOpen(item: { state?: unknown }) { return !['stopped', 'moving', 'moved'].includes(String(item.state)); }
 type Attached = { mimeType: string; data: string; name: string };
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
@@ -365,7 +371,7 @@ const toolRow = (block: Block) => `<article data-kind="tool" data-status="${esca
 function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
-  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${mdReply.parse(block.text)}${agentImgs(block.images, 'the agent')}</article>`;
+  if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
   if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
   if (kind === 'tool') return toolRow(block);
   // P10: an open question is answered here, from the daemon's checked form.
@@ -443,7 +449,7 @@ function renderList() {
     return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
-  const html = section('Open', state.conversations.filter((item) => item.state !== 'stopped')) + section('History', state.conversations.filter((item) => item.state === 'stopped' && item.sent))
+  const html = section('Open', state.conversations.filter(isOpen)) + section('History', state.conversations.filter((item) => !isOpen(item) && item.sent))
     || '<div class="empty">No chats yet. Tap + to start one.</div>';
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
@@ -452,7 +458,7 @@ let barSig = '';
 function chatBar(id: string, run: string) {
   const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
-  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '<span class="run" data-run="idle" role="img" aria-label="Stopped"></span>' : `<button type="button" class="run" id="stopTurn" data-run="${run}" aria-label="Stop"></button>`}<span class="sync" role="img" aria-label="Live"></span>`;
+  const html = `<button type="button" class="back" data-back aria-label="Back to Chats">${ICON.back}Chats</button><div class="title"><h1>${escape(item?.title || agent)}</h1><button type="button" class="sub" id="modelBtn" aria-label="Model">${escape(agent + (name ? ' · ' + name : ''))} ${ICON.chevron}</button></div>${run === 'idle' ? '' : `<span class="run" data-run="${run}" role="img" aria-label="${run === 'needs' ? 'Waiting on you' : 'Working'}"></span><button type="button" class="stop" id="stopTurn">${ICON.stop}Stop</button>`}<span class="sync" role="img" aria-label="Live"></span>`;
   if (html === barSig) return;
   barSig = html; const bar = one('[data-bar="chat"]'); bar.innerHTML = html; online();
 }
@@ -525,7 +531,7 @@ one<HTMLButtonElement>('#jump').innerHTML = ICON.down;
 one<HTMLButtonElement>('#jump').onclick = () => body.scrollTo({ top: body.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 one<HTMLElement>('#chips').onclick = (event) => { if ((event.target as Element).closest('[data-chip]')) openSheet('Plan and pinned', one('#pinned').innerHTML); };
 one<HTMLElement>('#chatList').onclick = (event) => { const row = (event.target as Element).closest<HTMLElement>('[data-chip],[data-chat]'); if (row?.dataset.chat) openChat(row.dataset.chat); };
-// L3: a turn that runs can be stopped from the top bar, where its status ring is (the composer's send button turns into Stop
+// L3, P3: a turn that runs can be stopped from the top bar: a labelled Stop beside its working spinner (the composer's send button turns into Stop
 // only when the box is empty and nothing is queued). The route is the composer's and the desktop's: POST /chat/:id/cancel.
 async function stopChat(id: string) {
   if (!id) return;
@@ -756,11 +762,20 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
 function note(text = '') { const line = one<HTMLElement>('#composerNote'); line.textContent = text; line.hidden = !text; }
 // P8: images attach as on the desktop: the + sheet (Photo library, Take photo, File) or a paste, up to four, checked
-// and scaled by the desktop's own readImage; 48 px chips with ✕ above the box. Kept per chat until sent; a reload
-// drops them (ponytail: this page's memory only).
+// and scaled by the desktop's own readImage; 48 px chips with ✕ above the box. Kept per chat until sent; K9: also in this
+// phone's IndexedDB (localStorage holds about 5 MB, four images can be 8), so a reload or sign-in keeps them.
+function attachedStore(mode: IDBTransactionMode, use: (store: IDBObjectStore) => void) {
+  const open = indexedDB.open('p9-attached', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('chats');
+  open.onerror = () => { attachedRead = true; };
+  open.onsuccess = () => { const db = open.result, tx = db.transaction('chats', mode); use(tx.objectStore('chats')); tx.oncomplete = tx.onerror = () => db.close(); };
+}
+let attachedRead = false; // until the kept images are read back, a redraw must not overwrite them with none
+function keepAttached() { if (!attachedRead) return; try { attachedStore('readwrite', (store) => { store.clear(); for (const [id, list] of attached) if (list.length) store.put(list, id); }); } catch {} }
+try { attachedStore('readonly', (store) => { const all = store.openCursor(); all.onerror = () => { attachedRead = true; }; all.onsuccess = () => { const at = all.result; if (!at) { attachedRead = true; return renderAttached(); } if (!attached.has(String(at.key))) attached.set(String(at.key), at.value as Attached[]); at.continue(); }; }); } catch {}
 function renderAttached() {
   const list = attached.get(one<HTMLSelectElement>('#conversation').value) ?? [], box = one<HTMLElement>('#attached');
-  box.hidden = !list.length;
+  box.hidden = !list.length; keepAttached();
   box.innerHTML = list.map((image, i) => `<span class="chip-img"><img src="data:${escape(image.mimeType)};base64,${escape(image.data)}" alt="${escape(image.name)}"><button type="button" data-unattach="${i}" aria-label="Remove ${escape(image.name)}">✕</button></span>`).join('');
   label();
 }
@@ -892,6 +907,9 @@ const KEYS: Record<string, string> = { esc: '\x1b', tab: '\t', ctrlc: '\x03', up
 const term = createTerminal({ screen: one('#screen'), connect: (id: string) => new WebSocket(location.origin.replace(/^http/, 'ws') + '/terminals/' + encodeURIComponent(id) + '/socket'),
   state(text: string, live: boolean) {
     one('#termState').textContent = text;
+    // P14: not connected is red in the bar and written across the screen, so a tap that cannot open a keyboard is not a mystery.
+    one<HTMLElement>('section[data-view="terminal"]').dataset.live = live ? 'yes' : text === 'Connecting' ? 'wait' : 'no';
+    one<HTMLElement>('#screen').dataset.off = live ? '' : text === 'Connecting' ? 'Connecting…' : 'Not connected\n' + text;
     document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.disabled = !live; });
   } });
 const termState = term.show;
@@ -923,7 +941,7 @@ one<HTMLElement>('#pickTerminal').onclick = () => {
   const select = one<HTMLSelectElement>('#terminal'), options = [...select.options].filter((option) => option.value);
   if (options.length) openSheet('Terminals', options.map((option) => `<button type="button" class="opt" role="menuitemradio" aria-checked="${option.value === select.value}" data-term="${escape(option.value)}">${escape(option.textContent)}</button>`).join(''));
 };
-one<HTMLButtonElement>('#refreshTerminal').onclick = () => void loadTerminals();
+one<HTMLButtonElement>('#refreshTerminal').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadTerminals);
 one<HTMLButtonElement>('#newTerminal').onclick = async () => {
   const result = await mutate('/terminals', {});
   if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING
@@ -956,16 +974,37 @@ one<HTMLButtonElement>('[data-key="paste"]').onclick = async (event) => {
 // line used to wait for did not come), so a tap is read from the touch itself: lifted within 10 px and 600 ms of going down.
 // Focus has to happen inside that event for a phone to raise its keyboard. The click stays for a mouse.
 one('#screen').addEventListener('click', () => term.focus());
-let tapFrom: { x: number; y: number; at: number } | null = null;
-one('#screen').addEventListener('touchstart', (event) => { const touch = (event as TouchEvent).touches[0]; tapFrom = (event as TouchEvent).touches.length === 1 ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp } : null; }, { passive: true });
+// P13: xterm has no touch selection, so a press and hold (half a second) or a double tap opens the terminal's text in a
+// sheet, where the phone's own selection and Copy work, with Copy all under it.
+let tapFrom: { x: number; y: number; at: number } | null = null, lastTap: { x: number; y: number; at: number } | null = null, hold = 0;
+function copyTerminal() {
+  clearTimeout(hold); tapFrom = lastTap = null;
+  const text = term.text();
+  openSheet('Copy from terminal', text ? `<pre class="termcopy" tabindex="0">${escape(text)}</pre><button type="button" data-termcopy>Copy all</button>` : '<p class="empty">Nothing on the screen to copy.</p>');
+  const pre = document.querySelector<HTMLElement>('#sheetBody .termcopy'); if (pre) pre.scrollTop = pre.scrollHeight;
+}
+one('#sheetBody').addEventListener('click', (event) => { const button = (event.target as Element).closest<HTMLButtonElement>('[data-termcopy]'); if (button) void copy(one('#sheetBody .termcopy').textContent ?? '', button); });
+one('#screen').addEventListener('touchstart', (event) => {
+  const touch = (event as TouchEvent).touches[0]; clearTimeout(hold);
+  tapFrom = (event as TouchEvent).touches.length === 1 ? { x: touch.clientX, y: touch.clientY, at: event.timeStamp } : null;
+  if (tapFrom) hold = window.setTimeout(copyTerminal, 500);
+}, { passive: true });
+one('#screen').addEventListener('touchmove', (event) => { const touch = (event as TouchEvent).touches[0]; if (tapFrom && Math.hypot(touch.clientX - tapFrom.x, touch.clientY - tapFrom.y) >= 10) clearTimeout(hold); }, { passive: true });
 one('#screen').addEventListener('touchend', (event) => {
   const touch = (event as TouchEvent).changedTouches[0];
-  if (tapFrom && Math.hypot(touch.clientX - tapFrom.x, touch.clientY - tapFrom.y) < 10 && event.timeStamp - tapFrom.at < 600) term.focus();
+  clearTimeout(hold);
+  if (tapFrom && Math.hypot(touch.clientX - tapFrom.x, touch.clientY - tapFrom.y) < 10 && event.timeStamp - tapFrom.at < 600) {
+    const second = lastTap && event.timeStamp - lastTap.at < 350 && Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y) < 30;
+    lastTap = second ? null : { x: touch.clientX, y: touch.clientY, at: event.timeStamp };
+    if (second) copyTerminal(); else term.focus();
+  }
   tapFrom = null;
 }, { passive: true });
 addEventListener('resize', term.fit); window.visualViewport?.addEventListener('resize', term.fit); // the screen fills the column, which follows a keyboard
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
 termState('No terminal open');
+// P19: a code block's Copy, as on the desktop.
+one('#events').addEventListener('click', (event) => { const button = (event.target as Element).closest<HTMLButtonElement>('[data-copycode]'); if (button) void copy(button.nextElementSibling?.textContent ?? '', button); });
 // P9: a tap on an agent's image opens it full screen; any tap closes it.
 const picture = document.body.appendChild(Object.assign(document.createElement('dialog'), { className: 'picture', onclick: () => picture.close() }));
 addEventListener('click', (event) => {
@@ -1260,15 +1299,24 @@ one('#mission').addEventListener('click', async (event) => {
   const result = await mutate(`/pages/${encodeURIComponent(button.dataset.openPage!)}/launch`, { confirm: true });
   button.textContent = result.status === 200 ? 'Opened on the laptop' : `Not opened: ${result.body.reason ?? result.body.error ?? result.status}`;
 });
-one<HTMLButtonElement>('#refreshMission').onclick = () => void loadMission();
+one<HTMLButtonElement>('#refreshMission').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadMission);
 
-// A used-% bar: cyan, amber from 75%, red from 90%; a window that already reset shows empty.
+// P5: a used-% ring with the % inside and when it resets under it: cyan, amber from 75%, red from 90%; a window that
+// already reset shows empty ("new window").
 const meter = (label: string, window: { usedPercent: number; resetsAt: number | null } | null) => {
-  const pct = !window || (window.resetsAt && window.resetsAt < Date.now()) ? 0 : Math.min(100, Math.round(window.usedPercent));
-  return `<div class="meter" role="meter" aria-label="${label} used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${pct}%"></i></div><span>${label}</span></div>`;
+  const reset = !!window?.resetsAt && window.resetsAt < Date.now(), pct = !window || reset ? 0 : Math.min(100, Math.round(window.usedPercent));
+  const under = !window ? 'not recorded' : reset ? 'new window' : window.resetsAt ? 'resets ' + new Date(window.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  return `<div class="meter" role="meter" aria-label="${label} used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="uring${pct >= 90 ? ' bad' : pct >= 75 ? ' warn' : ''}" style="--p:${pct}"><b>${window ? pct + '%' : '–'}</b></div><span>${label}</span><small>${escape(under)}</small></div>`;
 };
-// Spec §6: "$0.28 recorded". A cost under a cent is not shown as $0.00.
+// Spec §6, P5: the cost is what the agent reports, which is the API price of the tokens; on a subscription it is not what
+// was paid, so it says so. A cost under a cent is not shown as $0.00.
 const cents = (usd: number) => usd > 0 && usd < 0.005 ? '< $0.01' : '$' + usd.toFixed(2);
+// P6: a refresh button turns while its load runs (at least half a second, so a fast answer is still seen) and the bar
+// says when the screen last loaded.
+async function refreshing(button: HTMLButtonElement, load: () => Promise<unknown>) {
+  button.setAttribute('aria-busy', 'true'); button.disabled = true;
+  try { await Promise.all([load(), new Promise((resolve) => setTimeout(resolve, 500))]); } finally { button.removeAttribute('aria-busy'); button.disabled = false; }
+}
 // P9 (threat model row 31): sign in to Claude or Codex from the phone, the wizard's own login on the daemon's machine. The
 // daemon hands over only a vendor's sign-in URL and Codex's code; the link is set as a property and opens only on a tap.
 type SignIn = { signedIn: boolean; running: boolean; url: string | null; code: string | null; unsupported: boolean; exit: number | null };
@@ -1339,32 +1387,49 @@ async function loadUsage() {
   void loadSignIn();
   try {
     const data = await request('/usage') as Usage;
-    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two bars under the text.
-    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
+    one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two rings under its age.
+    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
     const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
     if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>'; return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
-    // Context fill per conversation (from usage_update), so a chat close to its limit shows before it stalls.
-    const contexts = data.contexts.map((item) => { const pct = Math.round(item.used / item.size * 100); return `<div class="ctx"><span>${escape(item.provider)} context</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
+    // Context fill per open chat (from usage_update), named by the chat's title, so a chat close to its limit shows before
+    // it stalls (P5). A stopped chat's last fill is history and is left out.
+    const chat = (id: string) => state.conversations.find((item) => item.id === id);
+    const contexts = data.contexts.filter((item) => { const c = chat(item.conversation); return c && isOpen(c); }).map((item) => { const pct = Math.round(item.used / item.size * 100), c = chat(item.conversation); return `<div class="ctx"><span>${escape(c?.title || (item.provider === 'codex' ? 'Codex' : 'Claude') + ' chat')}${c ? ` <small>${escape((c.provider === 'codex' ? 'Codex' : 'Claude') + ' · ' + when(c.created))}</small>` : ''}</span><b>${pct}%</b><div class="track"><i${pct >= 90 ? ' class="bad"' : pct >= 75 ? ' class="warn"' : ''} style="width:${Math.min(100, pct)}%"></i></div><small>${item.used.toLocaleString()} of ${item.size.toLocaleString()} tokens</small></div>`; }).join('');
     const none = data.samples ? '' : '<article class="card"><h2>No finished turns yet</h2><p>Token counts arrive when a chat turn ends; cost and context are already recorded.</p></article>';
-    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> recorded</p>`
+    one('#usage').innerHTML = limits + stale + none + `<p class="sum"><b>${data.totals.inputTokens.toLocaleString()}</b> in · <b>${data.totals.outputTokens.toLocaleString()}</b> out · <b>${cents(data.totals.costUsd)}</b> at API prices</p><p class="muted">What these tokens would cost on the pay-per-use API. A plan subscription is billed by its own price, not this.</p>`
       + (contexts ? `<div class="ctxs">${contexts}</div>` : '') + `<details class="more"><summary>Details</summary><p>${data.samples} samples · ${data.discarded} malformed discarded</p></details>`;
   } catch { one('#usage').innerHTML = '<article class="card warn"><h2>Usage unavailable</h2><p>The daemon did not answer.</p></article>'; }
 }
-one<HTMLButtonElement>('#refreshUsage').onclick = () => void loadUsage();
+one<HTMLButtonElement>('#refreshUsage').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadUsage);
+// P7: the Usage screen reads again every 20 s while it is shown (the plan limits move with every turn anywhere).
+setInterval(() => { if (document.body.dataset.view === 'usage' && !document.hidden && navigator.onLine) void loadUsage(); }, 20000);
 
 // The file browser: one workspace folder at a time ('' is the root), folders first; tapping a file opens the editor.
-let folder = '';
+// P10: the title is the folder shown. Only the newest load draws (a slow answer for the folder left must not put its name
+// back), and an open file's name is not left beside it (phone.css shows #openPath only while a file is open).
+let folder = '', listing = 0;
+// P15: the folder the Files tab works in: null is the workspace, else the outside folder the daemon checked and returned.
+let place: string | null = null;
+const at = (path: string) => 'path=' + encodeURIComponent(path) + (place ? '&root=' + encodeURIComponent(place) : '');
+const placeName = () => place ? place.split('/').filter(Boolean).pop() || place : 'Workspace';
 async function loadFolder(path = folder) {
+  const mine = ++listing;
   try {
-    const { entries } = await request('/files/list?path=' + encodeURIComponent(path)) as { entries: { name: string; dir?: boolean }[] };
+    const { entries } = await request('/files/list?' + at(path)) as { entries: { name: string; dir?: boolean }[] };
+    if (mine !== listing) return;
     folder = path;
-    one('#dirPath').textContent = path.split('/').pop() || 'Workspace';
+    one('#dirPath').textContent = path.split('/').pop() || placeName(); one<HTMLElement>('#dirPath').title = place ?? '';
     one<HTMLButtonElement>('#up').disabled = !path;
     const sorted = [...entries.filter((entry) => entry.dir), ...entries.filter((entry) => !entry.dir)];
     one('#fileList').innerHTML = sorted.map((entry) => `<li><button class="quiet" data-name="${escape(entry.name)}" data-dir="${entry.dir ? 1 : ''}">${entry.dir ? ICON.folder : ICON.file}${escape(entry.name)}</button></li>`).join('') || '<li class="empty">This folder is empty.</li>';
     one('#fileState').textContent = 'Pick a file';
-  } catch (error) { one('#fileState').textContent = 'Folder unavailable'; one('#fileList').innerHTML = `<li class="empty">Could not list this folder (${escape((error as Error).message)}).</li>`; }
+  } catch (error) {
+    if (mine !== listing) return;
+    // The daemon forgot the outside folder (it restarted): back to the workspace, and say so.
+    if (place && /^dev-root-(unset|changed)$/.test((error as Error).message)) { place = null; folder = ''; void loadFolder('').then(() => { one('#fileState').textContent = 'Outside folder closed: back in the workspace'; }); return; }
+    one('#fileState').textContent = 'Folder unavailable'; one('#fileList').innerHTML = `<li class="empty">Could not list this folder (${escape((error as Error).message)}).</li>`; }
 }
 one('#fileList').addEventListener('click', (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-name]');
@@ -1373,6 +1438,21 @@ one('#fileList').addEventListener('click', (event) => {
   void (button.dataset.dir ? loadFolder(path) : openFile(path));
 });
 one<HTMLButtonElement>('#up').onclick = () => void loadFolder(folder.split('/').slice(0, -1).join('/'));
+// P15: change the folder, as the desktop's Open Folder: a full path on the server, which the daemon checks (not P9's own
+// folders, not one holding the home folder or the workspace); Back to workspace returns. Saves go through the same guarded writer.
+one<HTMLButtonElement>('#pickFolder').onclick = () => {
+  openSheet('Folder', `<form class="pickfolder" data-pickfolder><label for="folderPath">A folder on the computer P9 runs on, by its full path</label><input id="folderPath" name="path" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="/srv/projects/site" value="${escape(place ?? '')}"><p class="muted" data-folder-note>${place ? 'Working in ' + escape(place) : 'Working in the workspace'}</p><div class="actions start"><button type="submit">Open folder</button>${place ? '<button type="button" class="quiet" data-folder-home>Back to workspace</button>' : ''}</div></form>`);
+};
+const FOLDER_REFUSED: Record<string, string> = { 'root-not-found': 'No folder there.', 'root-refused': 'Not that folder: it holds P9\'s own files or your home folder.', 'inside-workspace': 'That folder is in the workspace: open it from the list.', 'request-refused': 'Type the full path, starting with /.' };
+async function setPlace(path: string | null) {
+  const result = await mutate('/files/root', { path });
+  if (result.status !== 200) { const note = document.querySelector('[data-folder-note]'); if (note) note.textContent = FOLDER_REFUSED[String(result.body.error)] ?? 'Not opened: ' + (result.body.error ?? result.status); return; }
+  place = (result.body.root as string | null) ?? null; sheet.close(); await loadFolder('');
+}
+one('#sheetBody').addEventListener('submit', (event) => { const form = (event.target as Element).closest<HTMLFormElement>('[data-pickfolder]'); if (!form) return; event.preventDefault(); const path = (new FormData(form).get('path') as string).trim(); void setPlace(path || null); });
+one('#sheetBody').addEventListener('click', (event) => { if ((event.target as Element).closest('[data-folder-home]')) void setPlace(null); });
+// The daemon keeps the phone's folder until it restarts; a reload picks it up.
+void request('/files/root').then((body) => { place = (body as { root: string | null }).root ?? null; if (place && document.body.dataset.view === 'files' && one<HTMLElement>('#fileView').hidden) void loadFolder(''); }, () => {});
 one('#mission').addEventListener('click', (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-note]');
   if (!button) return;
@@ -1399,7 +1479,7 @@ one('#sheetBody').addEventListener('click', (event) => {
 });
 async function openFile(path: string, root?: string) {
   try {
-    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };
+    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }) };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root);
@@ -1415,7 +1495,7 @@ async function openFile(path: string, root?: string) {
 async function saveFile(hash: string) {
   if (!state.file) return;
   const { path, root } = state.file, content = editor.state.doc.toString();
-  const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content });
+  const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content, ...(state.file.place && { root: state.file.place }) });
   if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; syncSave(); }
   else if (result.status === 409) {
     // the disk version, when the file is still there, so the draft can be kept or the disk loaded (as on the desktop)

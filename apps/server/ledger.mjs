@@ -203,7 +203,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
           const cost = data.cost === undefined || data.cost === null
             || data.cost.currency === 'USD' && Number.isFinite(data.cost.amount) && data.cost.amount >= 0;
           if (!context || !cost) { discarded += 1; continue; }
-          contexts.set(row.conversation, { provider: row.provider ?? 'unknown', used: data.used, size: data.size });
+          contexts.set(row.conversation, { conversation: row.conversation, provider: row.provider ?? 'unknown', used: data.used, size: data.size });
           if (data.cost) costs.set(row.conversation, data.cost.amount);
         }
         latest = Math.max(latest, row.at);

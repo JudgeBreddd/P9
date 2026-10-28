@@ -3,7 +3,8 @@
 .shell{display:grid;grid-template-rows:44px 1fr 24px;grid-template-columns:minmax(0,1fr);height:100vh}
 .topbar{position:relative;z-index:50;display:flex;align-items:center;gap:6px;padding:0 10px 0 12px;border-bottom:1px solid var(--border);background:color-mix(in oklch,var(--card) 70%,transparent);backdrop-filter:blur(10px)}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;letter-spacing:-.01em;margin-right:8px}
-.brand .mark{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--primary),var(--glow2));box-shadow:0 0 14px color-mix(in oklch,var(--glow) 50%,transparent)}
+/* D12: the P9 icon (public/p9-icon.svg, inline), the same in every theme; the window's own icon above it is the desktop's title bar */
+.brand .p9mark{width:20px;height:20px;flex:none;display:block;border-radius:5px;box-shadow:0 0 0 1px color-mix(in oklch,var(--foreground) 14%,transparent)}
 .tabs{display:flex;align-items:stretch;align-self:stretch;overflow-x:auto;scrollbar-width:none;mask-image:linear-gradient(90deg,transparent,#000 12px,#000 calc(100% - 12px),transparent)}
 .topbar>:not(.tabs){flex-shrink:0}  /* only the tab strip gives up width; it scrolls */
 .tab{display:flex;align-items:center;gap:7px;padding:0 10px 0 12px;border-bottom:2px solid transparent;color:var(--muted-foreground);font-size:13px;white-space:nowrap;position:relative;transition:color .15s}
@@ -128,6 +129,7 @@ html,body{height:100%;overflow:hidden}
 /* Cards float top-right over the page as their own items (Builder 2026-10-14). They never resize a pane (Builder, 2026-10-27);
    in Dev Focus the editor is a native view above the page, so there the cards are drawn by their own overlay view instead. */
 .stage{--card-w:208px;--card-gap:24px}
+.stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))} /* K11: the Mission page makes room for the cards */
 .cards{position:absolute;top:50px;right:14px;width:var(--card-w);display:flex;flex-direction:column;gap:8px;z-index:20;pointer-events:none}
 .cards>*{pointer-events:auto}
 .shell[data-focus=dev] .cards{visibility:hidden} /* Dev Focus: the overlay view draws them above the editor */
@@ -179,8 +181,9 @@ html,body{height:100%;overflow:hidden}
 .lvl[data-l="bad"]{background:var(--destructive)}.lvl[data-l="warn"]{background:var(--warn)}.lvl[data-l="ok"]{background:var(--ok)}
 /* Popups: bottom right, under the card gutter; fade unless hovered (D07) */
 .toasts{position:fixed;right:14px;bottom:34px;width:var(--card-w,232px);display:flex;flex-direction:column;gap:8px;z-index:40}
-/* Desktop item 1: a failure toast shows its whole reason, never cut to one line */
-.toast.bad .truncate{white-space:normal;overflow:visible;text-overflow:clip}
+/* Desktop item 1, D1: a toast shows its whole message, never cut to one line (a click opens it in the panel too) */
+.toast .truncate{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+#mdlBody .review .start{margin-top:10px;color:var(--muted-foreground)}#mdlBody .review .start b{color:var(--foreground);font-weight:600}
 /* D7: a popover so a toast shows above an open modal (a modal sits in the top layer, over any z-index) */
 .toasts:popover-open{inset:auto 14px 34px auto;margin:0;padding:0;border:0;background:none;color:inherit;overflow:visible}
 :root{--toast-life:6s}
@@ -334,6 +337,7 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 .dock #termView{min-height:0;overflow:hidden;padding:6px 0 0 10px;background:#0d131c}
 .dock #dRefresh[hidden]{display:none}
 .dock.float{position:absolute;left:50%;top:50%;translate:-50% -50%;width:640px;height:360px;border:1px solid color-mix(in oklch,var(--primary) 30%,var(--border));border-radius:var(--radius);box-shadow:0 40px 80px -30px #000,0 0 0 1px color-mix(in oklch,var(--glow) 25%,transparent);z-index:30}
+.dock.float{z-index:16} /* D14: above a full side panel (15); the Dev Focus editor view steps aside in placeDev */
 .dock.float .tb{cursor:move;user-select:none;touch-action:none}
 .dock.float{resize:both;overflow:hidden;min-width:320px;min-height:160px;max-width:100%;max-height:100%}
 .dock.float .grip{display:none}
@@ -352,7 +356,12 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 #palette li kbd{margin-left:auto}
 @media (max-width:720px){.body{grid-template-columns:40px 1fr}.files{display:none}.chats[data-split="true"]{grid-template-columns:1fr}.chats[data-split="true"]>:not(:first-child){display:none}.meters{grid-template-columns:1fr 1fr}}
 /* Settings (phase 18) */
-#setDlg .settings{display:grid;gap:12px}
+#setDlg{max-width:min(94vw,1180px)}
+#setDlg .settings{display:block;columns:340px 3;column-gap:12px}#setDlg .settings.one{columns:auto}
+#setDlg .settings>.set-group{break-inside:avoid;margin-bottom:12px}#setDlg .settings>.set-group[hidden]{display:none}
+.set-pages{display:flex;flex-wrap:wrap;gap:4px;padding:10px 18px 0}
+.set-pages button{font:inherit;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);cursor:pointer}
+.set-pages button[aria-pressed=true]{background:color-mix(in oklch,var(--primary) 18%,transparent);border-color:color-mix(in oklch,var(--primary) 50%,var(--border));color:var(--foreground)}
 .set-row{display:flex;align-items:center;gap:10px}
 .set-row>span:not(.spacer):not(.mono){display:grid;gap:2px}
 .set-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary);flex:none}
