@@ -620,9 +620,14 @@ export async function createDesktop({ state, open } = {}) {
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
-    // D7/D8: an agent's install or sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
-    agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && ['install', 'login'].includes(action) && !Object.keys(rest).length
+    // D7/D8: an agent's sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
+    agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && action === 'login' && !Object.keys(rest).length
       && ['POST', '/setup/agent-terminal', { agent, action }],
+    // Item 15: the wizard's Install of the agents picked (launchers for the CLIs P9 ships), and a system package's admin
+    // command typed into a terminal (row 61); the daemon holds the commands, the page only names a dependency.
+    installAgents: ({ claude, codex, ...rest }) => typeof claude === 'boolean' && typeof codex === 'boolean' && !Object.keys(rest).length
+      && ['POST', '/setup/agents', { claude, codex }],
+    adminTerminal: ({ id, ...rest }) => ['tmux', 'ssh'].includes(id) && !Object.keys(rest).length && ['POST', '/setup/admin-terminal', { id }],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and

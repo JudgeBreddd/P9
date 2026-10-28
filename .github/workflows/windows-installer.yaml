@@ -405,8 +405,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Pre-releases count: every P9 release so far is one.
-          $tag = gh release list -R $env:GITHUB_REPOSITORY --exclude-drafts --limit 1 --json tagName -q '.[0].tagName'
+          # Pre-releases count: every P9 release so far is one. Only a P9 version's tag (vN...): a dependency release such as
+          # deps-tmux-3.8 has no installer.
+          $tag = gh release list -R $env:GITHUB_REPOSITORY --exclude-drafts --limit 20 --json tagName -q '[.[] | select(.tagName | test("^v\\d"))][0].tagName'
           if ($LASTEXITCODE -ne 0 -or -not $tag) { throw 'gh release list found no release' }
           $old = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'p9-newest')).FullName
           gh release download $tag -R $env:GITHUB_REPOSITORY -D $old -p "*-windows-$env:P9_ARCH.exe" -p "SHA256SUMS-$env:P9_ARCH" --clobber

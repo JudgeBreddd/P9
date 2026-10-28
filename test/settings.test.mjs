@@ -748,31 +748,43 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
-  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'claudeCli', 'codex', 'codexCli', 'conflict', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
+  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'claudeCli', 'codex', 'codexCli', 'conflict', 'creates', 'dependencies', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
     'settingsInvalid', 'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
   // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.
-  const total = s.tmux === null ? 6 : 7, base = s.tmux === false ? 1 : 2, settingsFile = s.settingsFile;
+  // Item 15: step 3 asks Claude, Codex or both; the card opens there unless a CLI is on PATH already.
+  const total = s.tmux === null ? 7 : 8, first = s.claudeCli || s.codexCli ? [4, 'Sign in to an agent'] : [3, 'Claude, Codex or both?'], base = s.tmux === false ? 1 : 2, settingsFile = s.settingsFile;
 
   let { app, page } = await launch();
   const card = () => page.locator('#cards [data-key="welcome"]'), body = () => page.locator('#welBody').innerText();
   const at = (n, title) => page.waitForFunction(([n, title, total]) => document.querySelector('#welDlg').open
     && document.querySelector('#welStep').textContent === 'Step ' + n + ' of ' + total && document.querySelector('#welT').textContent === title, [n, title, total]);
   const next = () => page.click('#welFoot [data-act="next"]');
+  // The pick step: Claude unless something is picked already, Install, then the same button is Next.
+  const pickThrough = async () => {
+    await at(3, 'Claude, Codex or both?');
+    if (await page.locator('#welFoot [data-act="install"]').isDisabled()) await page.click('#welBody [data-act="choose:claude"]');
+    if (await page.locator('#welFoot [data-act="install"]').innerText() === 'Install') {
+      await page.click('#welFoot [data-act="install"]'); await page.locator('#welBody [data-installed]').waitFor({ timeout: 10000 });
+    }
+    await page.click('#welFoot [data-act="install"]'); await at(4, 'Sign in to an agent');
+  };
   await card().waitFor({ timeout: 10000 });
   assert.match(await card().innerText(), new RegExp('Set up · ' + base + ' of 4 done[\\s\\S]*agent sign-in · Mission Control files'));
   await shot('setup-card.png');
   // The card opens at the first step not done; Back walks to the start.
   await card().locator('.open').click();
-  await at(3, 'Sign in to an agent');
-  assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits');
+  await at(...first);
+  if (first[0] === 4) { assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits'); await page.click('[data-act="back"]'); }
+  await at(3, 'Claude, Codex or both?');
   await page.click('[data-act="back"]'); await at(2, 'Your workspace');
   assert.equal(await page.locator('#welWs').textContent(), s.workspace);
   assert.match(await body(), /P9 can write here/);
   await shot('wizard-1-workspace.png');
   await page.click('[data-act="back"]'); await at(1, 'Welcome to Event Horizon');
   await shot('wizard-0-welcome.png');
-  await next(); await at(2, 'Your workspace'); await next(); await at(3, 'Sign in to an agent');
+  await next(); await at(2, 'Your workspace'); await next(); await pickThrough();
+  assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits');
 
   // Sign-in: the fake CLI prints a claude.com URL and a paste prompt. The page learns only that a URL exists.
   await page.click('[data-act="start:claude"]');
@@ -799,7 +811,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
   await shot('wizard-2-agents.png');
 
-  await next(); await at(4, 'Mission Control');
+  await next(); await at(5, 'Mission Control');
   assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Mission Control files[\s\S]*Not there yet/);
   // RH2: the first sentence names Mission Control; with none of the files yet, the step says what each is and opens the guide.
   assert.match(await body(), /Mission Control's buttons, apps and pages come from files in your workspace\./);
@@ -833,8 +845,11 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await shot('wizard-3-mission-done.png');
   await next();
   if (s.tmux !== null) {
-    await at(5, 'Terminal');
-    assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
+    // Item 15: something only an admin can install (the SSH client on a machine without it) turns this step into the admin screen.
+    const admin = s.dependencies.filter((x) => x.admin).map((x) => x.id);
+    await at(6, admin.length ? 'This needs your admin password' : 'Terminal');
+    if (admin.length) assert.deepEqual(await page.locator('#welBody [data-admin]').evaluateAll((all) => all.map((x) => x.dataset.admin)), admin);
+    else assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
     await shot('wizard-4-terminal.png');
     await next();
   }
@@ -869,7 +884,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await centerRow().waitFor();
   await shot('setup-in-center.png');
   await centerRow().click();
-  await at(3, 'Sign in to an agent');
+  await at(4, 'Sign in to an agent');
   await page.keyboard.press('Escape');
   await app.close();
   ({ app, page } = await launch());
@@ -882,7 +897,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.equal(await page.locator('#setWel').innerText(), 'Setup');
   await shot('settings-setup.png');
   await page.click('#setWel');
-  await at(3, 'Sign in to an agent');
+  await at(4, 'Sign in to an agent');
   await writeFile(credentials, JSON.stringify({ token: marker }));
   await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 12000 }); // the 10 s poll (BL5)
   await page.keyboard.press('Escape');
@@ -895,9 +910,9 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   }
   // "Turn Mission off for now" stays on the Mission Control screen.
   await page.click('#setBtn'); await page.click('#setWel');
-  await at(s.tmux === false ? 5 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
-  if (s.tmux === false) { await page.click('[data-act="back"]'); } else { await next(); await next(); await next(); }
-  await at(4, 'Mission Control');
+  await at(s.tmux === false ? 6 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
+  if (s.tmux === false) { await page.click('[data-act="back"]'); } else { await next(); await next(); await pickThrough(); await next(); }
+  await at(5, 'Mission Control');
   await page.click('[data-act="mission-off"]');
   await page.waitForFunction(() => document.querySelector('[data-focus-btn="mission"]').hidden && !document.querySelector('#welDlg').open);
   console.log('PASS setup wizard UI: card count, resume at the first step not done, sign-in code and open, ended shows Retry, starter files, name and petdex, tour, skip to the Notification Center across a restart, gone when done, Mission off');
@@ -1592,7 +1607,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await page.waitForFunction(() => !document.querySelector('#land').open);
   // First login: the setup wizard opens itself while a check fails (no settings here), before the walkthrough (v0.1.3 C1).
   await page.locator('#welDlg[open]').waitFor({ timeout: 5000 });
-  assert.equal(await page.locator('#welStep').textContent(), 'Step 1 of ' + ((await call(instance, '/setup')).tmux === null ? 6 : 7));
+  assert.equal(await page.locator('#welStep').textContent(), 'Step 1 of ' + ((await call(instance, '/setup')).tmux === null ? 7 : 8));
   assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough waits for the wizard');
   await shot('wizard-auto.png');
   await page.click('#welFoot [data-act="skip"]');
