@@ -33,7 +33,8 @@ admin_install() {
 system_deps() {
   local reasons command status=0
   # 3: something P9 needs is missing. Anything else non-zero is the check itself failing, which never counts as "nothing missing".
-  reasons=$("$node" scripts/deps.mjs "$@") || status=$?
+  # --place: a missing tmux first comes from P9's own pinned build, with no admin password (row 60).
+  reasons=$("$node" scripts/deps.mjs "$@" --place) || status=$?
   case $status in 0 | 3) ;; *) echo "P9's dependency check failed (the error is above)."; return 1 ;; esac
   [ -n "$reasons" ] || return 0
   echo "P9 needs these on this machine:"
