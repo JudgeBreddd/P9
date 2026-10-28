@@ -62,6 +62,15 @@ export function createTerminal({ screen, state, connect }) {
     // The old 1000 encoding puts one byte per number; a NUL there is a number that was not one.
     return /\x1b\[M[\s\S]{0,2}\0/.test(text) ? '' : text;
   }
+  // Item 4: a paste goes through xterm's own paste(), which wraps it in the bracketed-paste markers when the program asked for
+  // them (so a shell or Claude Code takes it as one paste, not typed lines) and turns newlines into Enter. xterm hands the
+  // text to onData at once, so "pasting" is the tap's time for the lease. The end marker inside the text is dropped: left in,
+  // it would close the bracket early and run the rest as typed commands.
+  let pasting;
+  function paste(text, at) {
+    pasting = at;
+    try { term.view?.paste(text.replaceAll('\x1b[201~', '')); } finally { pasting = undefined; }
+  }
   // Fits the terminal to its box from one measured character; tmux gets the size as the one text frame the daemon takes.
   function fit() {
     const view = term.view; if (!view?.element) return;
@@ -86,7 +95,7 @@ export function createTerminal({ screen, state, connect }) {
         // xterm opens OSC 8 links in its core (confirm, then window.open); surface 13 says links do not open.
         linkHandler: { activate() {} } });
       term.view.open(screen);
-      term.view.onData((data) => { const safe = mended(data); if (safe) sendKeys(safe); });
+      term.view.onData((data) => { const safe = mended(data); if (safe) sendKeys(safe, pasting); });
     }
     term.view.reset();
     const socket = connect(id);
@@ -119,5 +128,5 @@ export function createTerminal({ screen, state, connect }) {
       show(event.code === 4408 ? 'Closed: keys arrived late and were dropped; press Refresh' : 'Closed: press Refresh to reconnect');
     };
   }
-  return { attach, close, fit, sendKeys, show, focus: () => term.view?.focus(), get open() { return Boolean(term.socket); } };
+  return { attach, close, fit, sendKeys, paste, show, focus: () => term.view?.focus(), get open() { return Boolean(term.socket); } };
 }
