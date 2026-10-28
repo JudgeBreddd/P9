@@ -46,15 +46,6 @@ system_deps() {
   return 1
 }
 
-if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ]; then
-  # An install from before the editor server was part of it gets it now (issue #14); one on the pinned release is left alone.
-  node=$(command -v node || ls "$HOME"/.local/share/p9/node-v26.10.0-linux-*/bin/node 2>/dev/null | head -1 || true)
-  # An update checks the system again: a new version can need something the old one did not.
-  if [ -n "$node" ]; then system_deps --update ${headless:+--headless} || exit 1; fi
-  [ -n "$node" ] && "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
-  echo "P9 is already installed. To update: git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart p9-foundation"
-  exit 0
-fi
 path_added=()
 # Without Node v26.10.0 on PATH, P9 gets its own copy from nodejs.org, checked against the pinned SHA-256 from
 # nodejs.org/dist/v26.10.0/SHASUMS256.txt (the same list package-windows.mjs pins its Windows zip from).
@@ -100,6 +91,15 @@ if ! node_error=$(node --version 2>&1 >/dev/null); then
   esac
 fi
 node=$(command -v node)
+if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ]; then
+  # An update checks the system again: a new version can need something the old one did not. Node is in place by now
+  # (above), so the check never skips. An install from before the editor server was part of it gets it now (issue #14);
+  # one on the pinned release is left alone.
+  system_deps --update ${headless:+--headless} || exit 1
+  "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
+  echo "P9 is already installed. To update: git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart p9-foundation"
+  exit 0
+fi
 system_deps ${headless:+--headless} || exit 1
 
 if ! command -v pnpm >/dev/null; then

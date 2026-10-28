@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -130,4 +131,24 @@ test('Item 15: a server update\'s check (update.mjs) leaves the agents\' launche
   assert.ok(Array.isArray(result.missing) && !result.missing.some((m) => m.id === 'sandbox' || m.id === 'tmux'), JSON.stringify(result));
   assert.equal(await readFile(path.join(bin, 'claude'), 'utf8'), '#!/bin/sh\necho the daemon\'s own\n', 'a launcher pointed at the build folder breaks when a failed update removes it');
   console.log('PASS item 15 update check: launcher untouched, no Electron at the checkout so no sandbox ask, JSON on the last line');
+});
+
+// K5: on an installed machine with no Node (not on PATH, not P9's own copy), install.sh's update path gets Node first so its
+// system check runs; it used to skip the check and say "already installed". Here the download is a stand-in curl that fails.
+test('install.sh update with no Node: it fetches Node for the system check instead of skipping it', { skip: !linux, timeout: 60000 }, async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-inst-')), bin = path.join(home, 'bin'), asked = path.join(home, 'curl-asked');
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(bin); await mkdir(path.join(home, '.config/systemd/user'), { recursive: true });
+  await writeFile(path.join(home, '.config/systemd/user/p9-foundation.service'), '[Service]\n');
+  for (const tool of ['git', 'systemctl', 'systemd-run', 'sha256sum', 'tar', 'realpath', 'dirname', 'uname', 'mktemp', 'mkdir', 'rm', 'rmdir', 'cat', 'ls', 'head']) {
+    const found = spawnSync('sh', ['-c', 'command -v ' + tool], { encoding: 'utf8' }).stdout.trim();
+    if (found) await symlink(found, path.join(bin, tool));
+  }
+  await writeFile(path.join(bin, 'curl'), '#!/bin/sh\necho "$*" > ' + JSON.stringify(asked) + '\nexit 22\n', { mode: 0o755 });
+  const run = spawnSync('/bin/bash', ['scripts/install.sh', '--headless'], { cwd: root, encoding: 'utf8', timeout: 30000,
+    env: { PATH: bin, HOME: home, XDG_RUNTIME_DIR: home } });
+  assert.ok(existsSync(asked), 'went for Node: ' + run.stdout + run.stderr);
+  assert.match(readFileSync(asked, 'utf8'), /nodejs\.org\/dist\/v26\.10\.0\//);
+  assert.doesNotMatch(run.stdout, /P9 is already installed/);
+  assert.notEqual(run.status, 0);
 });

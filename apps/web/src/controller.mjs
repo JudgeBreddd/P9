@@ -424,7 +424,7 @@ function renderModal() {
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p><p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Dismiss</button>`;
     $('#mdlFoot [data-dismiss]').onclick = () => { S.alerts = S.alerts.filter(x => x !== a); if (H.notices) H.notices = H.notices.filter(x => x !== a); renderCards(); missionLive(); m.back ? openModal(m.back) : closeModal(); };
   } else missionModal(m, body, row);
@@ -2694,6 +2694,7 @@ window.p9?.onMove?.(onMove);
 function onServerUpdate(u) {
   if (!u) return;
   const on = 'P9 on ' + u.host, missing = (u.missing ?? []).map(m => m.id + ' (' + m.why + '): ' + m.command).join('; ');
+  const why = { 'turn-never-ended': 'a chat\'s turn did not end within 2 hours' }[u.error] ?? u.error;
   const say = {
     downloading: [on + ' is downloading ' + u.version + ' from GitHub Releases.', 'ok'],
     building: [on + ' is building ' + u.version + ' beside the running copy.', 'ok'],
@@ -2701,12 +2702,18 @@ function onServerUpdate(u) {
     restarting: [on + ' is restarting on ' + u.version + '.', 'ok'],
     done: [on + ' is now ' + u.version + '.', 'ok', true],
     'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote.'), 'bad', true],
-    failed: [on + ' was not updated to ' + u.version + ' (' + u.error + '). It runs on as before.', 'bad', true],
+    failed: [on + ' was not updated to ' + u.version + ' (' + why + '). It runs on as before.', 'bad', true],
+    'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
+    'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],
     'app-older': ['The remote runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
     unsupported: [on + ' cannot update itself (it is not a source checkout run by systemd). It stays on ' + u.server + '.', 'bad', true],
   }[u.phase];
   if (!say) return;
-  toast({ kind: 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1] }, !say[2]);
+  // A remote before 0.1.6 (K1): the steps in a dialog at once, then connect again and it updates itself from then on.
+  const steps = u.phase === 'too-old' ? ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'bash scripts/install.sh', 'systemctl --user restart p9-foundation'] : null;
+  const a = { kind: 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1], ...(steps ? { steps, after: 'Then connect again: from 0.1.6 on, it updates itself when you connect.' } : {}) };
+  toast(a, !say[2]);
+  if (steps) openModal({ kind: 'alert', a });
 }
 window.p9?.onServerUpdate?.(onServerUpdate);
 window.p9?.serverUpdate?.().then(onServerUpdate, () => {});

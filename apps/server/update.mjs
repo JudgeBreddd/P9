@@ -18,6 +18,9 @@ const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 // A P9 source archive is a few MiB; this only stops a runaway upload or download.
 export const MAX_ARCHIVE = 256 * 1024 * 1024;
 const BUILD_MS = 20 * 60_000, TURN_POLL_MS = 2000, LOG_TAIL = 4000;
+// ponytail: a turn that has not ended in 2 h fails the update (turn-never-ended) and the server runs on; 5 min for the new
+// version to answer /health once its service is active (a slow machine's first start builds caches).
+const TURN_LIMIT_MS = 2 * 60 * 60_000, START_WAIT_MS = 5 * 60_000;
 export const ARCHIVE = 'https://github.com/JudgeBreddd/P9/archive/refs/tags/';
 const SWAP = fileURLToPath(new URL('../../scripts/update-swap.mjs', import.meta.url));
 const refused = (status, error, extra) => ({ status, error, ...extra });
@@ -42,7 +45,7 @@ export function newer(a, b) {
 
 // root: the checkout this daemon runs from. version: its package.json version (what /health says). archive: where a
 // packaged app's version is downloaded from. unit: the service the swap restarts.
-export function createUpdate({ ownership, state, chat, lifecycle, version, root, archive = ARCHIVE, unit = 'p9-foundation' }) {
+export function createUpdate({ ownership, state, chat, lifecycle, version, root, archive = ARCHIVE, unit = 'p9-foundation', turnLimit = TURN_LIMIT_MS }) {
   const folder = ownership && path.join(ownership, 'update'), busy = new Set();
   const parent = path.dirname(root), base = path.basename(root);
   let job = null;
@@ -113,7 +116,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       // The turn wait: a restart now would cut a turn off. Hold new starts, then look again: a prompt admitted before the
       // hold is already 'turn' (chat.mjs sets it in the same tick as its lifecycle start), so this second look sees it.
       job.phase = 'waiting-turns';
-      for (;;) {
+      for (const end = Date.now() + turnLimit; ;) {
         job.turns = chat.list().filter((c) => c.state === 'turn').length;
         if (!job.turns) {
           lifecycle.hold('updating');
@@ -121,6 +124,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
           if (!job.turns) break;
           lifecycle.release('updating');
         }
+        if (Date.now() > end) return fail('turn-never-ended');
         await new Promise((resolve) => setTimeout(resolve, TURN_POLL_MS));
       }
       job.phase = 'restarting';
@@ -128,13 +132,13 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       // Outside this service: the restart stops this process, so the swap must not be its child.
       const started = await run('systemd-run', ['--user', '--unit', 'p9-update-' + job.id.slice(0, 8), '--collect', '--quiet', '--',
         process.execPath, SWAP, '--root', root, '--next', next, '--version', job.version, '--from', version, '--id', job.id,
-        '--state', state, '--result', path.join(folder, 'result.json'), '--service', unit], parent, 30_000);
+        '--state', state, '--result', path.join(folder, 'result.json'), '--service', unit, '--wait', String(START_WAIT_MS)], parent, 30_000);
       if (!started.ok) return fail('restart-not-started');
       // A swap that fails before any restart (swap-failed) leaves this process running and held: hand the starts back and
-      // say why. A restart ends this process, and this watch with it. ponytail: 15 minutes, past the swap's longest path
-      // (two restarts of up to 120 s, two 60 s health waits).
+      // say why. A restart ends this process, and this watch with it. ponytail: 30 minutes, past the swap's longest path
+      // (two restarts of up to 120 s, two waits for active of up to 120 s, two 5 min health waits).
       const current = job;
-      for (const end = Date.now() + 15 * 60_000; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 1000))) {
+      for (const end = Date.now() + 30 * 60_000; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 1000))) {
         const result = await readFile(path.join(folder, 'result.json'), 'utf8').then(JSON.parse, () => null);
         if (result?.id !== current.id) continue;
         if (!result.ok) { lifecycle.release?.('updating'); Object.assign(current, { phase: 'failed', error: String(result.reason ?? 'swap-failed').slice(0, 100) }); }
