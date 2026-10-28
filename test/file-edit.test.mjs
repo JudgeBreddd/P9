@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron } from '@playwright/test';
+import { _electron, chromium } from '@playwright/test';
 import { daemon, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -111,4 +111,16 @@ test('Chat Focus file modal: edit and Save through the guarded PUT /files, a cha
   assert.equal(wrong.status, 409, 'a stale hash is a conflict'); assert.equal(await disk('proj/notes.md'), 'second save\n');
   await assert.rejects(ask('write', { path: 'proj/notes.md', content: 'x' }), /ipc-sender-refused/);
   // (A third argument never reaches main: the frozen preload forwards the action and the payload only; main's args.length check is a second lock.)
+  // 6. Picture for the report: Dev Focus against this real daemon (editor view and chat panel). page.screenshot leaves out native views, so each view's own picture is stacked at its bounds.
+  await page.click('#rDev'); await page.waitForTimeout(3500);
+  const layers = await app.evaluate(async ({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0], out = [{ b: { x: 0, y: 0, ...win.getContentBounds() }, png: (await win.webContents.capturePage()).toPNG().toString('base64') }];
+    for (const c of win.contentView.children) if (c.getVisible()) out.push({ b: c.getBounds(), png: (await c.webContents.capturePage()).toPNG().toString('base64') });
+    return out;
+  });
+  const stack = await chromium.launch(), p = await stack.newPage({ viewport: { width: layers[0].b.width, height: layers[0].b.height } });
+  await p.setContent('<body style="margin:0;background:#000">' + layers.map(l => `<img style="position:absolute;left:${l.b.x}px;top:${l.b.y}px;width:${l.b.width}px;height:${l.b.height}px" src="data:image/png;base64,${l.png}">`).join(''));
+  const png = await p.screenshot(); await stack.close();
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT dev-daemon ' + png.toString('base64'));
+  if (process.env.P9_SCREENSHOTS) await writeFile(path.join(process.env.P9_SCREENSHOTS, 'dev-daemon.png'), png);
 });
