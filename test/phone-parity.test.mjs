@@ -359,6 +359,41 @@ test('P4: with an empty box during a turn the send button is Stop, and Stop ends
   await send(page, 'after');
   await said(page, 'echo:after');
 });
+// P18: typing during a turn shows a slim card over the box (the desktop's Steer / Queue chip and its Ctrl Enter
+// interrupt); Interrupt stops the turn and sends the text as the next prompt, and nothing typed is lost on the way.
+test('P18: a card over the box during a turn: Steer, Queue, Interrupt; Interrupt stops the turn and sends', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await sendLabel(page, 'Stop');
+  assert.equal(await page.isHidden('#midTurn'), true, 'no card with an empty box');
+  await page.fill('#prompt', 'do this instead');
+  await page.waitForSelector('#midTurn:not([hidden])', { timeout: 5000 });
+  assert.equal(await page.textContent('#midTurnLabel'), 'Claude is working');
+  assert.equal(await page.$eval('#midTurnLabel', (el) => el.scrollWidth <= el.clientWidth), true, 'the label shows whole');
+  assert.deepEqual(await page.$$eval('#midTurn button', (all) => all.map((b) => [b.textContent, b.dataset.when, b.offsetHeight >= 34])), [['Steer', 'steer', true], ['Queue', 'queue', true], ['Interrupt', 'now', true]]);
+  const box = await page.$eval('#midTurn', (el) => { const r = el.getBoundingClientRect(), b = document.querySelector('#box').getBoundingClientRect(); return [Math.round(r.height), r.bottom <= b.top, r.right <= 390]; });
+  assert.ok(box[0] <= 44 && box[1] && box[2], 'slim, above the box, on screen: ' + box);
+  await shot(page, 'p18-card');
+  await page.click('#midTurn [data-when="now"]');
+  await said(page, 'echo:do this instead');
+  assert.equal(await page.inputValue('#prompt'), '', 'sent, so the box is empty');
+  assert.equal(await page.isHidden('#composerNote'), true, 'no error line');
+});
+test('P18: a message held for the turn comes back to the box when the turn is stopped', { timeout: 90000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  await send(page, 'slow');
+  await said(page, 'working');
+  await page.fill('#prompt', 'keep me');
+  await page.click('#midTurn [data-when="queue"]');
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("keep me")', { timeout: 15000 });
+  assert.equal(await page.inputValue('#prompt'), '');
+  await page.click('#composer button[type="submit"]'); // the empty box's Stop
+  await page.waitForFunction(() => document.querySelector('#prompt').value === 'keep me' && document.querySelector('#queued').hidden, null, { timeout: 15000 });
+  await shot(page, 'p18-kept');
+});
 test('P4: the message box is one line empty, grows to six, then scrolls; 16 px text', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
   await newChat(page, 'claude');

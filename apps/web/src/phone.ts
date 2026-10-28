@@ -245,7 +245,13 @@ async function replay() {
 }
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }
-  else { await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen)); }
+  else {
+    await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
+    // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
+    const box = one<HTMLTextAreaElement>('#prompt'), open = one<HTMLSelectElement>('#conversation').value;
+    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled' && String(event.conversation) === open)
+      box.value = String((event.data as Json).text) + (box.value ? '\n' + box.value : '');
+  }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
 }
 // P20: a tail read's events go in once each, in cursor order. older holds, per chat, the first cursor read when
@@ -656,7 +662,9 @@ function label() {
   box.style.height = 'auto'; box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
   send.dataset.stop = String(busy && empty);
   one('#send .vh').textContent = busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
-  one<HTMLButtonElement>('button[form="composer"][data-when="queue"]').hidden = !busy || empty;
+  // P18: the slim card over the box says a send goes into a running turn, and how (Steer is the arrow's default).
+  one<HTMLElement>('#midTurn').hidden = !busy || empty;
+  one('#midTurnLabel').textContent = (provider(id) === 'codex' ? 'Codex' : 'Claude') + ' is working';
 }
 function renderQueue() {
   const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
@@ -730,10 +738,19 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
+  if (submitter?.dataset.when === 'now' && running(id)) {
+    // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
+    // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended.
+    note('Stopping this turn, then sending.');
+    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
+    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await fetchEvents(1000); await new Promise((done) => setTimeout(done, 250)); }
+    if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
+  }
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { if (art === null) { input.value = ''; attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
+  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
