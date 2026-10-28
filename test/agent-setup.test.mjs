@@ -255,21 +255,18 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   await shot('c13-pick-step', page.locator('#welDlg'));
   await body.locator('[data-act="choose:codex"]').click();
   await body.locator('[data-act="choose:claude"]').click();
-  assert.match(await body.innerText(), /Install sets up both from the copy that comes with P9: nothing is downloaded and no admin password is needed\./);
+  assert.match(await body.innerText(), /Continue sets up both from the copy that comes with P9: nothing is downloaded and no admin password is needed\./);
   await body.locator('[data-act="choose:codex"]').click(); // Remove
-  assert.match(await body.innerText(), /Install sets up Claude from the copy/);
+  assert.match(await body.innerText(), /Continue sets up Claude from the copy/);
   assert.equal(await body.locator('[data-act="choose:codex"]').innerText(), 'Pick');
   await shot('c13-pick-claude', page.locator('#welDlg'));
-  await foot.locator('[data-act="install"]').click();
-  await body.locator('[data-installed]').waitFor({ timeout: left() });
-  assert.equal(await body.locator('[data-installed]').innerText(), 'Installed: Claude');
-  assert.deepEqual(await readdir(path.join(instance.directory, '.local', 'share', 'p9', 'bin')), ['claude'], 'only the pick');
-  await shot('c13-pick-installed', page.locator('#welDlg'));
-  // Next: sign-in, for the one picked only.
+  // D16: Continue sets up the pick and goes on to sign-in, for the one picked only.
+  assert.equal(await foot.locator('[data-act="install"]').innerText(), 'Continue');
   await foot.locator('[data-act="install"]').click();
   await page.waitForFunction(() => document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
   assert.equal(await body.locator('[data-act="start:claude"]').innerText(), 'Sign in');
   assert.equal(await body.locator('[data-act="start:codex"]').count(), 0, 'Codex was not picked');
+  assert.deepEqual(await readdir(path.join(instance.directory, '.local', 'share', 'p9', 'bin')), ['claude'], 'only the pick');
   assert.equal(await body.locator('[data-act="term:claude:login"]').innerText(), 'Sign in in a terminal', 'the launcher is a CLI on PATH now');
   await shot('c13-sign-in', page.locator('#welDlg'));
 
@@ -358,4 +355,63 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   await shot('d17-terminal-link');
   assert.deepEqual(errors, []);
   console.log('PASS D17: expired login shows Sign-in expired with Sign in and the terminal row; terminal URLs open on Ctrl+click only, whole');
+});
+
+// D16: step 3 always says Continue (a CLI installed under a version manager is outside the background service's PATH, so
+// "installed" cannot be told); when setting up fails the reason shows and Continue without it goes on, never stuck.
+test('D16: the pick step says Continue; a failed setup names why and still goes on to sign-in', { skip: !linux, timeout: 60000 }, async (t) => {
+  const deadline = Date.now() + 55000, left = () => Math.max(1000, deadline - Date.now());
+  const { instance } = await start(t, []);
+  const bin = path.join(instance.directory, '.local', 'share', 'p9', 'bin');
+  await mkdir(bin, { recursive: true, mode: 0o500 });
+  await chmod(bin, 0o500);
+  t.after(() => chmod(bin, 0o700).catch(() => {}));
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d16-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  const title = () => page.locator('#welT').innerText();
+  const body = page.locator('#welBody'), foot = page.locator('#welFoot');
+  await page.waitForFunction(() => document.querySelector('#welDlg')?.open, null, { timeout: left() });
+  for (let i = 0; i < 4 && await title() !== 'Claude, Codex or both?'; i++) await foot.locator('[data-act="next"]').click({ timeout: left() });
+  assert.equal(await title(), 'Claude, Codex or both?');
+  await body.locator('[data-act="choose:claude"]').click();
+  await body.locator('[data-act="choose:codex"]').click();
+  assert.equal(await foot.locator('[data-act="install"]').innerText(), 'Continue');
+  await foot.locator('[data-act="install"]').click();
+  await foot.locator('[data-act="install"]', { hasText: 'Continue without it' }).waitFor({ timeout: left() });
+  assert.match(await body.innerText(), /P9 could not put the agent where its terminals find it\.[\s\S]*Continue without it goes on/);
+  assert.equal(await title(), 'Claude, Codex or both?', 'a failure stays on the step to be read');
+  await shot('d16-setup-failed', page.locator('#welDlg'));
+  await foot.locator('[data-act="install"]').click();
+  await page.waitForFunction(() => document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
+  assert.equal(await body.locator('[data-act="start:claude"]').count(), 1);
+  assert.equal(await body.locator('[data-act="start:codex"]').count(), 1);
+  await shot('d16-on-to-sign-in', page.locator('#welDlg'));
+  assert.deepEqual(errors, []);
+  console.log('PASS D16: Continue on the pick step; a failed setup says why and Continue without it reaches sign-in');
+});
+
+// D16: a daemon older than the app answers a route it lacks with a plain-text 404; the desktop names that as out of date
+// (retrying never helps), not "not answering". A JSON reply, also a 404, passes through as it is.
+test('D16: a plain-text 404 is daemon-outdated, no reply is daemon-unavailable, a JSON reply passes', { timeout: 20000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  const { daemonRequest, failedReply } = await import('../scripts/teh.mjs');
+  const state = await mkdtemp(path.join(os.tmpdir(), 'p9-d16s-')), socketPath = path.join(state, 'd.sock');
+  t.after(() => rm(state, { recursive: true, force: true }));
+  await writeFile(path.join(state, 'desktop.json'), JSON.stringify({ socketPath, cookie: 'c', csrf: 'x' }));
+  const server = createServer((req, res) => req.url === '/json' ? res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":"not-found"}') : res.writeHead(404).end('404 Not Found'));
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  t.after(() => server.close());
+  const failed = (route) => daemonRequest(state, 'POST', route, {}).then(() => assert.fail('resolved'), failedReply);
+  assert.deepEqual(await failed('/setup/agents'), { status: 404, body: { error: 'daemon-outdated' } });
+  assert.deepEqual(await daemonRequest(state, 'POST', '/json', {}), { status: 404, body: { error: 'not-found' } });
+  server.close();
+  assert.deepEqual(await failed('/setup/agents'), { status: 503, body: { error: 'daemon-unavailable' } });
 });

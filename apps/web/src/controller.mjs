@@ -972,6 +972,7 @@ function saveWhy(r) {
   const words = { 'registry-read-only': 'P9 keeps this file read-only (it holds Mission Control button commands)',
     'request-refused': 'P9 refused it: a locked or protected name, or not a text file',
     'daemon-unavailable': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' did not answer; check the connection and try again',
+    'daemon-outdated': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' is older than this app; update it, then try again',
     EACCES: 'no permission to write it', EPERM: 'no permission to write it', EROFS: 'the disk is read-only', ENOSPC: 'the disk is full',
     EDQUOT: 'the disk quota is full', EBUSY: 'the file is busy; try again', ENOENT: 'its folder is gone' }[code];
   return (words || 'P9 could not write it') + ' (' + code + ')';
@@ -2191,6 +2192,7 @@ async function wizRefresh() {
 // Each error a step can get back, as [cause, fix].
 const WIZ_ERR = {
   'daemon-unavailable': ["P9's background service is not answering.", 'It restarts on its own. Retry in a few seconds.'],
+  'daemon-outdated': ["P9's background service is older than this app, so it does not have this step.", 'Update P9 where its background service runs (or restart that service after an update), then try again.'],
   'workspace-change-unsupported': ["On this system the folder can't be changed from here.", 'P9 changes it on Linux and Windows.'],
   'workspace-refused': ["That folder can't be the workspace.", "Pick a folder of your own: not your home folder itself, a drive's root or P9's own state folder."],
   'service-missing': ["P9's background service is not installed.", "Run P9's installer again (the README's Install section), then Retry."],
@@ -2202,7 +2204,7 @@ const WIZ_ERR = {
   'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
   updating: ['P9 is updating and restarts in a moment.', 'Send again in a minute.'],
   'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
-  'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Retry. Chats still work: they use the agent P9 ships.'],
+  'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Continue without it goes on: chats still work, they use the agent P9 ships.'],
   'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
@@ -2252,16 +2254,17 @@ function wizRender() {
       + (s.writable ? '' : fail('workspace-unwritable'))
       + (note?.error ? fail(note.error, note.detail) : '');
   } else if (key === 'pick') {
-    // Item 15: which agent, why P9 asks, then Install puts the CLI P9 ships where its terminals find it (no download, no
-    // admin password); the next step signs in to the ones picked.
+    // Item 15: which agent, why P9 asks, then Continue puts the CLI P9 ships where its terminals find it (no download, no
+    // admin password; a no-op when it is there) and goes on to sign in to the ones picked. D16: always Continue, since a CLI the
+    // owner installed may be outside the background service's PATH; when setting up fails, the reason shows and the button
+    // goes on without it (chats run on the CLI the adapter ships; only P9 terminals need the launcher).
     title = 'Claude, Codex or both?';
     const on = wizPicked();
     body = '<p data-why>P9\'s chats run on an agent, and you need an account with the one you pick: pick the one you already have.</p>'
       + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('choose:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
-      + `<p class="muted sm">Install sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
-      + (note?.error ? fail(note.error, note.detail) : '') + (note?.installed ? `<p class="ok sm" data-installed>Installed: ${note.installed.map(a => AGENTS_PICK.find(([k]) => k === a)[1]).join(' and ')}</p>` : '');
-    // Next, not Install, when the ones picked are there already (installed earlier, or the owner's own CLI).
-    next = on.length ? btn('install', note?.installed || wizReady() ? 'Next' : 'Install', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Install', 'default').replace('<button', '<button disabled');
+      + `<p class="muted sm">Continue sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
+      + (note?.error ? fail(note.error, note.detail) : '');
+    next = on.length ? btn('install', note?.error ? 'Continue without it' : 'Continue', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Continue', 'default').replace('<button', '<button disabled');
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
     const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
@@ -2375,11 +2378,12 @@ $('#welDlg').addEventListener('click', async e => {
   // choose, not pick: pick is the folder picker's.
   if (act === 'choose') { const on = wizPicked(); W.picked = on.includes(agent) ? on.filter(a => a !== agent) : [...on, agent]; W.note.pick = null; return wizRender(); }
   if (act === 'install') {
-    if (W.note.pick?.installed || wizReady()) { W.i += 1; return wizRender(); }
+    if (W.note.pick?.error || wizReady()) { W.note.pick = null; W.i += 1; return wizRender(); }
     const on = wizPicked();
     const r = await run(() => liveChat.call('installAgents', { claude: on.includes('claude'), codex: on.includes('codex') }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.picked = on;
-    W.note.pick = r.status === 200 ? { installed: r.body.installed } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
+    W.note.pick = r.status === 200 ? null : { error: r.body?.error || String(r.status), detail: r.body?.detail };
+    if (r.status === 200) W.i += 1;
   }
   if (act === 'copy') { const x = W.s?.dependencies?.find(d => d.id === agent); if (x?.command) copy(x.command, b); return; }
   if (act === 'admin') {
