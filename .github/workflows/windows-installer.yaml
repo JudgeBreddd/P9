@@ -32,7 +32,7 @@ on:
         required: false
         default: ''
       files:
-        description: Windows test files to run instead of the Windows checks (space-separated, e.g. test/files-windows.test.mjs); the build still runs, the installs and updates do not. Empty runs everything. Leave the tag empty
+        description: Windows test files to run instead of the Windows checks (space-separated, e.g. test/files-windows.test.mjs); no installer build, no AppImage, no installs or updates. Empty runs everything. Leave the tag empty
         required: false
         default: ''
 
@@ -83,7 +83,9 @@ jobs:
           test -z "$TAG" || { echo "::error::A candidate attaches nothing to a release: leave the tag empty"; exit 1; }
           version=$(node scripts/candidate-version.mjs "$VERSION")
           npm pkg set "version=$version"
-      - run: pnpm package:win
+      # files (dispatch only) runs just the named tests: they need no installer, so the build is skipped.
+      - if: inputs.files == ''
+        run: pnpm package:win
       - name: Attach to the release
         if: env.TAG != ''
         shell: bash
@@ -100,7 +102,7 @@ jobs:
           path: dist/windows/latest.yml
           retention-days: 1
       - name: Show the check build
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         shell: bash
         run: |
           cat dist/windows/SHA256SUMS-$P9_ARCH
@@ -109,7 +111,7 @@ jobs:
           ls -l dist/windows/*-unpacked/resources/app.asar
       # The check build, to download from the run's page and install by hand (a tester's laptop).
       - uses: actions/upload-artifact@v4
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         with:
           name: windows-installer-${{ matrix.arch }}
           path: |
@@ -842,7 +844,7 @@ jobs:
   # AU2: the Linux AppImage, x64 only (no arm64 Linux build yet). Its daemon cannot run from the AppImage's mount, which
   # goes away when the app quits: AU4 copies it to ~/.local/share/p9/daemon first.
   appimage:
-    if: inputs.only != 'rollback'
+    if: inputs.only != 'rollback' && inputs.files == ''
     runs-on: ubuntu-24.04
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-appimage
