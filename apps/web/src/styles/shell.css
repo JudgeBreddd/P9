@@ -108,6 +108,7 @@ html,body{height:100%;overflow:hidden}
 .ed textarea{margin:0;padding:10px 12px;border:0;outline:0;resize:none;background:none;color:var(--foreground);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;font-size-adjust:none;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;min-width:0;tab-size:2}
 .mdl-body[data-kind="file"]{overflow:hidden;align-content:stretch;grid-template-rows:minmax(0,1fr)}
 .mdl-body[data-kind="file"] .ed{height:100%}
+.mdl-body[data-kind="file"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}
 /* Notes (threat model row 34): the list's New note box, the 409 banner, the preview and the editor filling the rest */
 .notes-new,.notes-row{display:flex;gap:8px;align-items:center}.notes-new{padding:10px 14px 4px}.notes-new input{flex:1;min-width:0}
 .mdl-body[data-kind="note"]{align-content:stretch;grid-template-rows:minmax(0,1fr)}.mdl-body[data-kind="note"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}.mdl-body[data-kind="note"] .ed{min-height:320px}

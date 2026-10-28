@@ -78,6 +78,8 @@ test('Chat Focus file modal: edit and Save through the guarded PUT /files, a cha
   await page.locator('#mdlBody [data-conflict]').waitFor({ timeout: 5000 });
   assert.equal(await disk('proj/conflict.md'), 'changed by someone else\n', 'the conflict overwrote nothing');
   assert.equal(await page.locator('#mdlBody textarea').inputValue(), 'my edit\n', 'and my text is still here');
+  const [bannerH, editorH] = await Promise.all([page.locator('#mdlBody [data-conflict]').evaluate(e => e.getBoundingClientRect().height), page.locator('#mdlBody .ed').evaluate(e => e.getBoundingClientRect().height)]);
+  assert.ok(bannerH < 160 && editorH > 200, 'the conflict notice is a strip above the editor, not the editor squeezed below it: ' + bannerH + ' / ' + editorH);
   await shot('file-modal-conflict');
   await page.locator('#mdlBody [data-disk]').click();
   await page.waitForFunction(() => document.querySelector('#mdlBody textarea')?.value === 'changed by someone else\n');
