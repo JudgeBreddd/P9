@@ -23,6 +23,10 @@ test('L2: a slow first load shows the P9 mark, turning, until the list arrives',
   const box = await page.locator('#boot svg').boundingBox();
   assert.ok(Math.abs(box.x + box.width / 2 - 195) < 2 && box.width >= 80, 'the mark is not centred on a 390 px screen: ' + JSON.stringify(box));
   await page.screenshot({ path: (process.env.P9_SCREENSHOTS || '/tmp') + '/phone-loading.png' });
+  // It never blocks the screen: a tap lands on what is under it (the + in the top bar), so a New chat can start mid-load.
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#boot')).pointerEvents), 'none');
+  const under = await page.evaluate(() => { const bar = document.querySelector('[data-bar="chat"]').getBoundingClientRect(); return document.elementFromPoint(bar.left + 10, bar.top + 10)?.closest('#boot') !== null; });
+  assert.equal(under, false, 'the mark covers the top bar');
   release();
   await page.waitForSelector('#boot', { state: 'detached', timeout: 10000 });
   await page.waitForSelector('#chatList .row', { timeout: 10000 });
