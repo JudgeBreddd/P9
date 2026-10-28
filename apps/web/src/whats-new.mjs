@@ -13,7 +13,7 @@ export const WHATS_NEW = {
     'Pets stay beside the chat box: panels, split view and the editor no longer cover them.',
     'Settings is wider, with its sections side by side.',
     'Dev Focus: the terminal floats above every panel, Markdown has colors, and the split no longer flashes white.',
-    'Mission starts as a blank slate you fill with widgets.',
+    'The phone signs in to Claude and Codex, opens faster, edits folders outside the workspace, and can steer a turn.',
     'Logging in again and the setup wizard no longer get stuck.',
     'Save in Chat Focus\'s editor reaches the file, on this computer and on a remote.',
   ],
