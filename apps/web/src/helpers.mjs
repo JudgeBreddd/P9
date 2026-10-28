@@ -9,6 +9,29 @@ export const popover = (btn, panel, onOpen, signal) => {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); }, { signal });
   return { open, close };
 };
+// Drag and arrow-key resizing for a separator (the terminal grip, the Chat Focus split bar, the side panel's bar).
+// el: the separator. axis: 'x' | 'y'. get(): the size now in px; set(px): apply it. min, max: px or a function of px, the clamp.
+// dir (a number or a function of none): 1 when moving right/down grows the thing (a left pane), -1 when it shrinks it (a right panel, a bottom dock).
+// Keys: the arrow that grows it adds 24 px, the other takes 24 px, Home = min, End = max. done(px) runs once at pointerup
+// or keyup: the place to persist. signal ends the listeners with the page.
+export function dragBar(el, { axis = 'x', dir = 1, get, set, min = 0, max = Infinity, done = () => {}, signal }) {
+  const val = v => typeof v === 'function' ? v() : v, clamp = px => Math.max(val(min), Math.min(val(max), px)), at = e => axis === 'x' ? e.clientX : e.clientY;
+  const d = () => val(dir), grow = () => ({ x: d() > 0 ? 'ArrowRight' : 'ArrowLeft', y: d() > 0 ? 'ArrowDown' : 'ArrowUp' })[axis], shrink = () => ({ x: d() > 0 ? 'ArrowLeft' : 'ArrowRight', y: d() > 0 ? 'ArrowUp' : 'ArrowDown' })[axis];
+  let from = null, size = 0, stepped = false;
+  el.style.touchAction = 'none';
+  // The move and the release are heard on the window, not the bar: the bar's own pointer capture was lost mid-drag in Electron
+  // (the editor view beside it moves with the bar), and the old terminal grip listened on the window too.
+  const move = e => { if (from !== null) set(clamp(size + d() * (at(e) - from))); };
+  const end = () => { if (from === null) return; from = null; removeEventListener('pointermove', move); removeEventListener('pointerup', end); removeEventListener('pointercancel', end); done(get()); };
+  el.addEventListener('pointerdown', e => { if (e.button) return; from = at(e); size = get(); e.preventDefault(); addEventListener('pointermove', move); addEventListener('pointerup', end); addEventListener('pointercancel', end); }, { signal });
+  signal?.addEventListener('abort', end);
+  el.addEventListener('keydown', e => {
+    const to = e.key === grow() ? get() + 24 : e.key === shrink() ? get() - 24 : e.key === 'Home' ? val(min) : e.key === 'End' ? val(max) : null;
+    if (to === null) return;
+    e.preventDefault(); set(clamp(to)); stepped = true;
+  }, { signal });
+  el.addEventListener('keyup', () => { if (stepped) { stepped = false; done(get()); } }, { signal });
+}
 export const svg = {
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',

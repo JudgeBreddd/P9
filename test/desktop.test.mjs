@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'onServerUpdate', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'onServerUpdate', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -110,14 +110,15 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     console.log('PASS phase4 must-pass: Chat draft/caret/scroll, Dev tab/draft/caret and Mission scroll survive focus cycle without reload');
 
     await focus('dev'); await editor.evaluate(t => { t.focus(); t.setSelectionRange(20, 25); });
-    const asks = Number(await card('asks:').locator('.n').innerText());
+    const asks = Number(await card('asks:').locator('.n').textContent());
     await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Simulate an agent question' }).click();
-    assert.equal(Number(await card('asks:').locator('.n').innerText()), asks + 1); assert.equal(await card('run:s-codex-1').count(), 0); assert.match(await card('asks:').getAttribute('class'), /fx-halo/);
-    await card('asks:').locator('.open').click(); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
+    assert.equal(Number(await card('asks:').locator('.n').textContent()), asks + 1); assert.equal(await card('run:s-codex-1').count(), 0); assert.match(await card('asks:').getAttribute('class'), /fx-halo/);
+    await card('asks:').locator('.open').evaluate(b => b.click()); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
     await page.check('#mdlBody [data-question] input[value="vitest"]'); await page.click('#mdlBody [data-question] [type="submit"]');
     assert.equal(await page.locator('#mdl').evaluate(el => el.open), false);
     // The dialog's close event restores the caret as a separate task; a fixed 100 ms wait lost that race on a loaded CI runner.
-    await page.waitForFunction(() => document.activeElement?.id === 'devEd', null, { timeout: 5000 }).catch(() => {});
+    // Wait for the caret itself: with the page's cards hidden the card is clicked without a mouse, devEd keeps focus, and the dialog's own focus restore (caret 0,0) comes first.
+    await page.waitForFunction(() => { const t = document.getElementById('devEd'); return document.activeElement === t && t.selectionStart === 20 && t.selectionEnd === 25; }, null, { timeout: 5000 }).catch(() => {});
     assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
     await focus('mission'); await card('reviews:').locator('.open').click(); await page.keyboard.press('Escape');
     await openWin(panelID); assert.equal(await body.evaluate(p => p.scrollTop), missionTop); await closeWin();
@@ -237,8 +238,8 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.deepEqual(navigation.committed, []);
     assert.ok(navigation.started.every(url => url === 'https://example.com/'));
     assert.equal(navigation.before, 'p9://app/'); assert.equal(navigation.after, navigation.before);
-    // The popup was refused: the only pages are the shell and (since Phase 8) the Dev Focus view.
-    assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/')), ['p9://app/']);
+    // The popup was refused: the only pages are the shell, (since Phase 8) the Dev Focus view and the cards overlay.
+    assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/') && !url.startsWith('p9://cards/')), ['p9://app/']);
     if (process.env.P9_SCREENSHOTS) await writeFile(path.join(process.env.P9_SCREENSHOTS, 'navigation-check.json'), JSON.stringify(navigation, null, 2));
   } finally { await application.close(); await rm(profile, { recursive: true, force: true }); }
 });
