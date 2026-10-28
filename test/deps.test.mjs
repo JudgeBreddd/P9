@@ -17,7 +17,7 @@ const restricted = (profile) => async (file) => {
 };
 
 test('Item 15 (row 61): the sandbox rule names this Electron only, and its command prints exactly that rule', { skip: !linux, timeout: 60000 }, async () => {
-  for (const electron of ['/srv/p9/p9/node_modules/electron/dist/electron', "/home/o'brien/my p9/node_modules/electron/dist/electron"]) {
+  for (const electron of ['/srv/p9/p9/node_modules/electron/dist/electron', "/opt/it's p9/my copy/node_modules/electron/dist/electron"]) {
     const missing = await sandboxDependency({ electron, read: restricted() });
     assert.deepEqual([missing.id, missing.ok, missing.admin], ['sandbox', false, true]);
     assert.match(profileText(electron), /^profile p9-electron "[^"]+" flags=\(unconfined\) \{\n {2}userns,\n\}\n$/m);
