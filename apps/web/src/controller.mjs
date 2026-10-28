@@ -1704,7 +1704,7 @@ function walkthrough(i = 0, from = S.focus) {
   const r = at?.getBoundingClientRect(), clamp = (v, max) => Math.min(Math.max(12, v), max - 12);
   if (!r?.width || !r.height) { at?.classList.remove('walk-at'); Object.assign(el.style, { left: (innerWidth - w) / 2 + 'px', top: (innerHeight - h) / 2 + 'px' }); }
   else {
-    if (r.left < 80) Object.assign(el.style, { left: r.right + 14 + 'px', top: clamp(r.top - 8, innerHeight - h) + 'px' }); // the rail: beside it
+    if (r.right < 80) Object.assign(el.style, { left: r.right + 14 + 'px', top: clamp(r.top - 8, innerHeight - h) + 'px' }); // the rail: beside it
     else Object.assign(el.style, { left: clamp(r.left, innerWidth - w) + 'px', top: (r.bottom + 14 + h < innerHeight ? r.bottom + 14 : clamp(r.top - 14 - h, innerHeight - h)) + 'px' });
   }
   el.querySelectorAll('[data-walk]').forEach(b => b.onclick = () => walkthrough(+b.dataset.walk, from));
@@ -1854,17 +1854,17 @@ function serverRow() {
   return '<div class="set-row"><span><strong>Server</strong><span class="muted sm">' + esc(note) + '</span></span><span class="spacer"></span>'
     + (hosts.length ? '<select data-slot="input" id="setServerHost">' + options + '</select><button data-slot="button" data-variant="default" id="setServerGo">Connect</button>' : '')
     + (host ? '<button data-slot="button" data-variant="outline" id="setServerLocal">Use Local</button>' : '')
-    + info('Server mode: chat, Mission Control and the terminal use the P9 on that server, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running. Dev Focus and folder pickers stay on this computer for now.', 'settings') + '</div>';
+    + info('Server mode: chat, Mission Control, the terminal and Dev Focus use the P9 on that server, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use Local goes back. It needs an ssh entry that works without a password prompt. Folder pickers, Open in VS Code and Repair stay Local-only.', 'server-mode-send-to-server-and-send-files') + '</div>';
 }
 // c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
 const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
 function securityGroup(box) {
   const [lock, protect, warn, free] = [SECURITY.lock, SECURITY.protect, SECURITY.warn, SECURITY.unrestricted], both = window.p9?.chat && window.p9?.fileProtection;
-  return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way.', 'settings')}</legend>`
+  return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way. The phone has the same four.', 'security-settings')}</legend>`
     + (window.p9?.chat ? box('setLock', lock[0], agentLock === true, agentLock === null ? SECURITY.unknown : lock[1], agentLock === null, lock[2], 'agent-lock') : '')
     + (window.p9?.fileProtection ? box('setProtect', protect[0], fileProtect !== false, fileProtect === null ? SECURITY.unknown : fileProtect ? protect[1] : SECURITY.protectOff, fileProtect === null, protect[2], 'file-protection') : '')
-    + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2])
-    + (both ? box('setFree', free[0], unrestricted(agentLock, fileProtect, START), free[1], agentLock === null || fileProtect === null, free[2]) : '')
+    + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
+    + (both ? box('setFree', free[0], unrestricted(agentLock, fileProtect, START), free[1], agentLock === null || fileProtect === null, free[2], 'security-settings') : '')
     + '</fieldset>';
 }
 // On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
@@ -1886,13 +1886,13 @@ function renderSettings() {
     + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
     + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
     + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
-    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
+    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
     + securityGroup(box)
     + (missionFiles?.settings ? missionGroup() : '')
     + (serverInfo ? serverRow() : '')
-    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to server (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'settings')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
+    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to server (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
     + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }

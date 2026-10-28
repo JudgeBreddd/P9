@@ -178,10 +178,11 @@ File protection is on by default. While it is on, P9's file routes and editor, o
 refuse to open or save locked names (`_private`, `.git`, `secrets`, `.env*`, `.p9-*`) and refuse to save the script
 registry, the Mission space file and workspace-hub's `mission_control.py`.
 
-Only the desktop can turn it off: Settings, File protection, then a native warning that the page can neither draw
-nor answer. "Keep protection on" is the default and Escape keeps it on; turning it back on never asks. The choice is
-kept in the daemon's ledger, so it survives a restart. The phone follows the switch but has no route to read or
-change it.
+You turn it off in Settings > Security settings. On the desktop that raises a native warning that the page can
+neither draw nor answer; on a paired phone it is a confirm in the same words, behind the phone's session, CSRF check,
+Origin check and operation ledger. Unrestricted mode turns it off too (with the same warning when protection is on).
+"Keep protection on" is the default and Escape keeps it on; turning it back on never asks. The choice is kept in the
+daemon's ledger, so it survives a restart, and one switch covers the desktop and every phone.
 
 With it off:
 
@@ -282,9 +283,11 @@ enrollment mutation; a missing or different Origin is 403.
   12 h session expires, and one whose client stops reading (8 MiB queued) is dropped.
 - **Desktop only.** `/devices` and its approve, refuse, lock, revoke and reset routes,
   and `/setup` (it names the workspace and settings file), exist only on the Unix socket;
-  on TCP they are 404. That includes `/setup/settings`, which Settings > Mission Control files uses: it changes
-  settings.json only from the desktop, through the same checks P9 runs at start, and keeps the old file as
-  settings.json.bak (threat model row 49). It takes only settings.json keys; a value those checks refuse writes
+  on TCP they are 404. Three routes are also on the phone's listener since 0.1.6, behind its session, CSRF check,
+  Origin check and operation ledger: the agent lock, File protection, and `/setup/settings`, which Settings >
+  Mission Control files uses. `/setup/settings` changes settings.json through the same checks P9 runs at start and
+  keeps the old file as settings.json.bak (threat model row 49); the phone's read of it leaves out the file path and
+  `remoteOrigin`. A lost phone is cut off by revoking it from the desktop. It takes only settings.json keys; a value those checks refuse writes
   nothing and shows its reason under its box. Saves run one at a time, and each lands by a temporary file and a
   rename, so a quick second save never drops the first. `/health` on TCP leaves out the workspace path. A failed New idea
   save answers with an allowlisted code (`request-refused`, `storage-unavailable`), never

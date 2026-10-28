@@ -9,17 +9,22 @@ One workspace. Every agent. Your focus.
 
 ## Why it's worth it
 
-- **Your agents keep working when you close the window.** A small daemon runs as your own user (a systemd
-  user service on Linux, a Scheduled Task on Windows) and owns the chats and tmux terminals; the window is
-  only a view onto it.
+- **Your agents keep working when you close the window, and your phone can follow them.** A small daemon
+  runs as your own user (a systemd user service on Linux, a Scheduled Task on Windows) and owns the chats
+  and tmux terminals; the window is only a view onto it. The optional phone view goes over Tailscale and
+  joins only after you approve a 6-digit code on the computer.
 - **Claude and Codex side by side, with your existing logins.** P9 starts each provider's Agent Client
   Protocol adapter and shows its approvals, models and Stop in one chat UI. It never stores your provider login.
-- **No save silently overwrites a change on disk.** Every save carries the hash of the text it started from;
-  if the file changed since, P9 refuses, shows the conflict and keeps your text as a recovery draft.
-- **Your scripts become buttons, with limits.** Mission Control runs commands from a registry file you
-  write, without a shell, at most 4 at once, 1 MiB of output, 15 minutes each.
-- **Your phone joins only when you approve it.** The optional phone view goes over Tailscale; a phone
-  enrolls with a 6-digit code you approve on the computer, then signs in with a passkey.
+- **Move work to your own server without losing the chat.** Send to server copies a chat, between turns,
+  over your own ssh, and Send files copies the project folder the same way, asking before it replaces
+  anything. From 0.1.6 on, connecting from a newer P9 updates the server's P9; a server still on 0.1.5
+  needs one update by hand (see Update).
+- **See what an agent makes, not just a description of it.** A fenced block the agent marks as an
+  artifact (HTML, SVG, Mermaid, React, Markdown or code) opens in a sealed frame beside the chat with no
+  network access; you comment on it and the comments go back as one message.
+- **No save silently overwrites a change on disk, and you choose the limits.** Every save carries the
+  hash of the text it started from; if the file changed since, P9 refuses and keeps your text as a recovery
+  draft. Settings has one switch each for the agent lock, File protection and the Full access warnings.
 
 ## Is it for you?
 
@@ -31,12 +36,13 @@ machine), need a sandbox for your agents (the workspace bounds P9's own file rou
 and buttons run as you), or need a signed, audited installer (v1 is an unsigned beta for testers).
 
 **You need:** Linux with a graphical session and systemd user services (or Windows, per-user install, no
-admin), and the Claude and/or Codex CLI already signed in. Dev Focus also needs
-VSCodium's remote server at one pinned release. Full list: [Requirements](#requirements).
+admin), and a Claude and/or Codex account. P9 ships both CLIs and its setup wizard signs you in. Full
+list, including what the install script asks your package manager for: [Requirements](#requirements).
 
 **Real cost:** P9 itself is free under PolyForm Shield (see [Licenses](#licenses)); you pay for your own
 Claude or Codex plan. Linux installs from source (`pnpm install` and `pnpm build`, Node 26.10.0 fetched if
-missing); install time was not measured.
+missing); install time was not measured. Server mode, Send to server and Send files need a second machine
+you can reach with `ssh` without a password prompt, with P9 running on it.
 
 ## Install
 
@@ -53,10 +59,13 @@ The repository is public: downloading and updating need no GitHub account.
 3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows). From then on it updates
    itself: [Update, roll back, uninstall](#update-roll-back-uninstall).
 
-**Linux AppImage** (x64, from the release after v0.1.4)
+**Linux AppImage** (x64)
 
-Install `tmux`, download `p9-event-horizon-<version>-linux-x64.AppImage` from the same page, then
-`chmod +x` it and run it. On its first start it copies its daemon to `~/.local/share/p9/daemon` and installs the
+Install `tmux` and `libfuse2t64` (an AppImage mounts itself with FUSE, and Ubuntu Desktop 24.04 does not
+ship that library): `sudo apt install tmux libfuse2t64`. Download
+`p9-event-horizon-<version>-linux-x64.AppImage` from the same page, then `chmod +x` it and run it. On its
+first start it copies its daemon to `~/.local/share/p9/daemon`, installs the Dev Focus editor server it
+carries into `~/.local/share/p9/codium-server` (checked against a pinned SHA-256), and installs the
 `p9-foundation` user service with `~/P9` as the workspace; without tmux it installs nothing and says
 `tmux-required`. If it already finds a `p9-foundation` service from a source install, it leaves that alone. On
 Ubuntu 23.10 and newer, AppArmor can stop an AppImage's sandbox from starting: allow it with an AppArmor
@@ -64,17 +73,21 @@ profile for the file, never with `--no-sandbox`. Like the Windows app, it update
 
 **Linux**
 
-Install `tmux` and the GitHub CLI (`gh`): for example `sudo apt install tmux gh`, `sudo dnf install tmux gh` or
-`sudo pacman -S tmux github-cli`. Then paste:
+Install the GitHub CLI (`gh`): for example `sudo apt install gh`, `sudo dnf install gh` or
+`sudo pacman -S github-cli`. Then paste:
 
 ```sh
 gh auth status >/dev/null 2>&1 || gh auth login -h github.com -p https --web && gh auth setup-git && gh repo clone JudgeBreddd/p9 ~/p9 && bash ~/p9/scripts/install.sh
 ```
 
-It signs you in to GitHub if needed, clones P9 to `~/p9`, checks the other tools, builds, starts the daemon
-and prints the command that opens P9. Without Node 26.10.0 it downloads P9's own copy from nodejs.org into
-`~/.local/share/p9` (checked against a pinned SHA-256; your system Node is left alone) and prints the PATH line
-to add to `~/.bashrc`. If the clone worked but a later step failed, fix what it printed and run
+It signs you in to GitHub if needed, clones P9 to `~/p9`, checks the other tools, builds, installs the Dev
+Focus editor server, starts the daemon and prints the command that opens P9. Without Node 26.10.0 it
+downloads P9's own copy from nodejs.org into `~/.local/share/p9` (checked against a pinned SHA-256; your
+system Node is left alone) and prints the PATH line to add to `~/.bashrc`. Without `tmux` it downloads
+P9's pinned static tmux 3.8 into P9's own folder (SHA-256 checked, no admin password) and asks your package
+manager for it only if that fails. For what only your package manager can supply (`curl`, `libatomic1`, the
+AppArmor rule for P9's window) it shows the reason first, then the command, then asks y/N; it never runs
+`sudo` unasked. If the clone worked but a later step failed, fix what it printed and run
 `bash ~/p9/scripts/install.sh`. P9's workspace is `~/work`; for another folder, run
 `bash ~/p9/scripts/install.sh <folder>` instead of the last part. Step by step:
 [Install on Linux](#install-on-linux-per-user-from-source).
@@ -125,13 +138,18 @@ A mismatch means do not run it.
 ## Requirements
 
 - **Linux** (v1 is built and tested on Arch-based CachyOS) with a graphical session, systemd user services,
-  `tmux`, util-linux `flock`, and Chromium sandbox support (user namespaces).
+  `tmux` (P9 downloads its own pinned build if none is found), util-linux `flock`, and Chromium sandbox
+  support (user namespaces). The AppImage also needs `libfuse2t64`.
 - **git**, **Node 26.10.0** and **pnpm 10.34.6** (the install steps add pnpm with npm; Node 25 and later no
   longer ship corepack).
-- For chat: the Claude and/or Codex CLI, already signed in. P9 starts their ACP adapters; it never stores
-  your provider login.
+- For chat: a Claude and/or Codex account. P9 ships both CLIs and puts a launcher for each in its own
+  `bin` folder (no download, no admin password); the setup wizard's *Claude, Codex or both?* step installs
+  the ones you pick, and its next step signs you in. P9 starts their ACP adapters; it never stores your
+  provider login.
 - For Dev Focus: VSCodium's remote server, release 1.121.03429 exactly. P9 refuses any other build (it
-  checks the commit in its `product.json`). Without it the other focus modes still work:
+  checks the commit in its `product.json`). `scripts/install.sh` installs it, the AppImage carries it, and
+  when it is missing Dev Focus says so and offers an **Install the editor server** button. Without it the
+  other focus modes still work. To install it by hand:
 
   ```sh
   curl -fLO https://github.com/VSCodium/vscodium/releases/download/1.121.03429/vscodium-reh-linux-x64-1.121.03429.tar.gz
@@ -142,6 +160,9 @@ A mismatch means do not run it.
 
   `~/.local/share/p9/codium-server/bin/codium-server` must exist afterwards. `P9_EDITOR_HOST` points P9 at a
   different folder.
+- For Server mode, Send to server and Send files: an `ssh` client, a `Host` entry for the server in
+  `~/.ssh/config`, and P9 running on the server. The install script asks for the ssh client only if it is
+  missing.
 - Optional, per feature: `konsole` for registry buttons marked `"terminal": true`, `xdg-open` for apps and
   pages that open a URL, and VS Code at `/usr/bin/code` for "Open in VS Code". Everything else works
   without them.
@@ -307,7 +328,24 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   ```
 
   Delete a draft once you have what you need.
-- **Dev Focus limits.** Saves go through the guarded save. New File creates a file and never replaces one;
+- **Artifacts.** When an agent answers with a fenced block whose first line reads
+  `<type> artifact [panel|pinned|full] [title]` (`type` is `markdown`, `html`, `svg`, `mermaid`, `code` or
+  `react`), the chat shows a chip and the newest artifact of a finished turn opens beside the chat (on the
+  phone, only when you tap the chip). It runs in a frame with no network, no access to your files and none
+  to P9 itself. Select text and press *Add comment*, collect several, and *Send N comments* sends them back
+  as one message that quotes each. Details: [docs/guide.md](docs/guide.md#artifacts).
+- **A second machine.** Settings > Server makes this window work on a server's P9 over an ssh tunnel (the
+  way VS Code Remote-SSH works), Dev Focus included. In Chat Focus, *Send to server* copies one Claude or
+  Codex chat to that server between turns and marks the local copy as moved, so the two never both run.
+  *Send files to server* (the files panel) copies a folder to the same folder on the server, shows what
+  differs, asks before it replaces or deletes anything and keeps every replaced file in P9's recovery
+  folder. Limits are under Settings > Send files. When you connect to a server running 0.1.6 or later with an
+  older P9, this one builds and installs itself there after chats finish their turn. A failed build leaves the
+  server as it was; a new build that does not start is put back. A server still on 0.1.5 has no update
+  route, so it needs one update by hand first (see Update).
+  Details: [docs/guide.md](docs/guide.md#server-mode-send-to-server-and-send-files).
+- **Dev Focus limits.** Saves go through the guarded save, and only Ctrl+S or Save writes (a white dot on the
+  tab marks an unsaved file). New File creates a file and never replaces one;
   creating folders, renaming and deleting from the editor's explorer is refused in v1. Do those in a
   terminal, where P9's guards do not apply.
   The editor server starts with VSCodium's server licence accepted for you
@@ -335,9 +373,21 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   into a note. Notes are capped at 50,000 characters (the box shows a live count and keeps your text if you go over) and 10 per 10 minutes. Without a token, GitHub's link limit cuts the prefilled text at 7,000 characters and the box says so.
   To remove the token: delete both `anymouse.*` files in that folder, then run
   `systemctl --user daemon-reload && systemctl --user restart p9-foundation`.
+- **Security settings.** Settings > Security settings, on the computer and on an enrolled phone, has four
+  switches: **Agent lock** (agents can read and answer but cannot edit files or run anything that asks
+  permission; off by default), **File protection** (the editor cannot open or change secrets, `.env` files,
+  `_private`, `.git` or P9's own files; on by default), **Warn before Full access and Bypass permissions**
+  (on by default) and **Unrestricted mode** (all of them off at once, and new chats start in Codex Full
+  access and Claude Bypass permissions). Turning File protection off, or Unrestricted mode on, asks first.
+  The lock and File protection belong to the daemon, so one setting covers the computer and every phone.
+  Unrestricted mode on a phone changes the daemon's two switches and that phone's new chats, not the
+  computer's new chats.
 - **Phone** (optional, needs Tailscale on both devices). **An enrolled phone can do what you can do in
-  P9:** read and save workspace files, run chats, terminals and registry buttons. Approve only your own
-  devices. Anyone on your tailnet can open the enrollment page and use up its rate limit, though only you
+  P9:** read and save workspace files, run chats, terminals and registry buttons, and turn the agent lock
+  and File protection on or off. Approve only your own devices; to cut off a lost phone, revoke it from the
+  computer (below). The phone has Chats (the same composer, modes, models, photos and one-tap send as the
+  desktop), Terminal (with a Paste key that reads the clipboard only when you tap it), Mission, Usage,
+  Files and Settings. Its sign-in lasts up to 12 hours, and a message you were typing survives a sign-in. Anyone on your tailnet can open the enrollment page and use up its rate limit, though only you
   can approve.
   1. Add the two remote flags with `systemctl --user edit p9-foundation`: an empty `ExecStart=` line, then
      the unit's own `ExecStart=` line (see `systemctl --user cat p9-foundation`) with
@@ -375,6 +425,15 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   version, which ends a chat turn in progress (reopen it to resume). What it downloads and how that is checked:
   `SECURITY.md` § Auto-update. Remove the AppImage's service with
   `node ~/.local/share/p9/daemon/<version>/scripts/uninstall-service.mjs`, then delete the AppImage.
+
+- **A server running P9** is updated from the computer you connect from once it runs 0.1.6: when this P9 is
+  newer (compared by version number), it sends its source, builds beside the running copy, waits until no chat
+  is mid-turn, swaps and restarts. A failed build leaves the running copy as it was; a restart that does not
+  answer puts the previous copy back. A server still on 0.1.5 has no update route and does not update itself:
+  update it once as a source checkout (the steps below: git pull, build, restart), then run
+  `bash scripts/install.sh` there. `install.sh` alone does not pull. From a source checkout, the update sends
+  its last commit (uncommitted work is not sent); the installed app asks the server to fetch this version's
+  source from GitHub. The old copy stays on the server as `source.previous`.
 
 A source checkout never updates itself:
 
@@ -430,8 +489,14 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Status and known gaps
 
-**Version 0.1.5, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.6, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
+
+**New in 0.1.6:** the phone shell and Chats screens, and phone parity with the desktop chat; Send to server
+and Send files over your own ssh; the server updating itself on connect; artifacts; the Security settings
+group; the Sprint tracker window; the Dev Focus editor server installed by the install script, the AppImage
+and a button; P9's own tmux; a saved-only-on-Ctrl+S editor; the side-panel Chat Focus file window that can
+save; and the setup wizard finding an existing Mission Control layout.
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
   daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
@@ -439,11 +504,16 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
   updated, restarted and uninstalled on GitHub's Windows runners, and the AppImage is built and checked on
   Ubuntu (Actions, Installers; a runner session, not a real desktop).
 - **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
-  that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`).
+  that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`). New in 0.1.6 and
+  not run on real machines: Send to server, Send files and the server's self-update over real ssh between
+  two computers (the tests use two daemons in one container joined by a stand-in ssh); the AppImage on a
+  bare Ubuntu Desktop 24.04 through the wizard's sign-in; how fast the phone's Mission tab is against a
+  real daemon.
 - **Not supported:** macOS.
 - **Known gaps:** installers are unsigned (checksum only, see above); a daemon restart cuts off the chat turn
   in progress (reopen to resume); Dev Focus refuses folder creation, rename and delete; recovery drafts have
-  no screen yet; the phone view uses the browser's online flag, so it can miss a daemon that is unreachable.
+  no screen yet; the phone view uses the browser's online flag, so it can miss a daemon that is unreachable;
+  the AppImage still asks you to install `tmux` and needs `libfuse2t64`.
 
 ## Licenses
 

@@ -199,7 +199,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.equal(seen['good-pet'], process.env.P9_REAL_PET ? 'data:image/webp;base64' : 'data:image/png;base64,');
   for (const name of ['dotdot', 'slash', 'link-image', 'link-folder', 'text', 'huge', 'Bad_Name', '../good-pet']) assert.equal(seen[name], 'pet-refused', name);
 
-  const ev = process.env.P9_EVIDENCE, shot = (name) => ev && page.screenshot({ path: path.join(ev, name) });
+  const ev = process.env.P9_EVIDENCE, shot = async (name) => { if (ev) await page.screenshot({ path: path.join(ev, name) }); else if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name.replace(/\.png$/, '') + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); } };
   const settingsNow = () => page.evaluate(() => window.p9.getSettings());
   const topPets = () => page.evaluate(() => [...document.querySelectorAll('#indPets canvas')].map((c) => c.dataset.petName + ':' + c.dataset.rows).sort().join());
   const drawn = (sel) => page.waitForFunction((sel) => { const c = [...document.querySelectorAll(sel)]; return c.length && c.every((cv) => cv.getContext('2d').getImageData(96, 104, 1, 1).data[3] > 0); }, sel);
@@ -590,7 +590,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
       for (let i = 0; i < 30 && (!shownViews.length || shownViews.some(over)); i++) { await page.waitForTimeout(100); shownViews = await views(); }
       assert.ok(shownViews.length && !shownViews.some(over), 'step ' + n + ': the Dev editor covers the card ' + JSON.stringify([now.rect, shownViews]));
     }
-    if ([1, 2, 7, 9, 10, 11, 13].includes(n)) await shot(`walkthrough-${n}.png`);
+    if ([1, 2, 7, 9, 10, 11, 13, 14, 16].includes(n)) await shot(`walkthrough-${n}.png`);
     if (n === 3) { await page.click('#walk [data-walk="1"]'); assert.equal((await walkNow()).n, 2, 'Back'); await page.click('#walk [data-walk="2"]'); }
     await page.click(`#walk [data-walk="${n}"]`);
   }

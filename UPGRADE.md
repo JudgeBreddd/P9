@@ -1,5 +1,55 @@
 # Upgrading P9
 
+## To 0.1.6 (beta)
+
+The Windows app and the AppImage update themselves from 0.1.5 (Settings > Maintenance > Updates). A source checkout
+updates as `README.md` § Update, roll back, uninstall says, then reopen the window (the desktop main process changed).
+Installing restarts the background service, which ends a chat turn in progress.
+
+**What you will notice**
+
+- Dev Focus saves only on Ctrl+S or Save. Before, the editor wrote a file about a second after your last key. A white
+  dot on a tab marks an unsaved file.
+- Settings has a Security settings group with four switches: Agent lock, File protection, Warn before Full access and
+  Bypass permissions, and Unrestricted mode. The defaults are the ones you had (lock off, protection on, warnings
+  on). The paired phone can now change the agent lock and File protection too, and edit your Mission Control files;
+  before 0.1.6 only the desktop could. To cut off a lost phone, revoke it from the desktop. Turning File protection
+  off, or Unrestricted mode on, asks first.
+- A loosened mode (Claude Bypass permissions, Codex Full access) no longer carries into the next new chat unless you
+  said "Don't show again". Settings > New chats start in sets each agent's default mode.
+- The phone has a new shell (a 44 px top bar and a tab bar), a Chats list that opens a chat at its last message, the
+  desktop's composer, modes, models and photos, a Paste key in the terminal, a Mission tab, a Sprint window, and Settings (theme, Security settings, Mission Control files, Rebuild + reload).
+- Chat Focus shows artifacts: an agent's fenced block marked `<type> artifact` opens in a sealed frame beside the
+  chat, and your comments on it go back as one message. A file you open from Chat Focus can be saved (the same
+  guarded save as Dev Focus), and Chat Focus full keeps only the text box under a full-screen artifact.
+- Mission Control: chips read `needs <your name>`, rail robot heads are numbered, rows have a Run pill and cost in
+  cents, and an empty Mission explains itself. A Sprint button appears while the machine you are connected to has a sprint status file; its window shows a ring for the whole sprint and one per chunk.
+- The setup wizard has a *Claude, Codex or both?* step that installs the CLIs P9 ships, a Mission step that finds an
+  existing layout (an `AGENTS.md`, a `registry.json`, a `needs-you` or `waiting` folder) and offers *Use these files*,
+  and a welcome choice to connect to a P9 on another machine. The wizard, the Mission plans list and the hub queue no
+  longer look inside `node_modules`, `.venv`, `dist`, `build`, `.cache` and similar folders.
+
+**What you can now do**
+
+- Settings > Server works on a server's P9, Dev Focus included. In Chat Focus, *Send to server* moves a Claude or
+  Codex chat to it, and *Send files to server* copies a folder, with no Syncthing. Settings > Send files sets the
+  limits. From 0.1.6 on, connecting from a newer P9 updates a server that already runs 0.1.6 (a failed build leaves the
+  server as it was; a new build that does not start is put back). A server still on 0.1.5 needs one update by hand. You need an `ssh` entry for the server that works without a password prompt.
+
+**What you must do**
+
+- **Linux AppImage, new installs:** it needs `libfuse2t64` (the AppImage mounts itself with FUSE, and Ubuntu Desktop
+  24.04 does not ship it): `sudo apt install libfuse2t64`. It still needs `tmux` installed.
+- **Linux source checkout:** run `bash scripts/install.sh` again after you update. It installs Dev Focus's editor
+  server into `~/.local/share/p9/codium-server`, downloads P9's pinned static tmux 3.8 when you have no tmux, and shows
+  the reason before it asks for your admin password for anything else. Without it, Dev Focus offers an *Install the
+  editor server* button.
+- **A server that runs P9:** a server still on 0.1.5 does not update itself (0.1.5 has no update route). Update it by
+  hand once, as a source checkout (the README's Update steps: git pull, build, restart), then run
+  `bash scripts/install.sh` there, as the source checkout bullet above says. After that, connecting from a newer P9 updates it.
+  A server you reach another way updates as a source checkout does.
+- **Windows:** nothing. The update keeps your workspace and the `P9 Foundation` task.
+
 ## To 0.1.5 (beta)
 
 The installed app now updates itself. From 0.1.5 on, the Windows app and the new Linux AppImage check P9's public
