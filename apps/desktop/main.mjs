@@ -260,6 +260,9 @@ export async function createDesktop({ state, open } = {}) {
   // last: the host used before, so Local can show a one-click way back.
   const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
   let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
+  // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
+  let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes }), { mode: 0o600 });
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
@@ -290,7 +293,7 @@ export async function createDesktop({ state, open } = {}) {
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
     await old?.close().catch(() => {});
-    await writeFile(serverFile, JSON.stringify({ host, last: serverLast }), { mode: 0o600 });
+    await keepServer();
     connect(attempt);
   };
   if (serverHost) { state = serverFolder(serverHost); connect(++serverTry); }
@@ -685,7 +688,7 @@ export async function createDesktop({ state, open } = {}) {
   // the window reloads onto that daemon. Neither daemon is stopped.
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
-    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts() };
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes };
     endDock();
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
@@ -693,6 +696,14 @@ export async function createDesktop({ state, open } = {}) {
     if (devView) reopenDev();
     setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
     return { ok: true };
+  });
+  // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
+  ipcMain.handle('p9:remotes', async (event, ...args) => {
+    const [action, host] = args;
+    if (!fromApp(event) || args.length !== 2 || !['add', 'remove'].includes(action) || typeof host !== 'string' || !HOST.test(host)) throw new Error('ipc-sender-refused');
+    remotes = action === 'add' ? [...new Set([...remotes, host])].slice(-50) : remotes.filter(h => h !== host); // ponytail: 50 kept, the oldest go
+    await keepServer();
+    return { remotes };
   });
   // Send to server (D14, move.mjs): this computer's chat moves to the server used last. From Local only: in Server mode the
   // chats are on the server already. One move per chat at a time; each has its Cancel.

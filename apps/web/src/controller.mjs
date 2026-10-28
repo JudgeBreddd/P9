@@ -1845,16 +1845,20 @@ function wireMission() {
     saveMission({ [k]: picked });
   }; });
 }
-// Settings > Server (desktop/remote.mjs): the hosts are the Host lines of ~/.ssh/config, as VS Code Remote-SSH lists them.
+// Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
+// lists them). Nothing is built in; Add remote takes a Host name or user@address.
 function serverRow() {
-  const { host, last, connected, error, hosts } = serverInfo, pick = host ?? last;
+  const { host, connected, error, hosts, remotes = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
   const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
-    : hosts.length ? 'This window works on this computer. Pick a server to work on its P9 over ssh.' : 'No Host lines in ~/.ssh/config yet. Add the server there, check that ssh to it works without a password prompt, then reopen Settings.';
-  const options = hosts.map(h => '<option value="' + esc(h) + '"' + (h === pick ? ' selected' : '') + '>' + esc(h) + '</option>').join('');
-  return '<div class="set-row"><span><strong>Server</strong><span class="muted sm">' + esc(note) + '</span></span><span class="spacer"></span>'
-    + (hosts.length ? '<select data-slot="input" id="setServerHost">' + options + '</select><button data-slot="button" data-variant="default" id="setServerGo">Connect</button>' : '')
-    + (host ? '<button data-slot="button" data-variant="outline" id="setServerLocal">Use Local</button>' : '')
-    + info('Server mode: chat, Mission Control, the terminal and Dev Focus use the P9 on that server, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use Local goes back. It needs an ssh entry that works without a password prompt. Folder pickers, Open in VS Code and Repair stay Local-only.', 'server-mode-send-to-server-and-send-files') + '</div>';
+    : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
+  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>'
+    + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
+    + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
+  return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. ssh to the remote must work without a password prompt. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
+    + '<p class="muted sm">' + esc(note) + '</p>' + (rows ? '<ul class="remote-list">' + rows + '</ul>' : '')
+    + '<form class="set-row" id="setRemoteAdd"><input data-slot="input" id="setRemoteName" placeholder="Host name or user@address" aria-label="Remote to add" maxlength="253" autocomplete="off" spellcheck="false"><button data-slot="button" data-variant="default">Add remote</button></form>'
+    + '<p class="warn sm" id="setRemoteErr" role="alert" hidden></p>'
+    + (host ? '<div class="set-row"><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setServerLocal">Use this computer</button></div>' : '') + '</fieldset>';
 }
 // c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
 const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
@@ -1911,7 +1915,16 @@ function renderSettings() {
   if (pets) wirePetSettings();
   if (missionFiles?.settings) wireMission();
   // Main reloads the window onto the chosen daemon, so nothing here re-renders.
-  if ($('#setServerGo')) $('#setServerGo').onclick = () => window.p9.server($('#setServerHost').value);
+  $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
+  const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); };
+  $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
+  if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
+    e.preventDefault();
+    const name = $('#setRemoteName').value.trim(), err = $('#setRemoteErr');
+    // The same rule as main's (desktop/remote.mjs HOST); main checks again.
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(name)) { err.hidden = false; err.textContent = 'A remote is a Host name from ~/.ssh/config or user@address: letters, digits and . _ - @, starting with a letter or digit.'; return; }
+    remotesNow('add', name);
+  };
   if ($('#setServerLocal')) $('#setServerLocal').onclick = () => window.p9.server(null);
   Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
@@ -2184,7 +2197,7 @@ const WIZ_ERR = {
 };
 // The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
 function wizRemote(btn) {
-  const h = W.hosts, hosts = h?.hosts || [], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
+  const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
   return '<div data-wiz-remote>' + (hosts.length
     ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">Its Host name from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
     : `<p class="muted sm">No Host lines in ~/.ssh/config yet. Add the machine there, check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
