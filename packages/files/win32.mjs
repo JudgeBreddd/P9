@@ -2,7 +2,8 @@
 // neither, so each component opens with NtCreateFile relative to its parent's handle and FILE_OPEN_REPARSE_POINT
 // (a junction or symlink opens as itself and is refused), and the opened handle's final path must be the expected one
 // (this also refuses case and 8.3 short-name variants). Reads, writes, renames and deletes go through the same handles.
-// ponytail: node:ffi is experimental in Node 26.10 and these calls are synchronous; files are capped at MAX_BYTES (2 MiB).
+// ponytail: node:ffi is experimental in Node 26.10 and these calls are synchronous; editor files are capped at MAX_BYTES
+// (2 MiB), and the tunnel send's bigger files go 1 MiB a call with a turn for other requests between (index.mjs pieces).
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -41,7 +42,7 @@ const SYNCHRONIZE = 0x00100000, DELETE = 0x00010000, READ_CONTROL = 0x00020000;
 const FILE_GENERIC_READ = 0x00120089, FILE_GENERIC_WRITE = 0x00120116;
 // Read-only: NTFS checks create and rename against the folder's own ACL, not the RootDirectory handle's access.
 const DIRECTORY_ACCESS = 0x0001 /* list */ | 0x0020 /* traverse */ | 0x0080 /* read attributes */ | SYNCHRONIZE | READ_CONTROL;
-const SHARE_ALL = 7, SHARE_READ = 1, FILE_OPEN = 1, FILE_CREATE = 2;
+const SHARE_ALL = 7, SHARE_READ = 1, SHARE_DELETE = 4, FILE_OPEN = 1, FILE_CREATE = 2, FILE_OPEN_IF = 3;
 const FILE_DIRECTORY_FILE = 0x1, FILE_NON_DIRECTORY_FILE = 0x40, FILE_SYNCHRONOUS_IO_NONALERT = 0x20, FILE_OPEN_REPARSE_POINT = 0x00200000;
 const ATTRIBUTE_DIRECTORY = 0x10, ATTRIBUTE_REPARSE = 0x400;
 const FileRenameInformationEx = 65, FileDispositionInformationEx = 64, FileFullDirectoryInformation = 2, FileIdInfo = 18;
@@ -113,15 +114,17 @@ class Handle {
     view.copy(buffer, offset, 0, bytesRead);
     return { bytesRead };
   }
+  // FileHandle.write's form, so index.mjs copies into a staged temp the same way on both systems.
+  async write(buffer, offset, length, position) {
+    const status = Buffer.alloc(16), at = Buffer.alloc(8), chunk = buffer.subarray(offset, offset + length);
+    at.writeBigUInt64LE(BigInt(position), 0);
+    const result = ntdll.NtWriteFile(this.handle, 0n, 0n, 0n, status, chunk, chunk.length, at, 0n);
+    if (result !== 0) throw statusError(result, 'NtWriteFile');
+    return { bytesWritten: Number(status.readBigUInt64LE(8)) };
+  }
   async writeFile(content) {
     const data = Buffer.from(content);
-    for (let offset = 0; offset < data.length;) {
-      const status = Buffer.alloc(16), at = Buffer.alloc(8), chunk = data.subarray(offset, offset + 1024 * 1024);
-      at.writeBigUInt64LE(BigInt(offset), 0);
-      const result = ntdll.NtWriteFile(this.handle, 0n, 0n, 0n, status, chunk, chunk.length, at, 0n);
-      if (result !== 0) throw statusError(result, 'NtWriteFile');
-      offset += Number(status.readBigUInt64LE(8));
-    }
+    for (let offset = 0; offset < data.length;) offset += (await this.write(data, offset, Math.min(1024 * 1024, data.length - offset), offset)).bytesWritten;
   }
   async chmod() {}
   async sync() {
@@ -418,7 +421,8 @@ const done = async (parent, name, handle, ok) => {
   if (ok) return handle.release();
   staged.set(stagedKey(parent, name), handle); // a failed rename leaves the file staged for the caller's unlinkAt
 };
-export async function renameAt(parent, from, to) {
+// replace false: a name already there fails with EEXIST (a tunnel send's new file, as Linux's link()).
+export async function renameAt(parent, from, to, replace = true) {
   // The recovery folder keeps holding a draft record after its rename (Sol round 3 M1), so draft.remove() deletes the
   // record it wrote, by handle. The record it replaces is let go first: a held name cannot be renamed over.
   if (parent.keep) await takeStaged(parent, to)?.release();
@@ -426,7 +430,7 @@ export async function renameAt(parent, from, to) {
   let ok = false;
   try {
     const name = Buffer.from(to, 'utf16le'), info = Buffer.alloc(24 + name.length);
-    info.writeUInt32LE(0x1 /* REPLACE_IF_EXISTS */ | 0x2 /* POSIX_SEMANTICS */, 0);
+    info.writeUInt32LE((replace ? 0x1 /* REPLACE_IF_EXISTS */ : 0) | 0x2 /* POSIX_SEMANTICS */, 0);
     info.writeBigUInt64LE(BigInt(parent.handle), 8);
     info.writeUInt32LE(name.length, 16);
     name.copy(info, 20);
@@ -459,15 +463,57 @@ export async function renameNamed(root, parts, to) {
   } finally { await Promise.all(handles.map((handle) => handle.close())); }
 }
 
+// Deletes the file this handle has open (DELETE access), whatever its name is now. POSIX semantics: the name goes at once.
+export function deleteHeld(handle, operation = 'delete') {
+  const info = Buffer.alloc(4);
+  info.writeUInt32LE(0x1 /* DELETE */ | 0x2 /* POSIX_SEMANTICS */, 0);
+  setInformation(handle, FileDispositionInformationEx, info, operation);
+}
+
 // Linux: unlink(`/proc/self/fd/N/name`).
 export async function unlinkAt(parent, name) {
   const target = openSource(parent, name);
-  try {
-    const info = Buffer.alloc(4);
-    info.writeUInt32LE(0x1 /* DELETE */ | 0x2 /* POSIX_SEMANTICS */, 0);
-    setInformation(target, FileDispositionInformationEx, info, `unlink(${name})`);
-  } finally { await done(parent, name, target, true); }
+  try { deleteHeld(target, `unlink(${name})`); }
+  finally { await done(parent, name, target, true); }
 }
+
+// Linux: index.mjs anchored() for a tunnel send's replaceFile and removeFile (threat model rows 4 and 59). The walk opens
+// each folder relative to its parent, creating missing ones when `create` (FILE_OPEN_IF: a junction opens as itself and
+// is refused, a file of that name fails ENOTDIR). The file is held from the hash to the rename or delete without write
+// sharing, so its bytes cannot change in between (Linux cannot stop that). A replace shares delete, which the rename
+// over it needs; a remove (create false) holds DELETE access and shares nothing but reads, so the delete goes through
+// this handle and nothing can move the file first.
+export async function anchored(root, parts, create) {
+  const handles = [], expected = path.join(root, ...parts);
+  try {
+    let parent = openRoot(root);
+    handles.push(parent);
+    for (const part of parts.slice(0, -1)) {
+      parent = create ? openRelative(parent, part, { access: DIRECTORY_ACCESS, disposition: FILE_OPEN_IF, options: FILE_DIRECTORY_FILE })
+        : openDirectory(parent, part);
+      parent.directory = true;
+      handles.push(parent);
+    }
+    if (finalPath(parent.handle) !== path.dirname(expected)) throw new Error('path-changed');
+    let file = null;
+    try {
+      file = openRelative(parent, parts.at(-1), { access: FILE_GENERIC_READ | (create ? 0 : DELETE), options: FILE_NON_DIRECTORY_FILE,
+        share: create ? SHARE_READ | SHARE_DELETE : SHARE_READ });
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (file) handles.push(file);
+    const stat = file && information(file.handle);
+    if (stat && (!stat.isFile() || stat.nlink !== 1)) throw new Error('unsafe-file');
+    // Also refuses a case or 8.3 variant of an existing name: on Windows those are the same file.
+    if (file && finalPath(file.handle) !== expected) throw new Error('path-changed');
+    return { parent, file, stat, name: parts.at(-1), expected, close: () => Promise.all(handles.map((handle) => handle.close())) };
+  } catch (error) {
+    await Promise.all(handles.map((handle) => handle.close()));
+    throw error;
+  }
+}
+// The held file still has its name (a replace shares delete, so another process could have moved it). A new name needs
+// no check here: the rename into it never replaces.
+export const unchanged = (safe) => !safe.file || finalPath(safe.file.handle) === safe.expected;
 
 // The recovery directory: opened without following a final reparse point. Its owner-only ACL is the installer's job on
 // Windows, as main.mjs already decides for the state and ownership directories; the outside-the-workspace check stays.
