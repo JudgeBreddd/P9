@@ -144,7 +144,7 @@ Server mode points this window at a P9 running on another computer. Chat, Missio
 
 1. Make sure `ssh <server>` works from this computer without a password prompt (an entry in `~/.ssh/config` with a key).
 2. Settings → Server → pick the server → **Connect**. A badge in the title bar says you are on the server. The setup wizard's welcome step offers the same choice.
-3. The first time you connect to a server running an older P9, P9 updates it and goes back to the old build if the new one fails to build. A server whose P9 is current is left alone.
+3. Connecting to a server whose P9 is 0.1.6 or later but older than this one updates it. A failed build leaves the server as it was, and a new build that does not start is put back. A server whose P9 is current is left alone. A server still on 0.1.5 does not update itself: update it by hand once (the README's Update section, or run install.sh there).
 4. Dev Focus runs its editor on the server. If the editor server is missing there, Dev offers **Install the editor server on the server**.
 5. Some things stay on this computer. In Server mode the folder pickers, Dev Focus **Open Folder**, **Open in VS Code**, **Change the workspace folder** and **Repair** do nothing, or say they are Local-only. Switch to **Use Local** for them. The server's workspace folder is set where P9 is installed on the server.
 

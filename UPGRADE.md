@@ -33,8 +33,8 @@ Installing restarts the background service, which ends a chat turn in progress.
 
 - Settings > Server works on a server's P9, Dev Focus included. In Chat Focus, *Send to server* moves a Claude or
   Codex chat to it, and *Send files to server* copies a folder, with no Syncthing. Settings > Send files sets the
-  limits. When you connect to a server running an older P9, it updates itself from you and goes back if the build
-  fails. You need an `ssh` entry for the server that works without a password prompt.
+  limits. From 0.1.6 on, connecting from a newer P9 updates a server that already runs 0.1.6 (a failed build leaves the
+  server as it was; a new build that does not start is put back). A server still on 0.1.5 needs one update by hand. You need an `ssh` entry for the server that works without a password prompt.
 
 **What you must do**
 
@@ -44,8 +44,9 @@ Installing restarts the background service, which ends a chat turn in progress.
   server into `~/.local/share/p9/codium-server`, downloads P9's pinned static tmux 3.8 when you have no tmux, and shows
   the reason before it asks for your admin password for anything else. Without it, Dev Focus offers an *Install the
   editor server* button.
-- **A server that runs P9:** nothing, if you connect from a 0.1.6 P9. A server you reach another way updates as a
-  source checkout does.
+- **A server that runs P9:** a server still on 0.1.5 does not update itself (0.1.5 has no update route). Update it by
+  hand once: the README's Update section, or run install.sh there. After that, connecting from a newer P9 updates it.
+  A server you reach another way updates as a source checkout does.
 - **Windows:** nothing. The update keeps your workspace and the `P9 Foundation` task.
 
 ## To 0.1.5 (beta)

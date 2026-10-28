@@ -17,7 +17,8 @@ One workspace. Every agent. Your focus.
   Protocol adapter and shows its approvals, models and Stop in one chat UI. It never stores your provider login.
 - **Move work to your own server without losing the chat.** Send to server copies a chat, between turns,
   over your own ssh, and Send files copies the project folder the same way, asking before it replaces
-  anything. The server's P9 updates itself when you connect to it.
+  anything. From 0.1.6 on, connecting from a newer P9 updates the server's P9; a server still on 0.1.5
+  needs one update by hand (see Update).
 - **See what an agent makes, not just a description of it.** A fenced block the agent marks as an
   artifact (HTML, SVG, Mermaid, React, Markdown or code) opens in a sealed frame beside the chat with no
   network access; you comment on it and the comments go back as one message.
@@ -338,8 +339,10 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   Codex chat to that server between turns and marks the local copy as moved, so the two never both run.
   *Send files to server* (the files panel) copies a folder to the same folder on the server, shows what
   differs, asks before it replaces or deletes anything and keeps every replaced file in P9's recovery
-  folder. Limits are under Settings > Send files. When you connect to a server running an older P9, this
-  one builds and installs itself there after chats finish their turn, and goes back if the build fails.
+  folder. Limits are under Settings > Send files. When you connect to a server running 0.1.6 or later with an
+  older P9, this one builds and installs itself there after chats finish their turn. A failed build leaves the
+  server as it was; a new build that does not start is put back. A server still on 0.1.5 has no update
+  route, so it needs one update by hand first (see Update).
   Details: [docs/guide.md](docs/guide.md#server-mode-send-to-server-and-send-files).
 - **Dev Focus limits.** Saves go through the guarded save, and only Ctrl+S or Save writes (a white dot on the
   tab marks an unsaved file). New File creates a file and never replaces one;
@@ -423,10 +426,11 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   `SECURITY.md` § Auto-update. Remove the AppImage's service with
   `node ~/.local/share/p9/daemon/<version>/scripts/uninstall-service.mjs`, then delete the AppImage.
 
-- **A server running P9** is updated from the computer you connect from, not by hand: when this P9 is newer
-  (compared by version number), it sends its source, builds beside the running copy, waits until no chat is
-  mid-turn, swaps and restarts. A failed build or a restart that does not answer puts the previous copy
-  back. A source checkout sends its last commit (uncommitted work is not sent); the installed app asks the
+- **A server running P9** is updated from the computer you connect from once it runs 0.1.6: when this P9 is
+  newer (compared by version number), it sends its source, builds beside the running copy, waits until no chat
+  is mid-turn, swaps and restarts. A failed build leaves the running copy as it was; a restart that does not
+  answer puts the previous copy back. A server still on 0.1.5 has no update route and does not update itself:
+  update it by hand once, with the steps in this section or by running install.sh there. A source checkout sends its last commit (uncommitted work is not sent); the installed app asks the
   server to fetch this version's source from GitHub. The old copy stays on the server as `source.previous`.
 
 A source checkout never updates itself:
