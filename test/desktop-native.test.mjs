@@ -21,8 +21,8 @@ test('right-click: selected page text gets Copy; the bare page gets no menu', ()
 });
 
 test('Windows full name: read from net user; a blank or missing one gives the login-name fallback', () => {
-  const out = (full) => `User name                    tyler\r\nFull Name                    ${full}\r\nComment                      Built-in\r\n`;
-  assert.equal(windowsFullName(out('Tyler Pfister')), 'Tyler Pfister');
+  const out = (full) => `User name                    sam\r\nFull Name                    ${full}\r\nComment                      Built-in\r\n`;
+  assert.equal(windowsFullName(out('Sam Rivera')), 'Sam Rivera');
   assert.equal(windowsFullName(out('')), '', 'a blank full name is not the next line');
   assert.equal(windowsFullName('The user name could not be found.'), '');
   assert.equal(windowsFullName(''), '');

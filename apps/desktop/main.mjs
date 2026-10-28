@@ -145,30 +145,30 @@ const AGAIN = ' Switch to another focus and back to Dev Focus to try again.';
 const failedText = (message, where) => /spawn systemd-run ENOENT/.test(message)
   ? 'Dev Focus is unavailable: ' + where + ' has no systemd-run. P9 runs the editor server in a systemd user scope (part of systemd), so it needs a Linux with systemd.'
   : /Failed to connect to .*bus|Failed to create bus connection/i.test(message)
-    ? 'Dev Focus is unavailable: ' + where + ' has no systemd user session for the editor server (systemd-run --user could not reach the user bus). Log in there normally (not with su or sudo); on a server, run "loginctl enable-linger" as you once, then restart P9.' + AGAIN
+    ? 'Dev Focus is unavailable: ' + where + ' has no systemd user session for the editor server (systemd-run --user could not reach the user bus). Log in there normally (not with su or sudo); on a remote, run "loginctl enable-linger" as you once, then restart P9.' + AGAIN
     : message === 'editor-host-timeout' ? 'Dev Focus is unavailable: the editor server on ' + where + ' did not say it was ready within 30 seconds.' + AGAIN
       : 'Dev Focus is unavailable: the editor server on ' + where + ' did not start (' + message.slice(0, 300) + '). Installing it again replaces a damaged copy.';
 function devErrorPage(error, download = editorDownload()) {
   const plain = ['daemon-unavailable', 'server-old'].includes(error.message);
   const problem = plain ? error.message : error.problem ?? editorProblem(error);
   // error.server: Server mode, where the daemon there answered (POST /dev/editor) with the cause, its folder and its download.
-  const remote = typeof error.server === 'string', where = remote ? 'the server ' + error.server : 'this computer';
+  const remote = typeof error.server === 'string', where = remote ? 'the remote ' + error.server : 'this computer';
   const host = remote ? error.place : process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
   if (remote) download = error.download;
   const text = {
-    'daemon-unavailable': remote ? 'Dev Focus is unavailable: the server ' + error.server + ' is not answering through the tunnel. P9 reconnects on its own; open Dev Focus again in a few seconds.'
+    'daemon-unavailable': remote ? 'Dev Focus is unavailable: the remote ' + error.server + ' is not answering through the tunnel. P9 reconnects on its own; open Dev Focus again in a few seconds.'
       : 'Dev Focus is unavailable: P9\'s background service is not answering. It restarts on its own; open Dev Focus again in a few seconds.',
-    'server-old': 'Dev Focus is unavailable: the P9 on the server ' + error.server + ' is older than 0.1.6 and cannot run the editor for this window. Update P9 on the server, then open Dev Focus again.',
+    'server-old': 'Dev Focus is unavailable: the P9 on the remote ' + error.server + ' is older than 0.1.6 and cannot run the editor for this window. Update P9 on the remote, then open Dev Focus again.',
     missing: 'Dev Focus needs VSCodium\'s editor server (release 1.121.03429), and it is not installed on ' + where + '. It belongs in ' + host + '.',
     'other-release': 'Dev Focus needs VSCodium\'s editor server release 1.121.03429; ' + host + ' on ' + where + ' holds a different release.',
     failed: failedText(String(error.message), where),
   }[problem];
   const fixable = problem === 'missing' || problem === 'other-release' || (problem === 'failed' && / did not start \(/.test(text));
-  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server' + (remote ? ' on the server' : '') + '</button></p>'
+  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server' + (remote ? ' on the remote' : '') + '</button></p>'
       + '<p id="note" style="color:#8b97ad">' + (!remote && path.isAbsolute(download[0]) ? 'Takes the copy this AppImage carries' : 'Downloads about 83 MB from VSCodium\'s GitHub releases' + (remote ? ' onto ' + html(error.server) : ''))
       + ', checks its SHA-256 against the one P9 pins, and installs it there.'
       + (problem !== 'missing' ? ' The copy there now is kept beside it.' : '') + '</p><script>' + INSTALL_SCRIPT + '</script>'
-    : '<p style="color:#8b97ad">P9 has no download of it for ' + html(remote ? 'that server' : 'this computer (' + process.platform + '-' + process.arch + ')') + '. The README\'s Requirements say how to install it by hand.</p>';
+    : '<p style="color:#8b97ad">P9 has no download of it for ' + html(remote ? 'that remote' : 'this computer (' + process.platform + '-' + process.arch + ')') + '. The README\'s Requirements say how to install it by hand.</p>';
   const page = '<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px"><p id="cause">' + html(text) + '</p>' + fix + '</body>';
   return { files: new Map([['/index.html', Buffer.from(page)]]), csp: "default-src 'none'; style-src 'unsafe-inline'; script-src " + (inlineHashes(page).join(' ') || "'none'") };
 }
@@ -717,13 +717,13 @@ export async function createDesktop({ state, open } = {}) {
     const [id, planId, choice, deleteToo] = args;
     const ok = uuid(id) && (args.length === 1 || args.length === 4 && uuid(planId) && (choice === null || ['laptop', 'server', 'newer'].includes(choice)) && typeof deleteToo === 'boolean');
     if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
-    if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the server already.' } };
-    if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' } };
+    if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the remote already.' } };
+    if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No remote yet: add one in Settings > Remote first.' } };
     if (!localState || sending.has(id)) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
     let files = null;
     if (planId) {
       if (xferBusy) return { status: 409, body: { error: 'busy', message: 'A send is running already.' } };
-      if (xferPlan?.id !== planId || xferPlan.host !== serverLast) return { status: 409, body: { error: 'stale', message: 'That check of the files is gone: press Send to server again.' } };
+      if (xferPlan?.id !== planId || xferPlan.host !== serverLast) return { status: 409, body: { error: 'stale', message: 'That check of the files is gone: press Send to remote again.' } };
       const { plan: p } = xferPlan, work = resolveXfer(p, choice, deleteToo);
       if (!work) return { status: 409, body: { error: 'choice', message: 'Pick how to settle the files that differ.' } };
       const limit = overLimit(work, settings.xfer, p.truncated);
@@ -756,8 +756,8 @@ export async function createDesktop({ state, open } = {}) {
     const ok = action === 'plan' ? args.length === 2 && typeof a === 'string' && a.length <= 4096 && XFER_FOLDER.test(a) && !a.split('/').some(p => p === '.' || p === '..')
       : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
     if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
-    if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Server to Local first: Send files copies this computer\'s files to the server.' };
-    if (!serverLast) return { error: 'no-server', message: 'No server yet: choose one in Settings > Server first.' };
+    if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Remote to Local first: Send files copies this computer\'s files to the remote.' };
+    if (!serverLast) return { error: 'no-server', message: 'No remote yet: add one in Settings > Remote first.' };
     if (!localState) return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' };
     if (xferBusy) return { error: 'busy', message: 'A send is running already.' };
     xferBusy = true;
@@ -946,9 +946,9 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost) {
       // On the server, by its daemon (POST /dev/editor/install): the same pinned download, checked there.
       const done = await daemonRequest(state, 'POST', '/dev/editor/install', {}, undefined, 660000).catch(() => null);
-      if (!done) return { error: 'The server did not answer. Check the connection in Settings > Server, then press Install again.' };
-      if (done.status === 409) return { error: 'The editor server is already running on the server.' };
-      if (done.status !== 200) return { error: INSTALL_ERRORS[done.body?.error] ?? 'The install on the server failed (' + String(done.body?.error).slice(0, 200) + ').' };
+      if (!done) return { error: 'The remote did not answer. Check the connection in Settings > Remote, then press Install again.' };
+      if (done.status === 409) return { error: 'The editor server is already running on the remote.' };
+      if (done.status !== 200) return { error: INSTALL_ERRORS[done.body?.error] ?? 'The install on the remote failed (' + String(done.body?.error).slice(0, 200) + ').' };
       setTimeout(reopenDev);
       return { ok: true };
     }
@@ -1170,7 +1170,7 @@ export async function createDesktop({ state, open } = {}) {
   // script stops the old daemon itself. P9's private folder there is %LOCALAPPDATA%\P9, the state folder's parent.
   ipcMain.handle('p9:workspace-change', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
-    if (serverHost) return { error: 'server-mode-local-only' }; // this machine's service; the server's folder is set where it is installed
+    if (serverHost) return { error: 'server-mode-local-only' }; // this machine's service; the remote's folder is set where it is installed
     const old = state && (await health(state).catch(() => null))?.workspace;
     if (!old) return { error: 'daemon-unavailable' };
     const win = process.platform === 'win32';
@@ -1246,7 +1246,7 @@ export async function createDesktop({ state, open } = {}) {
     if (repair && win && !await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing' };
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: repair ? 'Repair P9?' : 'Restart P9?',
       message: repair ? 'Repair P9\'s background service?' : serverHost ? 'Restart P9 on ' + serverHost + '?' : 'Restart P9\'s background service?',
-      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + (serverHost ? 'Running chats, scripts and terminals on the server stop, the ones open on your phone too.' : 'Running chats, scripts and terminals stop.'),
+      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + (serverHost ? 'Running chats, scripts and terminals on the remote stop, the ones open on your phone too.' : 'Running chats, scripts and terminals stop.'),
       buttons: ['Cancel', repair ? 'Repair' : 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
     if (response !== 1) return { cancelled: true };
     // A daemon that does not answer at all is restarted anyway (finding 6: otherwise a hung service had no way back); one that
