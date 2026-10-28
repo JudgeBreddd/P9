@@ -237,7 +237,7 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   assert.deepEqual(await modal.locator('.spr').evaluateAll(rows => rows.map(r => [r.querySelector('[data-activity]').textContent, r.querySelector('[data-steps]')?.textContent ?? null])),
     [['done', '8/8'], ['testing', '3/8'], ['needs you', '5/12'], ['building', '1/9'], ['in line', '0/4'], ['idle', null]]);
   const times = await modal.locator('[data-sprint-times]').innerText();
-  assert.match(times, /^Updated \d{1,2}:\d{2}\D*(AM|PM)? · cutoff \d{1,2}:\d{2}\D*(AM|PM)? tomorrow · 1 of 6 merged$/i);
+  assert.match(times, /^Updated \d{1,2}:\d{2}\D*(AM|PM)? · cutoff \d{1,2}:\d{2}\D*(AM|PM)? tomorrow$/i);
   assert.doesNotMatch(times, /\d{4}-\d\d-\d\d|T\d\d:/);
   const colours = await modal.locator('.spr').evaluateAll(rows => rows.map(r => getComputedStyle(r.querySelector('.ring')).getPropertyValue('--ring-c').trim()));
   assert.equal(new Set(colours).size, 3, 'merged, running and waiting each their own colour: ' + colours);

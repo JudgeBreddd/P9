@@ -149,6 +149,22 @@ test('Phone Sprint window: rings by state, the scripts ask first, Open tmux atta
   assert.equal(new Set(colours).size, 4, 'each state its own colour: ' + colours);
   assert.ok(await dialog.evaluate((d) => d.querySelector('.wbody').scrollWidth <= d.clientWidth + 1), 'the window is wider than the phone');
   await shot(page, 'phone-sprint-window');
+  // Every activity word the feed writes, drawn from one file (the picture Tyler looks at).
+  await dialog.evaluate((d) => d.close());
+  const words = ['testing', 'in line', 'needs you', 'building', 'idle', 'done'];
+  await writeStatus(server, { sprint: 'Feed sprint', updatedAt: new Date().toISOString(), cutoff: new Date(Date.now() + 86400000).toISOString(), overall: 55,
+    chunks: words.map((activity, n) => ({ id: 'c' + (n + 1), title: 'Chunk ' + activity, state: activity === 'done' ? 'merged' : activity === 'in line' ? 'waiting' : 'running', percent: n * 20, activity, ...(activity === 'idle' ? {} : { steps: n + '/5' }) })) });
+  await page.click('[data-nav="mission"]');
+  await page.locator('#sprint [data-open="sprint"]').click();
+  await dialog.waitFor({ timeout: 5000 });
+  assert.deepEqual(await dialog.locator('.spr [data-activity]').allTextContents(), words);
+  assert.match(await dialog.locator('[data-sprint-times]').innerText(), /^Updated \d{1,2}:\d{2}.* · cutoff \d{1,2}:\d{2}.* tomorrow$/);
+  await shot(page, 'phone-sprint-feed');
+  await dialog.evaluate((d) => d.close());
+  await writeStatus(server, STATUS);
+  await page.click('[data-nav="mission"]');
+  await page.locator('#sprint [data-open="sprint"]').click();
+  await dialog.waitFor({ timeout: 5000 });
   // A script asks first (confirm), then streams its output.
   const asked = [];
   page.on('dialog', (d) => { asked.push(d.message()); d.accept(); });

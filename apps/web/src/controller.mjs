@@ -1302,7 +1302,7 @@ function missionModal(m, body, row) {
   } else if (m.kind === 'sprint') {
     const d = SP.data;
     $('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
-    body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))} · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</p>${sprintRings(d)}`
+    body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
       : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
     $('#mdlFoot').innerHTML = SPRINT_SCRIPTS.map(([id, label]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${id}"${scriptById(id) ? '' : ` disabled title="Add a ${id} button to the registry"`}>${label}</button>`).join('')
       + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
