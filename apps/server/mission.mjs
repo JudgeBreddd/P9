@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { realpath, readdir as fsReaddir } from 'node:fs/promises';
-import { readFile, listDirectory, guardedSave, createFile, renameFile } from '../../packages/files/index.mjs';
+import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 import { ID, web, problem, RECORD, PAGE, SECTION, LOG, SETTINGS } from './mission-fields.mjs';
 
@@ -48,7 +48,7 @@ export function parseSettings(text) {
 const recordProblem = (record, kind, schemes) => problem(record, kind === 'pages' ? PAGE : RECORD, false, schemes);
 
 // Folders the plans list never walks into: dependencies, archives, private and template trees (workspace-hub skipped the same).
-const PLAN_SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
+const PLAN_SKIP = new Set([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
 
 // Malformed records and every record sharing a duplicated ID are dropped and reported, never run.
 export function parseRegistry(text, schemes = []) {

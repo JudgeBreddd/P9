@@ -456,7 +456,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // "Use what's here" (needs-done p9-wizard-respects-existing-workspace): with no settings in a folder that already has things
   // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
   // AGENTS.md at the top, a needs-you or waiting folder. Links are never followed; at most three folders deep.
-  const SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
+  const SKIP = new Set([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
   // The folder names a workspace keeps what is waiting on its owner in (the kit's _tyler included; Mission Control labels come from the owner's own folder).
   const WAITING_NAMES = new Set(['needs-you', '_needs-you', 'waiting', '_waiting', '_tyler']);
   const byDepth = (a, b) => a.split('/').length - b.split('/').length;
