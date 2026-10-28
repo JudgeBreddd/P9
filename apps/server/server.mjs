@@ -24,7 +24,7 @@ import { createMcp } from './mcp.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
-import { createAuth } from './auth.mjs';
+import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
@@ -101,22 +101,27 @@ export function authorizeRemote(headers, method, route, auth, remote) {
 // terminals' PATH), so the wizard's Install writes a launcher instead of downloading anything.
 const AGENT_COMMANDS = { claude: { login: 'claude auth login' }, codex: { login: 'codex login' } };
 
-export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive }) {
+// The rebuild's test stand-ins count only under the test home (P9_TEST_HOME, the daemon's test switch): P9_PACKAGED=1
+// answers as a packaged app would, P9_BUILD runs instead of pnpm build. Outside it both are ignored.
+export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P9_PACKAGED === '1', build: (env.P9_TEST_HOME && env.P9_BUILD) || null });
+
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
-  const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive });
+  const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive, turnLimit: updateTurnMs });
   // Rebuild + reload (remoteApp /rebuild): source checkouts only, as on the desktop (main.mjs source). A bundled daemon has no
-  // lockfile or web sources; P9_PACKAGED=1 lets a test see what one answers. Fixed argv, no shell, 10 minutes, one at a
+  // lockfile or web sources; P9_PACKAGED=1 lets a test see what one answers (under the test home only, as P9_BUILD). Fixed argv, no shell, 10 minutes, one at a
   // time; the error carries only the last 3 lines of stderr, at most 300 characters. P9_BUILD is the tests' stand-in.
   const checkout = fileURLToPath(new URL('../../', import.meta.url));
-  const buildable = () => process.env.P9_PACKAGED !== '1'
+  const buildable = () => !rebuildStandIns(process.env).packaged
     && ['package.json', 'pnpm-lock.yaml', 'apps/web/src/pages/phone.astro'].every((name) => existsSync(path.join(checkout, name)));
   let building = null;
   const rebuild = (device) => new Promise((resolve) => {
-    const [command, args] = process.env.P9_BUILD ? [process.env.P9_BUILD, []] : ['pnpm', ['build']];
+    const stand = rebuildStandIns(process.env).build;
+    const [command, args] = stand ? [stand, []] : ['pnpm', ['build']];
     const started = Date.now();
     console.error(JSON.stringify({ event: 'P9_REBUILD_STARTED', device, command: [path.basename(command), ...args].join(' ') }));
     execFile(command, args, { cwd: checkout, timeout: 600_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, PATH: toolPath() } }, (error, _stdout, stderr) => {
@@ -786,6 +791,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       socket.once('close', () => { for (const sockets of open.values()) sockets.delete(socket); });
     };
     auth.onClose((device) => { for (const socket of open.get(device) ?? []) socket.destroy(); open.delete(device); });
+    const cookie = (token, ms) => 'p9s=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=' + Math.max(0, Math.floor(ms / 1000));
     const remoteApp = new Hono();
     remoteApp.onError(onError);
     remoteApp.use('*', async (c, next) => {
@@ -811,6 +817,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       // Counted until the response has gone out, not just until the handler returns: queued bytes stay cuttable.
       c.env.outgoing.once('close', () => running.set(device, running.get(device) - 1));
       await authority.run(() => auth.session(token).status === 0, next);
+      // P2: a renewed session gets its cookie again with the new end, so the browser keeps it as long as the daemon does.
+      if (result.renewed) c.header('Set-Cookie', cookie(token, result.expires - Date.now()), { append: true });
     });
     remoteApp.use('*', hardening, limit);
     remoteApp.use('*', async (c, next) => {
@@ -823,7 +831,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       c.header('Referrer-Policy', 'no-referrer');
     });
     const login = (c, { status, token, csrf, ...result }) => {
-      if (token) c.header('Set-Cookie', 'p9s=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200');
+      if (token) c.header('Set-Cookie', cookie(token, SESSION_MS));
       return c.json(csrf ? { ...result, csrf } : result, status);
     };
     remoteApp.get('/login', (c) => c.html(loginPage));

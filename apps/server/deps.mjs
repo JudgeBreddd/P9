@@ -96,7 +96,7 @@ export async function found(name, { platform = process.platform, env = process.e
 const LINUX = [
   { id: 'tmux', program: 'tmux', why: "P9's terminals run inside tmux, so a terminal keeps running when its window closes. Without it P9 cannot start.",
     packages: { apt: 'tmux', dnf: 'tmux', pacman: 'tmux', zypper: 'tmux' } },
-  { id: 'ssh', program: 'ssh', why: 'Server mode and Send to server reach your other machine over SSH. The rest of P9 works without it.',
+  { id: 'ssh', program: 'ssh', why: 'Remote mode and Send to remote reach your other machine over SSH. The rest of P9 works without it.',
     packages: { apt: 'openssh-client', dnf: 'openssh-clients', pacman: 'openssh', zypper: 'openssh-clients' } },
 ];
 // apt: a bare machine has no package lists until an update; ';' so one broken third-party list does not stop the install.

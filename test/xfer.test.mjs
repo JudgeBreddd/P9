@@ -161,9 +161,9 @@ test('xfer plan: a first send asks, a laptop delete asks, delete against change 
   const p = plan(side(f('a', '7'), f('b', '2'), f('e', '8'), f('g', '9', Date.parse('2026-10-27T11:02:00'))),
     side(f('a', '1'), f('b', 'a'), f('c', '3'), f('d', 'b'), f('g', 'c', Date.parse('2026-10-27T13:40:00'))), record, '');
   assert.deepEqual([names(p.send), names(p.deletes), names(p.conflicts)], [['a'], ['c'], ['d', 'e', 'g']]);
-  assert.match(describe(p.conflicts[0], record), /deleted on the laptop; changed on the server since your last send/);
-  assert.match(describe(p.conflicts[1], record), /changed on the laptop .*; deleted on the server since your last send/);
-  assert.match(describe(p.conflicts[2], record), /changed on both since your last send; the server's copy is newer \(.*1:40.*\) than the laptop's \(.*11:02.*\)/);
+  assert.match(describe(p.conflicts[0], record), /deleted on the laptop; changed on the remote since your last send/);
+  assert.match(describe(p.conflicts[1], record), /changed on the laptop .*; deleted on the remote since your last send/);
+  assert.match(describe(p.conflicts[2], record), /changed on both since your last send; the remote's copy is newer \(.*1:40.*\) than the laptop's \(.*11:02.*\)/);
   // Delete unticked: the server keeps c and the record forgets it. "Newer" never turns a change into a silent delete.
   const newer = resolve(p, 'newer', false);
   assert.deepEqual([names(newer.toServer), names(newer.toLaptop), names(newer.serverDeletes), names(newer.laptopDeletes), names(newer.forget)],
@@ -248,4 +248,22 @@ test('xfer send: a first send asks; the next carries changes, asks for conflicts
   assert.equal(await readFile(path.join(laptop.recovery, back.recovery.laptop[0].recovery), 'utf8'), 'gamma laptop');
   assert.deepEqual((await planned('proj')).conflicts, []);
   console.log('PASS xfer keep the server\'s: the server\'s copy came here and the laptop\'s went to recovery');
+});
+
+// D19: "P9 did not answer" named neither side nor cause. A daemon older than the routes answers a 404 page, not JSON.
+test('xfer no answer: an older daemon here or there is named, with what to do', { skip, timeout: 30000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  const { noAnswer, tagSide } = await import('../apps/desktop/xfer.mjs');
+  const state = await mkdtemp(path.join(os.tmpdir(), 'p9-old-'));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const old = createServer((_req, res) => res.writeHead(404, { 'content-type': 'text/plain' }).end('404 Not Found'));
+  await new Promise((done) => old.listen(path.join(state, 'daemon.sock'), done));
+  t.after(() => old.close());
+  await writeFile(path.join(state, 'desktop.json'), JSON.stringify({ cookie: 'c', csrf: 'x' }));
+  const here = await planFolder({ local: state, host: 'box', folder: '', userData: state }).catch((error) => error);
+  assert.match(noAnswer(here, 'box'), /^P9's background service on this computer is older than this app\. Restart P9/);
+  const there = await tagSide('remote', Promise.reject(new Error('bad-response'))).catch((error) => error);
+  assert.match(noAnswer(there, 'box'), /^P9 on box is older than this app/);
+  assert.match(noAnswer(Object.assign(new Error('timeout'), { side: 'remote' }), 'box'), /^P9 on box did not answer \(timeout\)/);
+  console.log('PASS xfer no answer: the old daemon here and there each named');
 });

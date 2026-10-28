@@ -369,7 +369,7 @@ addEventListener('focusout', e => { const t = e.target; if (t.matches?.('textare
 addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .rail') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
 // A chat opens at its newest message (Builder, 2026-10-17: it opened at the first); paint ran while the dialog was closed.
 function openModal(m, card) { const seen = m.kind === 'chat' && S.sessions.find(s => s.id === m.id && s.done); if (seen) seen.done = false; m.card = card || m.card || m.back?.card; if (m.card) S.resume[m.card] = m; S.modal = m; if (m.kind === 'chat') delete view['mdlBody:' + m.id]; renderModal();
-  if (!mdl.open && S.modal) { mdl.showModal(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
+  if (!mdl.open && S.modal) { mdl.showModal(); raiseToasts(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
   if (m.kind === 'chat') $('#mdlBody .hist')?.scrollTo({ top: 1e6, behavior: 'instant' });
   if (seen) renderCards(); }
 function renderModal() {
@@ -424,7 +424,7 @@ function renderModal() {
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p><p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Dismiss</button>`;
     $('#mdlFoot [data-dismiss]').onclick = () => { S.alerts = S.alerts.filter(x => x !== a); if (H.notices) H.notices = H.notices.filter(x => x !== a); renderCards(); missionLive(); m.back ? openModal(m.back) : closeModal(); };
   } else missionModal(m, body, row);
@@ -470,8 +470,10 @@ function toast(a, done) {
   el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
   el.onclick = () => { el.remove(); if (!done) openModal({ kind: 'alert', a }); };
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
-  $('#toasts').append(el); renderCards();
+  $('#toasts').append(el); raiseToasts(); renderCards();
 }
+// D7: a modal sits in the top layer over any z-index, so the toast list is a popover put back on top after each toast or modal.
+const raiseToasts = () => { const box = $('#toasts'); if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); } };
 function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
@@ -595,7 +597,7 @@ function pane(s, i, bare) {
   const working = busy(s);
   // D14: a chat on its way to the server, or gone there, takes no messages here.
   const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away;
-  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to server…', moved: 'Moved to ' + (s.movedTo || 'the server') }[s.state];
+  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to the remote…', moved: 'Moved to ' + (s.movedTo || 'the remote') }[s.state];
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
@@ -610,12 +612,12 @@ function pane(s, i, bare) {
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host
-        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your server (Settings > Server)') + ' and carry on there: it stops here, and the server picks it up where it left off'}">Send to server</button>` : ''}
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your remote (Settings > Remote)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the server') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' ? 'Moving to the server…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
@@ -842,7 +844,7 @@ function renderTree() {
     $('#tree').querySelectorAll('[data-ldir]').forEach(b => b.onclick = () => { const p = b.dataset.ldir; files.open.has(p) ? files.open.delete(p) : files.open.add(p); renderTree(); });
     $('#tree').querySelectorAll('[data-lfile]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.lfile, live: true }));
     $('#xferBtn').hidden = !window.p9?.xferPlan || !!serverInfo?.host;
-    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your server (Settings > Server)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
+    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your remote (Settings > Remote)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
     return;
   }
   $('#tree').innerHTML = tree(M.files, 0, q, S.modal?.kind === 'file' && mdl.open ? S.modal.name : null);
@@ -872,7 +874,7 @@ async function sendFiles() {
   const folder = fileRoot(), b = $('#xferBtn');
   b.disabled = true; b.textContent = 'Checking…';
   const p = await window.p9.xferPlan(folder).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
-  b.disabled = false; b.textContent = 'Send files to server';
+  b.disabled = false; b.textContent = 'Send files to remote';
   if (p.error) return xferRefused(p);
   xfer.id = p.id;
   const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
@@ -891,12 +893,12 @@ function xferAsk(p, go, moving) {
     + sync.map(([side, d]) => esc(d === '..' ? 'a folder above the workspace' : d || 'the workspace') + ' (' + side + ')').join(', ') + '. Send only if Syncthing is off for it.</span></span></div>' : '';
   const asked = p.asked ? '<div data-xfer-asked><p><strong>' + (p.kind === 'first' ? 'Nothing was sent to this folder from here before, and ' + p.asked.toLocaleString() + ' file' + (p.asked === 1 ? ' differs' : 's differ') + ' between the two.'
     : p.asked.toLocaleString() + ' file' + (p.asked === 1 ? '' : 's') + ' changed on both sides since your last send.') + '</strong><br><span class="muted sm">'
-    + p.summary.laptopNewer.toLocaleString() + ' newer on the laptop, ' + p.summary.serverNewer.toLocaleString() + ' newer on the server.</span></p>'
+    + p.summary.laptopNewer.toLocaleString() + ' newer on the laptop, ' + p.summary.serverNewer.toLocaleString() + ' newer on the remote.</span></p>'
     + list(p.list.map(i => '<li><span>' + esc(i.path) + '</span> <span class="muted">' + esc(i.text) + '</span></li>'), p.asked - p.list.length) + '</div>' : '';
-  const gone = p.deletes ? '<label class="set-row" data-xfer-deletes><input type="checkbox" id="xferDel"><span><strong>Delete on the server too</strong><span class="muted sm">' + p.deletes.toLocaleString() + ' file'
-    + (p.deletes === 1 ? ' was' : 's were') + ' deleted on the laptop since your last send. Unticked, the server keeps ' + (p.deletes === 1 ? 'it' : 'them') + '.</span></span></label>' + list(p.deleteList.map(d => '<li>' + esc(d) + '</li>'), p.deletes - p.deleteList.length) : '';
+  const gone = p.deletes ? '<label class="set-row" data-xfer-deletes><input type="checkbox" id="xferDel"><span><strong>Delete on the remote too</strong><span class="muted sm">' + p.deletes.toLocaleString() + ' file'
+    + (p.deletes === 1 ? ' was' : 's were') + ' deleted on the laptop since your last send. Unticked, the remote keeps ' + (p.deletes === 1 ? 'it' : 'them') + '.</span></span></label>' + list(p.deleteList.map(d => '<li>' + esc(d) + '</li>'), p.deletes - p.deleteList.length) : '';
   const choices = !p.asked ? [['go', 'default', 'Send']] : p.kind === 'first' ? [['laptop', 'default', 'Laptop wins'], ['newer', 'outline', 'Keep the newer of each']]
-    : [['laptop', 'default', 'Keep the laptop\'s'], ['server', 'outline', 'Keep the server\'s'], ['newer', 'outline', 'Keep the newer of each']];
+    : [['laptop', 'default', 'Keep the laptop\'s'], ['server', 'outline', 'Keep the remote\'s'], ['newer', 'outline', 'Keep the newer of each']];
   xferShow(p.kind === 'first' ? 'First send to ' + p.host : p.kind === 'conflict' ? 'Files changed on both sides' : 'Send files to ' + p.host,
     where + ': ' + p.send.toLocaleString() + ' file' + (p.send === 1 ? '' : 's') + ' to send (' + bytes(p.sendBytes) + ').' + (moving ? ' The chat moves once they are there.' : ''),
     warn + asked + gone + '<p class="muted sm">Every file replaced or deleted, on either side, is kept in that computer\'s P9 recovery folder.</p>',
@@ -909,7 +911,7 @@ async function xferGo(p, choice, deleteToo) {
   xferWire();
   const r = await window.p9.xferRun(p.id, choice, deleteToo).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
   if (r.error === 'limit' || r.error && !r.sent && !r.received && !r.deletedOnServer && !r.deletedHere) return xferRefused(r);
-  const said = [r.sent && r.sent.toLocaleString() + ' sent', r.received && r.received.toLocaleString() + ' taken from the server', r.deletedOnServer && r.deletedOnServer.toLocaleString() + ' deleted on the server',
+  const said = [r.sent && r.sent.toLocaleString() + ' sent', r.received && r.received.toLocaleString() + ' taken from the remote', r.deletedOnServer && r.deletedOnServer.toLocaleString() + ' deleted on the remote',
     r.deletedHere && r.deletedHere.toLocaleString() + ' deleted here', r.kept && r.kept.toLocaleString() + ' old cop' + (r.kept === 1 ? 'y' : 'ies') + ' kept in recovery'].filter(Boolean);
   xferShow(r.error ? 'Partly sent' : 'Sent', (said.join(', ') || 'Nothing needed sending') + '.', r.message ? '<p>' + esc(r.message) + '</p>' : '', xferClose);
   xferWire();
@@ -952,7 +954,26 @@ function wireEditor(root, name, after, save = () => saveDoc(name)) {
   ta.onscroll = () => { d.top = gut.scrollTop = ta.scrollTop; };
   observe(() => fitGut(ta, gut)).observe(ta);
   ta.onselect = ta.onkeyup = ta.onclick = () => { d.sel = [ta.selectionStart, ta.selectionEnd]; };
-  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); after(); } };
+  edSave = { root, save, after };
+}
+// D7: Ctrl+S saves the editor on screen wherever the focus is in its window: a Save click re-renders the modal and drops the
+// focus to the page, which used to leave Ctrl+S doing nothing at all.
+let edSave = null;
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's' || !edSave?.root.isConnected) return;
+  const host = edSave.root.closest('dialog') || edSave.root, at = document.activeElement;
+  if (!host.checkVisibility() || (at && at !== document.body && !host.contains(at))) return; // a closed modal never saves
+  e.preventDefault(); edSave.save(); edSave.after();
+});
+// D7: why a save failed, in words; the daemon's code word stays at the end for a bug report.
+function saveWhy(r) {
+  const code = r.body?.error || r.body?.code || String(r.status);
+  const words = { 'registry-read-only': 'P9 keeps this file read-only (it holds Mission Control button commands)',
+    'request-refused': 'P9 refused it: a locked or protected name, or not a text file',
+    'daemon-unavailable': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' did not answer; check the connection and try again',
+    EACCES: 'no permission to write it', EPERM: 'no permission to write it', EROFS: 'the disk is read-only', ENOSPC: 'the disk is full',
+    EDQUOT: 'the disk quota is full', EBUSY: 'the file is busy; try again', ENOENT: 'its folder is gone' }[code];
+  return (words || 'P9 could not write it') + ' (' + code + ')';
 }
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
@@ -1132,7 +1153,7 @@ async function answerLive(r) {
   // Builder, 2026-10-21: an item with Q1:/Q2: lines and no A. line said "changed on disk" for days, so he kept retrying
   else if (res.body?.error === 'no-empty-answer-line') toast({ kind: 'not saved', txt: r.file + ' has no empty A. line, so P9 cannot write your answer. Ask an agent to add one; your answer is still here.', level: 'bad' }, true);
   else if (res.status === 409) toast({ kind: 'not saved', txt: r.file + ' changed on disk since you opened it. Reloaded it; your answer is still here.', level: 'warn' }, true);
-  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ' (' + (res.body?.error || res.status) + ')', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ': ' + saveWhy(res) + '. Your answer is still here.', level: 'bad' }, true);
   await loadMission();
   if (S.modal?.kind === 'review') { if (S.reviews.length) renderModal(); else closeModal(); }
 }
@@ -1326,7 +1347,7 @@ async function saveLive(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad' }, true);
   if (S.modal === m) renderModal();
 }
 // One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
@@ -1390,7 +1411,7 @@ async function saveNote(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad' }, true);
   if (S.modal === m) renderModal();
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
@@ -1844,16 +1865,20 @@ function wireMission() {
     saveMission({ [k]: picked });
   }; });
 }
-// Settings > Server (desktop/remote.mjs): the hosts are the Host lines of ~/.ssh/config, as VS Code Remote-SSH lists them.
+// Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
+// lists them). Nothing is built in; Add remote takes a Host name or user@address.
 function serverRow() {
-  const { host, last, connected, error, hosts } = serverInfo, pick = host ?? last;
+  const { host, connected, error, hosts, remotes = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
   const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
-    : hosts.length ? 'This window works on this computer. Pick a server to work on its P9 over ssh.' : 'No Host lines in ~/.ssh/config yet. Add the server there, check that ssh to it works without a password prompt, then reopen Settings.';
-  const options = hosts.map(h => '<option value="' + esc(h) + '"' + (h === pick ? ' selected' : '') + '>' + esc(h) + '</option>').join('');
-  return '<div class="set-row"><span><strong>Server</strong><span class="muted sm">' + esc(note) + '</span></span><span class="spacer"></span>'
-    + (hosts.length ? '<select data-slot="input" id="setServerHost">' + options + '</select><button data-slot="button" data-variant="default" id="setServerGo">Connect</button>' : '')
-    + (host ? '<button data-slot="button" data-variant="outline" id="setServerLocal">Use Local</button>' : '')
-    + info('Server mode: chat, Mission Control, the terminal and Dev Focus use the P9 on that server, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use Local goes back. It needs an ssh entry that works without a password prompt. Folder pickers, Open in VS Code and Repair stay Local-only.', 'server-mode-send-to-server-and-send-files') + '</div>';
+    : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
+  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>'
+    + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
+    + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
+  return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. ssh to the remote must work without a password prompt. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
+    + '<p class="muted sm">' + esc(note) + '</p>' + (rows ? '<ul class="remote-list">' + rows + '</ul>' : '')
+    + '<form class="set-row" id="setRemoteAdd"><input data-slot="input" id="setRemoteName" placeholder="Host name or user@address" aria-label="Remote to add" maxlength="253" autocomplete="off" spellcheck="false"><button data-slot="button" data-variant="default">Add remote</button></form>'
+    + '<p class="warn sm" id="setRemoteErr" role="alert" hidden></p>'
+    + (host ? '<div class="set-row"><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setServerLocal">Use this computer</button></div>' : '') + '</fieldset>';
 }
 // c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
 const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
@@ -1891,7 +1916,7 @@ function renderSettings() {
     + securityGroup(box)
     + (missionFiles?.settings ? missionGroup() : '')
     + (serverInfo ? serverRow() : '')
-    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to server (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
+    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to remote (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
     + maintenanceGroup(updates);
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
@@ -1910,7 +1935,16 @@ function renderSettings() {
   if (pets) wirePetSettings();
   if (missionFiles?.settings) wireMission();
   // Main reloads the window onto the chosen daemon, so nothing here re-renders.
-  if ($('#setServerGo')) $('#setServerGo').onclick = () => window.p9.server($('#setServerHost').value);
+  $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
+  const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); };
+  $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
+  if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
+    e.preventDefault();
+    const name = $('#setRemoteName').value.trim(), err = $('#setRemoteErr');
+    // The same rule as main's (desktop/remote.mjs HOST); main checks again.
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(name)) { err.hidden = false; err.textContent = 'A remote is a Host name from ~/.ssh/config or user@address: letters, digits and . _ - @, starting with a letter or digit.'; return; }
+    remotesNow('add', name);
+  };
   if ($('#setServerLocal')) $('#setServerLocal').onclick = () => window.p9.server(null);
   Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
@@ -2178,16 +2212,16 @@ const WIZ_ERR = {
   'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
   'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
   'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
-  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a server.", 'Switch to Local (the top-bar badge or Settings > Server), then try again.'],
+  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a remote.", 'Switch to Local (the top-bar badge or Settings > Remote), then try again.'],
   'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
 // The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
 function wizRemote(btn) {
-  const h = W.hosts, hosts = h?.hosts || [], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
+  const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
   return '<div data-wiz-remote>' + (hosts.length
-    ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">Its Host name from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
-    : `<p class="muted sm">No Host lines in ~/.ssh/config yet. Add the machine there, check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
-    + (W.note.remote?.error ? `<p class="warn sm" role="alert">Could not connect (${esc(W.note.remote.error)}). Settings > Server shows why and switches back to this computer.</p>` : '') + '</div>';
+    ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">A remote added in Settings > Remote, or a Host from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
+    : `<p class="muted sm">No remotes yet. Add one with Add remote in Settings > Remote (a Host name from ~/.ssh/config or user@address), check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
+    + (W.note.remote?.error ? `<p class="warn sm" role="alert">Could not connect (${esc(W.note.remote.error)}). Settings > Remote shows why and switches back to this computer.</p>` : '') + '</div>';
 }
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
@@ -2203,7 +2237,7 @@ function wizRender() {
     title = 'Welcome to Event Horizon'; next = btn('next', window.p9?.server ? 'Set up this computer' : 'Start', 'default');
     // D1: P9 can also be this window onto a P9 that runs on another machine (Server mode, Settings > Server).
     body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`
-      + (window.p9?.server ? row('Already run P9 on another machine?', 'Use this window on that machine\'s P9 instead, over ssh (the way VS Code Remote-SSH works). Chats there keep running when you close this window.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a P9 on another machine')) : '')
+      + (window.p9?.server ? row('Work on another machine?', 'Use this window on another machine\'s P9 over ssh (the way VS Code Remote-SSH works). Install P9 there first: on that machine, run the Linux command from the README\'s Install section. Chats there keep running when you close this window.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a P9 on another machine')) : '')
       + (W.remote ? wizRemote(btn) : '');
   } else if (key === 'workspace') {
     title = 'Your workspace';
@@ -2466,8 +2500,8 @@ function applyChat(ev) {
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
-    case 'moving': settle(); s.state = 'moving'; notice('Moving to the server: this chat is paused here.'); break;
-    case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Server mode (the title-bar badge) and open it.'); break;
+    case 'moving': settle(); s.state = 'moving'; notice('Moving to the remote: this chat is paused here.'); break;
+    case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Remote mode (the title-bar badge) and open it.'); break;
     case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;
     case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
@@ -2583,7 +2617,7 @@ async function sendAway(s) {
   let files = [];
   if (window.p9.xferPlan) {
     const p = await window.p9.xferPlan(s.folder || '').catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
-    if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (p.message || p.error) }); return renderChats(); }
+    if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (p.message || p.error) }); return renderChats(); }
     if (!p.syncthing.laptop.length && !p.syncthing.server.length) {
       const answer = !p.asked && !p.deletes ? [null, false] : await new Promise(done => {
         xfer.id = p.id;
@@ -2599,7 +2633,7 @@ async function sendAway(s) {
   const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
   if (r.body?.error === 'limit') return xferRefused(r.body);
   // busy: main is moving it already (a window reloaded mid-move); its events draw it.
-  if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the server: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
+  if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
 }
 function fxPlace() {
   const pane = [...document.querySelectorAll('.pane[data-id]')].find(p => p.dataset.id === FX.id);
@@ -2629,7 +2663,7 @@ function fxStart(m) {
   requestAnimationFrame(() => fx.toggleAttribute('data-on', true));
   if (!still && fxSky.ok) FX.raf = requestAnimationFrame(fxFrame);
   // Three missed heartbeats (5 s each): the move is not touched, the label says so.
-  FX.tick = setInterval(() => { fxPlace(); if (performance.now() - FX.at > 15000 && !fx.hasAttribute('data-wait')) { fx.toggleAttribute('data-wait', true); $('#moveWhat').textContent = 'Waiting for the server…'; } }, 1000);
+  FX.tick = setInterval(() => { fxPlace(); if (performance.now() - FX.at > 15000 && !fx.hasAttribute('data-wait')) { fx.toggleAttribute('data-wait', true); $('#moveWhat').textContent = 'Waiting for the remote…'; } }, 1000);
 }
 function fxEnd() {
   cancelAnimationFrame(FX.raf); clearInterval(FX.tick);
@@ -2659,19 +2693,26 @@ window.p9?.onMove?.(onMove);
 function onServerUpdate(u) {
   if (!u) return;
   const on = 'P9 on ' + u.host, missing = (u.missing ?? []).map(m => m.id + ' (' + m.why + '): ' + m.command).join('; ');
+  const why = { 'turn-never-ended': 'a chat\'s turn did not end within 2 hours' }[u.error] ?? u.error;
   const say = {
     downloading: [on + ' is downloading ' + u.version + ' from GitHub Releases.', 'ok'],
     building: [on + ' is building ' + u.version + ' beside the running copy.', 'ok'],
     'waiting-turns': [on + ' will update to ' + u.version + ': waiting for ' + u.turns + ' chat' + (u.turns === 1 ? '' : 's') + ' to finish ' + (u.turns === 1 ? 'its' : 'their') + ' turn.', 'ok'],
     restarting: [on + ' is restarting on ' + u.version + '.', 'ok'],
     done: [on + ' is now ' + u.version + '.', 'ok', true],
-    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the server.'), 'bad', true],
-    failed: [on + ' was not updated to ' + u.version + ' (' + u.error + '). It runs on as before.', 'bad', true],
-    'app-older': ['The server runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
+    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote.'), 'bad', true],
+    failed: [on + ' was not updated to ' + u.version + ' (' + why + '). It runs on as before.', 'bad', true],
+    'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
+    'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],
+    'app-older': ['The remote runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
     unsupported: [on + ' cannot update itself (it is not a source checkout run by systemd). It stays on ' + u.server + '.', 'bad', true],
   }[u.phase];
   if (!say) return;
-  toast({ kind: 'server update', txt: say[0] + (missing ? ' Missing on the server: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1] }, !say[2]);
+  // A remote before 0.1.6 (K1): the steps in a dialog at once, then connect again and it updates itself from then on.
+  const steps = u.phase === 'too-old' ? ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'bash scripts/install.sh', 'systemctl --user restart p9-foundation'] : null;
+  const a = { kind: 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1], ...(steps ? { steps, after: 'Then connect again: from 0.1.6 on, it updates itself when you connect.' } : {}) };
+  toast(a, !say[2]);
+  if (steps) openModal({ kind: 'alert', a });
 }
 window.p9?.onServerUpdate?.(onServerUpdate);
 window.p9?.serverUpdate?.().then(onServerUpdate, () => {});
@@ -2689,12 +2730,12 @@ moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.ma
 async function afterMove(m) {
   let kept = null; try { kept = localStorage.getItem('p9-after-move-ask'); } catch {}
   const pick = kept === 'open' || kept === 'stay' ? { yes: kept === 'open' } : await moveAsk({ title: 'Open it on ' + m.host + '?', yes: 'Open it', no: 'Stay here', never: true,
-    text: 'The chat is on ' + m.host + ' now. Opening it switches this window to the server; your chats on this computer stay here for when you switch back.' });
+    text: 'The chat is on ' + m.host + ' now. Opening it switches this window to the remote; your chats on this computer stay here for when you switch back.' });
   if (pick.never) localStorage.setItem('p9-after-move-ask', pick.yes ? 'open' : 'stay');
   if (!pick.yes) return fxEnd();
   localStorage.setItem('p9-after-move', JSON.stringify({ id: m.id }));
-  const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the server's P9
-  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Server switches by hand.' }); renderChats(); }
+  const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the remote's P9
+  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Remote switches by hand.' }); renderChats(); }
 }
 // After the first replay. The chat a move took here opens in the pane (on the server it is stopped, here it is moved).
 // A chat left moving by a reload: no stream event within 6 s means main is not moving it, so ask to finish.
@@ -2707,7 +2748,7 @@ function moveReloaded() {
   setTimeout(async () => {
     if (FX.id || left.state !== 'moving' || serverInfo?.host || moveDlg.open) return;
     const r = await moveAsk({ title: 'Finish the move?', yes: 'Finish the move', no: 'Not now',
-      text: '"' + (left.title || 'This chat') + '" was moving to ' + (serverInfo?.last || 'the server') + ' when the window closed. It stays paused here until the move finishes; its Send to server button finishes it later.' });
+      text: '"' + (left.title || 'This chat') + '" was moving to ' + (serverInfo?.last || 'the remote') + ' when the window closed. It stays paused here until the move finishes; its Send to remote button finishes it later.' });
     if (r.yes) sendAway(left);
   }, 6000);
 }

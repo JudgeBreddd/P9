@@ -23,7 +23,7 @@ const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', impo
 const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
   'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' },
   // The checkout a server update rebuilds, and where a packaged app's version is downloaded from (update.mjs); tests point them elsewhere.
-  'update-root': { type: 'string' }, 'update-archive': { type: 'string' } } });
+  'update-root': { type: 'string' }, 'update-archive': { type: 'string' }, 'update-turn-ms': { type: 'string' } } });
 if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbsolute(values[key]))) {
   throw new Error('absolute-workspace-state-and-recovery-required');
 }
@@ -135,6 +135,9 @@ if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tmuxSocket)) throw new Error('invalid-tmux-soc
 // BL4: honoured only under the test home (test/helpers.mjs sets P9_TEST_HOME), so a shipped unit never takes it.
 const terminalPlatform = values['terminal-platform'];
 if (terminalPlatform !== undefined && (!process.env.P9_TEST_HOME || !['darwin', process.platform].includes(terminalPlatform))) throw new Error('invalid-terminal-platform');
+// The update's stand-ins (another checkout, a loopback archive, a short turn limit) are test flags too: refused the same way.
+const updateFlag = ['update-root', 'update-archive', 'update-turn-ms'].find((name) => values[name] !== undefined);
+if (updateFlag && !process.env.P9_TEST_HOME) throw new Error('invalid-test-flag --' + updateFlag);
 // Remote logins (phase 10) are off unless both flags are given: the port binds 127.0.0.1 only, for tailscale serve to
 // proxy, and the origin pins the passkey RP ID and the Host header (https, or http://localhost for tests).
 let remote;
@@ -151,7 +154,8 @@ delete process.env.P9_GITHUB_TOKEN;
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
 const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
-  ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'] });
+  ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'],
+  ...(values['update-turn-ms'] ? { updateTurnMs: Number(values['update-turn-ms']) } : {}) });
 try {
   await new Promise((resolve, reject) => {
     server.once('error', reject);
