@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, http, authenticated, root, versionSeen } from './helpers.mjs';
 import { REPO } from '../apps/server/anymouse.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
@@ -178,6 +178,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await pet(src, 'link-sheet', {}); await symlink(path.join(src, 'new-pet', 'spritesheet.png'), path.join(src, 'link-sheet', 'spritesheet.png'));
   await pet(src, 'no-sheet', {});
   await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: 'dotdot' })); // from before pets per role: one refused pet
+  await versionSeen(profile);
 
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const launch = async () => {
@@ -1626,6 +1627,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await writeFile(path.join(profile, 'pets', 'land-pet', 'spritesheet.png'), sheet({ 0: 2, 3: 4, 4: 5, 6: 3, 7: 5 }));
   // A file from before the landing page: no name, no startLast. It must load (upgraded), not fall back to the defaults.
   await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1.1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS }));
+  await versionSeen(profile);
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_LANDING;
   // Evidence: the window's own capture. page.screenshot crops a zoomed (1.1) window to its CSS size and cuts off the bottom right.
   const ev = process.env.P9_EVIDENCE, shot = async (name) => ev && await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 300))))) === undefined && writeFile(path.join(ev, name), Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')), 'base64'));

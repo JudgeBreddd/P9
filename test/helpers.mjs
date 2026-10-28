@@ -11,6 +11,9 @@ import { request } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
+// D13: a profile seeded with a desktop's files (p9-settings.json) looks updated from an older P9, and the what's-new popup
+// would cover the window. Tests that seed one mark this version as already run.
+export const versionSeen = async (profile) => writeFile(path.join(profile, 'p9-version.txt'), JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
 export async function fixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-test-'));
   const workspace = path.join(directory, 'workspace');
