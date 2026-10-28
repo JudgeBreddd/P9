@@ -20,6 +20,7 @@ import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
+import { updatedFrom } from './whats-new.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -320,6 +321,8 @@ export async function createDesktop({ state, open } = {}) {
   // that has failed 2 starts goes back to the newest healthy one, through the launcher outside the install, and quits.
   const watched = offReason({ packaged: app.isPackaged, resources: process.resourcesPath, platform: process.platform, env: process.env }) === null;
   const startFile = path.join(app.getPath('userData'), 'update-state.json'), share = shareRoot();
+  // D13: once per start, read before the window asks: the version this profile ran before, when this start is an update.
+  let whatsNew = (from => from === null ? null : { version: ownVersion, from, link: 'https://github.com/' + REPO + '/commit/v' + ownVersion })(updatedFrom(app.getPath('userData'), ownVersion));
   const goBack = (start, to) => {
     // Sync lines, and the exit only once the launcher's start is known: app.exit drops pending writes.
     const line = text => { try { appendFileSync(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + text + '\n'); } catch {} };
@@ -1298,6 +1301,11 @@ export async function createDesktop({ state, open } = {}) {
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(url);
     return { opened: true };
+  });
+  // D13: the window asks once at load; the answer is given once, so a reload does not show it again.
+  ipcMain.handle('p9:whats-new', (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    const answer = whatsNew; whatsNew = null; return answer;
   });
   ipcMain.handle('p9:open-updates', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
