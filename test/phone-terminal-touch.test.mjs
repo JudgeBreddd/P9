@@ -109,3 +109,33 @@ test('T1: a touch scroll on the phone terminal never sends NaN or out-of-range b
   console.log('PASS T1: a 390x844 touch scroll sent only cursor keys (shell) or ' + reports.length + ' valid wheel reports (mouse mode); a mouse wheel is untouched: ' + JSON.stringify(wheel));
 });
 
+
+// T2: a finger's tap on the terminal puts the focus in xterm's input box, which is what raises a phone's keyboard.
+// A test cannot see the operating system's keyboard; it can see the three things that decide it: the tap is a real touch,
+// the focus ends in a writable (not readonly) input, and what is typed there reaches the program.
+test('T2: a tap on the phone terminal focuses a writable input and typing reaches the program', { timeout: 120000 }, async (t) => {
+  await mkdir(evidence, { recursive: true });
+  const server = await remoteDaemon(t, {});
+  const { page, touch } = await phone(t, server);
+  await page.click('[data-nav="terminal"]');
+  await page.click('#newTerminal');
+  await connected(page);
+  await page.evaluate(() => document.activeElement?.blur());
+  const focus = () => page.evaluate(() => { const a = document.activeElement; return { tag: a?.tagName, cls: a?.className, readOnly: a?.readOnly, disabled: a?.disabled, inScreen: !!a?.closest('#screen') }; });
+  assert.equal((await focus()).inScreen, false, 'the focus should start outside the terminal');
+  const box = await page.locator('#screen').boundingBox();
+  // A scroll drag is not a tap: it must not raise the keyboard over the screen being read.
+  await drag(page, touch, [box.x + box.width / 2, box.y + box.height * 0.7], [box.x + box.width / 2, box.y + box.height * 0.3]);
+  await page.waitForTimeout(300);
+  assert.equal((await focus()).inScreen, false, 'a scroll drag raised the keyboard');
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForTimeout(300);
+  const got = await focus();
+  await page.screenshot({ path: path.join(evidence, 'phone-terminal-tap.png') });
+  assert.deepEqual({ tag: got.tag, inScreen: got.inScreen, readOnly: got.readOnly, disabled: got.disabled }, { tag: 'TEXTAREA', inScreen: true, readOnly: false, disabled: false }, 'a tap left the focus at ' + JSON.stringify(got));
+  const mark = (await sent(page)).length;
+  await page.keyboard.type('echo kbd');
+  await page.waitForTimeout(300);
+  assert.equal((await sent(page)).slice(mark), 'echo kbd', 'what was typed after the tap did not reach the program');
+  console.log('PASS T2: a touch tap focused ' + got.tag + ' (' + got.cls + '), writable, and typing reached the program');
+});
