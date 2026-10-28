@@ -4,7 +4,7 @@
 // What P9 cannot carry is a system package; dependencies() names each missing one, why P9 needs it, and the one command
 // that installs it, which needs the admin password. install.sh prints that list before it asks; the wizard shows it.
 import { readFile, rename, stat, writeFile, mkdir, access } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,11 +13,12 @@ import { windowsStateRoot } from './windows.mjs';
 
 export const AGENTS = ['claude', 'codex'];
 // What each launcher runs with node. Claude: the adapter, whose --cli hands everything else to the CLI it ships. Codex:
-// the CLI the adapter ships, directly, resolved the way the adapter resolves it: codex-acp 2.1.1 answers --version
+// the CLI the adapter ships, directly, resolved the way the adapter resolves it (from its real path, as node runs it:
+// pnpm keeps @openai/codex beside the real folder, not under the node_modules link): codex-acp 2.1.1 answers --version
 // anywhere in its arguments with its own name before it reads "cli", so through it "codex --version" (or a prompt
 // holding those words) never reached Codex.
 const PASS = { claude: ' --cli', codex: '' };
-const cliEntry = (agent, adapter) => agent === 'codex' ? createRequire(adapter).resolve('@openai/codex/bin/codex.js') : adapter;
+const cliEntry = (agent, adapter) => agent === 'codex' ? createRequire(realpathSync(adapter)).resolve('@openai/codex/bin/codex.js') : adapter;
 
 // P9's bin folder: the user's own, never on a system path.
 export const binFolder = (platform = process.platform, env = process.env, home = os.homedir()) =>
