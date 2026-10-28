@@ -213,6 +213,13 @@ jobs:
             if (-not (Test-Path -LiteralPath (Join-Path $app $f))) { throw "the installer left out $f" }
           }
           if (-not (Get-ChildItem (Join-Path $app ($daemon + '@openai\codex-win32-' + $env:P9_ARCH)) -Recurse -Filter codex.exe -ErrorAction SilentlyContinue)) { throw 'the installer left out codex.exe' }
+          # Item 15: Codex's file search (rg.exe in codex-path) runs as installed, with the vcruntime140.dll bundleDaemon puts
+          # beside it (the runner has the VC++ runtime, so --version alone passes without that copy), and the doctor's
+          # child-env.mjs finds deps.mjs.
+          $rg = Get-ChildItem (Join-Path $app ($daemon + '@openai\codex-win32-' + $env:P9_ARCH)) -Recurse -Filter rg.exe | Where-Object { $_.Directory.Name -eq 'codex-path' } | Select-Object -First 1
+          if (-not $rg -or -not (Test-Path -LiteralPath (Join-Path $rg.DirectoryName 'vcruntime140.dll'))) { throw 'the installer left out codex-path\rg.exe or the vcruntime140.dll beside it' }
+          & $rg.FullName --version; if ($LASTEXITCODE -ne 0) { throw "rg.exe --version exited $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath (Join-Path $app 'resources\daemon\apps\server\deps.mjs'))) { throw 'the installer left out deps.mjs' }
           # AU2: the app and the daemon's node.exe are this runner's architecture (the PE header's machine field), not an
           # x64 file running under ARM64 emulation.
           $machine = @{ x64 = 0x8664; arm64 = 0xAA64 }[$env:P9_ARCH]

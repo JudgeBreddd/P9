@@ -339,7 +339,8 @@ test('Sol round 7: a save temp with a widened DACL still cannot be opened by any
 });
 
 // Item 23, Keep the server's onto a Windows laptop (Builder, 2026-10-27: build it): the tunnel send's writes on NT handles.
-test('Windows tunnel send: replaceFile and removeFile land whole files, keep old copies, and refuse what Linux refuses', { skip, timeout: 60000 }, async () => {
+// ponytail: arm64 Windows runners run these 30 to 60 times slower than x64 (run 40647602789: 70.7 s for a 1.3 s x64 test).
+test('Windows tunnel send: replaceFile and removeFile land whole files, keep old copies, and refuse what Linux refuses', { skip, timeout: 300000 }, async () => {
   const { workspace, recovery } = await canonicalFixture();
   const staging = await mkdtemp(path.join(path.dirname(workspace), 'staged-'));
   const stage = async (content) => { const file = path.join(staging, randomUUID()); await writeFile(file, content); return file; };
@@ -407,7 +408,8 @@ test('Windows tunnel send: replaceFile and removeFile land whole files, keep old
   assert.deepEqual(temps, []);
 });
 
-test('Windows tunnel send: the laptop daemon stages the server\'s copy in pieces and commits it (Keep the server\'s)', { skip, timeout: 60000 }, async () => {
+// ponytail: arm64 Windows runners run these 30 to 60 times slower than x64 (run 40647602789: 70.7 s for a 1.3 s x64 test).
+test('Windows tunnel send: the laptop daemon stages the server\'s copy in pieces and commits it (Keep the server\'s)', { skip, timeout: 300000 }, async () => {
   const { workspace, recovery } = await canonicalFixture();
   const xfer = createXfer({ workspace, ownership: path.join(path.dirname(workspace), 'ownership'), recovery });
   const id = randomUUID(), content = Buffer.from('the server\'s copy');
