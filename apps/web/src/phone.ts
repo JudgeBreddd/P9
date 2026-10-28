@@ -890,7 +890,7 @@ one<HTMLButtonElement>('[data-key="paste"]').onclick = async (event) => {
   let text: string;
   try { text = await navigator.clipboard.readText(); } catch { return termState('Paste not allowed: the browser did not share the clipboard', term.open); }
   if (performance.now() - at > 4000) return termState('Paste took too long: tap Paste again', term.open);
-  if (text) term.sendKeys(text, at);
+  if (text) term.paste(text, at);
   term.focus();
 };
 // T2: a tap on the terminal opens the keyboard. A finger's touchend on xterm's screen never becomes a click (the click this
