@@ -303,8 +303,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   api.get('/chat', (c) => c.json({ conversations: chat.list() }));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
-  api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until');
-    return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until))); });
+  api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until'), tail = c.req.query('tail');
+    return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail))); });
   api.get('/usage', async (c) => { const { claudeLive, ...usage } = ledger.usage(); return c.json({ ...usage, limits: await planLimits({ home: os.homedir(), claudeLive }) }); });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
