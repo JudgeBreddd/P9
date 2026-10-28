@@ -32,6 +32,8 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: path.
   body: body === undefined ? undefined : JSON.stringify(body) }).then((r) => ({ status: r.status, ...(r.status === 404 ? {} : JSON.parse(r.text)) }));
 const sh = async (file, text) => { await writeFile(file, '#!/bin/sh\n' + text); await chmod(file, 0o755); };
 const lines = (file) => readFile(file, 'utf8').then((t) => t.trim().split('\n').filter(Boolean), () => []);
+// The phase says restarting a moment before the stand-in systemd-run has written its line.
+const swapCall = (instance) => until(async () => (await lines(instance.log.run))[0], 'systemd-run called');
 
 // A checkout's few files: what update.mjs checks for. extra: more files (name -> text).
 async function tree(folder, version, extra = {}) {
@@ -150,7 +152,7 @@ test('update: a newer version builds beside the checkout, waits for the turn, th
   assert.deepEqual(await lines(instance.log.run), []);
   assert.equal((await call(instance, '/chat/' + id + '/stop', 'POST')).status, 200);
   await until(async () => (await job(instance))?.phase === 'restarting', 'the swap started');
-  const [swap] = await lines(instance.log.run);
+  const swap = await swapCall(instance);
   assert.match(swap, new RegExp('^--user --unit p9-update-' + pushed.id.slice(0, 8) + ' --collect --quiet -- \\S+ \\S+/scripts/update-swap\\.mjs --root ' + instance.source
     + ' --next ' + next + ' --version ' + NEXT + ' --from ' + VERSION + ' --id ' + pushed.id + ' '));
   // Held: a message now would start a turn the restart cuts off.
@@ -187,6 +189,7 @@ test('update: a packaged app has the server download its version; a missing rele
   assert.equal(started.status, 202, JSON.stringify(started));
   await until(async () => (await job(instance))?.phase === 'restarting', 'downloaded, built and handed over');
   assert.deepEqual(asked, ['/v' + NEXT + '.tar.gz']);
+  await swapCall(instance);
   assert.equal((await lines(instance.log.run)).length, 1);
 });
 
@@ -234,7 +237,7 @@ test('update, laptop: a checkout one version ahead pushes its HEAD and follows t
   assert.ok(events.every((e) => ['building', 'waiting-turns', 'restarting'].includes(e.phase) && e.version === NEXT), JSON.stringify(events));
   const commit = git('rev-parse', 'HEAD').toString().trim();
   assert.equal((await call(instance, '/update/status')).job.commit, commit);
-  assert.match((await lines(instance.log.run))[0], new RegExp(' --version ' + NEXT.replace(/\./g, '\\.') + ' '));
+  assert.match(await swapCall(instance), new RegExp(' --version ' + NEXT.replace(/\./g, '\\.') + ' '));
 });
 
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when
