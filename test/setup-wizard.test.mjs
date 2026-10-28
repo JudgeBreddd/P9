@@ -163,6 +163,18 @@ test('Setup settings (ST1): only settings.json keys, checked as the file is; the
   console.log('PASS setup settings: keys only, parseSettings rules, .bak kept, 0600, Mission live, null removes, an invalid file is left alone');
 });
 
+// c19: the wizard's folder scan does not look inside dependency or build output (packages/files HEAVY).
+test('Setup wizard: a registry, AGENTS.md or waiting folder inside dist, build, venv or __pycache__ is not found', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const dir of ['dist/workspace-hub', 'build/needs-you', 'venv/x', '__pycache__/x', 'node_modules/x']) await mkdir(path.join(workspace, dir), { recursive: true });
+    await writeFile(path.join(workspace, 'dist/workspace-hub/registry.json'), '{}');
+    for (const dir of ['build', 'venv/x', '__pycache__/x', 'node_modules/x']) await writeFile(path.join(workspace, dir, 'AGENTS.md'), 'not mine');
+    await mkdir(path.join(workspace, 'notes'));
+    return {};
+  });
+  assert.deepEqual((await call(instance, '/setup')).body.found, {});
+});
+
 test('Setup wizard: an existing workspace-hub is used as it is; only the settings file is written', { timeout: 60000 }, async (t) => {
   const hub = 'work/projects/workspace-hub';
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {

@@ -548,3 +548,10 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 .stage[data-side-mode=full]{grid-template-columns:minmax(0,1fr)}
 .stage[data-side-mode=full]>.side{grid-area:1/1;z-index:15}
 .stage[data-side-mode=full]>.focuses{visibility:hidden;grid-area:1/1} /* both in row 1: the dock keeps its own row and the side gets the 1fr */
+/* Chat Focus full: the artifact ends above the chat's text box, which stays visible and usable (side-panel answer 2). Only .bottom
+   of each chat shows, and in it only the box (not the plan card, pinned cards or meters); --chat-bottom is its height (controller.mjs,
+   renderChats). Dev Focus full keeps its box inside the side. */
+.stage[data-side-mode=full]>.focuses>#fChat.on{visibility:visible}
+.stage[data-side-mode=full]>.focuses>#fChat.on :is(.files,.pane>:not(.bottom)){visibility:hidden}
+.stage[data-side-mode=full]>.focuses>#fChat.on .bottom :is(.pinned,.meters){display:none}
+.stage[data-side-mode=full]:has(#fChat.on)>.side{margin-bottom:var(--chat-bottom,0px)}

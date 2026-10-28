@@ -12,7 +12,7 @@ import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './re
 import { updateServer } from './server-update.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer } from './xfer.mjs';
-import { ORIGIN } from '../../packages/protocol/index.mjs';
+import { ORIGIN, FRAME_CSP } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR, EDITOR_COMMIT, EDITOR_DOWNLOADS } from './editor-host.mjs';
@@ -23,6 +23,7 @@ import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
+const FRAME_URL = 'p9://frame/'; // item 19: the artifact frame's page (row 65)
 export const DEV_URL = 'p9://dev/';
 export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/' + REPO + '#readme';
@@ -234,13 +235,15 @@ export async function createDesktop({ state, open } = {}) {
   const appSite = async () => {
     const files = await assets(webDist);
     const html = files.get('/index.html').toString('utf8');
-    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'` };
+    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src ${FRAME_URL}; frame-ancestors 'none'` };
   };
   const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2',
     '.woff': 'font/woff', '.ttf': 'font/ttf', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg' };
   // Three origins: p9://app (the shell), p9://dev (Dev Focus, filled once the editor host is up) and p9://webview (its
   // extension pages). Each gets its own CSP, and each session serves only its own origins.
   const sites = { app: await appSite() };
+  // Item 19 (threat model row 65): the artifact frame's page on its own origin, p9://frame/, with nothing else there.
+  sites.frame = { get files() { return new Map([['/index.html', sites.app.files.get('/frame/index.html')]]); }, csp: FRAME_CSP + '; frame-ancestors p9://app' };
   const serve = (...hosts) => request => {
     const url = new URL(request.url);
     const key = url.pathname === '/' ? '/index.html' : url.pathname;
@@ -248,7 +251,7 @@ export async function createDesktop({ state, open } = {}) {
     if (request.method !== 'GET' || url.username || url.password || url.port || !data) return new Response('Not found', { status: 404 });
     return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff', 'Document-Policy': 'include-js-call-stacks-in-crash-reports' } });
   };
-  protocol.handle('p9', serve('app'));
+  protocol.handle('p9', serve('app', 'frame'));
   const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json');
   const name = await accountName();
   let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
@@ -301,8 +304,14 @@ export async function createDesktop({ state, open } = {}) {
   // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
   if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
-  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
-  session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
+  // Only for the shell itself: an artifact's frame (item 19, row 65) gets neither.
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => callback(details?.isMainFrame !== false && (permission === 'clipboard-sanitized-write' || permission === 'notifications')));
+  session.defaultSession.setPermissionCheckHandler((_contents, permission, _origin, details) => details?.isMainFrame !== false && (permission === 'clipboard-sanitized-write' || permission === 'notifications'));
+  // Item 19 (row 65), behind the frame's CSP: the window's session refuses every request a subframe makes; only the frame's page loads.
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    let sub = false; try { sub = !!details.frame?.parent; } catch {} // no frame (a worker, a frame already gone): the CSP alone decides
+    callback({ cancel: sub && !(details.resourceType === 'subFrame' && details.url === FRAME_URL) });
+  });
   const version = ownVersion;
   // Auto-update's lines (threat model row 39) and the rollback's (row 40) go to p9-update.log in the profile folder.
   // ponytail: never rotated, a few lines per check.
@@ -421,7 +430,7 @@ export async function createDesktop({ state, open } = {}) {
     if (menu.length) Menu.buildFromTemplate(menu).popup({ window });
   });
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
-  window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
+  window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && event.url !== FRAME_URL) event.preventDefault(); }); // item 19: only the artifact frame's page
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   // Freeze record (Builder, 2026-10-20: the window freezes "and i just need to close and reopen the app"): when the window
   // stops answering, the JavaScript it is stuck in goes to p9-freeze.log in the profile folder, then how long it lasted.
@@ -810,7 +819,7 @@ export async function createDesktop({ state, open } = {}) {
     app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
     // An install in progress (the AppImage's first start) finishes first, so Dev Focus opens instead of saying missing.
     await editorInstall?.catch(() => {});
-    return startEditorHost({ unit, signal: quit.signal, spell: process.env.P9_SPELL_CHECK !== 'off' });
+    return startEditorHost({ unit, signal: quit.signal });
   })().catch(error => { editorHost = null; throw error; });
   // Server mode (threat model row 50): the server's daemon runs the editor (POST /dev/editor) and the tunnel forwards its socket to
   // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the

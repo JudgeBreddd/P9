@@ -1,6 +1,7 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, sprintTimes, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
+import { artifactView, chipArtifact } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
@@ -60,6 +61,7 @@ one('[data-bar="files"]').innerHTML = `<button type="button" id="up" class="back
 one('main').addEventListener('scroll', (event) => { const box = event.target as HTMLElement; box.closest('section')?.querySelector(':scope > .bar')?.classList.toggle('ruled', box.scrollTop > 0); }, true);
 // Bottom sheet: one shared <dialog>. Fill the body with .opt rows (or anything); a tap on the backdrop closes it.
 const sheet = one<HTMLDialogElement>('#sheet');
+let artSending: string | null = null, artEntries: string[][] = []; // item 19 (the artifact functions at the end of this file)
 function openSheet(title: string, html: string) { one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
 sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
 sheet.addEventListener('close', () => sheet.classList.remove('full')); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
@@ -253,7 +255,7 @@ function history(id: string) {
 }
 // One readable block per message: streamed chunks are joined, a tool call keeps its latest status, and bookkeeping
 // updates (usage, commands, titles) are left out. Each block is one <article data-kind=…> in #events.
-type Block = { kind: string; text: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; form?: Json[] | null; sent?: string[] };
+type Block = { kind: string; text: string; id?: unknown; status?: string; detail?: string; request?: string; options?: Json[]; closed?: boolean; images?: string[]; plan?: string; form?: Json[] | null; sent?: string[] };
 type Attached = { mimeType: string; data: string; name: string };
 const attached = new Map<string, Attached[]>(), sentCache = new Map<string, string>(); // P8, below the composer
 // P10: an agent's question answered on the phone, from the daemon's checked form (formSpec in chat.mjs), as the desktop
@@ -306,7 +308,7 @@ function build(picked: string) {
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
         const image = type === 'agent' && imgSrc(data.content); if (image) (blocks.at(-1)!.images ??= []).push(image);
       } else if (update === 'plan') strip.events = [{ t: 'plan', entries: (Array.isArray(data.entries) ? data.entries as Json[] : []).map((entry) => [String(entry?.status), String(entry?.content ?? '')]) }];
-      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content) });
+      else if (update === 'tool_call') add('tool', data.title || 'Tool call', { id: data.toolCallId, status: String(data.status || 'pending'), detail: toolText(data).slice(0, DETAIL_CAP), images: toolImages(data.content), plan: artPlan(data) });
       else if (update === 'tool_call_update') {
         const tool = blocks.find((block) => block.kind === 'tool' && block.id === data.toolCallId);
         if (tool) {
@@ -335,7 +337,7 @@ function build(picked: string) {
   }
   return { blocks, strip };
 }
-const toolRow = (block: Block) => `<article data-kind="tool" data-status="${escape(block.status)}"><details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${agentImgs(block.images, 'the agent')}</article>`;
+const toolRow = (block: Block) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${agentImgs(block.images, 'the agent')}</article>`;
 function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
@@ -468,6 +470,7 @@ function render() {
   if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
   anchored = false;
   const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
+  artEntries = plan; // item 19: the plan view reads the entries shown
   one('#pinned').innerHTML = pinned(strip, (card: { text: string }) => md.parse(card.text) as string);
   chips.hidden = !plan.length && !cards;
   chips.innerHTML = (plan.length ? `<button type="button" class="chip" data-chip>Plan ${plan.filter((entry) => entry[0] === 'completed').length}/${plan.length} ▸</button>` : '') + (cards ? `<button type="button" class="chip" data-chip>${cards} pinned ▸</button>` : '');
@@ -675,28 +678,30 @@ one<HTMLElement>('#queued').onclick = async (event) => {
 for (const button of document.querySelectorAll<HTMLButtonElement>('#composer button[type="submit"], button[form="composer"]')) for (const type of ['pointerdown', 'mousedown']) button.addEventListener(type, (event) => event.preventDefault());
 one<HTMLFormElement>('#composer').onsubmit = async (event) => {
   event.preventDefault(); const id = one<HTMLSelectElement>('#conversation').value; const input = one<HTMLTextAreaElement>('#prompt');
-  const images = attached.get(id) ?? [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+  const art = artSending; artSending = null; // item 19: an artifact's comments, sent here as text only; the box and its images stay
+  const images = art === null ? attached.get(id) ?? [] : [], submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
   if (id && submitter?.dataset.stop === 'true') {
     // No turn to stop (it just ended): 409 no-turn, and the events say so.
     const result = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
     if (result.status !== 200 && result.body.error !== 'no-turn') note(`Not stopped: ${result.body.error ?? result.status}`);
     await fetchEvents(); render(); return;
   }
-  if (!id || (!input.value.trim() && !images.length)) return;
+  const text = (art ?? input.value).trim();
+  if (!id || (!text && !images.length)) return false;
   one<HTMLElement>('#slash').hidden = true;
   const mode = one<HTMLSelectElement>('#mode').value, model = one<HTMLSelectElement>('#model');
   const config = Object.fromEntries([...document.querySelectorAll<HTMLSelectElement>('#pickers select')].filter((pick) => pick.value !== pick.dataset.current).map((pick) => [pick.dataset.config!, pick.value]));
-  const body = { text: input.value.trim(), ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
+  const body = { text, ...(mode && { mode }), ...(model.value && model.value !== model.dataset.current && { model: model.value }), ...(Object.keys(config).length && { config }) };
   // Behind a queued message it queues too, so they go in the order typed. Images are not queued (up to 8 MB does not
   // fit this phone's storage): they stay attached and the box says why.
   if (!navigator.onLine || asking(id) || queued(id).length) {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
-    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); input.value = ''; renderQueue(); label(); void drain(); return;
+    keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { input.value = ''; label(); note(); attached.delete(id); renderAttached(); await fetchEvents(); render(); }
+  if (result.status === 202) { if (art === null) { input.value = ''; attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
@@ -1304,3 +1309,33 @@ addEventListener('online', () => { online(); void loadChat().then(drain); });
 online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
 void first.then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');
+// Item 19 (threat model row 65): on the phone an artifact opens in the full-screen sheet, the side panel's phone form
+// (specs/side-panel.md). A chip in an agent reply opens it; so does Open on the plan (the Plan chip's sheet) or on Claude's
+// plan-mode plan. The frame page is the server's /frame/ (its own CSP); comments go through the composer's send above.
+// ponytail: nothing opens by itself on the phone (a sheet over the chat at every turn's end would bury the reply); the chip does.
+const ART: { state: { art: Json; comments?: unknown[] } | null } = { state: null };
+function artPlan(data: Json) { // Claude's plan-mode plan (the adapter's "Approve Plan" call, kind switch_mode), kept whole
+  return data.kind === 'switch_mode' ? toolText(data).slice(0, 200000) || undefined : undefined;
+}
+async function artSend(text: string) {
+  artSending = text;
+  const sent = await (one<HTMLFormElement>('#composer').onsubmit as unknown as (event: unknown) => Promise<boolean | undefined>)({ preventDefault() {}, submitter: null });
+  artSending = null;
+  if (!sent) note('Comments not sent.');
+  return !!sent;
+}
+function artOpen(art: Json) {
+  if (!ART.state || ['kind', 'src', 'title'].some((key) => ART.state!.art[key] !== art[key])) ART.state = { art };
+  dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: String(art.title), html: '<div class="art-host"></div>', full: true } }));
+  artifactView(one('#sheetBody .art-host'), ART.state, { page: '/frame/', base: '/frame/', send: artSend, modes: [] });
+}
+function artPlanOpen(src: string) { artOpen({ kind: 'markdown', lang: 'md', mode: 'full', title: 'Plan', src }); }
+one('#events').addEventListener('click', (event) => {
+  const target = event.target as Element, chip = target.closest<HTMLElement>('[data-artifact]'), plan = target.closest<HTMLElement>('[data-art-plan]');
+  if (chip) artOpen(chipArtifact(chip));
+  if (plan) artPlanOpen(plan.dataset.artPlan ?? '');
+});
+one('#sheetBody').addEventListener('click', (event) => {
+  if (!(event.target as Element).closest('[data-open-plan="entries"]')) return;
+  artPlanOpen(artEntries.map(([status, text]) => `- [${status === 'completed' ? 'x' : ' '}] ${text}${status === 'in_progress' ? ' *(in progress)*' : ''}`).join('\n'));
+});
