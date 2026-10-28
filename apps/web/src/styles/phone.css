@@ -76,6 +76,7 @@ body.kbd nav{display:none}
 /* Sheet: one shared bottom-sheet <dialog>; openSheet(title, html) in phone.ts fills it. */
 dialog.sheet{width:100%;max-width:700px;margin:auto auto 0;padding:8px 16px calc(16px + env(safe-area-inset-bottom));border:0;border-radius:16px 16px 0 0;background:var(--raised);color:var(--text);max-height:80dvh;overflow-y:auto}
 dialog.sheet::backdrop{background:rgba(0,0,0,.5)}
+dialog.sheet.full{max-height:100dvh;height:100dvh;border-radius:0;margin:0}
 dialog.sheet .grab{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.2);margin:0 auto 8px}
 dialog.sheet h2{font-size:13px;color:var(--muted);font-weight:600;margin:4px 0 6px}
 dialog.sheet .opt{display:flex;align-items:center;width:100%;min-height:48px;padding:0 4px;border:0;border-radius:0;background:transparent;color:var(--text);font-weight:500;text-align:left;border-bottom:1px solid rgba(255,255,255,.08)}

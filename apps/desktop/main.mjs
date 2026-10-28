@@ -20,6 +20,7 @@ import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
+import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
 export const DEV_URL = 'p9://dev/';
@@ -536,6 +537,9 @@ export async function createDesktop({ state, open } = {}) {
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
+    // The Chat Focus file window's Save (row 23): exactly the guarded PUT /files, which re-checks the path, locked names and the hash.
+    save: ({ path: file, hash, content, ...rest }) => !Object.keys(rest).length && typeof file === 'string' && file.length <= 1000 && typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash)
+      && typeof content === 'string' && Buffer.byteLength(content) <= 2 * 1024 * 1024 && ['PUT', '/files', { path: file, hash, content }],
     // Notes (threat model row 34): the daemon checks the root name against settings, the path, .md and File protection.
     notes: ({ root }) => id(root) && ['GET', '/mission/notes?' + new URLSearchParams({ root })],
     noteRead: ({ root, path: file }) => id(root) && typeof file === 'string' && ['GET', '/mission/notes/file?' + new URLSearchParams({ root, path: file })],
@@ -795,6 +799,7 @@ export async function createDesktop({ state, open } = {}) {
   // A failed start or a crashed page is rebuilt on the next open; the editor host, once up, is kept.
   // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
   // devServing: the folder the loaded page was given (its saves go there).
+  let cardsView = null, cardsItems = [], cardsHide = null;
   let dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   const startHost = () => editorHost ??= (async () => {
@@ -859,6 +864,7 @@ export async function createDesktop({ state, open } = {}) {
       }
     });
     window.contentView.addChildView(devView);
+    if (cardsView) window.contentView.addChildView(cardsView); // the cards stay above the editor
     let config;
     try {
       if (!state) throw new Error('daemon-unavailable');
@@ -975,6 +981,60 @@ export async function createDesktop({ state, open } = {}) {
     devView.setVisible(true);
     if (!shown) devView.webContents.focus();
     return { ok: true };
+  });
+  // The Dev Focus cards overlay (threat model row 3, p9:cards): the shell hands over a bounded list of card texts and where to
+  // put them; the overlay view above the editor draws them and says which one was clicked. Created when first needed, closed a
+  // minute after it was last hidden, so it costs nothing in the other focuses.
+  const fromCards = event => cardsView && event.sender === cardsView.webContents && event.senderFrame === cardsView.webContents.mainFrame && event.senderFrame.url.startsWith(CARDS_URL);
+  const text = (value, max) => typeof value === 'string' && value.length <= max;
+  const openCards = () => {
+    if (cardsView) return cardsView;
+    const cardsSession = session.fromPartition('p9-cards'); // not persist: nothing kept
+    if (!cardsSession.protocol.isProtocolHandled('p9')) { sites.cards = cardsSite(); cardsSession.protocol.handle('p9', serve('cards')); }
+    cardsSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (_details, callback) => callback({ cancel: true }));
+    cardsSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    cardsSession.setPermissionCheckHandler(() => false);
+    cardsView = new WebContentsView({ webPreferences: { preload: fileURLToPath(new URL('./cards-preload.cjs', import.meta.url)), session: cardsSession, sandbox: true,
+      contextIsolation: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false } });
+    cardsView.setBackgroundColor('#00000000');
+    cardsView.webContents.on('dom-ready', () => cardsView?.webContents.setZoomFactor(settings.zoom));
+    cardsView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    cardsView.webContents.on('will-navigate', event => event.preventDefault());
+    cardsView.webContents.on('will-attach-webview', event => event.preventDefault());
+    cardsView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    window.contentView.addChildView(cardsView);
+    cardsView.webContents.loadURL(CARDS_URL).catch(() => {});
+    return cardsView;
+  };
+  ipcMain.handle('p9:cards', (event, ...args) => {
+    const [c] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || !c || typeof c.visible !== 'boolean'
+        || (c.visible && (!['x', 'y', 'width'].every(key => whole(c[key])) || !Array.isArray(c.items) || c.items.length > 8
+          || !c.items.every(i => i && text(i.key, 300) && text(i.title, 200) && text(i.sub, 300) && (i.n === undefined || whole(i.n)))))) throw new Error('ipc-sender-refused');
+    if (!c.visible || !c.items.length) {
+      cardsView?.setVisible(false);
+      if (cardsView && !cardsHide) cardsHide = setTimeout(() => { cardsHide = null; if (cardsView && !cardsView.getVisible()) { window.contentView.removeChildView(cardsView); cardsView.webContents.close(); cardsView = null; } }, 60000);
+      return { ok: true };
+    }
+    clearTimeout(cardsHide); cardsHide = null;
+    const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z), view = openCards();
+    cardsItems = c.items.map(i => ({ key: i.key, title: i.title, sub: i.sub, ...(i.n === undefined ? {} : { n: i.n }) }));
+    view.webContents.send('p9cards:list', cardsItems);
+    const bounds = view.getBounds();
+    view.setBounds({ x: px(c.x), y: px(c.y), width: px(c.width), height: bounds.height }); // the page says how tall it is
+    view.setVisible(true);
+    return { ok: true };
+  });
+  ipcMain.handle('p9cards:ready', event => { if (!fromCards(event)) throw new Error('ipc-sender-refused'); return { items: cardsItems, look }; });
+  ipcMain.on('p9cards:size', (event, height) => {
+    if (!fromCards(event) || !Number.isSafeInteger(height) || height < 0 || height > 4000) return;
+    const b = cardsView.getBounds(); cardsView.setBounds({ ...b, height: Math.round(height * window.webContents.getZoomFactor()) });
+  });
+  ipcMain.on('p9cards:act', (event, input) => {
+    if (!fromCards(event) || !input || !text(input.key, 300) || !['open', 'x'].includes(input.action)) return;
+    window.webContents.focus();
+    window.webContents.send('p9:card-act', { key: input.key, action: input.action });
   });
   // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
   ipcMain.handle('p9:settings', async (event, ...args) => {
@@ -1284,6 +1344,7 @@ export async function createDesktop({ state, open } = {}) {
         || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))) throw new Error('ipc-sender-refused');
     look = { dark: input.dark, colors: Object.fromEntries(LOOK_TOKENS.map(token => [token, input.colors[token]])) };
     devView?.webContents.send('p9dev:look', look);
+    cardsView?.webContents.send('p9cards:look', look);
     return { ok: true };
   });
   ipcMain.handle('p9dev:config', async (event, ...args) => {
