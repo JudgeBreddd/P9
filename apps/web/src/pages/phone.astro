@@ -48,13 +48,14 @@ import '../styles/artifact.css';
         <!-- COMPOSER SLOT (c2 builds the composer here): sits below the chat scroller, never scrolls away, rides the keyboard. Keep it one flex child; the queued list and the form are today's composer. -->
         <div id="composerSlot" hidden>
           <div id="queued" class="stack" aria-live="polite" hidden></div>
+          <!-- P18: sending while the agent works, as the desktop's Steer / Queue chip and its Ctrl Enter interrupt. -->
+          <div id="midTurn" role="group" aria-label="Send while the agent works" hidden><span id="midTurnLabel">Claude is working</span><button type="submit" form="composer" data-when="steer" title="Send into this turn when its current step ends">Steer</button><button type="submit" form="composer" class="quiet" data-when="queue" title="Send when this turn ends">Queue</button><button type="submit" form="composer" class="quiet" data-when="now" title="Stop this turn and send this now">Interrupt</button></div>
           <div id="box">
             <div id="attached" class="attached" hidden></div>
             <div id="slash" class="slash" role="listbox" aria-label="Slash commands" hidden></div>
             <form id="composer"><textarea id="prompt" rows="1" aria-label="Message" placeholder="Message Claude"></textarea><p id="composerNote" class="muted" role="status" hidden></p><button type="submit" id="send"><span class="vh">Send message</span></button></form>
             <button type="button" id="attach" class="quiet" aria-label="Attach images" aria-haspopup="dialog">+</button>
             <button type="button" id="modePill" class="quiet" aria-haspopup="dialog">Mode ▾</button>
-            <button type="submit" form="composer" class="quiet" data-when="queue" hidden>Queue</button>
             <input type="file" id="attachInput" multiple hidden>
             <span id="modeHome" hidden><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select><span id="more"><span id="pickers"></span></span></span>
           </div>

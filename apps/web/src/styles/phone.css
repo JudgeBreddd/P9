@@ -34,13 +34,13 @@ form.question{display:grid;gap:10px;margin-top:8px}form.question fieldset{border
    22 px, then it scrolls), then +, the mode pill, Queue during a turn, and a 36 px round send (44 px hit area). The form is
    display:contents so its textarea, note and send sit in the box's grid; the send words stay in a hidden span for
    screen readers and the tests, the arrow and the stop square are drawn. */
-#box{display:grid;grid-template-columns:auto auto 1fr auto auto;grid-template-areas:"chips chips chips chips chips" "slash slash slash slash slash" "text text text text text" "note note note note note" "plus pill . queue send";align-items:center;gap:2px 6px;margin:0 8px;padding:4px 6px 4px 12px;border:1px solid var(--line);border-radius:22px;background:var(--raised)}
+#box{display:grid;grid-template-columns:auto auto 1fr auto auto;grid-template-areas:"chips chips chips chips chips" "slash slash slash slash slash" "text text text text text" "note note note note note" "plus pill . . send";align-items:center;gap:2px 6px;margin:0 8px;padding:4px 6px 4px 12px;border:1px solid var(--line);border-radius:22px;background:var(--raised)}
 #box:focus-within{border-color:color-mix(in oklch,var(--cyan) 45%,var(--line))}#composer{display:contents}
 #attached{grid-area:chips;padding:10px 4px 4px}#slash{grid-area:slash;margin-top:6px}#composerNote{grid-area:note;margin:0;font-size:13px}
 #prompt{grid-area:text;width:100%;font-size:16px;line-height:22px;min-height:34px;max-height:144px;padding:6px 0;border:0;border-radius:0;background:transparent;resize:none;overflow-y:auto}#prompt:focus{outline:none}
 #attach{grid-area:plus;width:44px;height:44px;margin-left:-8px;padding:0;border:0;border-radius:50%;font-size:24px;font-weight:400;line-height:1}
 #modePill{grid-area:pill;width:auto;min-height:32px;padding:0 12px;border-radius:16px;font-size:13px;font-weight:600;white-space:nowrap}
-#box button[data-when=queue]{grid-area:queue;width:auto;min-height:32px;padding:0 12px;border-radius:16px;font-size:13px}
+#midTurn{display:flex;align-items:center;gap:4px;margin:0 8px 6px;padding:3px 3px 3px 12px;border:1px solid color-mix(in oklch,var(--cyan) 35%,var(--line));border-radius:20px;background:var(--raised);font-size:13px}#midTurn[hidden]{display:none}#midTurnLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}#midTurn button{width:auto;min-height:34px;padding:0 10px;border-radius:17px;font-size:13px}
 #send{grid-area:send;position:relative;width:36px;height:36px;min-height:0;padding:0;border-radius:50%;display:grid;place-items:center}
 #send::after{content:"";position:absolute;inset:-4px}#send::before{content:"↑";font-size:20px;line-height:1}#send[data-stop=true]::before{content:"■";font-size:14px}
 .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
