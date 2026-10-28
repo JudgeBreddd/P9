@@ -673,7 +673,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     async prompt(id, body, held) {
       await recovered;
       const release = lifecycle.begin();
-      if (!release) return refused(503, 'stop-all-running');
+      if (!release) return refused(503, lifecycle.refusal());
       const conversation = ID.test(id) && row(id);
       if (!conversation) { release(); return refused(404, 'unknown-conversation'); }
       const images = body?.images ?? [];

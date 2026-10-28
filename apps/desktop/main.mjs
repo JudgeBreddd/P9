@@ -9,6 +9,7 @@ import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
+import { updateServer } from './server-update.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer } from './xfer.mjs';
 import { ORIGIN } from '../../packages/protocol/index.mjs';
@@ -258,6 +259,11 @@ export async function createDesktop({ state, open } = {}) {
   // last: the host used before, so Local can show a one-click way back.
   const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
   let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
+  // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
+  // pointed at the window once it exists.
+  let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
+  // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
+  const ownVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   // One attempt chain per choice (serverTry): retried 1 s, then doubling to 30 s; a drop starts it again.
   const connect = async (attempt, wait = 1000) => {
     if (attempt !== serverTry || !serverHost) return;
@@ -265,6 +271,13 @@ export async function createDesktop({ state, open } = {}) {
       const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
       server = s; serverError = null;
+      if (!serverUpdating) {
+        // Item 14 (server-update.mjs): an older server is updated from this app; a newer one only says to update this app.
+        serverUpdating = true;
+        updateServer({ state: s.state, check: s.check, version: ownVersion, host: serverHost, live: () => attempt === serverTry,
+          checkout: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? fileURLToPath(new URL('../../', import.meta.url)) : null,
+          tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
+      }
     } catch (error) {
       serverError = error.message;
       if (attempt === serverTry) setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
@@ -272,6 +285,7 @@ export async function createDesktop({ state, open } = {}) {
   };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
+    serverUpdate = null;
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
     await old?.close().catch(() => {});
@@ -288,8 +302,7 @@ export async function createDesktop({ state, open } = {}) {
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
   session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
-  // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
-  const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
+  const version = ownVersion;
   // Auto-update's lines (threat model row 39) and the rollback's (row 40) go to p9-update.log in the profile folder.
   // ponytail: never rotated, a few lines per check.
   const updateLog = line => appendFile(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {});
@@ -705,6 +718,9 @@ export async function createDesktop({ state, open } = {}) {
     sending.get(args[0])?.abort();
     return { cancelling: sending.has(args[0]) };
   });
+  // Item 14: the server update's progress (server-update.mjs), and its last event for a window that loads after it.
+  tellUpdate = event => { if (!window.isDestroyed()) window.webContents.send('p9:server-update', event); };
+  ipcMain.handle('p9:server-update', event => { if (!fromApp(event)) throw new Error('ipc-sender-refused'); return serverUpdate; });
   // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
   // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
   // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
