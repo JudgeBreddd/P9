@@ -853,8 +853,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     remoteApp.get('/_astro/:file', async (c) => {
       const file = c.req.param('file');
       if (!/^[a-zA-Z0-9_.-]+$/.test(file)) return c.json({ error: 'request-refused' }, 400);
+      // P1: build files are named by their content, so the phone keeps them (every open read 1 MB again under no-store).
       return c.body(await readAsset(path.join(webRoot, '_astro', file)), 200,
-        { 'content-type': types[path.extname(file)] ?? 'application/octet-stream' });
+        { 'content-type': types[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'private, max-age=31536000, immutable' });
     });
     // Self-lock answers on its own socket, so that one is spared; every other socket of the device closes.
     remoteApp.post('/lock', (c) => {
