@@ -1,7 +1,7 @@
 // Dev Focus editor host: VSCodium's remote extension host (REH), started by the desktop on loopback only.
 // It runs extensions, terminals and language servers as you; their direct disk writes are "runs as you, not guarded" (SECURITY.md surface 5).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFile, chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
