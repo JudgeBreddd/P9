@@ -29,7 +29,7 @@ export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/' + REPO + '#readme';
 // HI1: a Settings row's "i" opens its part of the guide (docs/guide.md headings); any other section is refused.
 export const GUIDE_URL = 'https://github.com/' + REPO + '/blob/main/docs/guide.md#';
-export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance', 'mission-control-files', 'buttons-apps-and-pages']);
+export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance', 'mission-control-files', 'buttons-apps-and-pages', 'security-settings', 'server-mode-send-to-server-and-send-files', 'send-files']);
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
 export const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 // Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
