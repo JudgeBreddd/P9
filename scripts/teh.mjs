@@ -10,6 +10,7 @@ import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
 import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
+import { found, placeTmux } from '../apps/server/deps.mjs';
 
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -162,6 +163,9 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
     const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
       say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
     await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    // K7: the daemon cannot start without tmux. A system tmux wins; with none, the AppImage's pinned copy goes into P9's
+    // bin folder first (before the slow copy below and the service), so a machine with no tmux needs no admin password and no network.
+    if (!await found('tmux', { env })) await say('tmux from the AppImage: ' + await placeTmux({ from: path.join(resources, 'tmux', 'tmux') }));
     // A copy that fails (a full disk) costs the rollback only; the service below goes on.
     try {
       const kept = path.join(share, 'appimage'), copy = path.join(kept, version + '.AppImage');

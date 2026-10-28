@@ -6,6 +6,7 @@ import path from 'node:path';
 import { REPO } from '../apps/server/anymouse.mjs';
 import { bundleDaemon } from './bundle-daemon.mjs';
 import { EDITOR_DOWNLOADS } from '../apps/desktop/editor-host.mjs';
+import { TMUX_SHA256, TMUX_URL } from '../apps/server/deps.mjs';
 
 // The Linux AppImage, the same steps as package-windows.mjs: a pinned Node for the daemon, the notices, the daemon bundle,
 // then electron-builder. x64 only. ponytail: an arm64 AppImage needs an arm64 runner and Node's linux-arm64 pin.
@@ -48,6 +49,18 @@ if (!editorBytes || createHash('sha256').update(editorBytes).digest('hex') !== e
   if (createHash('sha256').update(bytes).digest('hex') !== editorHash) throw new Error('editor-download-hash-mismatch');
   await mkdir(path.dirname(editorArchive), { recursive: true });
   await writeFile(editorArchive, bytes);
+}
+// K7: P9's pinned static tmux (deps.mjs TMUX_SHA256, threat model row 60), carried so a first start on a machine with no
+// tmux places it with no network (teh.mjs appImageService). Same pin as the download; a mismatch stops the build.
+const tmuxCopy = path.join(build, 'tmux', 'tmux');
+const tmuxBytes = await readFile(tmuxCopy).catch(() => null);
+if (!tmuxBytes || createHash('sha256').update(tmuxBytes).digest('hex') !== TMUX_SHA256.x64) {
+  const response = await fetch(TMUX_URL + 'x64');
+  if (!response.ok) throw new Error(`tmux-download-${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (createHash('sha256').update(bytes).digest('hex') !== TMUX_SHA256.x64) throw new Error('tmux-download-hash-mismatch');
+  await mkdir(path.dirname(tmuxCopy), { recursive: true });
+  await writeFile(tmuxCopy, bytes, { mode: 0o755 });
 }
 // nodejs.org's binary carries its debug info: strip takes it from 149.7 MB to 116.4 MB (about 7.5 MB less compressed).
 // The dynamic symbols native addons link against stay. Outside the block so an older unstripped copy in .build is stripped too.
