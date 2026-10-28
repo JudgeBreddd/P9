@@ -15,6 +15,8 @@ import { chromium } from '@playwright/test';
 import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { newer } from '../apps/server/update.mjs';
 import { PIECE } from '../apps/server/pieces.mjs';
+import { daemonRequest } from '../scripts/teh.mjs';
+import { updateServer } from '../apps/desktop/server-update.mjs';
 
 const skip = process.platform === 'win32' ? 'a server update is Linux only (systemd, a source checkout)' : false;
 const VERSION = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -197,6 +199,42 @@ test('update: a missing release fails as download-failed and nothing is built', 
   const failed = await until(async () => { const j = await job(instance); return j?.phase === 'failed' && j; }, 'failed');
   assert.deepEqual([failed.error, failed.detail], ['download-failed', 'HTTP 404']);
   assert.deepEqual([await lines(instance.log.pnpm), await leftovers(instance)], [[], []]);
+});
+
+// The laptop's half (apps/desktop/server-update.mjs) against a real daemon: check() is the tunnel's /health.
+const laptop = (instance, options) => {
+  const events = [];
+  const check = () => daemonRequest(instance.state, 'GET', '/health').then((r) => r.body);
+  return { events, run: () => updateServer({ state: instance.state, check, host: 'test', tell: (event) => { events.push(event); }, ...options }) };
+};
+
+test('update, laptop: an app older than its server is told so and never starts an update', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  const { events, run } = laptop(instance, { version: '0.0.1', checkout: root });
+  assert.equal((await run()).phase, 'app-older');
+  assert.deepEqual(events, [{ phase: 'app-older', host: 'test', server: VERSION, app: '0.0.1' }]);
+  assert.deepEqual([(await call(instance, '/update/status')).job ?? null, await lines(instance.log.pnpm), await leftovers(instance)], [null, [], []]);
+});
+
+test('update, laptop: a checkout one version ahead pushes its HEAD and follows the server to the restart', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  const checkout = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-checkout-'));
+  await tree(checkout, NEXT);
+  const git = (...args) => execFileSync('git', ['-C', checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args]);
+  git('init', '-q'); git('add', '-A'); git('commit', '-qm', 'next');
+  // Uncommitted edits are not sent: the server builds HEAD.
+  await writeFile(path.join(checkout, 'package.json'), JSON.stringify({ name: 'p9', version: bump(NEXT) }));
+  let stop = false;
+  const { events, run } = laptop(instance, { version: NEXT, checkout, live: () => !stop });
+  const following = run();
+  await until(() => events.some((e) => e.phase === 'restarting'), 'the laptop saw the restart', 30000);
+  stop = true;
+  assert.equal((await following).phase, 'left');
+  assert.equal(events.at(-1).phase, 'restarting');
+  assert.ok(events.every((e) => ['building', 'waiting-turns', 'restarting'].includes(e.phase) && e.version === NEXT), JSON.stringify(events));
+  const commit = git('rev-parse', 'HEAD').toString().trim();
+  assert.equal((await call(instance, '/update/status')).job.commit, commit);
+  assert.match((await lines(instance.log.run))[0], new RegExp(' --version ' + NEXT.replace(/\./g, '\\.') + ' '));
 });
 
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when
