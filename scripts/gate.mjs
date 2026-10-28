@@ -98,6 +98,7 @@ export async function mutationInventory(directory) {
   // tar and pnpm with fixed argv, no shell, swept at start); scripts/update-swap.mjs renames the two (old kept as <root>.previous, a new one
   // that does not start moved to <root>.failed-*) and writes <ownership>/update/result.json (a temp file, then rename). apps/desktop/server-update.mjs = git archive (fixed argv) into a
   // temp folder for the push, removed after.
+  // phone rebuild (c18, row 64) = server.mjs's POST /rebuild: pnpm build (or P9_BUILD in tests) with fixed argv, no shell, in the checkout it serves, 10 minutes, one at a time; it writes only what the build writes (apps/web/dist).
   // sprint (#35) = apps/server/sprint.mjs reads the sprint status file only (open 'r', then stat and read); it writes nothing.
   // desktop rollback (AU5) = update-state.json in the profile folder and rollback.json's shown mark in P9's folder (a temp file, then rename); it starts nothing (main does).
   // files/win32 = the Windows form of the file guard's handle walk (index.mjs's writes, through NtCreateFile handles);

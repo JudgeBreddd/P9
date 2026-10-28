@@ -1,4 +1,12 @@
 ---
+// The desktop's look (c18): DUWOP's boot script and theme packs, so the picked theme paints on the first frame.
+import DuwopBoot from '../components/DuwopBoot.astro';
+import '../styles/fonts.css';
+import '../lib/duwop.css';
+import '../lib/command-center.css';
+import '../lib/gods.css';
+import '../lib/aphrodite.css';
+import '../styles/theme-picker.css';
 import '../styles/phone.css';
 ---
 <!doctype html>
@@ -7,12 +15,14 @@ import '../styles/phone.css';
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#080b10" />
+    <DuwopBoot />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/p9-icon.png" />
     <link rel="apple-touch-icon" href="/p9-icon.png" />
     <title>P9 phone</title>
   </head>
   <body data-view="chat">
+    <div class="fx-ambient"><div class="fx-horizon"></div></div>
     <!-- L2: the P9 mark (p9-icon.svg) moving from first paint until the chat list has loaded, so the page never looks frozen. -->
     <div id="boot" role="status" aria-label="Loading"><svg viewBox="0 0 512 512" aria-hidden="true"><circle class="ring" cx="256" cy="256" r="132" /><path class="p" d="M178 332V180h92c69 0 103 31 103 83 0 51-35 81-104 81h-43v-40h42c38 0 56-13 56-41 0-29-18-43-55-43h-43v112z" /></svg></div>
     <div id="app">

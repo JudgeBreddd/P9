@@ -21,6 +21,8 @@ const BUILD_MS = 20 * 60_000, TURN_POLL_MS = 2000, LOG_TAIL = 4000;
 export const ARCHIVE = 'https://github.com/JudgeBreddd/P9/archive/refs/tags/';
 const SWAP = fileURLToPath(new URL('../../scripts/update-swap.mjs', import.meta.url));
 const refused = (status, error, extra) => ({ status, error, ...extra });
+// The service's PATH is systemd's default, which has no pnpm: install.sh puts it beside this node or in ~/.local/bin.
+export const toolPath = () => [process.env.PATH, path.dirname(process.execPath), path.join(os.homedir(), '.local', 'bin')].filter(Boolean).join(path.delimiter);
 
 // Semver order: a > b. A pre-release sorts below its release; its dot parts compare as numbers when both are digits.
 export function newer(a, b) {
@@ -69,9 +71,7 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
 
   async function log(text) { if (job) { job.log = (job.log + text).slice(-LOG_TAIL); await writeFile(path.join(folder, job.id + '.log'), job.log, { mode: 0o600 }).catch(() => {}); } }
   function run(command, args, cwd, timeout = BUILD_MS) {
-    // The service's PATH is systemd's default, which has no pnpm: install.sh puts it beside this node or in ~/.local/bin.
-    const PATH = [process.env.PATH, path.dirname(process.execPath), path.join(os.homedir(), '.local', 'bin')].filter(Boolean).join(path.delimiter);
-    return new Promise((resolve) => execFile(command, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PATH, CI: '1' } },
+    return new Promise((resolve) => execFile(command, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, PATH: toolPath(), CI: '1' } },
       async (error, stdout, stderr) => { await log('$ ' + [command, ...args].join(' ') + '\n' + stdout + stderr); resolve({ ok: !error, stdout }); }));
   }
 
