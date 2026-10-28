@@ -307,11 +307,13 @@ async function checkoutAt(version, extra) {
 const updateFolder = (instance) => path.join(instance.directory, '.local', 'state', 'p9-foundation', 'update');
 
 test('update, laptop: a version that rolled back, or failed to build, is not sent again on the next connect', { skip, timeout: 60000 }, async (t) => {
+  // The follow loop has no deadline of its own: it ends with the test, so a resend that never restarts cannot hold the run open.
+  const live = () => !t.signal.aborted;
   const instance = await server(t);
   // What the swap leaves after a rollback; the daemon answering is the old one, restarted.
   await until(() => existsSync(updateFolder(instance)), 'the update folder');
   await writeFile(path.join(updateFolder(instance), 'result.json'), JSON.stringify({ id: randomUUID(), version: NEXT, from: VERSION, ok: false, rolledBack: true, reason: 'start-failed', steps: [] }));
-  const again = laptop(instance, { version: NEXT, checkout: await checkoutAt(NEXT) });
+  const again = laptop(instance, { version: NEXT, checkout: await checkoutAt(NEXT), live });
   assert.equal((await again.run()).phase, 'rolled-back');
   assert.deepEqual(again.events.map((e) => [e.phase, e.reason, e.version]), [['rolled-back', 'start-failed', NEXT]]);
   assert.deepEqual([await job(instance) ?? null, await lines(instance.log.pnpm), await readdir(updateFolder(instance))], [null, [], ['result.json']], 'nothing sent, nothing built');
@@ -319,10 +321,10 @@ test('update, laptop: a version that rolled back, or failed to build, is not sen
   // A build that fails: the first connect sends it once; the next one only says so.
   const broken = await server(t);
   const checkout = await checkoutAt(NEXT, { 'fail-build': '' });
-  const first = laptop(broken, { version: NEXT, checkout });
+  const first = laptop(broken, { version: NEXT, checkout, live });
   assert.deepEqual([(await first.run()).phase, first.events.at(-1).error], ['failed', 'build-failed']);
   const built = await lines(broken.log.pnpm);
-  const second = laptop(broken, { version: NEXT, checkout });
+  const second = laptop(broken, { version: NEXT, checkout, live });
   assert.equal((await second.run()).phase, 'failed');
   assert.deepEqual(second.events.map((e) => [e.phase, e.error]), [['failed', 'build-failed']]);
   assert.deepEqual([await lines(broken.log.pnpm), (await readdir(updateFolder(broken))).filter((n) => n.endsWith('.tar.gz'))], [built, []], 'not sent or built again');
