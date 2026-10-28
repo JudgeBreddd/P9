@@ -2371,11 +2371,12 @@ async function loadChat() {
 // over the moving chat's pane, not in it (panes are morphed on every paint), and in its dialog when the pane is in one.
 // ponytail: one move drawn at a time; another chat's events while one is drawn are not drawn (its ledger events still show).
 const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
-const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending the chat to ' + h,
+const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending ' + (fxFiles === FX.id ? 'the files and the chat' : 'the chat') + ' to ' + h,
   landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
 const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 // The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
 // is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
+let fxFiles = null; // the chat whose move sends its folder first, for the uploading words
 async function sendAway(s) {
   let files = [];
   if (window.p9.xferPlan) {
@@ -2392,6 +2393,7 @@ async function sendAway(s) {
       files = [p.id, ...answer];
     }
   }
+  fxFiles = files.length ? s.id : null;
   const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
   if (r.body?.error === 'limit') return xferRefused(r.body);
   // busy: main is moving it already (a window reloaded mid-move); its events draw it.
