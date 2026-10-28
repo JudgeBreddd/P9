@@ -112,6 +112,13 @@ jobs:
         run: set -o pipefail; bash scripts/bare-machine.sh discover 2>&1 | tee "$RUNNER_TEMP/discover.log"
       - name: Static tmux
         run: set -o pipefail; bash scripts/bare-machine.sh tmux "$RUNNER_TEMP/tmux" 2>&1 | tee "$RUNNER_TEMP/tmux.log"
+      # Step B: install.sh as a user meets it on a fresh bare machine each time, answering yes to its admin question.
+      - name: Server install (headless) asks, installs, runs
+        if: always()
+        run: set -o pipefail; bash scripts/bare-machine.sh boot && bash scripts/bare-machine.sh install headless 2>&1 | tee "$RUNNER_TEMP/install-headless.log"
+      - name: Desktop install asks, installs, and its Electron starts
+        if: always()
+        run: set -o pipefail; bash scripts/bare-machine.sh boot && bash scripts/bare-machine.sh install desktop 2>&1 | tee "$RUNNER_TEMP/install-desktop.log"
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -120,6 +127,8 @@ jobs:
           path: |
             ${{ runner.temp }}/discover.log
             ${{ runner.temp }}/tmux.log
+            ${{ runner.temp }}/install-headless.log
+            ${{ runner.temp }}/install-desktop.log
             ${{ runner.temp }}/tmux
           retention-days: 7
           if-no-files-found: warn

@@ -7,6 +7,7 @@ import { readFile, rename, stat, writeFile, mkdir, access } from 'node:fs/promis
 import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { windowsStateRoot } from './windows.mjs';
 
 export const AGENTS = ['claude', 'codex'];
@@ -68,25 +69,62 @@ const LINUX = [
   { id: 'ssh', program: 'ssh', why: 'Server mode and Send to server reach your other machine over SSH. The rest of P9 works without it.',
     packages: { apt: 'openssh-client', dnf: 'openssh-clients', pacman: 'openssh', zypper: 'openssh-clients' } },
 ];
-const MANAGERS = [['apt', '/usr/bin/apt-get', 'sudo apt-get install -y'], ['dnf', '/usr/bin/dnf', 'sudo dnf install -y'],
+// apt: a bare machine has no package lists until an update; ';' so one broken third-party list does not stop the install.
+const MANAGERS = [['apt', '/usr/bin/apt-get', 'sudo apt-get update; sudo apt-get install -y'], ['dnf', '/usr/bin/dnf', 'sudo dnf install -y'],
   ['pacman', '/usr/bin/pacman', 'sudo pacman -S --noconfirm'], ['zypper', '/usr/bin/zypper', 'sudo zypper install -y']];
 export async function packageManager(exists = (file) => access(file, constants.X_OK).then(() => true, () => false)) {
   for (const [name, file, command] of MANAGERS) if (await exists(file)) return { name, command };
   return null;
 }
 
+// Ubuntu 23.10 and newer stop unprivileged user namespaces for any program without an AppArmor profile, and Chromium's
+// sandbox needs one, so the Electron in a clone aborts at start (bare-machine.sh, v0.1.6). The fix is a profile that
+// allows userns for that one file, never --no-sandbox (README). Only for a clone: the AppImage mounts at a random
+// /tmp/.mount_* path that no profile can name, and a daemon copied by the AppImage has no Electron.
+// ponytail: one profile name, so a second clone on the same machine replaces the first one's profile.
+export const PROFILE = '/etc/apparmor.d/p9-electron';
+export const cloneElectron = (root = fileURLToPath(new URL('../../', import.meta.url))) =>
+  path.join(root, 'node_modules', 'electron', 'dist', 'electron');
+export function profileText(electron) {
+  if (/["\\\r\n\x00]/.test(electron)) throw new Error('profile-path-refused');
+  return 'abi <abi/4.0>,\ninclude <tunables/global>\n\n# Written by P9 (item 15): lets P9\'s Electron use its sandbox on Ubuntu 23.10 and newer.\n' +
+    `profile p9-electron "${electron}" flags=(unconfined) {\n  userns,\n}\n`;
+}
+const shellQuote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+export async function sandboxDependency({ electron = cloneElectron(), read = (file) => readFile(file, 'utf8') } = {}) {
+  const restricted = (await read('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').catch(() => '0')).trim() === '1';
+  const text = profileText(electron);
+  // A chrome-sandbox the owner made setuid root (Electron's other documented fix) needs no profile.
+  const setuid = await stat(path.join(path.dirname(electron), 'chrome-sandbox')).then((info) => info.uid === 0 && (info.mode & 0o4000) !== 0, () => false);
+  const ok = !restricted || setuid || await read(PROFILE).then((current) => current === text, () => false);
+  return { id: 'sandbox', ok, admin: !ok,
+    why: "Ubuntu stops P9's window from opening until AppArmor allows its sandbox. This adds a rule for P9's own Electron only.",
+    command: ok ? null : `printf '%s' ${shellQuote(text)} | sudo tee ${PROFILE} >/dev/null && sudo apparmor_parser -r ${PROFILE}` };
+}
+
 // Every dependency and where it stands: { id, ok, why, admin, command }. admin: installing it needs the admin password;
 // command: the one line that does it (null with no known package manager, and for anything P9 itself carries).
-export async function dependencies({ platform = process.platform, env = process.env, home = os.homedir(), manager } = {}) {
+// desktop: also what the window needs (install.sh without --headless; by default, when this clone has an Electron).
+export async function dependencies({ platform = process.platform, env = process.env, home = os.homedir(), manager, desktop, electron = cloneElectron() } = {}) {
   const agents = await Promise.all(AGENTS.map(async (id) => ({ id, ok: await found(id, { platform, env, home }), admin: false, command: null,
     why: id === 'claude' ? 'Claude Code, for Claude chats and a terminal.' : 'Codex, for Codex chats and a terminal.' })));
   if (platform !== 'linux') return agents;
   manager ??= await packageManager();
   const system = await Promise.all(LINUX.map(async ({ id, program, why, packages }) => {
     const ok = await found(program, { platform, env, home });
-    return { id, ok, why, admin: !ok, command: ok || !manager ? null : manager.command + ' ' + packages[manager.name] };
+    return { id, ok, why, admin: !ok, package: manager && packages[manager.name], command: ok || !manager ? null : manager.command + ' ' + packages[manager.name] };
   }));
-  return [...agents, ...system];
+  desktop ??= await executable(electron);
+  return [...agents, ...system, ...desktop ? [await sandboxDependency({ electron })] : []];
+}
+
+// What every update runs after its build (c15's /update, install.sh's update path): the agents the owner picked point
+// at the new version, and the system packages still missing come back with their reasons and commands. It never runs
+// sudo itself; the caller shows the reason first and asks.
+export async function ensureDependencies(options = {}) {
+  const placed = await placeAgents(AGENTS, { refresh: true });
+  const missing = (await dependencies(options)).filter((dependency) => dependency.admin);
+  return { placed, missing };
 }
 
 // The admin command for one dependency, for the wizard's "Run in a terminal": from the table above only.
