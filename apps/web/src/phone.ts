@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, sprintTimes, md, mdReply, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 
@@ -1008,7 +1008,7 @@ async function loadMission(cached = false) {
 }
 // Sprint tracker: a tile while the computer has a sprint status file (404 = none, so no tile); one ring per chunk, the
 // sprint scripts (registry ids sprint-start, sprint-close, sprint-heavy; they ask first like any script) and Open tmux.
-type Sprint = { sprint: string; updatedAt: string; cutoff: string; chunks: { id: string; title: string; state: string; percent: number; waitingOn: string }[] };
+type Sprint = { sprint: string; updatedAt: string; cutoff: string; overall?: number; chunks: { id: string; title: string; state: string; percent: number; waitingOn: string; steps?: string; activity?: string }[] };
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
 async function loadSprint() {
   const target = document.querySelector<HTMLElement>('#sprint');
@@ -1020,13 +1020,14 @@ async function loadSprint() {
     error = body.reason ?? body.error ?? 'unreadable';
   }
   const rings = data ? data.chunks.map((c) => `<div class="spr" data-state="${escape(['running', 'waiting', 'merged', 'blocked'].includes(c.state) ? c.state : 'unknown')}"><div class="ring" role="img" aria-label="${escape(c.id)} ${escape(c.state)} ${c.percent}%" style="--p:${Number(c.percent)}"><b>${Number(c.percent)}%</b></div>`
-    + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
+    + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}${c.activity ? ` · <span data-activity="${escape(c.activity)}">${escape(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${escape(c.steps)}</span>` : ''}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
+  const overall = data && Number.isFinite(data.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${Number(data.overall)}%" style="--p:${Number(data.overall)}" data-overall><b>${Number(data.overall)}%</b></div><div class="spt"><b>Whole sprint</b><small class="muted">${data.chunks.filter((c) => c.state === 'merged').length} of ${data.chunks.length} merged</small></div></div>` : '';
   const scripts = SPRINT_SCRIPTS.map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
     return index < 0 ? `<p class="muted">${label}: add a ${id} button to the registry.</p>` : `<form data-run="${index}"><button type="submit">${label} (asks first)</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`; }).join('');
   const merged = data ? data.chunks.filter((c) => c.state === 'merged').length : 0;
   keepOpen(() => { target.innerHTML = win('sprint', data ? 'Sprint · ' + escape(data.sprint || 'unnamed') : 'Sprint', data ? `${merged}/${data.chunks.length}` : '!',
     data ? `merged · updated ${escape(data.updatedAt || 'unknown')}` : 'status file unreadable',
-    (data ? `<p class="muted">Updated ${escape(data.updatedAt || 'unknown')}${data.cutoff ? ' · cutoff ' + escape(data.cutoff) : ''}</p><div class="springs">${rings}</div>`
+    (data ? `${overall}<p class="muted" data-sprint-times>${escape(sprintTimes(data))}</p><div class="springs">${rings}</div>`
       : `<article class="card warn"><p>The sprint status file is there but P9 cannot read it (${escape(error)}).</p></article>`)
     + `<div class="sprint-acts">${scripts}<button type="button" class="quiet" data-sprint-tmux>Open tmux</button><p class="muted" data-tmux-note></p></div>`, !data); });
 }

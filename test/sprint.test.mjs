@@ -8,16 +8,17 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
+import { sprintTime, sprintTimes } from '../apps/web/src/helpers.mjs';
 
 const skip = process.platform === 'win32' ? 'tmux terminals; Windows has no Open tmux' : false;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // The dev space keeps no files: pictures go out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
 const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
-export const STATUS = { sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', cutoff: '07:00', token: 'not-for-clients', chunks: [
+export const STATUS = { sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', cutoff: '07:00', overall: 61.4, token: 'not-for-clients', chunks: [
   { id: 'c1', title: 'Settings rows (sonnet)', state: 'merged', percent: 100 },
-  { id: 'c2', title: 'Installer (opus)', state: 'running', percent: 40.6 },
-  { id: 'c3', title: 'Phone layout (sonnet)', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue' },
-  { id: 'c4', title: 'x'.repeat(300), state: 'sideways', percent: 150, waitingOn: 5, secret: 'leak' }] };
+  { id: 'c2', title: 'Installer (opus)', state: 'running', percent: 40.6, steps: '3/8', activity: 'testing' },
+  { id: 'c3', title: 'Phone layout (sonnet)', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue', steps: '5/12', activity: 'in line' },
+  { id: 'c4', title: 'x'.repeat(300), state: 'sideways', percent: 150, waitingOn: 5, secret: 'leak', steps: '3 of 8', activity: 'dancing' }] };
 const statusFile = (instance) => path.join(instance.directory, '.local', 'state', 'sprint', 'status.json');
 const writeStatus = async (instance, value) => { await mkdir(path.dirname(statusFile(instance)), { recursive: true }); await writeFile(statusFile(instance), typeof value === 'string' ? value : JSON.stringify(value)); };
 
@@ -56,11 +57,19 @@ test('Sprint route: no file is 404, a file is its known fields cut to size, a br
   await writeStatus(server, STATUS);
   const read = await get();
   assert.equal(read.status, 200);
-  assert.deepEqual(read.body, { sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', cutoff: '07:00', chunks: [
+  assert.deepEqual(read.body, { sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', cutoff: '07:00', overall: 61, chunks: [
     { id: 'c1', title: 'Settings rows (sonnet)', state: 'merged', percent: 100, waitingOn: '' },
-    { id: 'c2', title: 'Installer (opus)', state: 'running', percent: 41, waitingOn: '' },
-    { id: 'c3', title: 'Phone layout (sonnet)', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue' },
+    { id: 'c2', title: 'Installer (opus)', state: 'running', percent: 41, waitingOn: '', steps: '3/8', activity: 'testing' },
+    { id: 'c3', title: 'Phone layout (sonnet)', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue', steps: '5/12', activity: 'in line' },
     { id: 'c4', title: 'x'.repeat(200), state: 'unknown', percent: 100, waitingOn: '' }] });
+  // The feed's fields: a bad steps or activity word is left out (c4 above), a bad overall too, a high one is clamped,
+  // and a file from before the feed has none of the three keys at all.
+  for (const [overall, expected] of [['61', undefined], [150, 100], [-5, 0], [null, undefined]]) {
+    await writeStatus(server, { sprint: 's', chunks: [], overall });
+    assert.equal((await get()).body.overall, expected, 'overall ' + JSON.stringify(overall));
+  }
+  await writeStatus(server, { sprint: 'old', updatedAt: 'now', chunks: [{ id: 'c1', title: 't', state: 'running', percent: 5 }] });
+  assert.deepEqual((await get()).body, { sprint: 'old', updatedAt: 'now', cutoff: '', chunks: [{ id: 'c1', title: 't', state: 'running', percent: 5, waitingOn: '' }] });
   await writeStatus(server, '{"sprint": "half wri');
   assert.deepEqual([(await get()).status, (await get()).body], [422, { error: 'status-unreadable', reason: 'not-json' }]);
   await writeStatus(server, JSON.stringify({ sprint: 'big', chunks: [], pad: 'x'.repeat(300 * 1024) }));
@@ -80,6 +89,21 @@ test('Open tmux: a body is refused; an empty one opens a P9 terminal attached to
   // Run, not only typed: the stand-in session gains a client (the P9 terminal's tmux attach).
   assert.notEqual(await clients(), '', 'nothing attached to the sprint session');
   console.log('PASS open tmux: bodies refused; {} made a terminal whose tmux attach reached the session');
+});
+
+test('Sprint times: an ISO time is the device\'s local time, a day word only when it is not today, other text as written', () => {
+  const now = new Date(2026, 9, 27, 19, 0), at = (day, hour, minute) => new Date(2026, 9, day, hour, minute).toISOString();
+  const clock = (day, hour, minute) => new Date(2026, 9, day, hour, minute).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  assert.equal(sprintTime(at(27, 18, 53), now), clock(27, 18, 53));
+  assert.equal(sprintTime(at(28, 7, 0), now), clock(28, 7, 0) + ' tomorrow');
+  assert.equal(sprintTime(at(26, 22, 30), now), clock(26, 22, 30) + ' yesterday');
+  const later = sprintTime(at(30, 7, 0), now);
+  assert.ok(later.startsWith(clock(30, 7, 0) + ' ') && !/tomorrow|yesterday/.test(later) && /30/.test(later), 'a date, not a day word: ' + later);
+  assert.doesNotMatch(sprintTime(at(27, 18, 53), now), /:\d\d:\d\d|T|Z/, 'no seconds, no raw ISO');
+  assert.equal(sprintTime('07:00', now), '07:00');
+  assert.equal(sprintTimes({ updatedAt: at(27, 18, 53), cutoff: '07:00' }, now), 'Updated ' + clock(27, 18, 53) + ' · cutoff 07:00');
+  assert.equal(sprintTimes({ updatedAt: '' }, now), 'Updated unknown');
+  console.log('PASS sprint times: local time, tomorrow / yesterday / date only off today, words as written');
 });
 
 async function signedInPage(browser, server) {
@@ -115,10 +139,32 @@ test('Phone Sprint window: rings by state, the scripts ask first, Open tmux atta
   assert.deepEqual(await dialog.locator('.spr').evaluateAll((rows) => rows.map((r) => [r.dataset.state, r.querySelector('.ring b').textContent])),
     [['merged', '100%'], ['running', '41%'], ['waiting', '70%'], ['unknown', '100%']]);
   assert.match(await dialog.locator('.spr[data-state="waiting"]').innerText(), /Waiting on: test run 4f2a in the queue/);
+  // The feed's fields: the whole-sprint ring, each chunk's activity and steps, and times a person can read.
+  assert.deepEqual(await dialog.locator('.spall .ring').evaluate((ring) => [ring.querySelector('b').textContent, ring.style.getPropertyValue('--p')]), ['61%', '61']);
+  assert.deepEqual(await dialog.locator('.spr').evaluateAll((rows) => rows.map((r) => [r.querySelector('[data-activity]')?.textContent ?? null, r.querySelector('[data-steps]')?.textContent ?? null])),
+    [[null, null], ['testing', '3/8'], ['in line', '5/12'], [null, null]]);
+  assert.match(await dialog.locator('[data-sprint-times]').innerText(), /^Updated \d{1,2}:\d{2}.* · cutoff 07:00$/);
+  assert.doesNotMatch(await dialog.locator('[data-sprint-times]').innerText(), /\d{4}-\d\d-\d\d|T\d\d:/);
   const colours = await dialog.locator('.spr').evaluateAll((rows) => rows.map((r) => getComputedStyle(r).getPropertyValue('--ring-c').trim()));
   assert.equal(new Set(colours).size, 4, 'each state its own colour: ' + colours);
   assert.ok(await dialog.evaluate((d) => d.querySelector('.wbody').scrollWidth <= d.clientWidth + 1), 'the window is wider than the phone');
   await shot(page, 'phone-sprint-window');
+  // Every activity word the feed writes, drawn from one file (the picture the Builder looks at).
+  await dialog.evaluate((d) => d.close());
+  const words = ['testing', 'in line', 'needs you', 'building', 'idle', 'done'];
+  await writeStatus(server, { sprint: 'Feed sprint', updatedAt: new Date().toISOString(), cutoff: new Date(Date.now() + 86400000).toISOString(), overall: 55,
+    chunks: words.map((activity, n) => ({ id: 'c' + (n + 1), title: 'Chunk ' + activity, state: activity === 'done' ? 'merged' : activity === 'in line' ? 'waiting' : 'running', percent: n * 20, activity, ...(activity === 'idle' ? {} : { steps: n + '/5' }) })) });
+  await page.click('[data-nav="mission"]');
+  await page.locator('#sprint [data-open="sprint"]').click();
+  await dialog.waitFor({ timeout: 5000 });
+  assert.deepEqual(await dialog.locator('.spr [data-activity]').allTextContents(), words);
+  assert.match(await dialog.locator('[data-sprint-times]').innerText(), /^Updated \d{1,2}:\d{2}.* · cutoff \d{1,2}:\d{2}.* tomorrow$/);
+  await shot(page, 'phone-sprint-feed');
+  await dialog.evaluate((d) => d.close());
+  await writeStatus(server, STATUS);
+  await page.click('[data-nav="mission"]');
+  await page.locator('#sprint [data-open="sprint"]').click();
+  await dialog.waitFor({ timeout: 5000 });
   // A script asks first (confirm), then streams its output.
   const asked = [];
   page.on('dialog', (d) => { asked.push(d.message()); d.accept(); });

@@ -518,6 +518,8 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 .spr .spt{display:flex;flex-direction:column;gap:2px;min-width:0}.spr .spt b{font-size:13px;font-weight:600}
 .spr .st{color:var(--ring-c)}.spr .wait{color:var(--muted-foreground);overflow-wrap:anywhere}
 .spr{--ring-c:var(--muted-foreground)}.spr .ring{--ring-c:inherit}
+.spall{display:flex;align-items:center;gap:12px;margin:8px 0 12px}.spall .ring{width:72px;height:72px}.spall .ring b{font-size:15px}.spall .spt{display:flex;flex-direction:column;gap:2px}
+.spr [data-activity]{color:var(--foreground)}.spr [data-activity="needs you"]{color:var(--warn)}.spr [data-steps]{color:var(--muted-foreground);font-variant-numeric:tabular-nums}
 .spr[data-state="merged"]{--ring-c:var(--ok)}.spr[data-state="waiting"]{--ring-c:var(--warn)}
 .spr[data-state="running"]{--ring-c:oklch(0.68 0.15 245)}.spr[data-state="blocked"]{--ring-c:var(--destructive)}
 @media (max-width:520px){.springs{grid-template-columns:minmax(0,1fr)}}

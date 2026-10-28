@@ -35,6 +35,19 @@ export const svg = {
   bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
 };
 export const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// The Sprint tracker's times, readable: an ISO time is the device's local time without seconds ("6:53 PM"), with
+// "tomorrow" / "yesterday" or a short date when the day is not today; anything else (the Builder's "07:00") is shown as written.
+const ISO = /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d/;
+export function sprintTime(value, now = new Date()) {
+  const raw = String(value ?? '').trim(), at = new Date(raw);
+  if (!ISO.test(raw) || Number.isNaN(at.getTime())) return raw;
+  const day = date => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const apart = Math.round((day(at) - day(now)) / 86400000);
+  const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (apart === 0) return time;
+  return time + ' ' + (apart === 1 ? 'tomorrow' : apart === -1 ? 'yesterday' : at.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }));
+}
+export const sprintTimes = (d, now) => `Updated ${sprintTime(d.updatedAt, now) || 'unknown'}${d.cutoff ? ' · cutoff ' + sprintTime(d.cutoff, now) : ''}`;
 // HI1: the hover "i" beside a Settings row (T-tracer's .info). Its tip says what the row does; a click opens that guide section.
 export const info = (tip, section) => `<button class="info" type="button" data-docs="${esc(section)}" aria-label="${esc(tip)}" title="${esc(tip)}">i</button>`;
 

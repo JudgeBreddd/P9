@@ -203,9 +203,11 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   const local = await daemon(t, undefined, false, settings), remote = await daemon(t, undefined, false, settings), s = await stage(remote);
   const status = path.join(remote.directory, '.local', 'state', 'sprint', 'status.json');
   await mkdir(path.dirname(status), { recursive: true });
-  await writeFile(status, JSON.stringify({ sprint: 'Window sprint', updatedAt: '2026-10-27T14:30', cutoff: '07:00', chunks: [
-    { id: 'c1', title: 'Settings rows', state: 'merged', percent: 100 }, { id: 'c2', title: 'Installer', state: 'running', percent: 40 },
-    { id: 'c3', title: 'Phone layout', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue' }] }));
+  await writeFile(status, JSON.stringify({ sprint: 'Window sprint', updatedAt: new Date().toISOString(), cutoff: new Date(Date.now() + 86400000).toISOString(), overall: 70, chunks: [
+    { id: 'c1', title: 'Settings rows', state: 'merged', percent: 100, steps: '8/8', activity: 'done' }, { id: 'c2', title: 'Installer', state: 'running', percent: 40, steps: '3/8', activity: 'testing' },
+    { id: 'c3', title: 'Phone layout', state: 'waiting', percent: 70, waitingOn: 'test run 4f2a in the queue', steps: '5/12', activity: 'needs you' },
+    { id: 'c4', title: 'Rebuild', state: 'running', percent: 10, steps: '1/9', activity: 'building' }, { id: 'c5', title: 'Tests', state: 'waiting', percent: 0, steps: '0/4', activity: 'in line' },
+    { id: 'c6', title: 'Docs', state: 'running', percent: 0, activity: 'idle' }] }));
   const profile = path.join(s.directory, 'profile');
   await mkdir(profile);
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
@@ -220,16 +222,23 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   await page.locator('#rMission').click();
   const tile = page.locator('#fMission [data-sprint]');
   await tile.waitFor({ timeout: 15000 });
-  assert.match(await tile.innerText(), /Sprint status\s+1\/3/);
+  assert.match(await tile.innerText(), /Sprint status\s+1\/6/);
   await shot('desktop-sprint-tile');
   await tile.click();
   const modal = page.locator('#mdl [data-sprint-body]');
   await modal.waitFor({ timeout: 5000 });
   assert.match(await page.locator('#mdlT').innerText(), /Window sprint/);
   assert.deepEqual(await modal.locator('.spr').evaluateAll(rows => rows.map(r => [r.dataset.state, r.querySelector('.ring b').textContent])),
-    [['merged', '100%'], ['running', '40%'], ['waiting', '70%']]);
+    [['merged', '100%'], ['running', '40%'], ['waiting', '70%'], ['running', '10%'], ['waiting', '0%'], ['running', '0%']]);
   assert.match(await modal.innerText(), /Waiting on: test run 4f2a in the queue/);
-  assert.match(await modal.innerText(), /1 of 3 merged/);
+  assert.match(await modal.innerText(), /1 of 6 merged/);
+  // The feed's fields: the whole-sprint ring, every activity word with the steps count, and times a person can read.
+  assert.deepEqual(await modal.locator('.spall .ring').evaluate(ring => [ring.querySelector('b').textContent, ring.style.getPropertyValue('--p')]), ['70%', '70']);
+  assert.deepEqual(await modal.locator('.spr').evaluateAll(rows => rows.map(r => [r.querySelector('[data-activity]').textContent, r.querySelector('[data-steps]')?.textContent ?? null])),
+    [['done', '8/8'], ['testing', '3/8'], ['needs you', '5/12'], ['building', '1/9'], ['in line', '0/4'], ['idle', null]]);
+  const times = await modal.locator('[data-sprint-times]').innerText();
+  assert.match(times, /^Updated \d{1,2}:\d{2}\D*(AM|PM)? · cutoff \d{1,2}:\d{2}\D*(AM|PM)? tomorrow$/i);
+  assert.doesNotMatch(times, /\d{4}-\d\d-\d\d|T\d\d:/);
   const colours = await modal.locator('.spr').evaluateAll(rows => rows.map(r => getComputedStyle(r.querySelector('.ring')).getPropertyValue('--ring-c').trim()));
   assert.equal(new Set(colours).size, 3, 'merged, running and waiting each their own colour: ' + colours);
   // No sprint-close or sprint-heavy in this registry: those buttons are off and say what is missing.

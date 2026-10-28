@@ -1,4 +1,4 @@
-import { popover as createPopover, svg, esc, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { popover as createPopover, svg, esc, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -927,7 +927,8 @@ async function loadSprint() {
   SP.timer = setTimeout(loadSprint, 30000);
 }
 const SPRINT_STATE = { running: 'running', waiting: 'waiting', merged: 'merged', blocked: 'blocked', unknown: 'unknown' };
-const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
+const sprintOverall = d => Number.isFinite(d.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${d.overall}%" style="--p:${d.overall}" data-overall><b>${d.overall}%</b></div><div class="spt"><b>Whole sprint</b><span class="sm muted">${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</span></div></div>` : '';
+const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}${c.activity ? ` · <span data-activity="${esc(c.activity)}">${esc(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${esc(c.steps)}</span>` : ''}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
 // The modal's buttons: each is a registry script (asks first, like any script), found by its fixed id.
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
 const scriptById = id => Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
@@ -1301,7 +1302,7 @@ function missionModal(m, body, row) {
   } else if (m.kind === 'sprint') {
     const d = SP.data;
     $('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
-    body.innerHTML = `<div class="review" data-sprint-body>${d ? `<p class="sm muted">Updated ${esc(d.updatedAt || 'unknown')}${d.cutoff ? ' · cutoff ' + esc(d.cutoff) : ''} · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</p>${sprintRings(d)}`
+    body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
       : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
     $('#mdlFoot').innerHTML = SPRINT_SCRIPTS.map(([id, label]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${id}"${scriptById(id) ? '' : ` disabled title="Add a ${id} button to the registry"`}>${label}</button>`).join('')
       + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
