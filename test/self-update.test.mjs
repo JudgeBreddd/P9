@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import http2 from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,7 +53,7 @@ async function archive(version, extra) {
 }
 
 // A daemon whose update root is a stand-in checkout of its own version, with stand-in pnpm and systemd-run.
-async function server(t, { remote = false, args = [] } = {}) {
+async function server(t, { remote = false, args = [], systemdRun = '' } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-'));
   const source = path.join(directory, 'share', 'source'), bin = path.join(directory, 'bin');
   await tree(source, VERSION);
@@ -61,8 +61,8 @@ async function server(t, { remote = false, args = [] } = {}) {
   const log = { pnpm: path.join(directory, 'pnpm.log'), run: path.join(directory, 'systemd-run.log') };
   // pnpm: notes each call and marks the tree built; a tree with a fail-build file fails.
   await sh(path.join(bin, 'pnpm'), `echo "$PWD $*" >> '${log.pnpm}'\n[ -e fail-build ] && { echo 'build broke' >&2; exit 1; }\necho built > built-$1\n`);
-  // systemd-run: notes its argv (the swap command) and starts nothing.
-  await sh(path.join(bin, 'systemd-run'), `printf '%s\\n' "$*" >> '${log.run}'\n`);
+  // systemd-run: notes its argv (the swap command) and starts nothing, or what systemdRun says.
+  await sh(path.join(bin, 'systemd-run'), `printf '%s\\n' "$*" >> '${log.run}'\n` + systemdRun);
   // Settings as mission.test.mjs's teammate has them, so the phone's Mission tab answers.
   const setup = async ({ directory: home, workspace }) => {
     for (const folder of ['_waiting', 'hub', 'projects']) await mkdir(path.join(workspace, folder));
@@ -295,4 +295,69 @@ test('update swap: a new tree that does not start goes aside and the old checkou
   assert.equal(await versionOf(path.join(stage.directory, result.failed)), NEXT);
   assert.ok(result.failed.startsWith('source.failed-' + NEXT + '-'));
   assert.deepEqual(await lines(stage.log), ['--user start test', '--user restart p9-test', '--user restart p9-test']);
+});
+
+// Review r3 (2026-10-28), findings 1 to 3.
+async function checkoutAt(version, extra) {
+  const checkout = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-checkout-'));
+  await tree(checkout, version, extra);
+  for (const args of [['init', '-q'], ['add', '-A'], ['commit', '-qm', 'next']]) execFileSync('git', ['-C', checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args]);
+  return checkout;
+}
+const updateFolder = (instance) => path.join(instance.directory, '.local', 'state', 'p9-foundation', 'update');
+
+test('update, laptop: a version that rolled back, or failed to build, is not sent again on the next connect', { skip, timeout: 60000 }, async (t) => {
+  // The follow loop has no deadline of its own: it ends with the test, so a resend that never restarts cannot hold the run open.
+  const live = () => !t.signal.aborted;
+  const instance = await server(t);
+  // What the swap leaves after a rollback; the daemon answering is the old one, restarted.
+  await until(() => existsSync(updateFolder(instance)), 'the update folder');
+  await writeFile(path.join(updateFolder(instance), 'result.json'), JSON.stringify({ id: randomUUID(), version: NEXT, from: VERSION, ok: false, rolledBack: true, reason: 'start-failed', steps: [] }));
+  const again = laptop(instance, { version: NEXT, checkout: await checkoutAt(NEXT), live });
+  assert.equal((await again.run()).phase, 'rolled-back');
+  assert.deepEqual(again.events.map((e) => [e.phase, e.reason, e.version]), [['rolled-back', 'start-failed', NEXT]]);
+  assert.deepEqual([await job(instance) ?? null, await lines(instance.log.pnpm), await readdir(updateFolder(instance))], [null, [], ['result.json']], 'nothing sent, nothing built');
+
+  // A build that fails: the first connect sends it once; the next one only says so.
+  const broken = await server(t);
+  const checkout = await checkoutAt(NEXT, { 'fail-build': '' });
+  const first = laptop(broken, { version: NEXT, checkout, live });
+  assert.deepEqual([(await first.run()).phase, first.events.at(-1).error], ['failed', 'build-failed']);
+  const built = await lines(broken.log.pnpm);
+  const second = laptop(broken, { version: NEXT, checkout, live });
+  assert.equal((await second.run()).phase, 'failed');
+  assert.deepEqual(second.events.map((e) => [e.phase, e.error]), [['failed', 'build-failed']]);
+  assert.deepEqual([await lines(broken.log.pnpm), (await readdir(updateFolder(broken))).filter((n) => n.endsWith('.tar.gz'))], [built, []], 'not sent or built again');
+});
+
+test('update: two commits at once start one build; the second is refused update-running', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  // Big enough that hashing the staged archive takes several ticks, the window the second commit used to get through.
+  const pushed = await archive(NEXT, { noise: randomBytes(12 * 1024 * 1024).toString('base64') });
+  const id = randomUUID();
+  for (let offset = 0; offset < pushed.data.length; offset += PIECE) {
+    assert.equal((await call(instance, '/update/' + id + '/part', 'POST', { offset, data: pushed.data.subarray(offset, offset + PIECE).toString('base64') })).status, 200);
+  }
+  const body = { version: NEXT, bytes: pushed.data.length, sha256: pushed.sha256 };
+  const both = await Promise.all([call(instance, '/update/' + id + '/commit', 'POST', body), call(instance, '/update/' + id + '/commit', 'POST', body)]);
+  assert.deepEqual(both.map((r) => r.status).sort(), [202, 409], JSON.stringify(both));
+  assert.equal(both.find((r) => r.status === 409).error, 'update-running');
+  await until(async () => (await job(instance))?.phase === 'restarting', 'the one build handed over');
+  assert.deepEqual((await lines(instance.log.pnpm)).map((l) => l.split(' ')[1]), ['install', 'build'], 'one build');
+});
+
+test('update: a swap that fails before any restart gives new starts back, and the daemon answers a prompt', { skip, timeout: 60000 }, async (t) => {
+  // systemd-run starts the real swap after taking its --next folder away, so its rename fails (swap-failed).
+  const instance = await server(t, { systemdRun: 'while [ "$1" != -- ]; do shift; done; shift\nn=; p=; for a in "$@"; do [ "$p" = --next ] && n=$a; p=$a; done\n'
+    + 'rm -rf "$n"\n"$@" </dev/null >/dev/null 2>&1 &\n' });
+  const pushed = await push(instance, await archive(NEXT), NEXT);
+  assert.equal(pushed.status, 202, JSON.stringify(pushed));
+  const failed = await until(async () => { const j = await job(instance); return j?.phase === 'failed' && j; }, 'the job failed with the swap');
+  assert.equal(failed.error, 'swap-failed');
+  const result = JSON.parse(await readFile(path.join(updateFolder(instance), 'result.json'), 'utf8'));
+  assert.deepEqual([result.id, result.ok, result.reason], [pushed.id, false, 'swap-failed']);
+  assert.equal(await versionOf(instance.source), VERSION, 'the checkout is where it was');
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  const prompt = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
+  assert.equal(prompt.status, 202, JSON.stringify(prompt));
 });

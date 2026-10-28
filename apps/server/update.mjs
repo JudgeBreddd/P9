@@ -130,6 +130,16 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
         process.execPath, SWAP, '--root', root, '--next', next, '--version', job.version, '--from', version, '--id', job.id,
         '--state', state, '--result', path.join(folder, 'result.json'), '--service', unit], parent, 30_000);
       if (!started.ok) return fail('restart-not-started');
+      // A swap that fails before any restart (swap-failed) leaves this process running and held: hand the starts back and
+      // say why. A restart ends this process, and this watch with it. ponytail: 15 minutes, past the swap's longest path
+      // (two restarts of up to 120 s, two 60 s health waits).
+      const current = job;
+      for (const end = Date.now() + 15 * 60_000; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 1000))) {
+        const result = await readFile(path.join(folder, 'result.json'), 'utf8').then(JSON.parse, () => null);
+        if (result?.id !== current.id) continue;
+        if (!result.ok) { lifecycle.release?.('updating'); Object.assign(current, { phase: 'failed', error: String(result.reason ?? 'swap-failed').slice(0, 100) }); }
+        return;
+      }
     } catch (error) { await fail('update-failed', { detail: String(error?.message ?? error).slice(0, 300) }); }
   }
   function start(id, target, commit, archiveFile) {
@@ -153,7 +163,9 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
         || (body.commit !== undefined && !COMMIT.test(body.commit))) return refused(400, 'request-refused');
       const refusal = gate(body.version);
       if (refusal) return refusal;
-      if (!await checkStaged(staged(id), body.bytes, body.sha256)) return refused(409, 'incomplete');
+      // The job exists before the hash read, as fetch's does: a second commit meanwhile gets update-running, not a second build.
+      job = { id, phase: 'checking', version: body.version, from: version, turns: 0, missing: [], log: '', started: Date.now() };
+      if (!await checkStaged(staged(id), body.bytes, body.sha256)) { Object.assign(job, { phase: 'failed', error: 'incomplete' }); return refused(409, 'incomplete'); }
       return start(id, body.version, body.commit, staged(id));
     },
     // A packaged app (answer 7): it has no checkout to push, so this daemon downloads its version's source archive.
