@@ -52,6 +52,19 @@ export async function updateServer({ state, check, version, checkout, host, tell
   const status = await daemonRequest(state, 'GET', '/update/status').catch(() => null);
   if (status?.status !== 200) return { phase: 'unknown' };
   if (!status.body.supported) return tell({ phase: 'unsupported', host, server: health.version, app: target.version }) ?? { phase: 'unsupported' };
+  // A version this server already tried and could not start or build is not sent again on every connect (each try is a
+  // rebuild, and a rollback two restarts): only a newer target tries again. A lost piece or download does retry.
+  const { job: prior, result: tried } = status.body;
+  if (tried?.version === target.version && !tried.ok) {
+    const event = { phase: 'rolled-back', host, version: target.version, reason: tried.reason, rolledBack: tried.rolledBack, steps: tried.steps };
+    tell(event);
+    return event;
+  }
+  if (prior?.phase === 'failed' && prior.version === target.version && !['incomplete', 'download-failed'].includes(prior.error)) {
+    const event = { phase: 'failed', host, version: target.version, error: prior.error, log: prior.logTail };
+    tell(event);
+    return event;
+  }
   let started = status.body.job && !['failed'].includes(status.body.job.phase) ? { status: 202, body: status.body.job } : null;
   if (!started) started = checkout ? await push(state, checkout, target) : await daemonRequest(state, 'POST', '/update/fetch', { version: target.version }, undefined, LONG);
   if (started.status !== 202) return tell({ phase: 'failed', host, version: target.version, error: started.body?.error ?? 'update-refused' }) ?? { phase: 'failed' };
