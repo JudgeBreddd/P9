@@ -231,12 +231,13 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(cached.status, 0, cached.stdout + cached.stderr);
   assert.match(cached.log, /^p9node scripts\/deps\.mjs\npnpm install --frozen-lockfile\npnpm build\np9node /, 'a second run reuses the downloaded Node');
 
-  await rm(path.join(bin, 'tmux'));
-  const noTmux = run();
-  assert.equal(noTmux.status, 1);
-  assert.match(noTmux.stdout, /MISSING: tmux\b/);
-  assert.equal(noTmux.log, '', 'nothing installed with a tool missing');
-  await stub('tmux', 'exit 0');
+  // Item 15: tmux is no longer one of these; scripts/deps.mjs asks for it with its reason (deps.test.mjs, bare-machine.sh).
+  await rm(path.join(bin, 'systemctl'));
+  const noTool = run();
+  assert.equal(noTool.status, 1);
+  assert.match(noTool.stdout, /MISSING: systemctl\b/);
+  assert.equal(noTool.log, '', 'nothing installed with a tool missing');
+  await stub('systemctl', 'exit 0');
 
   // No pnpm and a global npm install that needs root: the ~/.local fallback is used and the run carries on.
   await rm(path.join(bin, 'pnpm'));
