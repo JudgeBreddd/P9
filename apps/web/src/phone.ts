@@ -12,7 +12,7 @@ import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
-type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null } };
+type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
 type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | null; sevenDay: { usedPercent: number; resetsAt: number | null } | null; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -249,7 +249,13 @@ async function replay() {
 }
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }
-  else { await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen)); }
+  else {
+    await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen));
+    // P18: a Stop hands back the messages still held for its turn (as the desktop does): they go back in the box.
+    const box = one<HTMLTextAreaElement>('#prompt'), open = one<HTMLSelectElement>('#conversation').value;
+    for (const event of state.events) if (Number(event.cursor) > state.seen && event.type === 'unheld' && (event.data as Json)?.why === 'cancelled' && String(event.conversation) === open)
+      box.value = String((event.data as Json).text) + (box.value ? '\n' + box.value : '');
+  }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
 }
 // P20: a tail read's events go in once each, in cursor order. older holds, per chat, the first cursor read when
@@ -662,7 +668,9 @@ function label() {
   box.style.height = 'auto'; box.style.height = box.scrollHeight + box.offsetHeight - box.clientHeight + 'px';
   send.dataset.stop = String(busy && empty);
   one('#send .vh').textContent = busy ? (empty ? 'Stop' : 'Steer') : local ? 'Queue message' : 'Send message';
-  one<HTMLButtonElement>('button[form="composer"][data-when="queue"]').hidden = !busy || empty;
+  // P18: the slim card over the box says a send goes into a running turn, and how (Steer is the arrow's default).
+  one<HTMLElement>('#midTurn').hidden = !busy || empty;
+  one('#midTurnLabel').textContent = (provider(id) === 'codex' ? 'Codex' : 'Claude') + ' is working';
 }
 function renderQueue() {
   const id = one<HTMLSelectElement>('#conversation').value, items = queued(id), held = [...turn(id).held], box = one<HTMLElement>('#queued');
@@ -736,10 +744,19 @@ one<HTMLFormElement>('#composer').onsubmit = async (event) => {
     if (images.length) { note('Not sent: images go only with a message sent now. Send again when the agent is free' + (navigator.onLine ? '.' : ' and the phone is online.')); return; }
     keepQueue(id, [...queued(id), { qid: crypto.randomUUID(), ...body }]); if (art === null) input.value = ''; renderQueue(); label(); void drain(); return true;
   }
+  if (submitter?.dataset.when === 'now' && running(id)) {
+    // P18: Interrupt, as the desktop's Ctrl Enter: the turn stops, then this goes as the next prompt. The daemon refuses a
+    // prompt while the stopped turn is still ending, so the text stays in the box until the turn has ended.
+    note('Stopping this turn, then sending.');
+    const stopped = await mutate('/chat/' + encodeURIComponent(id) + '/cancel', {});
+    if (stopped.status !== 200 && stopped.body.error !== 'no-turn') { note(`Not sent: the turn did not stop (${stopped.body.error ?? stopped.status}). Your message is still in the box.`); return; }
+    for (const end = Date.now() + 20000; running(id) && Date.now() < end;) { await fetchEvents(1000); await new Promise((done) => setTimeout(done, 250)); }
+    if (running(id)) { note('Not sent: the turn is still stopping. Your message is still in the box; send it again in a moment.'); render(); return; }
+  }
   const when = running(id) ? (submitter?.dataset.when ?? 'steer') : undefined;
   const result = await mutate('/chat/' + encodeURIComponent(id) + '/prompt', { ...body, ...(when && { when }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) });
   // A refused send says so; it used to leave the box filled with no sign anything happened.
-  if (result.status === 202) { if (art === null) { input.value = ''; attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
+  if (result.status === 202) { if (art === null) { input.value = input.value.replace(text, '').trim(); attached.delete(id); } label(); note(); renderAttached(); await fetchEvents(); render(); return true; }
   else note(result.body.error === 'updating' ? 'Not sent: P9 is updating and restarts in a moment. Send again in a minute.' : `Not sent: ${result.body.error ?? result.status}`);
 };
 // Why a message or image did not go, under the box (a line in the chat was wiped by the next redraw); a send clears it.
@@ -1300,12 +1317,79 @@ async function refreshing(button: HTMLButtonElement, load: () => Promise<unknown
   button.setAttribute('aria-busy', 'true'); button.disabled = true;
   try { await Promise.all([load(), new Promise((resolve) => setTimeout(resolve, 500))]); } finally { button.removeAttribute('aria-busy'); button.disabled = false; }
 }
+// P9 (threat model row 31): sign in to Claude or Codex from the phone, the wizard's own login on the daemon's machine. The
+// daemon hands over only a vendor's sign-in URL and Codex's code; the link is set as a property and opens only on a tap.
+type SignIn = { signedIn: boolean; running: boolean; url: string | null; code: string | null; unsupported: boolean; exit: number | null };
+const SIGN_IN: [agent: 'claude' | 'codex', name: string, page: string][] = [['claude', 'Claude', 'Claude'], ['codex', 'Codex', 'OpenAI']];
+let signInShown = '', signInTimer = 0, signInData: Record<string, SignIn> | null = null;
+const signInNote: Record<string, string> = {};
+async function loadSignIn() {
+  clearTimeout(signInTimer);
+  const box = one('#signIn');
+  // Unreachable after a first answer: the cards stay as last seen (a code typed in the box with them) and say so.
+  let stale = false;
+  try { signInData = await request('/phone/sign-in'); }
+  catch { stale = true; }
+  const data = signInData;
+  if (!data) { box.innerHTML = '<article class="card warn"><h2>Sign-in unavailable</h2><p>The daemon did not answer.</p></article>'; signInShown = ''; return; }
+  const key = JSON.stringify([data, signInNote, stale]);
+  if (key !== signInShown) {
+    signInShown = key;
+    const typed = box.querySelector<HTMLInputElement>('[data-sign-code]')?.value ?? '';
+    box.innerHTML = (stale ? '<p class="muted card">The daemon did not answer: this is the last sign-in state it sent.</p>' : '') + SIGN_IN.map(([agent, name, page]) => {
+      const s = data[agent], note = signInNote[agent];
+      const ended = !s.running && s.exit !== null && !s.signedIn;
+      const said = s.unsupported ? `This Codex has no sign-in with a code (P9 was built with Codex 0.159.3, which has one). Sign in from the desktop's Sign in in a terminal and follow what Codex prints there.`
+        : ended ? `${name} sign-in ended without signing in. Sign in starts it again; finish on ${page}'s page before it ends.` : '';
+      const running = !s.running ? '' : !s.url ? '<p class="muted">Starting sign-in…</p>'
+        : `<p><a data-sign-link="${agent}" target="_blank" rel="noopener noreferrer"></a></p>`
+          + (agent === 'codex' ? (s.code ? `<p class="muted">Enter this one-time code there. It lasts 15 minutes.</p><p class="sign-code"><code>${escape(s.code)}</code></p>` : '<p class="muted">Getting a code…</p>')
+            : `<p class="muted">After you sign in, Claude shows a code. Paste it here.</p><form class="sign-form" data-sign-send="${agent}"><input data-sign-code autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Claude's code" placeholder="Code from Claude" maxlength="512"><button type="submit">Send code</button></form>`);
+      const act = s.running ? `<button type="button" data-sign="stop:${agent}">Cancel</button>`
+        : `<button type="button" data-sign="start:${agent}">${s.signedIn || ended ? 'Sign in again' : 'Sign in'}</button>`;
+      return `<article class="card sign-in${said || note ? ' warn' : ''}" data-agent="${agent}"><h2>${name} <small>${s.signedIn ? 'Signed in' : 'Not signed in'}</small></h2>${running}`
+        + (said ? `<p>${escape(said)}</p>` : '') + (note ? `<p>${escape(note)}</p>` : '') + `<div class="sign-acts">${act}</div></article>`;
+    }).join('');
+    for (const link of box.querySelectorAll<HTMLAnchorElement>('[data-sign-link]')) {
+      const agent = link.dataset.signLink as 'claude' | 'codex';
+      link.href = data[agent].url!;
+      link.textContent = `Open ${SIGN_IN.find(([a]) => a === agent)![2]}'s sign-in page`;
+    }
+    const input = box.querySelector<HTMLInputElement>('[data-sign-code]');
+    if (input) input.value = typed;
+  }
+  if (SIGN_IN.some(([agent]) => data[agent].running) && !one<HTMLElement>('[data-view="usage"]').hidden) signInTimer = window.setTimeout(() => void loadSignIn(), 2000);
+}
+async function signIn(path: string, body: Json, agent: string) {
+  try {
+    const { status, body: result } = await mutate(path, body);
+    signInNote[agent] = status < 300 ? '' : result.error === 'login-running' ? 'A sign-in is already running.' : result.error === 'login-not-running' ? 'That sign-in has ended. Sign in starts a new one.'
+      : 'The daemon refused that (' + String(result.error ?? status) + ').';
+    return status < 300;
+  } catch (error) {
+    signInNote[agent] = (error as Error).message === 'offline' ? 'You are offline. Nothing was sent; try again when back online.' : 'The daemon did not answer. Try again.';
+    return false;
+  } finally { void loadSignIn(); }
+}
+one('#signIn').addEventListener('click', (event) => {
+  const [act, agent] = ((event.target as Element).closest<HTMLElement>('[data-sign]')?.dataset.sign ?? '').split(':');
+  if (act) void signIn(act === 'start' ? '/phone/sign-in' : '/phone/sign-in/stop', { agent }, agent);
+});
+one('#signIn').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.target as HTMLFormElement, agent = form.dataset.signSend!, input = form.querySelector<HTMLInputElement>('[data-sign-code]')!;
+  const code = input.value.trim();
+  if (!code) return;
+  // The typed code stays in the box until the daemon takes it.
+  if (await signIn('/phone/sign-in/code', { agent, code }, agent)) input.value = '';
+});
 async function loadUsage() {
+  void loadSignIn();
   try {
     const data = await request('/usage') as Usage;
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
     // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two rings under its age.
-    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
+    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
     const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
     if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>'; return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';

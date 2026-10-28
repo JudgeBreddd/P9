@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
-import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave } from '../../packages/protocol/index.mjs';
+import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
@@ -327,10 +327,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until'), tail = c.req.query('tail');
     return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail))); });
+  // P8: a signed-out Codex has no plan figure (its old sessions would show one months old) and is named signed out. Claude
+  // is left out: on a Mac its login is in the Keychain, so a missing credentials file says nothing.
   api.get('/usage', async (c) => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
-    return c.json({ ...usage, ...(contexts && { contexts }), limits: await planLimits({ home: os.homedir(), claudeLive }) });
+    const limits = await planLimits({ home: os.homedir(), claudeLive }), signedOut = (await signedIn()).codex ? [] : ['codex'];
+    return c.json({ ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } });
   });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
@@ -565,6 +568,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const own = await existing();
     return Object.fromEntries(Object.entries(own).filter(([key, value]) => loaded[key] !== value));
   };
+  // Whether each agent is signed in: its credentials file exists (never read).
+  const signedIn = async () => ({ claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')),
+    codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')) });
   app.get('/setup', async (c) => {
     const disk = await settingsOnDisk(), empty = !(await readdir(workspace)).length;
     // A settings file (loaded or on disk) decides the paths. Without one: an empty folder gets the starter paths, any other
@@ -582,7 +588,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
       // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
-      claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')),
+      ...await signedIn(),
       // D8: each agent's own CLI, for a terminal and Hand off (chats use the CLI the adapter ships, so they work without it).
       claudeCli: await onPath('claude'), codexCli: await onPath('codex'),
       // Item 15: every dependency, its reason and, for a system package, the admin command (deps.mjs).
@@ -872,8 +878,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     remoteApp.get('/_astro/:file', async (c) => {
       const file = c.req.param('file');
       if (!/^[a-zA-Z0-9_.-]+$/.test(file)) return c.json({ error: 'request-refused' }, 400);
+      // P1: build files are named by their content, so the phone keeps them (every open read 1 MB again under no-store).
       return c.body(await readAsset(path.join(webRoot, '_astro', file)), 200,
-        { 'content-type': types[path.extname(file)] ?? 'application/octet-stream' });
+        { 'content-type': types[path.extname(file)] ?? 'application/octet-stream', 'cache-control': 'private, max-age=31536000, immutable' });
     });
     // Self-lock answers on its own socket, so that one is spared; every other socket of the device closes.
     remoteApp.post('/lock', (c) => {
@@ -892,6 +899,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       building = rebuild(c.get('device')).finally(() => { building = null; });
       return reply(c, await building);
     });
+    // P9 (threat model row 31): the phone's sign-in, the wizard's own login. The phone has no main, so the daemon checks
+    // the URL and the code itself; POST answers carry neither, since the operations ledger keeps them.
+    remoteApp.get('/phone/sign-in', async (c) => {
+      const state = chat.login.state(), on = await signedIn();
+      c.header('cache-control', 'no-store');
+      return c.json(Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map((agent) => { const l = state[agent]; return [agent, { signedIn: on[agent],
+        running: l.running, url: typeof l.url === 'string' ? signInUrl(agent, l.url) : null, code: agent === 'codex' && DEVICE_CODE.test(l.code ?? '') ? l.code : null,
+        unsupported: l.unsupported, exit: l.exit }]; })));
+    });
+    remoteApp.post('/phone/sign-in', async (c) => reply(c, await chat.login.start(await json(c))));
+    remoteApp.post('/phone/sign-in/code', async (c) => reply(c, chat.login.code(await json(c))));
+    remoteApp.post('/phone/sign-in/stop', async (c) => reply(c, await chat.login.stop(await json(c))));
     remoteApp.route('/', api);
     const remoteServer = createServer(options, getRequestListener(remoteApp.fetch));
     remoteServer.on('upgrade', (request, socket, head) => {

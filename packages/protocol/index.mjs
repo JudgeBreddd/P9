@@ -22,3 +22,12 @@ export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here an
   + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons.\n\n'
   + 'With it off, one wrong save can break those files, and anyone holding your unlocked, paired phone can read or change them, keys included.\n\n'
   + 'Agents, terminals and editor extensions are not affected: they can already change any file you can. You can turn protection back on any time in Settings.';
+
+// Agent sign-in (threat model row 31): a sign-in URL leaves the daemon (phone) or main (desktop) only if its parsed origin is
+// exactly that vendor's sign-in page (no prefix match: claude.com.evil.example and claude.com@evil.example fail), and Codex's
+// one-time code only when it has exactly a code's shape.
+export const SIGN_IN_ORIGINS = Object.freeze({ claude: ['https://claude.com', 'https://claude.ai', 'https://console.anthropic.com'], codex: ['https://auth.openai.com'] });
+export const DEVICE_CODE = /^[A-Z0-9]{4,8}-[A-Z0-9]{4,8}$/;
+export function signInUrl(agent, text) {
+  try { const url = new URL(text); return Object.hasOwn(SIGN_IN_ORIGINS, agent) && SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; }
+}
