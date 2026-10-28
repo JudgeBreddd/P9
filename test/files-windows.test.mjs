@@ -4,9 +4,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { open, writeFile, readFile as diskRead, symlink, link, mkdir, rename, readdir, realpath } from 'node:fs/promises';
+import { open, writeFile, readFile as diskRead, symlink, link, mkdir, mkdtemp, rename, readdir, realpath } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { readFile, listDirectory, guardedSave, hash } from '../packages/files/index.mjs';
+import { readFile, listDirectory, guardedSave, hash, replaceFile, removeFile } from '../packages/files/index.mjs';
+import { createXfer } from '../apps/server/xfer.mjs';
 import { fixture, externalEdit } from './helpers.mjs';
 import { MAX_BYTES } from '../packages/protocol/index.mjs';
 
@@ -334,4 +336,94 @@ test('Sol round 7: a save temp with a widened DACL still cannot be opened by any
     await assert.rejects(open(path.join(workspace, name), 'r'), { code: 'EBUSY' }); // ...but the handle shares nothing
   } finally { await win.unlinkAt(safe.parent, name).catch(() => {}); await safe.close(); }
   assert.deepEqual((await readdir(workspace)).filter((entry) => entry.startsWith('.p9-')), []);
+});
+
+// Item 23, Keep the server's onto a Windows laptop (Builder, 2026-10-27: build it): the tunnel send's writes on NT handles.
+test('Windows tunnel send: replaceFile and removeFile land whole files, keep old copies, and refuse what Linux refuses', { skip, timeout: 60000 }, async () => {
+  const { workspace, recovery } = await canonicalFixture();
+  const staging = await mkdtemp(path.join(path.dirname(workspace), 'staged-'));
+  const stage = async (content) => { const file = path.join(staging, randomUUID()); await writeFile(file, content); return file; };
+  const tag = 'send-' + Date.now(), at = (name) => path.join(workspace, ...name.split('/'));
+  const kept = (name) => diskRead(path.join(recovery, 'replaced', tag, ...name.split('/')), 'utf8');
+
+  // Replace: the new bytes land, the old ones are in recovery first.
+  assert.deepEqual(await replaceFile(workspace, 'note.txt', await stage('from the server'), hash('original'), recovery, tag),
+    { kind: 'written', recovery: path.join('replaced', tag, 'note.txt') });
+  assert.equal(await diskRead(at('note.txt'), 'utf8'), 'from the server');
+  assert.equal(await kept('note.txt'), 'original');
+  // A new file in folders that do not exist yet; one bigger than a copy piece.
+  assert.deepEqual(await replaceFile(workspace, 'new/deep/a.md', await stage('new'), null, recovery, tag), { kind: 'written' });
+  assert.equal(await diskRead(at('new/deep/a.md'), 'utf8'), 'new');
+  const big = Buffer.alloc(3 * 1024 * 1024 + 5, 7);
+  big.write('start', 0);
+  assert.equal((await replaceFile(workspace, 'big.bin', await stage(big), null, recovery, tag)).kind, 'written');
+  assert.ok((await diskRead(at('big.bin'))).equals(big));
+
+  // Changed since the plan, or a new name that exists now: nothing written.
+  assert.deepEqual(await replaceFile(workspace, 'note.txt', await stage('late'), hash('original'), recovery, tag), { kind: 'changed' });
+  assert.deepEqual(await replaceFile(workspace, 'big.bin', await stage('late'), null, recovery, tag), { kind: 'changed' });
+  assert.equal(await diskRead(at('note.txt'), 'utf8'), 'from the server');
+  // A case variant of an existing name is that file on Windows: refused, not replaced.
+  await refused(replaceFile(workspace, 'NOTE.txt', await stage('x'), hash('from the server'), recovery, tag), 'path-changed');
+  // A junction on the way, inside or out: refused, nothing created behind it.
+  await mkdir(at('real'));
+  await symlink(at('real'), at('junc'), 'junction');
+  await refused(replaceFile(workspace, 'junc/x.md', await stage('x'), null, recovery, tag), 'ELOOP');
+  await refused(removeFile(workspace, 'junc/x.md', hash('x'), recovery, tag), 'ELOOP');
+  assert.deepEqual(await readdir(at('real')), []);
+  // A file where a folder must be, a hardlinked file, a locked name.
+  await refused(replaceFile(workspace, 'note.txt/x.md', await stage('x'), null, recovery, tag), ['ENOTDIR', 'EEXIST', 'ENOENT']);
+  await writeFile(at('h.txt'), 'linked');
+  await link(at('h.txt'), at('h2.txt'));
+  await refused(replaceFile(workspace, 'h.txt', await stage('x'), hash('linked'), recovery, tag), 'unsafe-file');
+  await refused(removeFile(workspace, 'h.txt', hash('linked'), recovery, tag), 'unsafe-file');
+  assert.equal(await diskRead(at('h2.txt'), 'utf8'), 'linked');
+  await refused(replaceFile(workspace, '.env', await stage('x'), null, recovery, tag), 'locked-path');
+
+  // A protected owner-only DACL stays (the temp takes the file's owner and DACL, as a save's does).
+  const sddl = (file) => fullSddl(file).replace(/^O:.*?(?=D:)/, '');
+  await writeFile(at('private.txt'), 'private');
+  execFileSync('icacls', [at('private.txt'), '/inheritance:r', '/grant:r', process.env.USERNAME + ':F'], { stdio: 'ignore' });
+  const before = sddl(at('private.txt'));
+  assert.equal((await replaceFile(workspace, 'private.txt', await stage('private 2'), hash('private'), recovery, tag)).kind, 'written');
+  assert.equal(sddl(at('private.txt')).replace(/^D:[A-Z]*/, ''), before.replace(/^D:[A-Z]*/, ''));
+  assert.ok(sddl(at('private.txt')).startsWith('D:P'));
+
+  // Remove: deleted through the held handle, the old copy kept; changed refused; already gone is gone.
+  assert.deepEqual(await removeFile(workspace, 'new/deep/a.md', hash('new'), recovery, tag),
+    { kind: 'removed', recovery: path.join('replaced', tag, 'new', 'deep', 'a.md') });
+  assert.deepEqual(await readdir(at('new/deep')), []);
+  assert.equal(await kept('new/deep/a.md'), 'new');
+  assert.deepEqual(await removeFile(workspace, 'big.bin', hash('other'), recovery, tag), { kind: 'changed' });
+  assert.deepEqual(await removeFile(workspace, 'nothing.md', hash('x'), recovery, tag), { kind: 'gone' });
+  assert.deepEqual(await removeFile(workspace, 'nowhere/x.md', hash('x'), recovery, tag), { kind: 'gone' });
+  // A file another process holds open for writing is not hashed and deleted under it: the guard's handle shares no writes.
+  const writer = await open(at('big.bin'), 'r+');
+  try { await refused(removeFile(workspace, 'big.bin', hash(big), recovery, tag), ['EBUSY', 'EACCES']); }
+  finally { await writer.close(); }
+  assert.ok((await diskRead(at('big.bin'))).equals(big));
+
+  const temps = (await readdir(workspace, { recursive: true })).filter((name) => path.basename(name).startsWith('.p9-'));
+  assert.deepEqual(temps, []);
+});
+
+test('Windows tunnel send: the laptop daemon stages the server\'s copy in pieces and commits it (Keep the server\'s)', { skip, timeout: 60000 }, async () => {
+  const { workspace, recovery } = await canonicalFixture();
+  const xfer = createXfer({ workspace, ownership: path.join(path.dirname(workspace), 'ownership'), recovery });
+  const id = randomUUID(), content = Buffer.from('the server\'s copy');
+  assert.equal((await xfer.part(id, { path: 'note.txt', offset: 0, data: content.toString('base64') })).status, 200);
+  assert.equal((await xfer.part(id, { path: 'docs/new.md', offset: 0, data: Buffer.from('new').toString('base64') })).status, 200);
+  const done = await xfer.commit(id, { files: [
+    { path: 'note.txt', size: content.length, sha256: hash(content), expect: hash('original') },
+    { path: 'docs/new.md', size: 3, sha256: hash('new'), expect: null },
+  ], deletes: [] });
+  assert.equal(done.status, 200, JSON.stringify(done));
+  assert.deepEqual(done.written, ['note.txt', 'docs/new.md']);
+  assert.equal(await diskRead(path.join(workspace, 'note.txt'), 'utf8'), 'the server\'s copy');
+  assert.equal(await diskRead(path.join(workspace, 'docs', 'new.md'), 'utf8'), 'new');
+  assert.equal(await diskRead(path.join(recovery, done.replaced[0].recovery), 'utf8'), 'original');
+  // The server deleted docs/new.md and the laptop takes that too.
+  const gone = await xfer.commit(randomUUID(), { files: [], deletes: [{ path: 'docs/new.md', expect: hash('new') }] });
+  assert.equal(gone.status, 200, JSON.stringify(gone));
+  assert.deepEqual(await readdir(path.join(workspace, 'docs')), []);
 });

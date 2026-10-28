@@ -144,20 +144,15 @@ export function createXfer({ workspace, ownership, recovery }) {
       if (mismatch.length) { for (const name of mismatch) paths.delete(name); return refused(409, 'upload-mismatch', { files: mismatch }); }
       const tag = new Date().toISOString().replace(/[:.]/g, '-') + '-' + id.slice(0, 8);
       const written = [], replaced = [], removed = [], changed = [];
-      try {
-        for (const f of files) {
-          const staged = staging(id, paths.get(f.path)), result = await replaceFile(workspace, f.path, staged, f.expect, recovery, tag);
-          await rm(staged, { force: true });
-          if (result.kind === 'written') written.push(f.path); else changed.push(f.path);
-          if (result.recovery && result.kind === 'written') replaced.push({ path: f.path, recovery: result.recovery });
-        }
-        for (const f of deletes) {
-          const result = await removeFile(workspace, f.path, f.expect, recovery, tag);
-          if (result.kind === 'changed') changed.push(f.path); else removed.push({ path: f.path, ...(result.recovery && { recovery: result.recovery }) });
-        }
-      } catch (error) {
-        if (error.message === 'unsupported-platform') return refused(409, 'unsupported-platform', { written, replaced, removed });
-        throw error;
+      for (const f of files) {
+        const staged = staging(id, paths.get(f.path)), result = await replaceFile(workspace, f.path, staged, f.expect, recovery, tag);
+        await rm(staged, { force: true });
+        if (result.kind === 'written') written.push(f.path); else changed.push(f.path);
+        if (result.recovery && result.kind === 'written') replaced.push({ path: f.path, recovery: result.recovery });
+      }
+      for (const f of deletes) {
+        const result = await removeFile(workspace, f.path, f.expect, recovery, tag);
+        if (result.kind === 'changed') changed.push(f.path); else removed.push({ path: f.path, ...(result.recovery && { recovery: result.recovery }) });
       }
       const done = { written, replaced, removed };
       return changed.length ? refused(409, 'changed', { files: changed, ...done }) : { status: 200, ...done };

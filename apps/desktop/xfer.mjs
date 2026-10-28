@@ -174,9 +174,6 @@ async function oneWay(from, to, files, deletes, onBytes, signal) {
 // Runs a resolved plan. onProgress({ total, sent }) as bytes are acknowledged by the receiving daemon. signal: a move's Cancel,
 // checked before each piece; what was committed already stays.
 export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), onProgress = () => {}, signal }) {
-  if (process.platform === 'win32' && (work.toLaptop.length || work.laptopDeletes.length)) {
-    return { error: 'unsupported-platform', message: 'Taking the server\'s copies onto a Windows computer is not built yet. Choose the laptop\'s copies, or cancel.' };
-  }
   const total = [...work.toServer.map((i) => i.laptop.size), ...work.toLaptop.map((i) => i.server.size)].reduce((a, b) => a + b, 0);
   let sent = 0;
   const counted = (bytes) => { sent += bytes; onProgress({ total, sent }); };
