@@ -24,7 +24,7 @@ import { createMcp } from './mcp.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
-import { createAuth } from './auth.mjs';
+import { createAuth, SESSION_MS } from './auth.mjs';
 import { agentDirs, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
@@ -760,6 +760,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       socket.once('close', () => { for (const sockets of open.values()) sockets.delete(socket); });
     };
     auth.onClose((device) => { for (const socket of open.get(device) ?? []) socket.destroy(); open.delete(device); });
+    const cookie = (token, ms) => 'p9s=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=' + Math.max(0, Math.floor(ms / 1000));
     const remoteApp = new Hono();
     remoteApp.onError(onError);
     remoteApp.use('*', async (c, next) => {
@@ -785,6 +786,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       // Counted until the response has gone out, not just until the handler returns: queued bytes stay cuttable.
       c.env.outgoing.once('close', () => running.set(device, running.get(device) - 1));
       await authority.run(() => auth.session(token).status === 0, next);
+      // P2: a renewed session gets its cookie again with the new end, so the browser keeps it as long as the daemon does.
+      if (result.renewed) c.header('Set-Cookie', cookie(token, result.expires - Date.now()), { append: true });
     });
     remoteApp.use('*', hardening, limit);
     remoteApp.use('*', async (c, next) => {
@@ -797,7 +800,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       c.header('Referrer-Policy', 'no-referrer');
     });
     const login = (c, { status, token, csrf, ...result }) => {
-      if (token) c.header('Set-Cookie', 'p9s=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200');
+      if (token) c.header('Set-Cookie', cookie(token, SESSION_MS));
       return c.json(csrf ? { ...result, csrf } : result, status);
     };
     remoteApp.get('/login', (c) => c.html(loginPage));

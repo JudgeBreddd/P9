@@ -85,14 +85,20 @@ window.visualViewport?.addEventListener('resize', fit); window.visualViewport?.a
 fit();
 // L1: sign-in is the one place this page is thrown away, so what is unsent goes to storage first (the draft: label()) and
 // the chat is named in the address, which the login page hands back (an exact #chat=<uuid>).
+// P2: the file editor's unsaved text goes too (p9-file-draft, put back by keptFile() after the login), and the login page is
+// told why it is shown (p9-ended), so a session that ended says so instead of a bare passkey page.
 function toLogin() {
   forgetMission(); localStorage.removeItem('p9-csrf');
+  try {
+    if (dirty()) localStorage.setItem('p9-file-draft', JSON.stringify({ ...state.file, disk: undefined, text: editor.state.doc.toString() }));
+    sessionStorage.setItem('p9-ended', '1');
+  } catch {}
   location.replace('/login' + (openId ? '#chat=' + encodeURIComponent(openId) : ''));
 }
 // L1: the CSRF token outlives a closed or discarded tab (sessionStorage does not, and a phone drops it when the app is
-// swiped away while the 12-hour cookie lives on), so a reopened app does not sign in again. It is kept no longer than the
-// session itself (auth.mjs SESSION_MS), and a 401 or a login drops it.
-const CSRF_MS = 12 * 3600 * 1000;
+// swiped away while the cookie lives on), so a reopened app does not sign in again. It is kept no longer than a session can
+// last (auth.mjs SESSION_MAX_MS, 7 days; P2: the daemon ends it sooner when unused for 12 h), and a 401 or a login drops it.
+const CSRF_MS = 7 * 24 * 3600 * 1000;
 function csrfToken() {
   const tab = sessionStorage.getItem('p9-csrf'); if (tab) return tab;
   try {
@@ -1366,6 +1372,22 @@ addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
 // L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
 online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+// P2: coming back to the app asks the daemon at once, so a session that ended meanwhile goes to the login now (request()),
+// with the drafts kept, not on the next Save, Send or Stop.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && navigator.onLine) void request('/agent-lock').catch(() => {}); });
+// P2: the file text kept by toLogin() comes back in the editor over the version it was read as, so Save still refuses
+// to overwrite a file that changed on disk meanwhile.
+void (async function keptFile() {
+  let kept: { path?: unknown; root?: unknown; hash?: unknown; content?: unknown; text?: unknown } | null = null;
+  try { kept = JSON.parse(localStorage.getItem('p9-file-draft') ?? 'null'); } catch {}
+  if (!kept || typeof kept.path !== 'string' || typeof kept.hash !== 'string' || typeof kept.text !== 'string') return;
+  const root = typeof kept.root === 'string' ? kept.root : undefined;
+  if (!await openFile(kept.path, root)) return;
+  localStorage.removeItem('p9-file-draft');
+  state.file = { path: kept.path, hash: kept.hash, content: typeof kept.content === 'string' ? kept.content : '', root };
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: kept.text } });
+  one('#fileState').textContent = 'Kept through sign-in, not saved'; show('files');
+})();
 void first.then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');
 // Item 19 (threat model row 65): on the phone an artifact opens in the full-screen sheet, the side panel's phone form
