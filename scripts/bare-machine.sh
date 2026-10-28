@@ -6,11 +6,17 @@
 #   bash scripts/bare-machine.sh discover   install.sh --headless; each MISSING line's packages installed, then again
 #   bash scripts/bare-machine.sh install headless|desktop   after boot: the fixed install.sh, its admin question answered yes
 #   bash scripts/bare-machine.sh tmux DIR   static tmux from the pinned source on pinned Alpine, run on bare Ubuntu, into DIR
+#   bash scripts/bare-machine.sh appimage FILE   what the AppImage's runtime needs to mount it on bare Ubuntu, round by round
 set -euo pipefail
 cd "$(dirname -- "$0")/.."
 UBUNTU=ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
 ALPINE=alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
 TMUX_VERSION=3.8 TMUX_SHA256=e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e
+# What builds the static tmux and goes into it (threat model row 60), each pinned. Alpine's mirror keeps only the newest
+# build of a package, so once Alpine updates one of these the build stops naming it: bump that pin on purpose, and the
+# SHA-256 values in apps/server/deps.mjs if the binary changes.
+ALPINE_PACKAGES="build-base=0.5-r3 gcc=14.2.0-r6 binutils=2.44-r3 musl-dev=1.2.5-r13 make=4.4.1-r3 libevent-dev=2.1.13-r0
+ libevent-static=2.1.13-r0 ncurses-dev=6.5_p20250503-r0 ncurses-static=6.5_p20250503-r0 bison=3.8.2-r2 pkgconf=2.4.3-r0"
 NAME=${BARE_NAME:-p9-bare}
 # The Ubuntu package that holds a library, for this machine's architecture: apt-file in a throwaway container, so
 # apt-file and perl never reach the bare machine. Where several packages hold it, the one Ubuntu Desktop ships (the
@@ -40,6 +46,36 @@ daemon_check() {
   node='$(ls ~/.local/share/p9/node-*/bin/node | head -1)'
   as_p9 "$node --input-type=module -e \"import { daemonRequest } from './scripts/teh.mjs'; const s = process.env.XDG_RUNTIME_DIR + '/p9-foundation';
     for (const p of ['/health', '/setup']) { const r = await daemonRequest(s, 'GET', p).catch((e) => ({ status: 0, body: String(e) })); console.log('BARE_DAEMON', p, r.status, JSON.stringify(r.body)); }\"" || true
+}
+# The wizard's last steps, called as its buttons call them: Install for both agents (a launcher each in P9's bin folder),
+# each launcher's --version, then Sign in until the CLI hands back its sign-in page. No account here, so it stops there
+# (Stop, as Cancel does); only the page's address without its query is printed.
+signin_check() {
+  docker exec -i -u p9 -w /srv/p9/p9 -e XDG_RUNTIME_DIR=/run/user/1000 "$NAME" bash -lc '$(ls ~/.local/share/p9/node-*/bin/node | head -1) --input-type=module -' <<'EOF' || true
+import { daemonRequest } from './scripts/teh.mjs';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
+const s = process.env.XDG_RUNTIME_DIR + '/p9-foundation';
+const call = (method, route, body) => daemonRequest(s, method, route, body).catch((e) => ({ status: 0, body: String(e) }));
+const installed = await call('POST', '/setup/agents', { claude: true, codex: true });
+console.log('BARE_WIZARD_INSTALL', installed.status, JSON.stringify(installed.body));
+for (const agent of ['claude', 'codex']) {
+  let version;
+  try { version = execFileSync(os.homedir() + '/.local/share/p9/bin/' + agent, ['--version'], { encoding: 'utf8', timeout: 60000 }).trim(); }
+  catch (e) { version = 'FAILED ' + String(e.stderr || e.message).slice(0, 300); }
+  console.log('BARE_WIZARD_CLI', agent, version);
+  const started = await call('POST', '/setup/login', { agent });
+  let state;
+  for (let i = 0; i < 60 && started.status < 300; i++) {
+    state = (await call('GET', '/setup/login')).body?.[agent];
+    if (state?.url || state?.exit !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  const page = state?.url ? new URL(state.url) : null;
+  console.log('BARE_WIZARD_SIGNIN', agent, started.status, page ? 'page ' + page.origin + page.pathname : 'none ' + JSON.stringify(state ?? started.body));
+  await call('POST', '/setup/login/stop', { agent });
+}
+EOF
 }
 
 case "${1:-}" in
@@ -136,6 +172,8 @@ install)
   grep -A8 '^P9 needs th' /tmp/p9-bare-install.log | sed 's/^/BARE_ASKED /' || true
   docker exec "$NAME" dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/p9-bare-before.txt - | tr '\n' ' ' | sed 's/^/BARE_ADDED_PACKAGES /'; echo
   daemon_check
+  signed=$(signin_check); echo "$signed"
+  [ "$(grep -c '^BARE_WIZARD_SIGNIN .* page ' <<< "$signed")" = 2 ] || status=1
   if [ "$mode" = desktop ]; then
     echo "BARE_USERNS_RESTRICTED $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
     # With the rule loaded Electron prints its version; the SUID-sandbox FATAL means the rule did not take.
@@ -153,9 +191,9 @@ tmux)
   out=$(realpath -m -- "${2:?output folder}"); mkdir -p -- "$out"
   curl -fsSLo "$out/tmux-$TMUX_VERSION.tar.gz" "https://github.com/tmux/tmux/releases/download/$TMUX_VERSION/tmux-$TMUX_VERSION.tar.gz"
   echo "$TMUX_SHA256  $out/tmux-$TMUX_VERSION.tar.gz" | sha256sum -c -
-  docker run --rm -v "$out:/w" -w /w "$ALPINE" sh -euc "apk add --no-cache build-base libevent-dev libevent-static ncurses-dev ncurses-static bison pkgconf >/dev/null
+  docker run --rm -v "$out:/w" -w /w "$ALPINE" sh -euc "apk add --no-cache $(echo $ALPINE_PACKAGES) >/dev/null
     mkdir /b && tar -xzf tmux-$TMUX_VERSION.tar.gz -C /b && cd /b/tmux-$TMUX_VERSION && ./configure --enable-static --prefix=/usr >/dev/null && make -j4 >/dev/null
-    strip tmux && cp tmux /w/tmux && chown $(id -u):$(id -g) /w/tmux && apk list --installed libevent-static ncurses-static musl > /w/tmux.versions"
+    strip tmux && cp tmux /w/tmux && apk info -v | sort > /w/tmux.versions && chown $(id -u):$(id -g) /w/tmux /w/tmux.versions"
   rm -f -- "$out/tmux-$TMUX_VERSION.tar.gz"
   # The test P9's terminals need: a session with a shell, a typed command and its output, on bare Ubuntu.
   docker run --rm -v "$out/tmux:/usr/local/bin/tmux:ro" -e TERM=xterm-256color "$UBUNTU" bash -euc 'tmux -V
@@ -163,5 +201,30 @@ tmux)
     tmux -S /tmp/s capture-pane -p | grep -q ok-42 && echo BARE_TMUX_RUNS'
   (cd "$out" && sha256sum tmux | tee tmux.sha256 && file tmux && cat tmux.versions)
   ;;
-*) echo "usage: bash scripts/bare-machine.sh boot | discover | install headless|desktop | tmux DIR"; exit 2 ;;
+appimage)
+  # What an AppImage download needs before P9 can ask for anything: its runtime mounts the image with FUSE. A bare Ubuntu
+  # 24.04 (privileged for /dev/fuse, which a desktop has), the default user mounting it as a user does: each round's
+  # failure names a package, which is installed, then again. Each is checked against Ubuntu Desktop's manifest.
+  image=$(realpath -- "${2:?AppImage file}"); NAME=$NAME-appimage
+  [ -f "$image" ] || { echo "no AppImage at $image"; exit 2; } # docker -v would make a root-owned folder there
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker run -d --name "$NAME" --privileged -v "$image:/p9.AppImage:ro" "$UBUNTU" sleep infinity >/dev/null
+  desktop_manifest
+  docker exec "$NAME" apt-get update -q >/dev/null
+  status=1
+  for round in 1 2 3 4; do
+    said=$(docker exec -u ubuntu "$NAME" sh -c '/p9.AppImage --appimage-mount > /tmp/mount.log 2>&1 & sleep 8
+      grep -q " /tmp/.mount_" /proc/mounts && echo MOUNTED; head -c 600 /tmp/mount.log; kill $! 2>/dev/null; true')
+    grep -q '^MOUNTED' <<< "$said" && { echo "BARE_APPIMAGE_MOUNTS round $round"; status=0; break; }
+    sed 's/^/BARE_APPIMAGE_SAYS /' <<< "$said"
+    if grep -q 'libfuse\.so\.2' <<< "$said"; then p=libfuse2t64
+    elif grep -qi 'fusermount' <<< "$said"; then p=fuse3
+    else echo "BARE_APPIMAGE_FAILED round $round (the cause is above)"; break; fi
+    echo "BARE_APPIMAGE_NEEDS round $round: $p $(grep -qx "$p" /tmp/p9-bare-desktop.txt && echo on-ubuntu-desktop || echo NOT-on-ubuntu-desktop)"
+    docker exec "$NAME" bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y $p" | tail -1
+  done
+  docker rm -f "$NAME" >/dev/null
+  exit $status
+  ;;
+*) echo "usage: bash scripts/bare-machine.sh boot | discover | install headless|desktop | tmux DIR | appimage FILE"; exit 2 ;;
 esac

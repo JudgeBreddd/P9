@@ -98,12 +98,13 @@ export function createUpdate({ ownership, state, chat, lifecycle, version, root,
       if (!(await run('pnpm', ['install', '--frozen-lockfile', ...(electron ? [] : ['--ignore-scripts'])], next)).ok) return fail('build-failed');
       if (!(await run('pnpm', ['build'], next)).ok) return fail('build-failed');
       // The new version's own dependency check (scripts/deps.mjs, from 0.1.6), in a child so its code never loads here.
-      // It never runs sudo; what it cannot place comes back as { id, why, command } for the laptop to show.
+      // It never runs sudo; what it cannot place comes back as { id, why, command } for the laptop to show. The window's
+      // rule is checked for the checkout's own Electron (root), where the swap moves this build, not for this folder.
       const deps = path.join(next, 'scripts', 'deps.mjs');
       if (existsSync(deps)) {
         const checked = await run(process.execPath, ['--input-type=module', '-e',
-          'const { ensureDependencies } = await import(process.argv[1]); process.stdout.write("\\n" + JSON.stringify(await ensureDependencies()) + "\\n");',
-          pathToFileURL(deps).href], next, 10 * 60_000);
+          'const { ensureDependencies } = await import(process.argv[1]); process.stdout.write("\\n" + JSON.stringify(await ensureDependencies({ electron: process.argv[2] })) + "\\n");',
+          pathToFileURL(deps).href, path.join(root, 'node_modules', 'electron', 'dist', 'electron')], next, 10 * 60_000);
         const result = checked.ok ? (() => { try { return JSON.parse(checked.stdout.trim().split('\n').at(-1)); } catch { return null; } })() : null;
         if (!Array.isArray(result?.missing)) return fail('dependency-check-failed');
         job.missing = result.missing.filter((m) => m && typeof m.id === 'string').slice(0, 50)
