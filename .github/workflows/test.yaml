@@ -1,6 +1,6 @@
 # Runs P9's tests on GitHub's Linux machine: every push to a branch other than main, or by hand from
-# Actions -> Tests -> Run workflow (optionally naming test files). Linux minutes count once against the
-# private repo's monthly allowance.
+# Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
+# Linux minutes count once against the private repo's monthly allowance.
 # The machine gets what the tests need and a laptop has: Chromium's sandbox and unshare (user namespaces),
 # a systemd user manager, tmux, ss, GTK 3, a display (Xvfb) and gitleaks 8.19 or newer.
 name: Tests
@@ -19,17 +19,25 @@ on:
         type: boolean
         required: false
         default: false
+      bare:
+        description: Instead of the tests, install P9 on a bare Ubuntu 24.04 (x64 and arm64) and build the static tmux
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
-# A new push to the same branch cancels the run it replaces.
+# A new push to the same branch cancels the run it replaces. A bare run has its own group (on a push inputs.bare is
+# empty, so the group is the same as before), so it never cancels a test run on the same branch, nor one it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ inputs.bare && '-bare' || '' }}
   cancel-in-progress: true
 
 jobs:
   linux:
+    # On a push the inputs are empty: !inputs.bare is !null, true, so the tests run as before.
+    if: ${{ !inputs.bare }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -83,5 +91,35 @@ jobs:
         with:
           name: evidence
           path: ${{ runner.temp }}/evidence
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Item 15 (v0.1.6 c13): what a bare Ubuntu 24.04 lacks for P9, found by installing on one, and the static tmux build
+  # (scripts/bare-machine.sh, which says what each step does). By hand only, with bare.
+  bare:
+    if: ${{ inputs.bare }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Boot a bare Ubuntu 24.04
+        run: bash scripts/bare-machine.sh boot
+      - name: Install P9 on it and list what it lacked
+        run: set -o pipefail; bash scripts/bare-machine.sh discover 2>&1 | tee "$RUNNER_TEMP/discover.log"
+      - name: Static tmux
+        run: set -o pipefail; bash scripts/bare-machine.sh tmux "$RUNNER_TEMP/tmux" 2>&1 | tee "$RUNNER_TEMP/tmux.log"
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bare-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/discover.log
+            ${{ runner.temp }}/tmux.log
+            ${{ runner.temp }}/tmux
           retention-days: 7
           if-no-files-found: warn
