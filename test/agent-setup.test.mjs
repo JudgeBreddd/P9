@@ -375,6 +375,7 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
   const title = () => page.locator('#welT').innerText();
   const body = page.locator('#welBody'), foot = page.locator('#welFoot');
+  await page.locator('#cards [data-key="welcome"] .open').click({ timeout: left() });
   await page.waitForFunction(() => document.querySelector('#welDlg')?.open, null, { timeout: left() });
   for (let i = 0; i < 4 && await title() !== 'Claude, Codex or both?'; i++) await foot.locator('[data-act="next"]').click({ timeout: left() });
   assert.equal(await title(), 'Claude, Codex or both?');
