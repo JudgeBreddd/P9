@@ -495,6 +495,8 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
   else if (button.id === 'modelBtn') {
     const model = one<HTMLSelectElement>('#model'), options = [...model.options];
     openSheet('Model', options.length ? options.map((option) => `<button type="button" class="opt" data-model="${escape(option.value)}" aria-checked="${option.selected}">${escape(option.textContent)}</button>`).join('') : '<div class="empty">This agent lists no models.</div>');
+    // L4: Send to server is desktop-only by design (a chat on this phone already runs on the server), so say where it lives.
+    one('#sheetBody').insertAdjacentHTML('beforeend', '<p class="empty">Send to server is in the desktop app, on a chat that runs on that computer. A chat here is already on the server.</p>');
   }
 });
 one('#sheetBody').addEventListener('click', async (event) => {
@@ -1242,5 +1244,7 @@ one<HTMLButtonElement>('#loadDisk').onclick = () => {
 
 addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
-online(); void loadChat().then(listen); void loadUsage();
+// L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
+online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+void first.then(listen); void loadUsage();
 if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');
