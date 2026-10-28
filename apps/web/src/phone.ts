@@ -92,7 +92,7 @@ function toLogin() {
   forgetMission(); localStorage.removeItem('p9-csrf');
   try {
     if (dirty()) localStorage.setItem('p9-file-draft', JSON.stringify({ ...state.file, disk: undefined, text: editor.state.doc.toString() }));
-    const unsent = missionDraft(); if (unsent) localStorage.setItem('p9-mission-draft', JSON.stringify(unsent));
+    holdTyped(); if (Object.keys(typed.answers).length || typed.idea) localStorage.setItem('p9-mission-draft', JSON.stringify(typed));
     sessionStorage.setItem('p9-ended', '1');
   } catch {}
   location.replace('/login' + (openId ? '#chat=' + encodeURIComponent(openId) : ''));
@@ -963,7 +963,7 @@ function keepOpen(render: () => void) {
   const title = (d: HTMLDetailsElement) => d.querySelector('summary')!.firstChild?.textContent;
   const windowNow = () => openWindow ? document.getElementById('w-' + openWindow) : null;
   if (windowNow()) expanded = new Set(rows(windowNow()).filter((d) => d.open).map(title));
-  render();
+  holdTyped(); render(); putTyped();
   const again = windowNow() as HTMLDialogElement | null;
   if (again && !again.open) again.showModal();
   rows(again).forEach((d) => { if (!d.open && expanded.has(title(d))) d.open = true; });
@@ -973,18 +973,26 @@ function keepOpen(render: () => void) {
 // #hub and waited on GET /mission/hub.
 const kept = (key: string) => { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } };
 const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }; // storage full: no cache
-// P2: Mission text typed and not sent, kept through a sign-in. An answer is matched by its item's name (its place in the
-// list can change); it comes back on the first fresh draw after the login, unsent, with its window and row open.
+// P2: Mission text typed and not sent. A redraw (Refresh, the hub's retry, a save) rebuilds the forms, so keepOpen() reads
+// it before and puts it back after; toLogin() keeps the same record through a sign-in. An answer is matched by its item's
+// name (its place in the list can change); a sent answer or a saved idea leaves the record.
 type MissionDraft = { answers: Record<string, string>; idea: { name: string; text: string; needs: boolean } | null };
-function missionDraft(): MissionDraft | null {
-  const answers: Record<string, string> = {};
-  document.querySelectorAll<HTMLFormElement>('#mission form[data-answer]').forEach((form) => {
-    const text = form.querySelector('textarea')!.value, item = mission.queue[Number(form.dataset.answer)];
-    if (item && text.trim()) answers[item.name] = text;
-  });
-  const form = document.querySelector<HTMLFormElement>('#mission form[data-idea]'), field = (name: string) => form!.elements.namedItem(name) as HTMLInputElement;
-  const idea = form && (field('name').value.trim() || field('text').value.trim()) ? { name: field('name').value, text: field('text').value, needs: field('needs').checked } : null;
-  return Object.keys(answers).length || idea ? { answers, idea } : null;
+const typed: MissionDraft = { answers: {}, idea: null };
+const answerForms = () => [...document.querySelectorAll<HTMLFormElement>('#mission form[data-answer]')].map((form) => ({ form, name: mission.queue[Number(form.dataset.answer)]?.name, box: form.querySelector('textarea')! }));
+const ideaField = (form: HTMLFormElement, name: string) => form.elements.namedItem(name) as HTMLInputElement;
+function holdTyped() {
+  for (const { name, box } of answerForms()) if (name) { if (box.value.trim()) typed.answers[name] = box.value; else delete typed.answers[name]; }
+  const form = document.querySelector<HTMLFormElement>('#mission form[data-idea]');
+  if (form) typed.idea = ideaField(form, 'name').value.trim() || ideaField(form, 'text').value.trim()
+    ? { name: ideaField(form, 'name').value, text: ideaField(form, 'text').value, needs: ideaField(form, 'needs').checked } : null;
+}
+function putTyped() { // the row holding text put back opens, so the text is in sight
+  const opened = (form: HTMLFormElement) => { const row = form.closest('details'); if (row) row.open = true; };
+  for (const { form, name, box } of answerForms()) if (name && typed.answers[name] && !box.value) { box.value = typed.answers[name]; opened(form); }
+  const form = document.querySelector<HTMLFormElement>('#mission form[data-idea]');
+  if (form && typed.idea && !ideaField(form, 'name').value && !ideaField(form, 'text').value) {
+    ideaField(form, 'name').value = typed.idea.name; ideaField(form, 'text').value = typed.idea.text; ideaField(form, 'needs').checked = typed.idea.needs; opened(form);
+  }
 }
 function keptMission(part: 'answers' | 'idea') {
   const draft = kept('p9-mission-draft');
@@ -1195,7 +1203,7 @@ one('#mission').addEventListener('submit', async (event) => {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
     note.textContent = result.status === 201 ? `Saved ${result.body.path}.` : `Not saved: ${result.body.error ?? result.status}`;
-    if (result.status === 201) setTimeout(() => void loadHub(), 900);
+    if (result.status === 201) { form.reset(); typed.idea = null; setTimeout(() => void loadHub(), 900); }
   } else if (form.dataset.decide !== undefined) {
     const choice = ((event as SubmitEvent).submitter as HTMLButtonElement)?.value, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/hub/decide', { name: form.dataset.decide, choice });
@@ -1204,7 +1212,7 @@ one('#mission').addEventListener('submit', async (event) => {
   } else if (form.dataset.answer !== undefined) {
     const item = mission.queue[Number(form.dataset.answer)], note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/answer', { name: item.name, hash: item.hash, answer: form.querySelector('textarea')!.value.replace(/\s+/g, ' ').trim() });
-    if (result.status === 200) { note.textContent = 'Answer saved.'; setTimeout(() => void loadMission(), 900); }
+    if (result.status === 200) { note.textContent = 'Answer saved.'; form.querySelector('textarea')!.value = ''; delete typed.answers[item.name]; setTimeout(() => void loadMission(), 900); }
     else note.textContent = result.status === 409 ? 'The file changed since it loaded. Refresh and answer again.' : `Not saved: ${result.body.error ?? result.status}`;
   }
 });

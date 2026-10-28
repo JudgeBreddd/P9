@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
 import { remoteDaemon } from './helpers.mjs';
 import { phone, CHAT, seedChat, stubPrompt, openChat } from './phone-c16-helpers.mjs';
 
@@ -68,18 +70,7 @@ test('P2: a 401 on Save keeps the file edit through the sign-in, and the login p
 // P2 (v0.1.6): Mission answers and a new idea typed on the phone survive a sign-in: back in their boxes, unsent; an answer
 // whose item went away during the sign-in is shown to copy, not dropped.
 test('P2: a 401 on Send answer keeps the typed Mission answers and the new idea through the sign-in', { timeout: 120000 }, async (t) => {
-  const { writeFile, mkdir, unlink } = await import('node:fs/promises');
-  const path = await import('node:path');
-  const server = await remoteDaemon(t, { setup: async (paths) => {
-    for (const dir of ['hub', '_tyler', '_ideas/needs-done', 'projects']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
-    await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
-    await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n');
-    await writeFile(path.join(paths.workspace, '_tyler', 'p9-color.md'), '# Pick a color\n\nQ. Which one?\n\nA.\n');
-    await writeFile(path.join(paths.workspace, '_tyler', 'p9-size.md'), '# Pick a size\n\nQ. How big?\n\nA.\n');
-    const settings = path.join(paths.directory, 'settings.json');
-    await writeFile(settings, JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler', hub: 'hub' }));
-    return { args: ['--settings', settings] };
-  } });
+  const server = await remoteDaemon(t, { setup: missionSetup });
   const { page } = await phone(t, server, { touchScreen: false });
   await page.click('[data-nav="mission"]');
   await page.click('[data-open="work"]', { timeout: 15000 });
@@ -113,4 +104,53 @@ test('P2: a 401 on Send answer keeps the typed Mission answers and the new idea 
   console.log('P9_SHOT p2-mission-kept ' + (await page.screenshot()).toString('base64'));
   assert.equal(await page.evaluate(() => localStorage.getItem('p9-mission-draft')), null, 'nothing left in storage once all is back');
   console.log('PASS P2: Mission answers and the new idea came back unsent; the gone item\'s answer is shown to copy');
+});
+
+// A workspace with two answerable Mission items and a hub, so the phone shows Waiting on you and + New idea.
+async function missionSetup(paths) {
+    for (const dir of ['hub', '_tyler', '_ideas/needs-done', 'projects']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
+  await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+  await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n');
+  await writeFile(path.join(paths.workspace, '_tyler', 'p9-color.md'), '# Pick a color\n\nQ. Which one?\n\nA.\n');
+  await writeFile(path.join(paths.workspace, '_tyler', 'p9-size.md'), '# Pick a size\n\nQ. How big?\n\nA.\n');
+  const settings = path.join(paths.directory, 'settings.json');
+  await writeFile(settings, JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler', hub: 'hub' }));
+  return { args: ['--settings', settings] };
+}
+
+// P2 (v0.1.6): a Mission refresh (the Refresh button; the hub's 15 s retry redraws the same way) rebuilt the forms and
+// wiped what was typed; the text stays, and a saved idea does not come back after the redraw that follows its save.
+test('P2: a phone Mission refresh keeps the typed answer and idea; a saved idea leaves the form', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: missionSetup });
+  const { page } = await phone(t, server, { touchScreen: false });
+  await page.click('[data-nav="mission"]');
+  await page.click('[data-open="queue"]', { timeout: 15000 });
+  await page.click('#w-queue summary:text("Pick a color")');
+  const answer = page.locator('#w-queue details:has(summary:text("Pick a color")) textarea');
+  await answer.fill('blue, typed before a refresh');
+  await page.click('#w-queue [data-close]');
+  await page.click('[data-open="work"]');
+  await page.click('#w-work summary:text("+ New idea")');
+  await page.fill('#w-work form[data-idea] [name="name"]', 'refresh-idea');
+  await page.fill('#w-work form[data-idea] [name="text"]', 'an idea typed before a refresh');
+  await page.click('#w-work [data-close]');
+  const fresh = Promise.all([page.waitForResponse(/\/mission$/), page.waitForResponse(/\/mission\/hub$/)]);
+  await page.click('#refreshMission');
+  await fresh; await page.waitForTimeout(300); // the hub draws after its answer is read
+  assert.equal(await answer.inputValue(), 'blue, typed before a refresh');
+  assert.equal(await answer.isVisible(), false, 'its window is closed');
+  await page.click('[data-open="queue"]');
+  assert.equal(await answer.isVisible(), true, 'the row holding the kept text is open');
+  await page.click('#w-queue [data-close]');
+  await page.click('[data-open="work"]');
+  const idea = page.locator('#w-work form[data-idea]');
+  assert.deepEqual([await idea.locator('[name="name"]').inputValue(), await idea.locator('[name="text"]').inputValue()], ['refresh-idea', 'an idea typed before a refresh']);
+  console.log('P9_SHOT p2-refresh-kept ' + (await page.screenshot()).toString('base64'));
+  await idea.locator('button[type="submit"]').click();
+  await page.waitForFunction(() => document.querySelector('#mission form[data-idea] [data-note]')?.textContent, null, { timeout: 10000 });
+  assert.match(await idea.locator('[data-note]').innerText(), /^Saved /);
+  await page.waitForResponse(/\/mission\/hub$/, { timeout: 10000 }); await page.waitForTimeout(300); // the redraw 900 ms after a save
+  assert.deepEqual([await idea.locator('[name="name"]').inputValue(), await idea.locator('[name="text"]').inputValue()], ['', ''], 'a saved idea does not come back');
+  assert.ok((await readdir(path.join(server.workspace, '_ideas'))).some((name) => name.startsWith('refresh-idea')), 'the idea was written');
+  console.log('PASS P2: a Mission refresh kept the typed answer and idea; the saved idea left the form');
 });
