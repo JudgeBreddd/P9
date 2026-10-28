@@ -16,8 +16,9 @@ import { PIECE } from '../server/pieces.mjs';
 const run = promisify(execFile), LONG = 60_000, POLL_MS = 2000;
 // ponytail: 3 h, past the server's longest update: the build (20 min), the turn limit (2 h) and the swap (under 15 min).
 const FOLLOW_MS = 3 * 60 * 60_000;
-// A step line names files, never where they are on the server: any absolute path becomes its last part.
-const names = (steps) => Array.isArray(steps) ? steps.map((line) => String(line).replace(/\/[^\s'",:)]+/g, (p) => path.basename(p))) : steps;
+// A step line names files, never where they are on the server: any absolute path becomes its last part (a URL stays whole).
+// Exported for its test.
+export const names = (steps) => Array.isArray(steps) ? steps.map((line) => String(line).replace(/(^|[\s'"(=])(\/[^\s'",:)]+)/g, (_, before, p) => before + path.basename(p))) : steps;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // What this app would send: a checkout's committed HEAD (its version from HEAD's package.json), or a packaged app's version.

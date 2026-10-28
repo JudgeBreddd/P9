@@ -16,7 +16,8 @@ import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollD
 import { newer } from '../apps/server/update.mjs';
 import { PIECE } from '../apps/server/pieces.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
-import { updateServer } from '../apps/desktop/server-update.mjs';
+import { updateServer, names } from '../apps/desktop/server-update.mjs';
+import { rebuildStandIns } from '../apps/server/server.mjs';
 
 const skip = process.platform === 'win32' ? 'a server update is Linux only (systemd, a source checkout)' : false;
 const VERSION = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -425,4 +426,17 @@ test('update: --update-root, --update-archive and --update-turn-ms outside the t
     assert.equal(run.status, 1, flag[0] + ' served: ' + run.stderr);
     assert.match(run.stderr, new RegExp('invalid-test-flag ' + flag[0]));
   }
+});
+
+// K4: a path becomes its name; a URL in the same line stays whole.
+test('update steps: paths become file names, URLs stay whole', () => {
+  assert.deepEqual(names(["rename '/home/a/p9/source.new-x' failed", '/srv/p9/next gone, see https://github.com/x/y/issues/1']),
+    ["rename 'source.new-x' failed", 'next gone, see https://github.com/x/y/issues/1']);
+});
+
+// K6: the rebuild's stand-ins (P9_PACKAGED, P9_BUILD) count only under the test home.
+test('rebuild stand-ins: P9_PACKAGED and P9_BUILD are ignored outside the test home', () => {
+  assert.deepEqual(rebuildStandIns({ P9_PACKAGED: '1', P9_BUILD: '/bin/true' }), { packaged: false, build: null });
+  assert.deepEqual(rebuildStandIns({ P9_TEST_HOME: '/t', P9_PACKAGED: '1', P9_BUILD: '/bin/true' }), { packaged: true, build: '/bin/true' });
+  assert.deepEqual(rebuildStandIns({ P9_TEST_HOME: '/t' }), { packaged: false, build: null });
 });

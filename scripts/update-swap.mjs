@@ -14,8 +14,8 @@ const { values: a } = parseArgs({ options: Object.fromEntries(['root', 'next', '
 const START_MS = Number(a.wait ?? 60_000), stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const previous = a.root + '.previous', older = a.root + '.previous-' + stamp, failed = a.root + '.failed-' + a.version + '-' + stamp;
 const steps = [];
-// result.steps leave the server (the laptop shows them): file names only, never where they are.
-const say = (line) => { steps.push(new Date().toISOString() + ' ' + line.replace(/\/[^\s'",:)]+/g, (p) => path.basename(p))); };
+// result.steps leave the server (the laptop shows them): file names only, never where they are (a URL stays whole).
+const say = (line) => { steps.push(new Date().toISOString() + ' ' + line.replace(/(^|[\s'"(=])(\/[^\s'",:)]+)/g, (_, before, p) => before + path.basename(p))); };
 const done = (result) => {
   writeFileSync(a.result + '.tmp', JSON.stringify({ id: a.id, version: a.version, from: a.from, at: Date.now(), ...result, steps }), { mode: 0o600 });
   renameSync(a.result + '.tmp', a.result);

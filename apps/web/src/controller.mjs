@@ -2710,7 +2710,7 @@ function onServerUpdate(u) {
   }[u.phase];
   if (!say) return;
   // A remote before 0.1.6 (K1): the steps in a dialog at once, then connect again and it updates itself from then on.
-  const steps = u.phase === 'too-old' ? ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'systemctl --user restart p9-foundation', 'bash scripts/install.sh'] : null;
+  const steps = u.phase === 'too-old' ? ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'bash scripts/install.sh', 'systemctl --user restart p9-foundation'] : null;
   const a = { kind: 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1], ...(steps ? { steps, after: 'Then connect again: from 0.1.6 on, it updates itself when you connect.' } : {}) };
   toast(a, !say[2]);
   if (steps) openModal({ kind: 'alert', a });
