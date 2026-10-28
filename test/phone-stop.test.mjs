@@ -26,7 +26,7 @@ test('L3: a running chat has a Stop in the top bar even with text in the box; an
   const box = await page.locator('#stopTurn').boundingBox();
   assert.ok(box.width + 28 >= 44 && box.height + 28 >= 44, 'the Stop tap target is under 44 px: ' + JSON.stringify(box));
   await page.screenshot({ path: (process.env.P9_SCREENSHOTS || '/tmp') + '/phone-stop.png' });
-  await page.click('#stopTurn', { force: true }); // the ring spins, so Playwright never sees it stable; a finger does not wait
+  await page.click('#stopTurn', { force: true }); // P3: Stop is a plain labelled button beside the spinner
   await page.waitForTimeout(500);
   assert.deepEqual(calls, [{ url: '/chat/' + CHAT + '/cancel', csrf: session.csrf }]);
   assert.equal(await page.inputValue('#prompt'), 'a half-typed follow-up', 'Stop took the typed text');

@@ -25,7 +25,7 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createTerminals } from './terminals.mjs';
 import { readSprint, SPRINT_TMUX } from './sprint.mjs';
 import { createAuth } from './auth.mjs';
-import { agentDirs, planLimits } from './limits.mjs';
+import { agentDirs, claudeWindow, planLimits } from './limits.mjs';
 import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
@@ -300,7 +300,11 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until');
     return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until))); });
-  api.get('/usage', async (c) => { const { claudeLive, ...usage } = ledger.usage(); return c.json({ ...usage, limits: await planLimits({ home: os.homedir(), claudeLive }) }); });
+  api.get('/usage', async (c) => {
+    const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
+    const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
+    return c.json({ ...usage, ...(contexts && { contexts }), limits: await planLimits({ home: os.homedir(), claudeLive }) });
+  });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));

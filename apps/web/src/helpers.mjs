@@ -98,6 +98,9 @@ export const mdReply = new Marked({ gfm: true, breaks: true, async: false, rende
     return `<a class="link" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${this.parser.parseInline(t.tokens)}</a>` + (same ? '' : ` <span class="link-host">(${esc(u.host)})</span>`);
   },
 } });
+// P19: a reply's code blocks get a Copy button (desktop and phone); copy() says Copied or why not on the button.
+export const copyCode = html => html.replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code');
+export const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copied', e => { btn.title = String(e?.message || e); return 'Copy failed'; }).then(said => { const was = btn.textContent; btn.textContent = said; btn.dataset.said = said; setTimeout(() => { btn.textContent = was; delete btn.dataset.said; }, 2000); });
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES) and the two loosened ones, which ask first in red
 // (threat model row 25). Desktop and phone (P6).
 export const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
