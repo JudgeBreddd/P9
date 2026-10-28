@@ -64,18 +64,19 @@ export async function placeAgents(agents, { platform = process.platform, bin = b
 // Bundle first for tmux (threat model row 60): a static tmux 3.8, built in CI from tmux's pinned tarball
 // (bare-machine.sh tmux) and published as the pre-release deps-tmux-3.8, goes into P9's bin folder with no admin
 // password. Pinned to these SHA-256 values; a download that fails or does not match places nothing, and install.sh asks
-// for the distro's tmux as before. Returns 'placed' or why not.
+// for the distro's tmux as before. from: a copy on disk instead of the download (the AppImage carries one, K7), checked
+// against the same SHA-256. Returns 'placed' or why not.
 export const TMUX_SHA256 = {
   x64: '8003e4b0d5447fd695070fe26e8c7aa460a4731f84d1cb024bf126ba5c77fc03',
   arm64: '656c14ed1c4adac6ec792c8e4ce12441c5a1a832fcf5d7cbfbd672b751c65649',
 };
-const TMUX_URL = 'https://github.com/JudgeBreddd/P9/releases/download/deps-tmux-3.8/tmux-linux-';
-export async function placeTmux({ arch = process.arch, bin = binFolder('linux'), get = fetch, sums = TMUX_SHA256 } = {}) {
+export const TMUX_URL = 'https://github.com/JudgeBreddd/P9/releases/download/deps-tmux-3.8/tmux-linux-';
+export async function placeTmux({ arch = process.arch, bin = binFolder('linux'), get = fetch, sums = TMUX_SHA256, from } = {}) {
   const sum = sums[arch];
   if (!sum) return 'no-build';
-  const bytes = await get(TMUX_URL + arch, { signal: AbortSignal.timeout(120_000) })
+  const bytes = from ? await readFile(from).catch(() => null) : await get(TMUX_URL + arch, { signal: AbortSignal.timeout(120_000) })
     .then(async (response) => response.ok ? Buffer.from(await response.arrayBuffer()) : null, () => null);
-  if (!bytes) return 'download-failed';
+  if (!bytes) return from ? 'copy-missing' : 'download-failed';
   if (createHash('sha256').update(bytes).digest('hex') !== sum) return 'checksum-mismatch';
   await mkdir(bin, { recursive: true, mode: 0o700 });
   const file = path.join(bin, 'tmux');

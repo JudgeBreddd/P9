@@ -10,6 +10,7 @@ import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
 import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
+import { found, placeTmux } from '../apps/server/deps.mjs';
 
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -176,6 +177,9 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
         if (![version, previous].map((each) => each + '.AppImage').includes(name)) await rm(path.join(kept, name), { force: true }).catch(() => {});
       }
     } catch (error) { await say('the AppImage was not kept: ' + error.message); }
+    // K7: the daemon cannot start without tmux. A system tmux wins; with none, the AppImage's pinned copy goes into P9's
+    // bin folder before the service starts, so a machine with no tmux needs no admin password and no network.
+    if (!await found('tmux', { env })) await say('tmux from the AppImage: ' + await placeTmux({ from: path.join(resources, 'tmux', 'tmux') }));
     if (unit === null) {
       const workspace = path.join(os.homedir(), 'P9');
       await mkdir(workspace, { recursive: true });
