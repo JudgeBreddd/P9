@@ -18,9 +18,12 @@ NAME=${BARE_NAME:-p9-bare}
 apt_file() {
   docker image inspect p9-bare-apt-file >/dev/null 2>&1 \
     || printf 'FROM %s\nRUN apt-get update && apt-get install -y apt-file && apt-file update\n' "$UBUNTU" | docker build -q -t p9-bare-apt-file - >/dev/null
-  local all
+  local all ours
   all=$(docker run --rm p9-bare-apt-file apt-file search -l -x "^/(usr/)?lib/$(docker exec "$NAME" uname -m)-linux-gnu/$1\$")
-  { grep -xFf /tmp/p9-bare-desktop.txt <<< "$all" || true; head -1 <<< "$all"; } | head -1
+  # No "| head -1" on a pipe here: under pipefail a writer cut off early exits 141 and set -e stops the script.
+  ours=$(grep -xFf /tmp/p9-bare-desktop.txt <<< "$all" || true)
+  ours=${ours:-$all}
+  echo "${ours%%$'\n'*}"
 }
 # The newest Ubuntu Desktop 24.04 manifest for this machine's architecture, one package per line, into /tmp/p9-bare-desktop.txt:
 # amd64 is on releases.ubuntu.com, arm64 on cdimage.

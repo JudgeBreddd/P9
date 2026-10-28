@@ -28,7 +28,7 @@ import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
 import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
-import { AGENTS, adminCommand, dependencies, found as onPath, placeAgents } from './deps.mjs';
+import { AGENTS, adminCommand, wizardDependencies, found as onPath, placeAgents } from './deps.mjs';
 import pkg from '../../package.json' with { type: 'json' };
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
@@ -531,7 +531,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       // D8: each agent's own CLI, for a terminal and Hand off (chats use the CLI the adapter ships, so they work without it).
       claudeCli: await onPath('claude'), codexCli: await onPath('codex'),
       // Item 15: every dependency, its reason and, for a system package, the admin command (deps.mjs).
-      dependencies: await dependencies() });
+      dependencies: await wizardDependencies() });
   });
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.

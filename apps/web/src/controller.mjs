@@ -137,7 +137,7 @@ function cardList(all) {
   if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
   for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, halo: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
-  if (S.setup) { const d = setupDone(S.setup), left = Object.keys(d).filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${4 - left.length} of 4 done`, sub: left.map(k => STEP_NAMES[k]).join(' · ') }); }
+  if (S.setup) { const d = setupDone(S.setup), left = Object.keys(d).filter(k => !d[k] && k !== 'pick'); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${4 - left.length} of 4 done`, sub: left.map(k => STEP_NAMES[k]).join(' · ') }); }
   return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
 }
 const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.key)).length + S.alerts.length;
@@ -606,7 +606,8 @@ function paint(root, ss, only) {
     // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
     p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => { b.disabled = true; await sendAway(s); b.disabled = false; });
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
-    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome(2));
+    // Item 15: by name (the pick step now comes first), with the chat's own agent on the step even when it was not picked.
+    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude'));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
@@ -1944,13 +1945,16 @@ async function loadSetup(paths) {
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
-// pick (item 15): an agent installed or signed in; while it is false the wizard asks Claude, Codex or both first.
+// pick (item 15): an agent installed or signed in; while it is false the wizard asks Claude, Codex or both first. The
+// card leaves it out: a missing pick is a missing sign-in too.
 function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: s.settings && s.agentsFile && s.registryFile, terminal: s.tmux !== false }; }
 function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
 // Item 15: the agents the wizard offers, each with the one line that says what it needs.
 const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
 // What the pick step shows as picked: this run's choice, else what is installed or signed in already.
 const wizPicked = () => W.picked || AGENTS_PICK.filter(([a]) => W.s?.[a + 'Cli'] || W.s?.[a]).map(([a]) => a);
+// The admin screen's name for each system item /setup can report missing (deps.mjs wizardDependencies).
+const ADMIN_NAMES = { tmux: 'tmux', ssh: 'SSH client' };
 const STEP_NAMES = { workspace: 'workspace folder', agents: 'agent sign-in', mission: 'Mission Control files', terminal: 'terminal' };
 async function checkSetup() {
   const s = await loadSetup();
@@ -1972,10 +1976,11 @@ const PATH_KEYS = [['primary', 'Main project file', 'setup-file'], ['registry', 
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
 const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
-async function welcome(at) {
+async function welcome(at, agent) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
   Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null, picked: null });
   W.s = await loadSetup();
+  if (agent) W.picked = [...new Set([...wizPicked(), agent])];
   const d = W.s && setupDone(W.s);
   W.i = typeof at === 'string' ? Math.max(0, wizSteps().indexOf(at)) : at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
   // BL5: every 10 s (was 2 s) while a check fails or a sign-in runs; wizRefresh stops it once neither is so, and starts it again.
@@ -2059,7 +2064,7 @@ function wizRender() {
     title = 'Claude, Codex or both?';
     const on = wizPicked();
     body = '<p data-why>P9\'s chats run on an agent, and you need an account with the one you pick: pick the one you already have.</p>'
-      + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('pick:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
+      + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('choose:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
       + `<p class="muted sm">Install sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
       + (note?.error ? fail(note.error, note.detail) : '') + (note?.installed ? `<p class="ok sm" data-installed>Installed: ${note.installed.map(a => AGENTS_PICK.find(([k]) => k === a)[1]).join(' and ')}</p>` : '');
     next = on.length ? btn('install', note?.installed ? 'Next' : 'Install', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Install', 'default').replace('<button', '<button disabled');
@@ -2107,8 +2112,8 @@ function wizRender() {
     // then the command; Run in a terminal types it into a P9 terminal and sudo asks there. tmux cannot: P9's terminals are tmux.
     const admin = (s.dependencies || []).filter(x => x.admin);
     title = admin.length ? 'This needs your admin password' : 'Terminal';
-    body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(x.id === 'ssh' ? 'SSH client' : 'tmux', esc(x.why), yes(false, '', 'Not installed'))}`
-        + '<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This is a system program, and only an admin can install one, so your computer asks for your password.</p>'
+    body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(ADMIN_NAMES[x.id] || esc(x.id), esc(x.why), yes(false, '', 'Not installed'))}`
+        + '<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This one goes into the system itself, and only an admin can change that, so your computer asks for your password.</p>'
         + (x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
           + (x.id === 'tmux' ? btn('copy:' + x.id, 'Copy') + '</div><p class="muted sm">P9\'s terminals need tmux, so run it in your own terminal app, then Retry.</p>'
             : btn('admin:' + x.id, 'Run in a terminal') + '</div><p class="muted sm">Types it into a P9 terminal. Read it, press Enter, then type your password there.</p>')
@@ -2172,7 +2177,8 @@ $('#welDlg').addEventListener('click', async e => {
     W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
   }
-  if (act === 'pick') { const on = wizPicked(); W.picked = on.includes(agent) ? on.filter(a => a !== agent) : [...on, agent]; W.note.pick = null; return wizRender(); }
+  // choose, not pick: pick is the folder picker's.
+  if (act === 'choose') { const on = wizPicked(); W.picked = on.includes(agent) ? on.filter(a => a !== agent) : [...on, agent]; W.note.pick = null; return wizRender(); }
   if (act === 'install') {
     if (W.note.pick?.installed) { W.i += 1; return wizRender(); }
     const on = wizPicked();

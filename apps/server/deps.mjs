@@ -127,9 +127,12 @@ export async function ensureDependencies(options = {}) {
   return { placed, missing };
 }
 
+// What the wizard shows: the window's own sandbox is left out, since a window that opened has a working sandbox (P9 never
+// runs Electron with --no-sandbox). install.sh and every update check it (scripts/deps.mjs, ensureDependencies).
+export const wizardDependencies = (options = {}) => dependencies({ ...options, desktop: false });
 // The admin command for one dependency, for the wizard's "Run in a terminal": from the table above only.
 export async function adminCommand(id) {
-  const dependency = (await dependencies()).find((each) => each.id === id && each.admin);
+  const dependency = (await wizardDependencies()).find((each) => each.id === id && each.admin);
   return dependency?.command ?? null;
 }
 
