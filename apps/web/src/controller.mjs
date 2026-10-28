@@ -223,7 +223,7 @@ const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.
 // 192 x 208: row 0 idle, 3 wave, 4 jump, 6 waiting, 7 running; each row's frame count is read from the sheet.
 const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, top: [], drag: null };
 const PET_ROLES = ['system', 'claude', 'codex'];
-const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> [x, y], see petHome
+const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> { box: [x, y] }, see petHome
 const DEFAULT_PET ={ on: true, size: 48, claude: null, codex: null, system: null, top: null, pane: null };
 async function petLook(name) {
   const pet = await window.p9.loadPet(name).catch(() => null), img = new Image();
@@ -275,8 +275,12 @@ function tickPets() {
     let cv = p.querySelector(':scope > canvas.pet');
     if (!name) return cv?.remove();
     if (!cv || cv.dataset.petName !== name || cv.dataset.rows !== rows || cv.style.height !== f.size + 'px') { cv?.remove(); p.insertAdjacentHTML('beforeend', petCanvas(name, rows, f.size)); cv = p.lastElementChild; }
-    const key = p.parentElement.id + ':' + s.id, at = IND.drag?.key === key && IND.drag.at || petSpots[key] || petHome(p, cv);
-    cv.style.left = at[0] * 100 + '%'; cv.style.top = at[1] * 100 + '%';
+    const key = p.parentElement.id + ':' + s.id, r = p.getBoundingClientRect(), b = petBox(p);
+    if (!r.width || !b) { cv.style.left = '10%'; cv.style.top = '70%'; return; }
+    // A spot saved before D2 was a share of the pane: kept where it is now, from the box.
+    if (Array.isArray(petSpots[key])) { petSpots[key] = { box: [r.left + petSpots[key][0] * r.width - b.left, r.top + petSpots[key][1] * r.height - b.top].map(Math.round) }; localStorage.setItem('p9-pet-spots', JSON.stringify(petSpots)); }
+    const [x, y] = (IND.drag?.key === key && IND.drag.at || petSpots[key])?.box || petHome(p, cv, r, b);
+    cv.style.left = Math.min(r.width, Math.max(0, b.left - r.left + x)) + 'px'; cv.style.top = Math.min(r.height, Math.max(0, b.top - r.top + y)) + 'px';
   });
   document.querySelectorAll('canvas.pet').forEach(drawPet);
 }
@@ -286,12 +290,15 @@ setInterval(() => { if (!document.hidden) { IND.frame++; tickPets(); } }, 125);
 // ponytail: localStorage (petSpots, top of this section), last 200 dragged chats; move it into the settings file if spots should follow a profile copy.
 // Until dragged, a chat's pet stands left of its message box, standing on the box's top edge (Builder, 2026-10-20: moved from
 // the right side to where the owner dragged his); with no room there, just above the box's left end.
-function petHome(p, cv) {
-  const r = p.getBoundingClientRect(), c = p.querySelector('.bottom .col')?.getBoundingClientRect(), b = p.querySelector('.composer')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
-  if (!r.width || !r.height || !c || !b) return [0.1, 0.7];
+// D2 (Builder, 2026-10-28: "Make the pets position reletive to the chat box"): a spot is px from the message box's top-left
+// corner, not a share of the pane, so a side panel, split view or the editor that moves the box moves the pet with it.
+function petHome(p, cv, r, b) {
+  const c = p.querySelector('.bottom .col')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
+  if (!c) return [-w, -h / 2];
   const beside = c.left - r.left >= w + 16;
-  return [((beside ? c.left - 8 - w / 2 : c.left + w / 2) - r.left) / r.width, ((beside ? b.top - h / 2 : c.top - h / 2 - 4) - r.top) / r.height];
+  return [(beside ? c.left - 8 - w / 2 : c.left + w / 2) - b.left, (beside ? b.top - h / 2 : c.top - h / 2 - 4) - b.top];
 }
+const petBox = p => p.querySelector('.composer')?.getBoundingClientRect();
 // Drag a chat's pet within its chat; the spot is saved for that chat on release. The top bar's pets stay put.
 document.addEventListener('pointerdown', e => {
   const cv = e.target.closest?.('.pane canvas.pet'); if (!cv || e.button) return;
@@ -299,8 +306,9 @@ document.addEventListener('pointerdown', e => {
   const pane = cv.closest('.pane'), where = `#${pane.parentElement.id} .pane[data-id="${CSS.escape(pane.dataset.id)}"]`;
   IND.drag = { key: pane.parentElement.id + ':' + pane.dataset.id, at: null };
   const move = ev => {
-    const r = document.querySelector(where)?.getBoundingClientRect(); if (!r) return;
-    IND.drag.at = [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height].map(n => Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000);
+    const pane = document.querySelector(where), r = pane?.getBoundingClientRect(), b = pane && petBox(pane); if (!b) return;
+    const x = Math.min(r.right, Math.max(r.left, ev.clientX)), y = Math.min(r.bottom, Math.max(r.top, ev.clientY));
+    IND.drag.at = { box: [Math.round(x - b.left), Math.round(y - b.top)] };
     tickPets();
   };
   const up = () => {
@@ -424,7 +432,7 @@ function renderModal() {
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}${a.start ? '<p class="start"><b>Where to start:</b> ' + esc(a.start) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps || m.done ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Dismiss</button>`;
     $('#mdlFoot [data-dismiss]').onclick = () => { S.alerts = S.alerts.filter(x => x !== a); if (H.notices) H.notices = H.notices.filter(x => x !== a); renderCards(); missionLive(); m.back ? openModal(m.back) : closeModal(); };
   } else missionModal(m, body, row);
@@ -468,11 +476,13 @@ function toast(a, done) {
   if (!done) S.alerts.push(a);
   const el = document.createElement('button');
   el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
-  el.onclick = () => { el.remove(); if (!done) openModal({ kind: 'alert', a }); };
+  // D1 (Builder, 2026-10-28: "if i click it, it goes away"): every toast opens its whole message, and where to start, in the panel.
+  el.onclick = () => openModal({ kind: 'alert', a, done });
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
   $('#toasts').append(el); raiseToasts(); renderCards();
 }
 // D7: a modal sits in the top layer over any z-index, so the toast list is a popover put back on top after each toast or modal.
+if (sampleView) window.__toast = toast; // ponytail: the UI test's door, as window.__side
 const raiseToasts = () => { const box = $('#toasts'); if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); } };
 function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
@@ -1347,7 +1357,7 @@ async function saveLive(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
   if (S.modal === m) renderModal();
 }
 // One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
@@ -1411,7 +1421,7 @@ async function saveNote(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
   if (S.modal === m) renderModal();
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
@@ -1606,7 +1616,15 @@ function placeDev() {
   if (k && k.right > x && k.left < right && k.bottom > y && k.top < r.bottom) {
     if ((right - k.right) * (r.bottom - y) >= (right - x) * (r.bottom - k.bottom)) x = k.right + 8; else y = k.bottom + 8;
   }
-  window.p9.devView(visible ? { visible, x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, r.bottom - y)) } : { visible });
+  // D14 (Builder, 2026-10-28: "It should never be hidden behind any panel"): the view draws above the page, so it keeps clear of a
+  // floating terminal: the editor takes the biggest of the room left of it, right of it, above it or below it.
+  let bottom = r.bottom;
+  const d = $('#dock'), t = !d.hidden && d.classList.contains('float') ? d.getBoundingClientRect() : null; // $: placeDev runs before const dock
+  if (t && t.right > x && t.left < right && t.bottom > y && t.top < bottom) {
+    const room = ([a, b, c, d]) => Math.max(0, c - a) * Math.max(0, d - b);
+    [x, y, right, bottom] = [[t.right + 8, y, right, bottom], [x, y, t.left - 8, bottom], [x, t.bottom + 8, right, bottom], [x, y, right, t.top - 8]].reduce((m, o) => room(o) > room(m) ? o : m);
+  }
+  window.p9.devView(visible ? { visible, x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) } : { visible });
 }
 new ResizeObserver(placeDev).observe($('#fDev'));
 new ResizeObserver(cardsOverlay).observe($('.stage'));
@@ -1688,8 +1706,9 @@ dock.querySelector('.tb').onpointerdown = e => {
   const r = dock.getBoundingClientRect(), pr = dock.offsetParent.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
   dock.style.translate = 'none';
   const place = ev => { dock.style.left = Math.max(0, Math.min(pr.width - 80, ev.clientX - dx - pr.left)) + 'px'; dock.style.top = Math.max(0, Math.min(pr.height - 30, ev.clientY - dy - pr.top)) + 'px'; };
-  place(e); tb.onpointermove = place; tb.onpointerup = tb.onpointercancel = () => { tb.onpointermove = tb.onpointerup = tb.onpointercancel = null; };
+  place(e); tb.onpointermove = place; tb.onpointerup = tb.onpointercancel = () => { tb.onpointermove = tb.onpointerup = tb.onpointercancel = null; placeDev(); };
 };
+new ResizeObserver(() => placeDev()).observe(dock); // D14: opened, closed (display none), floated, docked or resized
 
 /* ---------- stop all + palette ---------- */
 $('#stopAll').onclick = () => $('#stopDlg').showModal();
