@@ -130,6 +130,7 @@
       "scripts/teh.mjs",
       "apps/server/process-tree.mjs",
       "apps/server/windows.mjs",
+      "apps/server/deps.mjs",
       "apps/server/update.mjs",
       "apps/server/pieces.mjs",
       "package.json",

@@ -437,8 +437,8 @@ test('agents see only allowlisted environment names, in a new session and a resu
   const { childEnv } = await import('../apps/server/child-env.mjs');
   assert.deepEqual(Object.keys(childEnv({ LC_TIME: 'C', LC_ALL: 'C', LC_SECRET_TOKEN: 'sentinel' })), ['LC_TIME', 'LC_ALL']);
   // A unit without a PATH line still finds tmux in ~/.local/bin, once, after the system directories.
-  assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'linux').PATH, '/usr/bin:/h/.local/bin');
-  assert.equal(childEnv({ HOME: '/h', PATH: '/h/.local/bin:/usr/bin' }, 'linux').PATH, '/h/.local/bin:/usr/bin');
+  assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'linux').PATH, '/usr/bin:/h/.local/bin:/h/.local/share/p9/bin');
+  assert.equal(childEnv({ HOME: '/h', PATH: '/h/.local/bin:/usr/bin' }, 'linux').PATH, '/h/.local/bin:/usr/bin:/h/.local/share/p9/bin');
   assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'darwin').PATH, '/usr/bin');
   console.log(`PASS child env: agent saw ${fresh.length} names (no sentinel, no API key), same after resume; every server spawn passes childEnv`);
 });
