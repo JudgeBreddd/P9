@@ -152,3 +152,21 @@ test('install.sh update with no Node: it fetches Node for the system check inste
   assert.doesNotMatch(run.stdout, /P9 is already installed/);
   assert.notEqual(run.status, 0);
 });
+
+// K7: the AppImage carries the pinned tmux and places it from that copy: checked against the same pin, no download asked.
+test('K7: placeTmux from the AppImage copy places it with no download; a changed or missing copy places nothing', { timeout: 30000 }, async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), 'p9-tmux-copy-')), bin = path.join(folder, 'bin'), copy = path.join(folder, 'tmux');
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const bytes = Buffer.from('a static tmux'), sums = { x64: createHash('sha256').update(bytes).digest('hex') };
+  const get = async () => { throw new Error('no download from the AppImage'); };
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get, from: copy }), 'copy-missing');
+  await writeFile(copy, 'a changed tmux');
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get, from: copy }), 'checksum-mismatch');
+  await writeFile(copy, bytes);
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get, from: copy }), 'placed');
+  assert.deepEqual(await readFile(path.join(bin, 'tmux')), bytes);
+  assert.equal((await stat(path.join(bin, 'tmux'))).mode & 0o777, 0o755);
+  // The AppImage build ships it under that name (package-linux.mjs fetches it into .build/tmux, pinned).
+  const linuxBuild = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).build.linux.extraResources;
+  assert.ok(linuxBuild.some((each) => each.from === '.build/tmux/tmux' && each.to === 'tmux/tmux'));
+});

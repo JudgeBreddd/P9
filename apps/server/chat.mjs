@@ -275,8 +275,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // The paste box's code goes to its stdin only. One login per agent; ended after 10 minutes, on Stop or at shutdown.
   // ponytail: Stop ends the CLI's whole process group (Windows: its job), so a browser the CLI started itself, not
   // handed to one already running, closes with it.
-  const LOGIN = { claude: ['--cli', 'auth', 'login', '--claudeai'], codex: ['cli', 'login'] };
-  const logins = new Map(); // agent -> { tree, url, exit, timer }
+  // D8: Codex signs in with its device code (a hidden flag in the codex P9 ships, pinned in the lockfile): it prints a
+  // page and a one-time code and listens on no port, so it works when the daemon runs on another computer.
+  const LOGIN = { claude: ['--cli', 'auth', 'login', '--claudeai'], codex: ['cli', 'login', '--device-auth'] };
+  const logins = new Map(); // agent -> { tree, url, code, unsupported, exit, timer }
   const agentName = (value) => typeof value === 'string' && Object.hasOwn(LOGIN, value); // never ['claude'], which hasOwn reads as 'claude'
   const endLogin = async (agent) => {
     const login = logins.get(agent);
@@ -289,7 +291,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const loginRoutes = {
     state: () => ({ status: 200, ...Object.fromEntries(Object.keys(LOGIN).map((agent) => {
       const login = logins.get(agent);
-      return [agent, { running: Boolean(login && login.exit === undefined), url: login?.url ?? null, exit: login?.exit ?? null }];
+      return [agent, { running: Boolean(login && login.exit === undefined), url: login?.url ?? null, code: login?.code ?? null, unsupported: login?.unsupported ?? false, exit: login?.exit ?? null }];
     })) }),
     async start(body) {
       if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'agent' || !agentName(body.agent)) return refused(400, 'request-refused');
@@ -298,19 +300,26 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (logins.has(agent) && logins.get(agent).exit === undefined) return refused(409, 'login-running');
       const [program, ...entry] = adapterOverride ? [process.execPath, adapterOverride, agent] : [process.execPath, adapterEntry(agent)];
       const tree = launchTree([program, ...entry, ...LOGIN[agent]], workspace);
-      const login = { tree, url: null, exit: undefined, timer: setTimeout(() => endLogin(agent), 10 * 60 * 1000) };
+      const login = { tree, url: null, code: null, unsupported: false, exit: undefined, timer: setTimeout(() => endLogin(agent), 10 * 60 * 1000) };
       logins.set(agent, login);
       let seen = '';
       const read = (chunk) => {
-        if (login.url || seen.length > 65536) return;
+        if ((login.url && (agent !== 'codex' || login.code)) || seen.length > 65536) return;
         seen += chunk;
-        login.url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(seen)?.[0] ?? null;
+        const text = seen.replace(/\x1b\[[0-9;]*m/g, '');
+        login.url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(text)?.[0] ?? null;
+        // Codex's one-time code: the first code-shaped word after its page, nothing else of the output.
+        if (agent === 'codex' && login.url) login.code = /(?<![\w-])[A-Z0-9]{4,8}-[A-Z0-9]{4,8}(?![\w-])/.exec(text.slice(text.indexOf(login.url) + login.url.length))?.[0] ?? null;
       };
       tree.child.stdout.on('data', read);
       tree.child.stderr.on('data', read);
       tree.child.stdin.on('error', () => {});
       tree.child.on('error', () => { login.exit = -1; clearTimeout(login.timer); });
-      tree.child.on('exit', (code) => { login.exit = code ?? -1; clearTimeout(login.timer); });
+      tree.child.on('exit', (code) => {
+        login.exit = code ?? -1; clearTimeout(login.timer);
+        // A later codex without the flag: named, so the wizard says why and offers its terminal sign-in.
+        login.unsupported = agent === 'codex' && code !== 0 && !login.url && seen.includes('--device-auth');
+      });
       return { status: 202, started: agent };
     },
     code(body) {
@@ -816,11 +825,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).
-    async events(after, waitMs, only, until) {
+    // tail (P20, with only): the newest tail blocks of each chat instead (ledger.tail), for the phone.
+    async events(after, waitMs, only, until, tail) {
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(waitMs) || waitMs < 0) return refused(400, 'request-refused');
-      if (only !== undefined || until !== undefined) {
-        if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))) return refused(400, 'request-refused');
-        return { status: 200, ...ledger.of(only, after, until) };
+      if (only !== undefined || until !== undefined || tail !== undefined) {
+        if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))
+          || (tail !== undefined && (!Number.isSafeInteger(tail) || tail < 1 || tail > 200))) return refused(400, 'request-refused');
+        return { status: 200, ...(tail === undefined ? ledger.of(only, after, until) : ledger.tail(only, until, tail)) };
       }
       let events = ledger.after(after);
       if (!events.length && waitMs) {

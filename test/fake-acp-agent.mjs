@@ -24,6 +24,16 @@ import * as acp from '@agentclientprotocol/sdk';
 if (process.argv.includes('--cli') || process.argv[3] === 'cli') {
   writeFileSync('fake-login-argv', JSON.stringify(process.argv.slice(2)));
   const url = existsSync('fake-login-url') ? readFileSync('fake-login-url', 'utf8').trim() : 'https://claude.com/cai/oauth/authorize?fake=1';
+  // Codex's device sign-in (D8), as codex 0.159 prints it, with the code in fake-login-device; "unsupported" is a codex
+  // without the flag, which exits 2 naming it.
+  if (process.argv.includes('--device-auth')) {
+    const code = existsSync('fake-login-device') ? readFileSync('fake-login-device', 'utf8').trim() : 'ABCD-12345';
+    if (code === 'unsupported') { process.stderr.write("error: unexpected argument '--device-auth' found\n"); process.exit(2); }
+    process.stdout.write('Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \x1b[94m'
+      + (existsSync('fake-login-url') ? url : 'https://auth.openai.com/codex/device') + '\x1b[0m\n\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94m' + code + '\x1b[0m\n');
+    setInterval(() => {}, 60000); // waits, as codex polls OpenAI, until Stop
+    await new Promise(() => {});
+  }
   process.stdout.write("Opening the browser to sign in\nIf the browser didn't open, visit: " + url + '\nPaste code here if prompted > ');
   let buffer = '';
   process.stdin.setEncoding('utf8').on('data', (chunk) => {

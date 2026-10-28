@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { sendToServer } from './move.mjs';
@@ -20,6 +20,7 @@ import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
+import { updatedFrom } from './whats-new.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -320,6 +321,8 @@ export async function createDesktop({ state, open } = {}) {
   // that has failed 2 starts goes back to the newest healthy one, through the launcher outside the install, and quits.
   const watched = offReason({ packaged: app.isPackaged, resources: process.resourcesPath, platform: process.platform, env: process.env }) === null;
   const startFile = path.join(app.getPath('userData'), 'update-state.json'), share = shareRoot();
+  // D13: once per start, read before the window asks: the version this profile ran before, when this start is an update.
+  let whatsNew = (from => from === null ? null : { version: ownVersion, from, link: 'https://github.com/' + REPO + '/commit/v' + ownVersion })(updatedFrom(app.getPath('userData'), ownVersion));
   const goBack = (start, to) => {
     // Sync lines, and the exit only once the launcher's start is known: app.exit drops pending writes.
     const line = text => { try { appendFileSync(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + text + '\n'); } catch {} };
@@ -504,6 +507,8 @@ export async function createDesktop({ state, open } = {}) {
   // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
   // and claude.com@evil.example fail). The page sees whether a URL exists, never the URL or any other output.
   const SIGN_IN_ORIGINS = { claude: ['https://claude.com', 'https://claude.ai', 'https://console.anthropic.com'], codex: ['https://auth.openai.com'] };
+  // D8: Codex's one-time code is shown in this window only, and only when it has exactly a code's shape.
+  const DEVICE_CODE = /^[A-Z0-9]{4,8}-[A-Z0-9]{4,8}$/;
   const vendorUrl = (agent, text) => { try { const url = new URL(text); return SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; } };
   ipcMain.handle('p9:agent-login', async (event, ...args) => {
     const [action, agent, code] = args;
@@ -519,7 +524,8 @@ export async function createDesktop({ state, open } = {}) {
       if (result.status !== 200) return result;
       if (action === 'state') return { status: 200, body: Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map(name => [name,
         { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && vendorUrl(name, result.body[name].url) !== null,
-          exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
+          code: name === 'codex' && typeof result.body[name]?.code === 'string' && DEVICE_CODE.test(result.body[name].code) ? result.body[name].code : null,
+          unsupported: result.body[name]?.unsupported === true, exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
       const open = typeof result.body[agent]?.url === 'string' ? vendorUrl(agent, result.body[agent].url) : null;
       if (!open) return { status: 409, body: { error: 'no-sign-in-page' } };
       if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
@@ -661,7 +667,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
-    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+    catch (error) { return failedReply(error); }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
@@ -1302,6 +1308,11 @@ export async function createDesktop({ state, open } = {}) {
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(url);
     return { opened: true };
+  });
+  // D13: the window asks once at load; the answer is given once, so a reload does not show it again.
+  ipcMain.handle('p9:whats-new', (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    const answer = whatsNew; whatsNew = null; return answer;
   });
   ipcMain.handle('p9:open-updates', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL

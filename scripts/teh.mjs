@@ -10,6 +10,7 @@ import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
 import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
+import { found, placeTmux } from '../apps/server/deps.mjs';
 
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -44,13 +45,17 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(new Error('bad-response')); } });
+      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); } });
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(data);
   });
 }
+
+// D16: a daemon older than the app answers a route it lacks with a plain-text 404: that is not "not answering", and
+// retrying never helps, so the page is told the daemon is out of date.
+export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } } : { status: 503, body: { error: 'daemon-unavailable' } };
 
 export function collectBundle({ status, journal, daemon }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
@@ -162,6 +167,9 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
     const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
       say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
     await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    // K7: the daemon cannot start without tmux. A system tmux wins; with none, the AppImage's pinned copy goes into P9's
+    // bin folder first (before the slow copy below and the service), so a machine with no tmux needs no admin password and no network.
+    if (!await found('tmux', { env })) await say('tmux from the AppImage: ' + await placeTmux({ from: path.join(resources, 'tmux', 'tmux') }));
     // A copy that fails (a full disk) costs the rollback only; the service below goes on.
     try {
       const kept = path.join(share, 'appimage'), copy = path.join(kept, version + '.AppImage');
