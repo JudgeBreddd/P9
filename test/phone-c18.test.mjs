@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { remoteDaemon, root } from './helpers.mjs';
 import { phone } from './phone-c16-helpers.mjs';
 
@@ -120,4 +121,121 @@ test('c18: the Chats bar has New chat, Theme and Settings; a theme survives a re
   await page.waitForSelector('#mtRebuild:text("Rebuild + reload")');
   await shot(page, 'phone-rebuild-done');
   console.log('PASS c18: three buttons; theme ' + other + ' kept over a reload; ' + fonts.length + ' fonts under the CSP; Rebuild + reload built once and reloaded');
+});
+
+// c18 part 2 (threat model row 66; Builder, 2026-10-27, A. 2): the phone changes what the desktop's Settings changes, through the
+// desktop's own routes, behind its session, CSRF and op ID. settings.json is in the test home (main.mjs's default place).
+const SETTINGS = { primary: 'AGENTS.md', registry: 'registry.json', waiting: 'needs-you' };
+const settingsFile = (paths) => path.join(paths.directory, '.config', 'p9', 'settings.json');
+const withSettings = async (paths) => {
+  await mkdir(path.dirname(settingsFile(paths)), { recursive: true });
+  await writeFile(path.join(paths.workspace, 'AGENTS.md'), '# work\n'); await writeFile(path.join(paths.workspace, 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+  await mkdir(path.join(paths.workspace, 'needs-you'));
+  await writeFile(settingsFile(paths), JSON.stringify(SETTINGS));
+  return {};
+};
+const onDisk = async (server) => JSON.parse(await readFile(settingsFile(server), 'utf8'));
+const op = () => ({ 'x-p9-op': randomUUID() });
+
+test('c18 row 66: the phone turns the agent lock and File protection on and off and saves settings.json; refused without a session or CSRF, or with a bad body', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: withSettings });
+  const { session } = await phone(t, server);
+  const post = (route, body, extra = {}) => server.remote(route, { method: 'POST', session, body, headers: { ...op(), ...extra } });
+  // The agent lock: on and off from the phone, and the desktop sees it.
+  assert.deepEqual([(await post('/agent-lock', { on: true })).status, (await server.desk('/agent-lock')).body], [200, { on: true }]);
+  assert.deepEqual((await post('/agent-lock', { on: false })).body, { on: false });
+  // File protection: the phone reads it and turns it off and on again.
+  assert.deepEqual((await server.remote('/file-protection', { session })).body, { on: true });
+  assert.deepEqual([(await post('/file-protection', { on: false })).body, (await server.desk('/file-protection')).body], [{ on: false }, { on: false }]);
+  assert.deepEqual((await post('/file-protection', { on: true })).body, { on: true });
+  // Refused: no session, a wrong CSRF token, a body of any other shape; nothing changed.
+  for (const route of ['/agent-lock', '/file-protection']) {
+    assert.equal((await server.remote(route, { method: 'POST', body: { on: true }, headers: op() })).status, 401, route + ' no session');
+    assert.equal((await post(route, { on: route === '/agent-lock' }, { 'x-p9-csrf': 'wrong' })).status, 403, route + ' wrong CSRF');
+    for (const bad of [{ on: 'off' }, { on: false, x: 1 }, {}]) assert.equal((await post(route, bad)).status, 400, route + ' ' + JSON.stringify(bad));
+  }
+  assert.deepEqual([(await server.desk('/agent-lock')).body, (await server.desk('/file-protection')).body], [{ on: false }, { on: true }]);
+
+  // settings.json: the phone reads it (not the desktop's phone address) and saves a row through the same checks, keeping .bak.
+  const read = await server.remote('/setup/settings', { session });
+  assert.deepEqual(read.body, { settings: SETTINGS, error: null }, 'no remoteOrigin for the phone');
+  assert.equal((await server.desk('/setup/settings')).body.remoteOrigin, server.origin, 'the desktop still gets it');
+  const saved = await post('/setup/settings', { server_host: 'box' });
+  assert.deepEqual([saved.status, saved.body], [200, { settings: { ...SETTINGS, server_host: 'box' } }]);
+  assert.deepEqual(await onDisk(server), { ...SETTINGS, server_host: 'box' });
+  assert.deepEqual(JSON.parse(await readFile(settingsFile(server) + '.bak', 'utf8')), SETTINGS);
+  for (const [body, extra, status, error] of [[{ nope: 1 }, {}, 400, 'request-refused'], [{ server_host: 'a b' }, {}, 400, 'settings-refused'], [{}, {}, 400, 'request-refused'],
+    [{ server_host: 'other' }, { 'x-p9-csrf': 'wrong' }, 403, 'request-refused']]) {
+    const refused = await post('/setup/settings', body, extra);
+    assert.deepEqual([refused.status, refused.body?.error], [status, error], JSON.stringify(body));
+  }
+  assert.equal((await server.remote('/setup/settings', { method: 'POST', body: { server_host: 'other' }, headers: op() })).status, 401);
+  assert.deepEqual(await onDisk(server), { ...SETTINGS, server_host: 'box' }, 'nothing written by a refused save');
+  // The rest of /setup and new files stay the desktop's.
+  for (const route of ['/setup/starter', '/setup/login', '/setup/agent-terminal']) assert.equal((await post(route, {})).status, 404, route);
+  assert.equal((await post('/files', { path: 'phone-made.txt', content: 'x' })).status, 404);
+  console.log('PASS c18 row 66: phone lock on/off, protection off/on, settings row saved with .bak; no session 401, bad CSRF 403, bad body 400, nothing changed');
+});
+
+test('c18 row 66: the phone\'s Security settings: one toggle each, protection off asks first, Unrestricted mode turns all off and back; Mission Control files save', { skip: process.platform === 'win32', timeout: 180000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: withSettings });
+  const { page } = await phone(t, server);
+  const asked = [];
+  let answer = false;
+  page.on('dialog', (dialog) => { asked.push(dialog.message()); return answer ? dialog.accept() : dialog.dismiss(); });
+  const open = async () => { if (await page.locator('#sheet[open]').count()) await page.evaluate(() => document.querySelector('#sheet').close());
+    await page.click('[data-bar="chat"] #setBtn'); await page.waitForSelector('#phoneSettings #setFree'); };
+  const checked = () => page.$$eval('#phoneSettings label.set input', (boxes) => Object.fromEntries(boxes.map((b) => [b.id, b.checked])));
+  const daemonSide = async () => [(await server.desk('/agent-lock')).body.on, (await server.desk('/file-protection')).body.on];
+  const local = () => page.evaluate(() => ['p9-mode-ok:Full access', 'p9-mode-ok:Bypass permissions', 'p9-mode:codex', 'p9-mode:claude'].map((k) => localStorage.getItem(k)));
+  const settled = (want) => page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#phoneSettings label.set input')].map((b) => b.checked)) === want, JSON.stringify(want), { timeout: 5000 });
+  await open();
+  assert.deepEqual(await page.$$eval('#phoneSettings h2', (h) => h.map((x) => x.textContent)), ['Security settings', 'Mission Control files', 'Maintenance']);
+  assert.deepEqual(await page.$$eval('#phoneSettings label.set strong', (s) => s.map((x) => x.textContent)), ['Agent lock', 'File protection', 'Warn before Full access and Bypass permissions', 'Unrestricted mode']);
+  assert.deepEqual(await checked(), { setLock: false, setProtect: true, setWarn: true, setFree: false }, 'the defaults');
+  // One toggle each.
+  await page.click('#setLock'); await settled([true, true, true, false]);
+  assert.deepEqual(await daemonSide(), [true, true]);
+  await page.click('#setLock'); await settled([false, true, true, false]);
+  // File protection off asks first; Cancel keeps it on, OK turns it off; on never asks.
+  await page.click('#setProtect'); await settled([false, true, true, false]);
+  assert.equal(asked.length, 1); assert.match(asked[0], /^Turn off file protection\?/); assert.match(asked[0], /\.env/);
+  assert.deepEqual(await daemonSide(), [false, true], 'Cancel kept protection on');
+  answer = true; await page.click('#setProtect'); await settled([false, false, true, false]);
+  assert.deepEqual(await daemonSide(), [false, false]);
+  await page.click('#setProtect'); await settled([false, true, true, false]);
+  assert.equal(asked.length, 2, 'turning protection on never asks');
+  await page.click('#setWarn'); await settled([false, true, false, false]);
+  assert.deepEqual(await local(), ['1', '1', null, null]);
+  await page.click('#setWarn'); await settled([false, true, true, false]);
+  assert.deepEqual(await local(), [null, null, null, null]);
+  // Unrestricted mode, with the lock on: Cancel changes nothing; OK turns every restriction off.
+  await page.click('#setLock'); await settled([true, true, true, false]);
+  answer = false; await page.click('#setFree'); await settled([true, true, true, false]);
+  assert.match(asked.at(-1), /^Turn on Unrestricted mode\?/);
+  assert.deepEqual([await daemonSide(), await local()], [[true, true], [null, null, null, null]], 'Cancel changed nothing');
+  answer = true; await page.click('#setFree'); await settled([false, false, false, true]);
+  assert.deepEqual([await daemonSide(), await local()], [[false, false], ['1', '1', 'Full access', 'Bypass permissions']]);
+  await page.locator('#phoneSettings h2').first().scrollIntoViewIfNeeded(); await shot(page, 'phone-security-unrestricted');
+  await page.reload(); await page.waitForSelector('h1:text("Chats")'); await open();
+  assert.deepEqual(await checked(), { setLock: false, setProtect: false, setWarn: false, setFree: true }, 'still on after a reload');
+  // Off puts the defaults back: protection on, the warnings on, new chats in the agents' own modes, the lock off.
+  const before = asked.length;
+  await page.click('#setFree'); await settled([false, true, true, false]);
+  assert.deepEqual([await daemonSide(), await local(), asked.length], [[false, true], [null, null, null, null], before]);
+
+  // Mission Control files: the desktop's rows; a value saves when the box is left, a refused one keeps its reason.
+  const host = page.locator('#phoneSettings [data-mission="server_host"]');
+  await host.fill('box'); await host.blur();
+  await page.waitForFunction(() => document.querySelector('#phoneSettings [data-mission="server_host"]')?.value === 'box' && !document.querySelector('[data-mission-err]'));
+  for (let i = 0; i < 30 && (await onDisk(server)).server_host !== 'box'; i++) await page.waitForTimeout(100);
+  assert.deepEqual(await onDisk(server), { ...SETTINGS, server_host: 'box' });
+  await host.fill('a b'); await host.blur();
+  await page.waitForSelector('#phoneSettings [data-mission-err]');
+  assert.match(await page.locator('#phoneSettings [data-mission-err]').innerText(), /^Not saved: server_host/);
+  assert.deepEqual(await onDisk(server), { ...SETTINGS, server_host: 'box' });
+  await page.locator('#phoneSettings [data-mission-err]').scrollIntoViewIfNeeded(); await shot(page, 'phone-mission-files');
+  await page.reload(); await page.waitForSelector('h1:text("Chats")'); await open();
+  assert.equal(await page.locator('#phoneSettings [data-mission="server_host"]').inputValue(), 'box', 'kept over a reload');
+  console.log('PASS c18 row 66: phone toggles; protection off asks (Cancel keeps it); Unrestricted on/off with one confirm, kept over a reload; a Mission row saved, a bad one refused');
 });

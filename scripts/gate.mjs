@@ -99,6 +99,7 @@ export async function mutationInventory(directory) {
   // that does not start moved to <root>.failed-*) and writes <ownership>/update/result.json (a temp file, then rename). apps/desktop/server-update.mjs = git archive (fixed argv) into a
   // temp folder for the push, removed after.
   // phone rebuild (c18, row 64) = server.mjs's POST /rebuild: pnpm build (or P9_BUILD in tests) with fixed argv, no shell, in the checkout it serves, 10 minutes, one at a time; it writes only what the build writes (apps/web/dist).
+  // phone Security settings (c18, row 66) = no new writes: the phone listener gets the desktop's POST /agent-lock and /file-protection (prefs rows) and /setup/settings (settings.json, .bak, temp + rename).
   // frame runtimes (item 19, row 65) = scripts/frame-runtimes.mjs, a build step: copies Mermaid's and TypeScript's browser builds and writes the React bundle into apps/web/dist/frame; nothing at run time.
   // sprint (#35) = apps/server/sprint.mjs reads the sprint status file only (open 'r', then stat and read); it writes nothing.
   // desktop rollback (AU5) = update-state.json in the profile folder and rollback.json's shown mark in P9's folder (a temp file, then rename); it starts nothing (main does).

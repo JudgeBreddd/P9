@@ -12,7 +12,7 @@ import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './re
 import { updateServer } from './server-update.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer } from './xfer.mjs';
-import { ORIGIN, FRAME_CSP } from '../../packages/protocol/index.mjs';
+import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
 import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR, EDITOR_COMMIT, EDITOR_DOWNLOADS } from './editor-host.mjs';
@@ -37,10 +37,7 @@ export const PETDEX_URL = 'https://petdex.dev';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
 export const FILE_PROTECTION_DOCS = 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection';
-export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here and on your paired phone, from opening or changing your secrets '
-  + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons.\n\n'
-  + 'With it off, one wrong save can break those files, and anyone holding your unlocked, paired phone can read or change them, keys included.\n\n'
-  + 'Agents, terminals and editor extensions are not affected: they can already change any file you can. You can turn protection back on any time in Settings.';
+export { FILE_PROTECTION_RISK }; // the warning's words, in protocol so the phone's Settings asks with them too (c18)
 // The Settings page's UI settings (threat model row 15): one fixed shape, checked here, kept in the profile folder.
 // pet: each focus mode's own pet settings: shown or not, size in pixels, a petdex pet per agent (system when the agent has
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.

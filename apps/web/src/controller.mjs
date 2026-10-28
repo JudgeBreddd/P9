@@ -6,6 +6,8 @@ import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
+import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
@@ -1808,26 +1810,6 @@ function wirePetSettings() {
 // editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
-const MISSION_TIPS = { primary: 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)',
-  registry: "JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card)",
-  waiting: 'Folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane\'s Needs you view)',
-  hub: "Folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it)",
-  scripts_root: 'Full path of the folder your buttons and apps run in, and the one ~/workspace stands for (for the Mission Control buttons). Empty: the workspace' };
-// A function: PATH_KEYS is declared further down, with the wizard.
-const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
-  ['space', 'Extra sections file (optional)', 'setup-file', 'JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page)'],
-  ['server_host', 'Server host name (optional)', '', "Network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
-  ['page_schemes', 'Extra link types for pages (optional, comma-separated)', '', 'Link types besides http and https that a Mission Control page may open, for example obsidian (a page link of that type asks before it opens)'],
-  ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Named folders of .md notes (for the notes an extra Mission Control section shows, by that name)']];
-const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;
-// The box's text as the settings value; empty removes the key. No checks here: the daemon's are the rules.
-const missionValue = (k, text) => {
-  text = text.trim();
-  if (!text) return null;
-  if (k === 'page_schemes') return text.split(/[\s,]+/).filter(Boolean);
-  if (k === 'notes_roots') return Object.fromEntries(text.split('\n').filter(l => l.trim()).map(l => { const i = l.indexOf('='); return i < 0 ? [l.trim(), ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
-  return text;
-};
 function missionGroup() {
   const s = missionFiles.settings;
   return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The files and folders Mission Control reads, from its settings file (for the Mission Control focus). Each row saves when you leave it.', 'mission-control-files')}</legend>`
@@ -1874,6 +1856,28 @@ function serverRow() {
     + (host ? '<button data-slot="button" data-variant="outline" id="setServerLocal">Use Local</button>' : '')
     + info('Server mode: chat, Mission Control and the terminal use the P9 on that server, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running. Dev Focus and folder pickers stay on this computer for now.', 'settings') + '</div>';
 }
+// c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
+const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
+function securityGroup(box) {
+  const [lock, protect, warn, free] = [SECURITY.lock, SECURITY.protect, SECURITY.warn, SECURITY.unrestricted], both = window.p9?.chat && window.p9?.fileProtection;
+  return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way.', 'settings')}</legend>`
+    + (window.p9?.chat ? box('setLock', lock[0], agentLock === true, agentLock === null ? SECURITY.unknown : lock[1], agentLock === null, lock[2], 'agent-lock') : '')
+    + (window.p9?.fileProtection ? box('setProtect', protect[0], fileProtect !== false, fileProtect === null ? SECURITY.unknown : fileProtect ? protect[1] : SECURITY.protectOff, fileProtect === null, protect[2], 'file-protection') : '')
+    + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2])
+    + (both ? box('setFree', free[0], unrestricted(agentLock, fileProtect, START), free[1], agentLock === null || fileProtect === null, free[2]) : '')
+    + '</fieldset>';
+}
+// On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
+// protection already off that warning never shows, so Unrestricted asks once itself (row 25a: no silent loosened default).
+async function setUnrestricted(on) {
+  if (on && fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1])) return renderSettings();
+  const r = fileProtect === !on ? null : await window.p9.fileProtection(!on).catch(() => null);
+  fileProtect = r?.status === 200 ? r.body.on : fileProtect;
+  if (fileProtect !== !on) return renderSettings();
+  if (on && agentLock) { const l = await liveChat.call('setLock', { on: false }); agentLock = l.status === 200 ? l.body.on : agentLock; }
+  setWarnsLoose(!on); setStarts(on, START);
+  renderSettings();
+}
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -1885,8 +1889,7 @@ function renderSettings() {
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
-    + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents in every chat can read and answer but cannot edit files or run anything that asks permission.', 'agent-lock') : '')
-    + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor (Dev Focus, here and on your phone) cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
+    + securityGroup(box)
     + (missionFiles?.settings ? missionGroup() : '')
     + (serverInfo ? serverRow() : '')
     + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to server (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'settings')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
@@ -1914,6 +1917,8 @@ function renderSettings() {
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
   if ($('#setProtect')) $('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); fileProtect = r?.status === 200 ? r.body.on : fileProtect; renderSettings(); };
+  $('#setWarn').onchange = e => { setWarnsLoose(e.target.checked); renderSettings(); };
+  if ($('#setFree')) $('#setFree').onchange = e => setUnrestricted(e.target.checked);
   $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
   $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };
   if ($('#setWel')) $('#setWel').onclick = () => { $('#setDlg').close(); welcome(); };
@@ -2122,7 +2127,6 @@ async function firstRun() {
 const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out; hub is optional.
-const PATH_KEYS = [['primary', 'Main project file', 'setup-file'], ['registry', 'Buttons, apps and pages file', 'setup-file'], ['waiting', 'Folder of items waiting on you', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder your buttons run in (optional, full path)', '']];
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
 const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];

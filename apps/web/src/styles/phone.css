@@ -256,3 +256,4 @@ body.inchat nav{display:none}
 #themeMenu .tgrid,#themeMenu .fgrid{grid-template-columns:repeat(2,minmax(0,1fr));padding:2px 0}#themeMenu .theme-pop,#themeMenu.theme-pop{padding:0}
 #themeMenu .hd{margin:12px 0 6px}#themeMenu :is(.tnote,.fx-row){padding-left:0;padding-right:0}#themeMenu .roll{margin:8px 0 0}
 #phoneSettings h2{margin-top:8px}#phoneSettings p{margin:0}
+#phoneSettings label.set{display:flex;align-items:flex-start;gap:4px}#phoneSettings label.set input{margin-top:2px;flex:none}#phoneSettings label.set>span,#phoneSettings label.mission-file{display:grid;gap:4px}#phoneSettings label.set .muted{font-size:13px}#phoneSettings .field-err{color:var(--red)}
