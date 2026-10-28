@@ -3,10 +3,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
-import { dependencies, profileText, sandboxDependency, PROFILE } from '../apps/server/deps.mjs';
+import { dependencies, placeTmux, profileText, sandboxDependency, PROFILE, TMUX_SHA256 } from '../apps/server/deps.mjs';
 import { root } from './helpers.mjs';
 
 const linux = process.platform === 'linux';
@@ -82,4 +84,27 @@ test('Item 15: scripts/deps.mjs exits 3 only when P9 cannot run without what is 
   execFileSync('sh', ['-c', `printf '#!/bin/sh\\n' > "${some}/tmux" && chmod 755 "${some}/tmux"`]);
   const sshOnly = spawnSync(process.execPath, ['scripts/deps.mjs', '--headless'], { cwd: root, env: { PATH: some, HOME: empty } });
   assert.deepEqual([sshOnly.status, sshOnly.stdout.toString().split('\n')[0].slice(0, 6)], [0, '- ssh:']);
+});
+
+test('Item 15 (row 60): tmux comes from P9\'s pinned build with no admin password; a failed or changed download places nothing', { timeout: 60000 }, async (t) => {
+  const bin = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-tmux-')), 'bin');
+  t.after(() => rm(path.dirname(bin), { recursive: true, force: true }));
+  const bytes = Buffer.from('a static tmux');
+  const sums = { x64: createHash('sha256').update(bytes).digest('hex') };
+  const urls = [];
+  const serve = (body, ok = true) => async (url) => { urls.push(url); return new Response(body, { status: ok ? 200 : 404 }); };
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get: serve('a changed tmux') }), 'checksum-mismatch');
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get: serve(bytes, false) }), 'download-failed');
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get: async () => { throw new Error('offline'); } }), 'download-failed');
+  assert.equal(await placeTmux({ arch: 'riscv64', bin, sums, get: serve(bytes) }), 'no-build');
+  await assert.rejects(stat(path.join(bin, 'tmux')), /ENOENT/, 'nothing placed until the bytes match');
+  assert.equal(await placeTmux({ arch: 'x64', bin, sums, get: serve(bytes) }), 'placed');
+  assert.deepEqual([(await readFile(path.join(bin, 'tmux'))).equals(bytes), (await stat(path.join(bin, 'tmux'))).mode & 0o777], [true, 0o755]);
+  assert.equal(urls[0], 'https://github.com/JudgeBreddd/P9/releases/download/deps-tmux-3.8/tmux-linux-x64');
+  assert.deepEqual(Object.keys(TMUX_SHA256), ['x64', 'arm64']);
+  // A server update imports scripts/deps.mjs for ensureDependencies() (apps/server/update.mjs): the import prints nothing.
+  const imported = spawnSync(process.execPath, ['--input-type=module', '-e',
+    'const m = await import(process.argv[1]); console.log(typeof m.ensureDependencies);', pathToFileURL(path.join(root, 'scripts/deps.mjs')).href]);
+  assert.equal(imported.stdout.toString(), 'function\n', imported.stderr.toString());
+  console.log('PASS item 15 tmux: mismatch, 404, offline and an unknown arch place nothing; matching bytes placed 0755; scripts/deps.mjs imports clean');
 });

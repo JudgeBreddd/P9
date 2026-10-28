@@ -5,6 +5,7 @@
 // that installs it, which needs the admin password. install.sh prints that list before it asks; the wizard shows it.
 import { readFile, readdir, rename, stat, writeFile, mkdir, access } from 'node:fs/promises';
 import { constants, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -58,6 +59,29 @@ export async function placeAgents(agents, { platform = process.platform, bin = b
     written.push(agent);
   }
   return written;
+}
+
+// Bundle first for tmux (threat model row 60): a static tmux 3.8, built in CI from tmux's pinned tarball
+// (bare-machine.sh tmux) and published as the pre-release deps-tmux-3.8, goes into P9's bin folder with no admin
+// password. Pinned to these SHA-256 values; a download that fails or does not match places nothing, and install.sh asks
+// for the distro's tmux as before. Returns 'placed' or why not.
+export const TMUX_SHA256 = {
+  x64: '8003e4b0d5447fd695070fe26e8c7aa460a4731f84d1cb024bf126ba5c77fc03',
+  arm64: '656c14ed1c4adac6ec792c8e4ce12441c5a1a832fcf5d7cbfbd672b751c65649',
+};
+const TMUX_URL = 'https://github.com/JudgeBreddd/P9/releases/download/deps-tmux-3.8/tmux-linux-';
+export async function placeTmux({ arch = process.arch, bin = binFolder('linux'), get = fetch, sums = TMUX_SHA256 } = {}) {
+  const sum = sums[arch];
+  if (!sum) return 'no-build';
+  const bytes = await get(TMUX_URL + arch, { signal: AbortSignal.timeout(120_000) })
+    .then(async (response) => response.ok ? Buffer.from(await response.arrayBuffer()) : null, () => null);
+  if (!bytes) return 'download-failed';
+  if (createHash('sha256').update(bytes).digest('hex') !== sum) return 'checksum-mismatch';
+  await mkdir(bin, { recursive: true, mode: 0o700 });
+  const file = path.join(bin, 'tmux');
+  await writeFile(file + '.tmp', bytes, { mode: 0o755 });
+  await rename(file + '.tmp', file);
+  return 'placed';
 }
 
 // A program on PATH, in ~/.local/bin (where Claude's own installer puts it) or in P9's bin folder.
@@ -145,6 +169,7 @@ export async function dependencies({ platform = process.platform, env = process.
 // sudo itself; the caller shows the reason first and asks.
 export async function ensureDependencies(options = {}) {
   const placed = await placeAgents(AGENTS, { refresh: true });
+  if ((options.platform ?? process.platform) === 'linux' && !await found('tmux', options) && await placeTmux() === 'placed') placed.push('tmux');
   const missing = (await dependencies(options)).filter((dependency) => dependency.admin);
   return { placed, missing };
 }
