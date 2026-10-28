@@ -1,9 +1,10 @@
 export function createLifecycle() {
   const starts = new Set();
-  let stopping = null;
+  let stopping = null, held = null;
 
+  // held: a server update about to restart the service (update.mjs) refuses new starts the same way Stop all does.
   function begin() {
-    if (stopping) return null;
+    if (stopping || held) return null;
     let release;
     const settled = new Promise((resolve) => { release = resolve; });
     starts.add(settled);
@@ -19,5 +20,7 @@ export function createLifecycle() {
     return stopping;
   }
 
-  return { begin, stopAll, stopping: () => Boolean(stopping) };
+  return { begin, stopAll, stopping: () => Boolean(stopping), hold: (reason) => { held = reason; }, release: (reason) => { if (held === reason) held = null; },
+    // The refusal for a start begin() turned down.
+    refusal: () => held ?? 'stop-all-running' };
 }
