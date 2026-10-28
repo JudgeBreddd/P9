@@ -361,7 +361,7 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
 // "installed" cannot be told); when setting up fails the reason shows and Continue without it goes on, never stuck.
 test('D16: the pick step says Continue; a failed setup names why and still goes on to sign-in', { skip: !linux, timeout: 60000 }, async (t) => {
   const deadline = Date.now() + 55000, left = () => Math.max(1000, deadline - Date.now());
-  const { instance } = await start(t, []);
+  const { instance } = await start(t, [], { without: ['ssh'] });
   const bin = path.join(instance.directory, '.local', 'share', 'p9', 'bin');
   await mkdir(bin, { recursive: true });
   await chmod(bin, 0o500);
