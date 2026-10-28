@@ -134,12 +134,14 @@ test('update: a newer version builds beside the checkout, waits for the turn, th
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'slow' })).status, 202);
   await until(async () => (await call(instance, '/chat')).conversations.find((c) => c.id === id).state === 'turn', 'the slow turn started');
-  const deps = 'export async function ensureDependencies() { console.log("placing"); return { placed: ["git"], missing: [{ id: "tmux", why: "terminals", command: "sudo apt install tmux" }] }; }\n';
+  // The stub hands back the Electron it was asked about: the checkout's, where the swap moves the build (c13).
+  const deps = 'export async function ensureDependencies(o) { console.log("placing"); return { placed: ["git"], missing: [{ id: "tmux", why: "terminals", command: "sudo apt install tmux" }, { id: "electron", why: o.electron, command: "" }] }; }\n';
   const pushed = await push(instance, await archive(NEXT, { 'scripts/deps.mjs': deps }), NEXT);
   assert.equal(pushed.status, 202, JSON.stringify(pushed));
   const waiting = await until(async () => { const j = await job(instance); return j?.phase === 'waiting-turns' && j; }, 'waiting for the turn');
   assert.equal(waiting.turns, 1);
-  assert.deepEqual(waiting.missing, [{ id: 'tmux', why: 'terminals', command: 'sudo apt install tmux' }]);
+  assert.deepEqual(waiting.missing, [{ id: 'tmux', why: 'terminals', command: 'sudo apt install tmux' },
+    { id: 'electron', why: path.join(instance.source, 'node_modules', 'electron', 'dist', 'electron'), command: '' }]);
   const next = path.join(instance.share, 'source.new-' + pushed.id);
   assert.ok(existsSync(path.join(next, 'built-install')) && existsSync(path.join(next, 'built-build')), 'built in the new tree');
   assert.deepEqual((await lines(instance.log.pnpm)).map((l) => l.split(' ').slice(1).join(' ')), ['install --frozen-lockfile --ignore-scripts', 'build']);

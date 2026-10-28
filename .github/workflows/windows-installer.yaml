@@ -896,6 +896,10 @@ jobs:
           sha=$(node --input-type=module -e "import('./apps/desktop/editor-host.mjs').then(m => console.log(m.EDITOR_DOWNLOADS.x64[1]))")
           echo "$sha  $root/editor/reh.tar.gz" | sha256sum -c
           test -f "$root/licenses/editor-server-NOTICE.md"
+      # Item 15: what this AppImage's runtime needs to mount it on a bare Ubuntu 24.04, round by round, each package checked
+      # against Ubuntu Desktop's manifest (scripts/bare-machine.sh appimage).
+      - name: The AppImage on a bare Ubuntu 24.04
+        run: set -o pipefail; bash scripts/bare-machine.sh appimage dist/linux/*.AppImage 2>&1 | tee "$RUNNER_TEMP/appimage-bare.log"
       # Item 16: a first start on a computer with no P9 installs the editor server from that copy, with no network asked of
       # it. The unpacked AppImage, as its runtime would start it (APPIMAGE set), with a fresh home; no FUSE on the runner.
       - name: The AppImage installs the editor server

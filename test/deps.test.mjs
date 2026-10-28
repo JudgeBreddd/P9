@@ -108,3 +108,26 @@ test('Item 15 (row 60): tmux comes from P9\'s pinned build with no admin passwor
   assert.equal(imported.stdout.toString(), 'function\n', imported.stderr.toString());
   console.log('PASS item 15 tmux: mismatch, 404, offline and an unknown arch place nothing; matching bytes placed 0755; scripts/deps.mjs imports clean');
 });
+
+test('Item 15: a server update\'s check (update.mjs) leaves the agents\' launchers alone and answers on its last line', { skip: !linux, timeout: 60000 }, async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-deps-update-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  // The launcher the daemon wrote for its own tree; tmux on PATH, so nothing is downloaded.
+  const bin = path.join(home, '.local', 'share', 'p9', 'bin');
+  const tools = path.join(home, 'tools');
+  await mkdir(bin, { recursive: true });
+  await mkdir(tools);
+  await writeFile(path.join(bin, 'claude'), '#!/bin/sh\necho the daemon\'s own\n', { mode: 0o755 });
+  await writeFile(path.join(tools, 'tmux'), '#!/bin/sh\n', { mode: 0o755 });
+  // update.mjs's own call, from a build folder, naming the checkout's Electron (none here: a headless checkout).
+  const checked = spawnSync(process.execPath, ['--input-type=module', '-e',
+    'const { ensureDependencies } = await import(process.argv[1]); process.stdout.write("\\n" + JSON.stringify(await ensureDependencies({ electron: process.argv[2] })) + "\\n");',
+    pathToFileURL(path.join(root, 'scripts/deps.mjs')).href, path.join(home, 'source', 'node_modules', 'electron', 'dist', 'electron')],
+  { env: { ...process.env, HOME: home, PATH: tools + path.delimiter + process.env.PATH }, timeout: 30000 });
+  assert.equal(checked.status, 0, checked.stderr.toString());
+  const result = JSON.parse(checked.stdout.toString().trim().split('\n').at(-1));
+  assert.deepEqual(result.placed, []);
+  assert.ok(Array.isArray(result.missing) && !result.missing.some((m) => m.id === 'sandbox' || m.id === 'tmux'), JSON.stringify(result));
+  assert.equal(await readFile(path.join(bin, 'claude'), 'utf8'), '#!/bin/sh\necho the daemon\'s own\n', 'a launcher pointed at the build folder breaks when a failed update removes it');
+  console.log('PASS item 15 update check: launcher untouched, no Electron at the checkout so no sandbox ask, JSON on the last line');
+});

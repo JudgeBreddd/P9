@@ -164,11 +164,13 @@ export async function dependencies({ platform = process.platform, env = process.
   return [...agents, ...system, ...desktop ? [await sandboxDependency({ electron })] : []];
 }
 
-// What every update runs after its build (c15's /update, install.sh's update path): the agents the owner picked point
-// at the new version, and the system packages still missing come back with their reasons and commands. It never runs
-// sudo itself; the caller shows the reason first and asks.
+// What a server update runs after its build (c15's update.mjs): P9's own tmux placed if there is none, and the system
+// packages still missing, with their reasons and commands. It never runs sudo itself; the caller shows the reason first
+// and asks. options.electron: the checkout's Electron, since the update builds in a folder the swap renames. The agents'
+// launchers are left alone: the daemon points them at its own tree at every start (main.mjs), after the swap, and a
+// launcher pointed at the build folder would break when a failed update removes that folder.
 export async function ensureDependencies(options = {}) {
-  const placed = await placeAgents(AGENTS, { refresh: true });
+  const placed = [];
   if ((options.platform ?? process.platform) === 'linux' && !await found('tmux', options) && await placeTmux() === 'placed') placed.push('tmux');
   const missing = (await dependencies(options)).filter((dependency) => dependency.admin);
   return { placed, missing };
