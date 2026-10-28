@@ -202,6 +202,10 @@
         {
           "from": ".build/editor/reh.tar.gz",
           "to": "editor/reh.tar.gz"
+        },
+        {
+          "from": ".build/tmux/tmux",
+          "to": "tmux/tmux"
         }
       ]
     },

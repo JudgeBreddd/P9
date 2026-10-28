@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import http2 from 'node:http';
 import os from 'node:os';
@@ -16,7 +16,8 @@ import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollD
 import { newer } from '../apps/server/update.mjs';
 import { PIECE } from '../apps/server/pieces.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
-import { updateServer } from '../apps/desktop/server-update.mjs';
+import { updateServer, names } from '../apps/desktop/server-update.mjs';
+import { rebuildStandIns } from '../apps/server/server.mjs';
 
 const skip = process.platform === 'win32' ? 'a server update is Linux only (systemd, a source checkout)' : false;
 const VERSION = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -247,26 +248,29 @@ test('update, laptop: a checkout one version ahead pushes its HEAD and follows t
 const TINY = `import { createServer } from 'node:http'; import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 const [state] = process.argv.slice(2), here = new URL('.', import.meta.url).pathname;
 if (existsSync(here + 'broken')) process.exit(1);
+if (existsSync(here + 'slow')) await new Promise((resolve) => setTimeout(resolve, 4000));
 const version = JSON.parse(readFileSync(here + 'package.json', 'utf8')).version;
 rmSync(state + '/daemon.sock', { force: true });
 writeFileSync(state + '/desktop.json', JSON.stringify({ cookie: 'c', csrf: 'x', socketPath: state + '/daemon.sock' }));
 createServer((req, res) => res.end(req.headers.cookie === 'p9=c' ? JSON.stringify({ version }) : '{}')).listen(state + '/daemon.sock');
 `;
-async function swapStage(t, { broken = false } = {}) {
+async function swapStage(t, { broken = false, slow = false, activeAfter = 0, wait = 5000 } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-swap-'));
   const source = path.join(directory, 'source'), next = path.join(directory, 'source.new-x'), state = path.join(directory, 'state'), bin = path.join(directory, 'bin');
   await tree(source, VERSION, { 'tiny.mjs': TINY });
-  await tree(next, NEXT, { 'tiny.mjs': TINY, ...(broken ? { broken: '' } : {}) });
+  await tree(next, NEXT, { 'tiny.mjs': TINY, ...(broken ? { broken: '' } : {}), ...(slow ? { slow: '' } : {}) });
   await mkdir(state); await mkdir(bin);
   const pid = path.join(directory, 'pid'), log = path.join(directory, 'systemctl.log');
-  await sh(path.join(bin, 'systemctl'), `echo "$*" >> '${log}'\n[ -e '${pid}' ] && kill "$(cat '${pid}')" 2>/dev/null\n`
+  const at = path.join(directory, 'restarted');
+  await sh(path.join(bin, 'systemctl'), `[ "$2" = is-active ] && { [ $(( $(date +%s) - $(cat '${at}' 2>/dev/null || echo 0) )) -ge ${activeAfter} ] && echo active || echo activating; exit 0; }\n`
+    + `date +%s > '${at}'\necho "$*" >> '${log}'\n[ -e '${pid}' ] && kill "$(cat '${pid}')" 2>/dev/null\n`
     + `'${process.execPath}' '${source}/tiny.mjs' '${state}' </dev/null >/dev/null 2>&1 &\necho $! > '${pid}'\n`);
   t.after(() => { try { process.kill(Number(execFileSync('cat', [pid]).toString())); } catch {} });
   // The old one running, as the service would be.
   execFileSync(path.join(bin, 'systemctl'), ['--user', 'start', 'test'], { env: process.env });
   const result = path.join(directory, 'result.json');
   const run = () => new Promise((resolve) => spawn(process.execPath, [path.join(root, 'scripts/update-swap.mjs'), '--root', source, '--next', next, '--version', NEXT,
-    '--from', VERSION, '--id', 'job', '--state', state, '--result', result, '--service', 'p9-test', '--wait', '5000'],
+    '--from', VERSION, '--id', 'job', '--state', state, '--result', result, '--service', 'p9-test', '--wait', String(wait)],
   { env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH }, stdio: 'ignore' }).on('exit', resolve));
   return { directory, source, next, result, log, run };
 }
@@ -360,4 +364,79 @@ test('update: a swap that fails before any restart gives new starts back, and th
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   const prompt = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   assert.equal(prompt.status, 202, JSON.stringify(prompt));
+});
+
+// K1: a server before 0.1.6 has no /update routes. The laptop says it is too old (the window shows the steps), not nothing.
+test('update, laptop: a server with no /update routes (before 0.1.6) is too-old, with its version', { skip, timeout: 30000 }, async (t) => {
+  const state = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-old-')), socketPath = path.join(state, 'daemon.sock');
+  await writeFile(path.join(state, 'desktop.json'), JSON.stringify({ cookie: 'c', csrf: 'x', socketPath }));
+  const old = http2.createServer((req, res) => { res.statusCode = req.url === '/health' ? 200 : 404; res.end(JSON.stringify(req.url === '/health' ? { version: '0.1.5' } : { error: 'not-found' })); });
+  await new Promise((resolve) => old.listen(socketPath, resolve));
+  t.after(() => old.close());
+  const events = [];
+  const done = await updateServer({ state, check: async () => ({ version: '0.1.5' }), version: NEXT, checkout: null, host: 'test', tell: (event) => { events.push(event); } });
+  assert.deepEqual(events, [{ phase: 'too-old', host: 'test', server: '0.1.5', app: NEXT }]);
+  assert.equal(done.phase, 'too-old');
+});
+
+// K3: a turn that never ends fails the update (turn-never-ended) and gives the starts back; the laptop's follow has its own
+// deadline and says timed-out instead of waiting for ever.
+test('update: a turn that never ends fails as turn-never-ended, and the laptop stops following at its deadline', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t, { args: ['--update-turn-ms', '6000'] });
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'slow' })).status, 202);
+  await until(async () => (await call(instance, '/chat')).conversations.find((c) => c.id === id).state === 'turn', 'the slow turn started');
+  const { events, run } = laptop(instance, { version: NEXT, checkout: await checkoutAt(NEXT), deadline: 3000 });
+  const followed = await run();
+  assert.deepEqual([followed.phase, followed.version], ['timed-out', NEXT], JSON.stringify(events));
+  assert.equal(events.at(-1).phase, 'timed-out');
+  const failed = await until(async () => { const j = await job(instance); return j?.phase === 'failed' && j; }, 'the turn limit', 20000);
+  assert.equal(failed.error, 'turn-never-ended');
+  assert.deepEqual(await lines(instance.log.run), [], 'no restart');
+  const other = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  assert.equal((await call(instance, '/chat/' + other + '/prompt', 'POST', { text: 'hello' })).status, 202, 'starts are not held');
+});
+
+// K2: the health clock starts once systemd says active. Here the unit is active 3 s after the restart and the new daemon
+// answers 1 s later: a 2 s clock from the restart failed it; from active it passes. The update passes its window in.
+test('update swap: a slow start passes when it answers within the window from active, not from the restart', { skip, timeout: 60000 }, async (t) => {
+  const stage = await swapStage(t, { slow: true, activeAfter: 3, wait: 3000 });
+  await stage.run();
+  const result = JSON.parse(await readFile(stage.result, 'utf8'));
+  assert.deepEqual([result.ok, await versionOf(stage.source)], [true, NEXT], JSON.stringify(result));
+});
+
+// K4: result.steps leave the server, so they carry file names, never paths.
+test('update swap: a failed swap reports file names only, no path from the server', { skip, timeout: 60000 }, async (t) => {
+  const stage = await swapStage(t);
+  execFileSync('rm', ['-rf', stage.next]);
+  await stage.run();
+  const result = JSON.parse(await readFile(stage.result, 'utf8'));
+  assert.equal(result.reason, 'swap-failed', JSON.stringify(result));
+  assert.ok(result.steps.some((line) => /source\.new-x/.test(line)), JSON.stringify(result.steps));
+  assert.ok(result.steps.every((line) => !line.includes(stage.directory) && !line.includes(os.tmpdir() + '/')), JSON.stringify(result.steps));
+});
+
+// K6: the update's stand-ins are test flags: a daemon outside the test home refuses to start with them.
+test('update: --update-root, --update-archive and --update-turn-ms outside the test home stop the daemon', { skip, timeout: 30000 }, async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-flag-'));
+  for (const flag of [['--update-root', home], ['--update-archive', 'http://127.0.0.1:1/'], ['--update-turn-ms', '1']]) {
+    const run = spawnSync(process.execPath, ['apps/server/main.mjs', '--workspace', path.join(home, 'w'), '--state', path.join(home, 's'), '--recovery', path.join(home, 'r'), ...flag],
+      { cwd: root, env: { PATH: process.env.PATH, HOME: home, XDG_STATE_HOME: home }, encoding: 'utf8', timeout: 10000 });
+    assert.equal(run.status, 1, flag[0] + ' served: ' + run.stderr);
+    assert.match(run.stderr, new RegExp('invalid-test-flag ' + flag[0]));
+  }
+});
+
+// K4: a path becomes its name; a URL in the same line stays whole.
+test('update steps: paths become file names, URLs stay whole', () => {
+  assert.deepEqual(names(["rename '/srv/a/p9/source.new-x' failed", '/srv/p9/next gone, see https://github.com/x/y/issues/1']),
+    ["rename 'source.new-x' failed", 'next gone, see https://github.com/x/y/issues/1']);
+});
+
+// K6: the rebuild's stand-ins (P9_PACKAGED, P9_BUILD) count only under the test home.
+test('rebuild stand-ins: P9_PACKAGED and P9_BUILD are ignored outside the test home', () => {
+  assert.deepEqual(rebuildStandIns({ P9_PACKAGED: '1', P9_BUILD: '/bin/true' }), { packaged: false, build: null });
+  assert.deepEqual(rebuildStandIns({ P9_TEST_HOME: '/t', P9_PACKAGED: '1', P9_BUILD: '/bin/true' }), { packaged: true, build: '/bin/true' });
+  assert.deepEqual(rebuildStandIns({ P9_TEST_HOME: '/t' }), { packaged: false, build: null });
 });

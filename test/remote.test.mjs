@@ -204,7 +204,16 @@ test('Remote list in Settings: nothing built in, Add remote refuses an option, a
   await page.locator('[data-remote-remove="test-host"]').click();
   await page.locator('#setRemote li', { hasText: 'test-host' }).waitFor({ state: 'detached', timeout: 10000 });
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).remotes, []);
-  console.log('PASS remote list: nothing built in, an option refused, added and removed');
+  // K1: a remote before 0.1.6 (main's p9:server-update too-old): a dialog with the steps by hand, at once.
+  await page.keyboard.press('Escape');
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('p9:server-update', { phase: 'too-old', host: 'test-host', server: '0.1.5', app: '0.1.6' }));
+  await page.locator('#mdlBody ol.steps').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#mdlBody').innerText(), /P9 on test-host runs 0\.1\.5, too old to update itself\. Update it once by hand/);
+  assert.deepEqual(await page.locator('#mdlBody ol.steps li').allTextContents(), ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'bash scripts/install.sh', 'systemctl --user restart p9-foundation']);
+  assert.doesNotMatch(await page.locator('#mdlBody').innerText(), /In the real app/);
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)));
+  await evidence(page, 'k1-too-old');
+  console.log('PASS remote list: nothing built in, an option refused, added and removed; too-old shows the steps');
 });
 
 // Send to server (D14) in the window: the button beside Hand off, then the pane frozen as moved. Screenshots go to the log (P9_SHOT).

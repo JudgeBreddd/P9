@@ -14,7 +14,8 @@ const { values: a } = parseArgs({ options: Object.fromEntries(['root', 'next', '
 const START_MS = Number(a.wait ?? 60_000), stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const previous = a.root + '.previous', older = a.root + '.previous-' + stamp, failed = a.root + '.failed-' + a.version + '-' + stamp;
 const steps = [];
-const say = (line) => { steps.push(new Date().toISOString() + ' ' + line); };
+// result.steps leave the server (the laptop shows them): file names only, never where they are (a URL stays whole).
+const say = (line) => { steps.push(new Date().toISOString() + ' ' + line.replace(/(^|[\s'"(=])(\/[^\s'",:)]+)/g, (_, before, p) => before + path.basename(p))); };
 const done = (result) => {
   writeFileSync(a.result + '.tmp', JSON.stringify({ id: a.id, version: a.version, from: a.from, at: Date.now(), ...result, steps }), { mode: 0o600 });
   renameSync(a.result + '.tmp', a.result);
@@ -33,8 +34,12 @@ const health = () => new Promise((resolve) => {
   req.on('error', () => resolve(null)).on('timeout', () => req.destroy());
   req.end();
 });
+const active = () => { try { return execFileSync('systemctl', ['--user', 'is-active', a.service], { encoding: 'utf8', timeout: 10_000 }).trim() === 'active'; } catch { return false; } };
 async function startsAs(version) {
   try { execFileSync('systemctl', ['--user', 'restart', a.service], { stdio: 'ignore', timeout: 120_000 }); } catch (error) { say('restart failed: ' + error.message.split('\n')[0]); }
+  // The health clock (--wait, which the update passes in) starts once systemd says the service is active: a slow stop of
+  // the old daemon or a slow start of the unit is not counted against the new version.
+  for (const end = Date.now() + 120_000; Date.now() < end && !active(); await new Promise((resolve) => setTimeout(resolve, 1000)));
   for (const end = Date.now() + START_MS; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 1000))) {
     const seen = await health();
     if (seen === version) return true;
