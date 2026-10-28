@@ -255,21 +255,18 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   await shot('c13-pick-step', page.locator('#welDlg'));
   await body.locator('[data-act="choose:codex"]').click();
   await body.locator('[data-act="choose:claude"]').click();
-  assert.match(await body.innerText(), /Install sets up both from the copy that comes with P9: nothing is downloaded and no admin password is needed\./);
+  assert.match(await body.innerText(), /Continue sets up both from the copy that comes with P9: nothing is downloaded and no admin password is needed\./);
   await body.locator('[data-act="choose:codex"]').click(); // Remove
-  assert.match(await body.innerText(), /Install sets up Claude from the copy/);
+  assert.match(await body.innerText(), /Continue sets up Claude from the copy/);
   assert.equal(await body.locator('[data-act="choose:codex"]').innerText(), 'Pick');
   await shot('c13-pick-claude', page.locator('#welDlg'));
-  await foot.locator('[data-act="install"]').click();
-  await body.locator('[data-installed]').waitFor({ timeout: left() });
-  assert.equal(await body.locator('[data-installed]').innerText(), 'Installed: Claude');
-  assert.deepEqual(await readdir(path.join(instance.directory, '.local', 'share', 'p9', 'bin')), ['claude'], 'only the pick');
-  await shot('c13-pick-installed', page.locator('#welDlg'));
-  // Next: sign-in, for the one picked only.
+  // D16: Continue sets up the pick and goes on to sign-in, for the one picked only.
+  assert.equal(await foot.locator('[data-act="install"]').innerText(), 'Continue');
   await foot.locator('[data-act="install"]').click();
   await page.waitForFunction(() => document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
   assert.equal(await body.locator('[data-act="start:claude"]').innerText(), 'Sign in');
   assert.equal(await body.locator('[data-act="start:codex"]').count(), 0, 'Codex was not picked');
+  assert.deepEqual(await readdir(path.join(instance.directory, '.local', 'share', 'p9', 'bin')), ['claude'], 'only the pick');
   assert.equal(await body.locator('[data-act="term:claude:login"]').innerText(), 'Sign in in a terminal', 'the launcher is a CLI on PATH now');
   await shot('c13-sign-in', page.locator('#welDlg'));
 
@@ -282,7 +279,7 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   assert.equal(await title(), 'This needs your admin password');
   const ssh = body.locator('[data-admin="ssh"]');
   const said = await ssh.innerText(), command = await ssh.locator('[data-command]').innerText();
-  const reason = said.indexOf('Server mode and Send to server reach your other machine over SSH.'), password = said.indexOf('only an admin can change that, so your computer asks for your password.');
+  const reason = said.indexOf('Remote mode and Send to remote reach your other machine over SSH.'), password = said.indexOf('only an admin can change that, so your computer asks for your password.');
   assert.ok(said.startsWith('SSH client') && reason > 0 && password > reason && said.indexOf(command) > password, 'reason, then why the password, then the command: ' + said);
   assert.match(command, /^sudo .*\bopenssh/);
   assert.equal(await body.locator('[data-admin="tmux"]').count(), 0, 'tmux is there');
@@ -296,4 +293,126 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   await shot('c13-admin-in-terminal');
   assert.deepEqual(errors, []);
   console.log('PASS item 15 desktop: why line first, Install waits for a pick, Install writes Claude only, Next reaches its sign-in; admin screen: reason, why the password, command; typed, not run');
+});
+
+// D17: a login that expired leaves its file, so /setup says signed in. The chat's "not signed in" opens the agents step
+// on that agent as Sign-in expired with Sign in and the terminal row (it was "Signed in" with no button: a dead end), and
+// the sign-in URL an agent prints in a P9 terminal opens on Ctrl+click through row 18's checked opener (threat model row 13).
+test('D17: chat sign-in on an expired login is not a dead end; a URL in the terminal opens on Ctrl+click only, also when broken into rows', { skip: !linux, timeout: 90000 }, async (t) => {
+  const deadline = Date.now() + 85000, left = () => Math.max(1000, deadline - Date.now());
+  const { instance, tmux } = await start(t, ['claude']);
+  await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
+  await writeFile(path.join(instance.directory, '.claude', '.credentials.json'), '{}');
+  assert.equal((await call(instance, '/setup')).claude, true, 'the stale file reads as signed in');
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'auth-required' })).status, 202);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d17-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const opened = path.join(home, 'opened.txt'), opener = path.join(home, 'open.sh');
+  await writeFile(opener, '#!/bin/sh\nprintf "%s\\n" "$1" >> "' + opened + '"\n', { mode: 0o755 });
+  const env = { ...process.env, HOME: home, P9_OPEN_URL: opener }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+
+  await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: left() });
+  await page.locator('.pane[data-id="' + id + '"] [data-signin]').click({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#welDlg').open && document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
+  const body = page.locator('#welBody');
+  await body.locator('[data-act="start:claude"]').waitFor({ timeout: left() });
+  assert.match(await body.innerText(), /Claude[\s\S]*Sign-in expired/);
+  assert.doesNotMatch(await body.innerText(), /Signed in/);
+  assert.equal(await body.locator('[data-act="start:claude"]').innerText(), 'Sign in');
+  assert.equal(await body.locator('[data-act="term:claude:login"]').innerText(), 'Sign in in a terminal');
+  await shot('d17-wizard-expired', page.locator('#welDlg'));
+
+  await body.locator('[data-act="term:claude:login"]').click();
+  await page.waitForFunction(() => !document.querySelector('#welDlg').open, null, { timeout: left() });
+  let fresh;
+  for (const end = Date.now() + 10000; Date.now() < end && !fresh; await wait(100)) fresh = (await call(instance, '/terminals')).terminals.find((x) => x.state === 'running');
+  await typedNotRun(tmux, fresh.id, 'claude auth login');
+  const target = '=p9-' + fresh.id + ':';
+  const cols = Number(tmux('display-message', '-p', '-t', target, '#{pane_width}').trim());
+  // One URL the terminal wraps, one broken into full rows by the program (as Claude Code prints its sign-in URL).
+  const soft = 'https://example.com/d17/soft?' + 'a'.repeat(cols + 20), hard = 'https://example.com/d17/hard?' + 'b'.repeat(cols + 20);
+  tmux('send-keys', '-t', target, 'C-u', "clear; printf '%s\\n\\n%s\\n%s\\n' '" + soft + "' '" + hard.slice(0, cols) + "' '" + hard.slice(cols) + "'", 'Enter');
+  const rows = page.locator('#termView .xterm-rows > div');
+  await rows.filter({ hasText: /^b{20}/ }).waitFor({ timeout: left() });
+  const read = () => readFile(opened, 'utf8').catch(() => '');
+  const click = async (row, modifiers) => { const box = await row.boundingBox(); await page.mouse.move(box.x + 30, box.y + box.height / 2); await page.waitForTimeout(300); for (const key of modifiers) await page.keyboard.down(key); await page.mouse.down(); await page.mouse.up(); for (const key of modifiers) await page.keyboard.up(key); };
+  await click(rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }), []);
+  await page.waitForTimeout(800);
+  assert.equal(await read(), '', 'a plain click opens nothing');
+  await click(rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }), ['Control']);
+  for (const end = Date.now() + 5000; Date.now() < end && !(await read()); await wait(100));
+  await click(rows.filter({ hasText: /^b{20}/ }), ['Control']);
+  for (const end = Date.now() + 5000; Date.now() < end && (await read()).split('\n').length < 3; await wait(100));
+  assert.deepEqual((await read()).trim().split('\n'), [soft, hard], 'each whole URL, the second from a click on its second row');
+  await shot('d17-terminal-link');
+  assert.deepEqual(errors, []);
+  console.log('PASS D17: expired login shows Sign-in expired with Sign in and the terminal row; terminal URLs open on Ctrl+click only, whole');
+});
+
+// D16: step 3 always says Continue (a CLI installed under a version manager is outside the background service's PATH, so
+// "installed" cannot be told); when setting up fails the reason shows and Continue without it goes on, never stuck.
+test('D16: the pick step says Continue; a failed setup names why and still goes on to sign-in', { skip: !linux, timeout: 60000 }, async (t) => {
+  const deadline = Date.now() + 55000, left = () => Math.max(1000, deadline - Date.now());
+  const { instance } = await start(t, [], { without: ['ssh'] });
+  const bin = path.join(instance.directory, '.local', 'share', 'p9', 'bin');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d16-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  const title = () => page.locator('#welT').innerText();
+  const body = page.locator('#welBody'), foot = page.locator('#welFoot');
+  await page.locator('#cards [data-key="welcome"] .open').click({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#welDlg')?.open, null, { timeout: left() });
+  for (let i = 0; i < 4 && await title() !== 'Claude, Codex or both?'; i++) await foot.locator('[data-act="next"]').click({ timeout: left() });
+  assert.equal(await title(), 'Claude, Codex or both?');
+  await body.locator('[data-act="choose:claude"]').click();
+  await body.locator('[data-act="choose:codex"]').click();
+  assert.equal(await foot.locator('[data-act="install"]').innerText(), 'Continue');
+  await mkdir(bin, { recursive: true });
+  await chmod(bin, 0o500);
+  t.after(() => chmod(bin, 0o700).catch(() => {}));
+  await foot.locator('[data-act="install"]').click();
+  await foot.locator('[data-act="install"]', { hasText: 'Continue without it' }).waitFor({ timeout: left() });
+  assert.match(await body.innerText(), /P9 could not put the agent where its terminals find it\.[\s\S]*Continue without it goes on/);
+  assert.equal(await title(), 'Claude, Codex or both?', 'a failure stays on the step to be read');
+  await shot('d16-setup-failed', page.locator('#welDlg'));
+  await foot.locator('[data-act="install"]').click();
+  await page.waitForFunction(() => document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
+  assert.equal(await body.locator('[data-act="start:claude"]').count(), 1);
+  assert.equal(await body.locator('[data-act="start:codex"]').count(), 1);
+  await shot('d16-on-to-sign-in', page.locator('#welDlg'));
+  assert.deepEqual(errors, []);
+  console.log('PASS D16: Continue on the pick step; a failed setup says why and Continue without it reaches sign-in');
+});
+
+// D16: a daemon older than the app answers a route it lacks with a plain-text 404; the desktop names that as out of date
+// (retrying never helps), not "not answering". A JSON reply, also a 404, passes through as it is.
+test('D16: a plain-text 404 is daemon-outdated, no reply is daemon-unavailable, a JSON reply passes', { timeout: 20000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  const { daemonRequest, failedReply } = await import('../scripts/teh.mjs');
+  const state = await mkdtemp(path.join(os.tmpdir(), 'p9-d16s-')), socketPath = path.join(state, 'd.sock');
+  t.after(() => rm(state, { recursive: true, force: true }));
+  await writeFile(path.join(state, 'desktop.json'), JSON.stringify({ socketPath, cookie: 'c', csrf: 'x' }));
+  const server = createServer((req, res) => req.url === '/json' ? res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":"not-found"}') : res.writeHead(404).end('404 Not Found'));
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  t.after(() => server.close());
+  const failed = (route) => daemonRequest(state, 'POST', route, {}).then(() => assert.fail('resolved'), failedReply);
+  assert.deepEqual(await failed('/setup/agents'), { status: 404, body: { error: 'daemon-outdated' } });
+  assert.deepEqual(await daemonRequest(state, 'POST', '/json', {}), { status: 404, body: { error: 'not-found' } });
+  server.close();
+  assert.deepEqual(await failed('/setup/agents'), { status: 503, body: { error: 'daemon-unavailable' } });
 });

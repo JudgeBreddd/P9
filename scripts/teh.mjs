@@ -45,13 +45,17 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(new Error('bad-response')); } });
+      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); } });
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(data);
   });
 }
+
+// D16: a daemon older than the app answers a route it lacks with a plain-text 404: that is not "not answering", and
+// retrying never helps, so the page is told the daemon is out of date.
+export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } } : { status: 503, body: { error: 'daemon-unavailable' } };
 
 export function collectBundle({ status, journal, daemon }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
