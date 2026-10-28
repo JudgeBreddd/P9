@@ -5,7 +5,9 @@
 <script>
 // The artifact frame (item 19, threat model row 65). Served on its own origin with its own CSP (sandbox allow-scripts,
 // default-src 'none', inline scripts and styles only), inside <iframe sandbox="allow-scripts">: an opaque origin with no
-// network, no cookies, no P9 page and no window.p9. It takes one message from its parent, { p9: 'render', html, scripts },
+// fetch, no network images, no cookies, no P9 page and no window.p9. The CSP cannot stop it navigating itself away:
+// the desktop refuses that, the phone's page CSP (frame-src 'self') limits it, and the page puts the frame back
+// (mountFrame in artifact.mjs). It takes one message from its parent, { p9: 'render', html, scripts },
 // runs the runtimes in scripts (Mermaid, React, TypeScript, sent by the page as text), then puts html in as its document,
 // running its inline scripts in order. It tells its parent only: ready, rendered, an error's text and the selected text.
 (() => {
