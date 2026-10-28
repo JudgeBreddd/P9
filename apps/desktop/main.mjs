@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { sendToServer } from './move.mjs';
@@ -661,7 +661,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!route) return { status: 400, body: { error: 'request-refused' } };
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
-    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+    catch (error) { return failedReply(error); }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
