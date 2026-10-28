@@ -845,8 +845,11 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await shot('wizard-3-mission-done.png');
   await next();
   if (s.tmux !== null) {
-    await at(6, 'Terminal');
-    assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
+    // Item 15: something only an admin can install (the SSH client on a machine without it) turns this step into the admin screen.
+    const admin = s.dependencies.filter((x) => x.admin).map((x) => x.id);
+    await at(6, admin.length ? 'This needs your admin password' : 'Terminal');
+    if (admin.length) assert.deepEqual(await page.locator('#welBody [data-admin]').evaluateAll((all) => all.map((x) => x.dataset.admin)), admin);
+    else assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
     await shot('wizard-4-terminal.png');
     await next();
   }
