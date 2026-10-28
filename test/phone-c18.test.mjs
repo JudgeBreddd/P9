@@ -82,8 +82,11 @@ test('c18: the Chats bar has New chat, Theme and Settings; a theme survives a re
 
   // Theme: the desktop's picker in the sheet; the pick is this phone's, kept across a reload, and the browser bar follows.
   const before = await page.evaluate(() => document.documentElement.dataset.theme);
+  // A full-screen sheet (c12's p9-sheet full: true), closed, leaves no full class for the Theme sheet.
+  await page.evaluate(() => { dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Full', html: '<p>x</p>', full: true } })); document.querySelector('#sheet').close(); });
   await page.click('[data-bar="chat"] #themeBtn');
   await page.waitForSelector('#themeMenu .tcard');
+  assert.equal(await page.$eval('#sheet', (sheet) => sheet.classList.contains('full')), false, 'Theme sheet opened full-screen after a full sheet');
   const other = await page.$eval('#themeMenu [data-theme-pick]:not([data-theme-pick="' + before + '"])', (card) => card.dataset.themePick);
   await page.click('#themeMenu [data-theme-pick="' + other + '"]');
   await page.waitForTimeout(300);

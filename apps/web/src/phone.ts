@@ -62,6 +62,7 @@ one('main').addEventListener('scroll', (event) => { const box = event.target as 
 const sheet = one<HTMLDialogElement>('#sheet');
 function openSheet(title: string, html: string) { one('#sheetTitle').textContent = title; one('#sheetBody').innerHTML = html; if (!sheet.open) sheet.showModal(); }
 sheet.addEventListener('click', (event) => { if (event.target === sheet) sheet.close(); });
+sheet.addEventListener('close', () => sheet.classList.remove('full')); // a full-screen sheet never leaks into the next openSheet() (New chat, Theme, Settings)
 addEventListener('p9-sheet', (event) => { const { title, html, full } = (event as CustomEvent).detail; sheet.classList.toggle('full', full === true); openSheet(String(title), String(html)); }); // ponytail: the one door into the sheet for code outside this file and for its test; callers pass trusted HTML
 // The app is a column the size of the visible viewport: when a keyboard opens, visualViewport shrinks (iOS Safari leaves
 // the layout viewport alone and offsets the visual one), the column follows it, and the composer rides the keyboard. The
