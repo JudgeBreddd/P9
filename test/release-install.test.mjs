@@ -197,8 +197,9 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
 
   const ok = run();
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  // Item 15: first what P9 needs from the system (deps.mjs; this stub node reports nothing missing).
   // D5: then Dev Focus's editor server, through the same pinned install the Dev Focus button uses.
-  assert.equal(ok.log, 'pnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
+  assert.equal(ok.log, 'node scripts/deps.mjs\npnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
   assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
 
   assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
@@ -207,7 +208,7 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   // It still installs the editor server: Dev Focus in Server mode runs it on this server (c10, item 33).
   const headless = run({}, ['--headless', 'ws']);
   assert.equal(headless.status, 0, headless.stdout + headless.stderr);
-  assert.equal(headless.log, 'pnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
+  assert.equal(headless.log, 'node scripts/deps.mjs --headless\npnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
   assert.match(headless.stdout, /P9 runs on this server/);
   assert.doesNotMatch(headless.stdout, /pnpm desktop/);
 
@@ -222,27 +223,28 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   const oldNode = run({ FAKE_NODE: 'v24.19.0', FAKE_SUM_OK: '1' });
   assert.equal(oldNode.status, 0, oldNode.stdout + oldNode.stderr);
   assert.match(oldNode.log, new RegExp('^curl -fsSL -o \\S+/node\\.tar\\.gz https://nodejs\\.org/dist/v26\\.10\\.0/node-v26\\.10\\.0-linux-x64\\.tar\\.gz\n'
-    + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\npnpm install --frozen-lockfile\npnpm build\n'
+    + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\np9node scripts/deps\\.mjs\npnpm install --frozen-lockfile\npnpm build\n'
     + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\np9node scripts/install-editor\\.mjs\n$'));
   assert.deepEqual(readdirSync(share), ['node-v26.10.0-linux-x64'], 'temp folder removed');
   assert.ok(oldNode.stdout.includes('export PATH="' + path.join(ownNode, 'bin') + ':$PATH"'), 'PATH line printed');
   const cached = run({ FAKE_NODE: 'v24.19.0' });
   assert.equal(cached.status, 0, cached.stdout + cached.stderr);
-  assert.match(cached.log, /^pnpm install --frozen-lockfile\npnpm build\np9node /, 'a second run reuses the downloaded Node');
+  assert.match(cached.log, /^p9node scripts\/deps\.mjs\npnpm install --frozen-lockfile\npnpm build\np9node /, 'a second run reuses the downloaded Node');
 
-  await rm(path.join(bin, 'tmux'));
-  const noTmux = run();
-  assert.equal(noTmux.status, 1);
-  assert.match(noTmux.stdout, /MISSING: tmux\b/);
-  assert.equal(noTmux.log, '', 'nothing installed with a tool missing');
-  await stub('tmux', 'exit 0');
+  // Item 15: tmux is no longer one of these; scripts/deps.mjs asks for it with its reason (deps.test.mjs, bare-machine.sh).
+  await rm(path.join(bin, 'systemctl'));
+  const noTool = run();
+  assert.equal(noTool.status, 1);
+  assert.match(noTool.stdout, /MISSING: systemctl\b/);
+  assert.equal(noTool.log, '', 'nothing installed with a tool missing');
+  await stub('systemctl', 'exit 0');
 
   // No pnpm and a global npm install that needs root: the ~/.local fallback is used and the run carries on.
   await rm(path.join(bin, 'pnpm'));
   await stub('npm', 'case "$*" in *--prefix*) mkdir -p "$HOME/.local/bin"; printf \'#!/bin/sh\\necho "pnpm $*" >> ' + log + '\\n\' > "$HOME/.local/bin/pnpm"; chmod +x "$HOME/.local/bin/pnpm";; *) exit 1;; esac');
   const fallback = run();
   assert.equal(fallback.status, 0, fallback.stdout + fallback.stderr);
-  assert.match(fallback.log, /^pnpm install --frozen-lockfile\npnpm build\n/);
+  assert.match(fallback.log, /^node scripts\/deps\.mjs\npnpm install --frozen-lockfile\npnpm build\n/);
 
   await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
   await writeFile(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service'), '');
@@ -250,7 +252,8 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(again.status, 0);
   assert.match(again.stdout, /already installed/);
   // Issue #14: an existing install gets the editor server step only; install-editor.mjs leaves the pinned commit alone.
-  assert.equal(again.log, 'node scripts/install-editor.mjs\n', 'an existing install is left alone but for the editor server');
+  // Item 15: and the system check again, since a new version can need something the old one did not.
+  assert.equal(again.log, 'node scripts/deps.mjs --update\nnode scripts/install-editor.mjs\n', 'an existing install is left alone but for the system check and the editor server');
 });
 
 // The Windows installer carries every licence notice in resources/licenses (package-windows.mjs gathers them).

@@ -10,15 +10,46 @@ workspace=$(realpath -m -- "${1:-$HOME/work}")
 cd "$(dirname -- "$0")/.."
 
 missing=()
-for t in git tmux systemctl systemd-run curl sha256sum tar; do command -v "$t" >/dev/null || missing+=("$t"); done
+for t in git systemctl systemd-run sha256sum tar; do command -v "$t" >/dev/null || missing+=("$t"); done
+# The Node download needs one of the two; Ubuntu Desktop ships wget and not curl (bare-machine.sh, v0.1.6).
+command -v curl >/dev/null || command -v wget >/dev/null || missing+=(curl)
 if [ ${#missing[@]} -gt 0 ]; then
   echo "MISSING: ${missing[*]}. Install them with your package manager (for example: sudo apt install ${missing[*]}), then run this again."
   exit 1
 fi
 : "${XDG_RUNTIME_DIR:?not set: run this from a normal desktop or ssh login}"
+
+# Item 15 (row 61): the admin password only for what P9 cannot carry, and only after the reason is on the screen.
+# $1: the command, shown in full before the question. No answer (a pipe that ends, a closed terminal) is a no.
+admin_install() {
+  echo "This needs your admin password. The command:"
+  echo "  $1"
+  local answer=
+  read -r -p "Run it with sudo now? [y/N] " answer || true
+  case "$answer" in [yY]*) bash -c "$1" ;; *) return 1 ;; esac
+}
+# What P9 needs from the system (tmux, ssh; on a desktop, the AppArmor rule for its window): scripts/deps.mjs lists
+# each missing one with its reason and the one command for all of them. $@: deps.mjs's flags.
+system_deps() {
+  local reasons command status=0
+  # 3: something P9 needs is missing. Anything else non-zero is the check itself failing, which never counts as "nothing missing".
+  reasons=$("$node" scripts/deps.mjs "$@") || status=$?
+  case $status in 0 | 3) ;; *) echo "P9's dependency check failed (the error is above)."; return 1 ;; esac
+  [ -n "$reasons" ] || return 0
+  echo "P9 needs these on this machine:"
+  echo "$reasons"
+  command=$("$node" scripts/deps.mjs "$@" --command) || { echo "P9's dependency check failed (the error is above)."; return 1; }
+  [ -z "$command" ] || admin_install "$command" || true
+  "$node" scripts/deps.mjs "$@" >/dev/null && return 0
+  echo "P9 cannot run without the ones above. Install them, then run this again."
+  return 1
+}
+
 if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ]; then
   # An install from before the editor server was part of it gets it now (issue #14); one on the pinned release is left alone.
   node=$(command -v node || ls "$HOME"/.local/share/p9/node-v26.10.0-linux-*/bin/node 2>/dev/null | head -1 || true)
+  # An update checks the system again: a new version can need something the old one did not.
+  if [ -n "$node" ]; then system_deps --update ${headless:+--headless} || exit 1; fi
   [ -n "$node" ] && "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
   echo "P9 is already installed. To update: git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart p9-foundation"
   exit 0
@@ -37,7 +68,8 @@ if [ "$(node --version 2>/dev/null || true)" != "v26.10.0" ]; then
     echo "Downloading Node v26.10.0 for P9 into $share/$name"
     mkdir -p -- "$share"
     tmp=$(mktemp -d "$share/.download-XXXXXX")
-    curl -fsSL -o "$tmp/node.tar.gz" "https://nodejs.org/dist/v26.10.0/$name.tar.gz"
+    url="https://nodejs.org/dist/v26.10.0/$name.tar.gz"
+    if command -v curl >/dev/null; then curl -fsSL -o "$tmp/node.tar.gz" "$url"; else wget -q -O "$tmp/node.tar.gz" "$url"; fi
     if ! echo "$sum  $tmp/node.tar.gz" | sha256sum -c --quiet; then
       rm -f -- "$tmp/node.tar.gz"; rmdir -- "$tmp"
       echo "The Node download does not match its pinned checksum; nothing was installed."
@@ -49,6 +81,25 @@ if [ "$(node --version 2>/dev/null || true)" != "v26.10.0" ]; then
   fi
   export PATH="$share/$name/bin:$PATH"; path_added+=("$share/$name/bin")
 fi
+# Node itself needs libatomic1, which a minimal Ubuntu (a server image, a container) lacks; the desktop has it.
+# Asked here, in the shell, because scripts/deps.mjs cannot run until Node does.
+if ! node_error=$(node --version 2>&1 >/dev/null); then
+  case "$node_error" in
+    *libatomic.so.1*)
+      echo "P9 needs this on this machine:"
+      echo "- libatomic1: Node, which P9 runs on, cannot start without this system library."
+      if command -v apt-get >/dev/null; then command="sudo apt-get update; sudo apt-get install -y libatomic1"
+      elif command -v dnf >/dev/null; then command="sudo dnf install -y libatomic"
+      elif command -v zypper >/dev/null; then command="sudo zypper install -y libatomic1"
+      else command=; fi
+      if [ -z "$command" ] || ! admin_install "$command" || ! node --version >/dev/null 2>&1; then
+        echo "P9 cannot run without it. Install libatomic with your package manager, then run this again."; exit 1
+      fi ;;
+    *) echo "Node does not start: $node_error"; exit 1 ;;
+  esac
+fi
+node=$(command -v node)
+system_deps ${headless:+--headless} || exit 1
 
 if ! command -v pnpm >/dev/null; then
   # A system Node installs global packages to /usr, which needs root; fall back to ~/.local.

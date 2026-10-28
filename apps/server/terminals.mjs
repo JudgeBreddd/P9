@@ -114,7 +114,8 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       await ensureServer();
       stillAuthorized();
-      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, ...(start.phone ? ['-e', 'P9_PHONE=1'] : [])]);
+      // -e PATH: a tmux server an older P9 started keeps its own PATH, without P9's bin folder (item 15).
+      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, '-e', 'PATH=' + childEnv().PATH, ...(start.phone ? ['-e', 'P9_PHONE=1'] : [])]);
       if (start.typed) await tmux(['send-keys', '-t', '=' + name(id) + ':', '-l', start.typed]);
       if (start.typed && start.run) await tmux(['send-keys', '-t', '=' + name(id) + ':', 'Enter']); // a fixed command from server.mjs (Sprint: Open tmux)
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);

@@ -29,6 +29,7 @@ import { loginPage, loginScript } from './login-page.mjs';
 import { authority, stillAuthorized } from './authority.mjs';
 import { createIcons } from './icons.mjs';
 import { daemonEditor, editorProblem, editorDownload, EDITOR_DIR } from '../desktop/editor-host.mjs';
+import { AGENTS, adminCommand, wizardDependencies, found as onPath, placeAgents } from './deps.mjs';
 import pkg from '../../package.json' with { type: 'json' };
 
 // RS1: a restart is done when /health names a different boot, not when the old process is gone.
@@ -95,19 +96,9 @@ export function authorizeRemote(headers, method, route, auth, remote) {
   return session;
 }
 
-// D7/D8: the agents' official install commands (claude.ai/install, npm's @openai/codex) and their sign-in commands.
-const AGENT_COMMANDS = process.platform === 'win32'
-  ? { claude: { install: 'irm https://claude.ai/install.ps1 | iex', login: 'claude auth login' }, codex: { install: 'npm install -g @openai/codex', login: 'codex login' } }
-  : { claude: { install: 'curl -fsSL https://claude.ai/install.sh | bash', login: 'claude auth login' }, codex: { install: 'npm install -g @openai/codex', login: 'codex login' } };
-// A program on PATH or in ~/.local/bin (where Claude's installer puts it, often not yet on a service's PATH).
-async function onPath(name) {
-  const folders = [...(process.env.PATH ?? '').split(path.delimiter), path.join(os.homedir(), '.local', 'bin')].filter(Boolean);
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.ps1'] : [''];
-  for (const folder of folders) for (const ext of exts) {
-    if (await stat(path.join(folder, name + ext)).then(info => info.isFile(), () => false)) return true;
-  }
-  return false;
-}
+// D7/D8: the agents' sign-in commands. Item 15: no install command; both CLIs ship with P9 (deps.mjs puts them on the
+// terminals' PATH), so the wizard's Install writes a launcher instead of downloading anything.
+const AGENT_COMMANDS = { claude: { login: 'claude auth login' }, codex: { login: 'codex login' } };
 
 export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive }) {
   const lifecycle = createLifecycle();
@@ -545,7 +536,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
       claude: await present(path.join(agentDirs(os.homedir()).claudeDir, '.credentials.json')), codex: await present(path.join(agentDirs(os.homedir()).codexHome, 'auth.json')),
       // D8: each agent's own CLI, for a terminal and Hand off (chats use the CLI the adapter ships, so they work without it).
-      claudeCli: await onPath('claude'), codexCli: await onPath('codex') });
+      claudeCli: await onPath('claude'), codexCli: await onPath('codex'),
+      // Item 15: every dependency, its reason and, for a system package, the admin command (deps.mjs).
+      dependencies: await wizardDependencies() });
   });
   // "Create my starter files" (Builder, 2026-10-22: "1 yes"; threat model row 17): create-only, so an existing file or
   // folder counts as done and is never replaced. An invalid settings file is never touched; the wizard shows its error.
@@ -649,6 +642,26 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'action,agent' || typeof body.agent !== 'string' || typeof body.action !== 'string'
         || !Object.hasOwn(AGENT_COMMANDS, body.agent) || !Object.hasOwn(AGENT_COMMANDS[body.agent], body.action)) return reply(c, { status: 400, error: 'request-refused' });
     const command = AGENT_COMMANDS[body.agent][body.action];
+    const made = await terminals.create({}, { cwd: workspace, typed: command });
+    return reply(c, made.terminal ? { status: 201, terminal: made.terminal, command } : { ...made, command });
+  });
+  // Item 15: the wizard's Install for the agents the owner picked, {claude, codex} as booleans: a launcher in P9's bin folder
+  // for each true one, pointing at the CLI P9 ships. Nothing is downloaded and nothing needs the admin password.
+  app.post('/setup/agents', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'claude,codex' || typeof body.claude !== 'boolean' || typeof body.codex !== 'boolean'
+        || !(body.claude || body.codex)) return reply(c, { status: 400, error: 'request-refused' });
+    try { return reply(c, { status: 200, installed: await placeAgents(AGENTS.filter((agent) => body[agent])) }); }
+    catch (error) { return reply(c, { status: 500, error: 'agents-not-installed', detail: error.code ?? error.message }); }
+  });
+  // Item 15 (threat model row 61): a system package P9 cannot carry, installed with the admin password. The command comes
+  // from deps.mjs's table for a dependency that is missing now, typed into a new P9 terminal and never run: the owner reads
+  // the reason first (the wizard's screen), then the command, and presses Enter; sudo asks for the password there.
+  app.post('/setup/admin-terminal', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'id' || typeof body.id !== 'string') return reply(c, { status: 400, error: 'request-refused' });
+    const command = await adminCommand(body.id);
+    if (!command) return reply(c, { status: 409, error: 'nothing-to-install' });
     const made = await terminals.create({}, { cwd: workspace, typed: command });
     return reply(c, made.terminal ? { status: 201, terminal: made.terminal, command } : { ...made, command });
   });
