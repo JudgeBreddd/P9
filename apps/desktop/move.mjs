@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { daemonRequest } from '../../scripts/teh.mjs';
 import { connectServer } from './remote.mjs';
+import { runPlan } from './xfer.mjs';
 
 const LONG = 120_000; // a 4 MiB piece over a slow link, or the server hashing a long transcript
 const SYNC_WAIT = 120_000, SYNC_EVERY = 2000; // Syncthing catching up with the files the chat changed
@@ -17,8 +18,11 @@ const CANCELLED = 'You cancelled the move. The chat stays here.';
 // error?, message? }, for drawing only; the ledger's moving, moved and move-failed events stay the record. bytes.sent is what
 // the server acknowledged, never what went into the socket. A phase that lasts repeats its last event every 5 s.
 // signal: Cancel. Checked between requests only, so a chat the server has taken is never cancelled half way.
+// files (item 23): { userData, plan, work }, the chat's folder as the Send files prompt planned and settled it before the freeze
+// (Builder, 2026-10-27: "Same prompt first"). It goes over P9's tunnel before the chat, so nothing waits for Syncthing. null: a
+// Syncthing folder, which keeps the wait (Builder: "Keep today's wait").
 export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), syncWait = SYNC_WAIT,
-  onProgress = () => {}, signal, heartbeat = HEARTBEAT }) {
+  onProgress = () => {}, signal, heartbeat = HEARTBEAT, files = null }) {
   let seq = 0, beat, last;
   const send = () => { try { onProgress({ id, seq: ++seq, host, ...last, bytes: { ...last.bytes } }); } catch {} };
   const tell = (phase, percent = last.percent, bytes = last.bytes, extra) => {
@@ -33,7 +37,8 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
     const away = await daemonRequest(local, 'POST', `/chat/${id}/send-away`);
     if (away.status !== 200) return away; // refused before the freeze: the answer says why, and nothing is drawn
     const { status: _, ...manifest } = away.body;
-    const total = manifest.parts.transcript.bytes + manifest.parts.events.bytes;
+    const work = files?.work, fileBytes = work ? [...work.toServer.map((i) => i.laptop.size), ...work.toLaptop.map((i) => i.server.size)].reduce((a, b) => a + b, 0) : 0;
+    const total = fileBytes + manifest.parts.transcript.bytes + manifest.parts.events.bytes;
     tell('stopping', 0, { sent: 0, total });
     // Settles this computer's copy: moved for good, or runnable here again with the reason.
     const settle = async (ok, message, extra) => {
@@ -41,6 +46,7 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
       if (ok) tell('done', 100, { sent: total, total }); else tell('failed', undefined, undefined, { error: 'move-failed', message, ...extra });
       return ok ? { status: 200, body: { moved: true, host } } : { status: 409, body: { error: 'move-failed', message, ...extra } };
     };
+    if (files && files.plan.folder !== manifest.folder) return settle(false, 'The files checked were not this chat\'s folder. Press Send to server again. The chat stays here.');
     tell('connecting');
     let tunnel;
     try { tunnel = await connectServer({ host, ssh, runtime: path.join(runtime, 'p9-move-' + id.slice(0, 8)), editor: false }); }
@@ -53,6 +59,13 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
       return !(answer.status === 409 && answer.body.error === 'already-here');
     };
     try {
+      // The chat's files first: a chat that lands before them would run on the server's old copies.
+      if (files) {
+        const sent = await runPlan({ local, host, userData: files.userData, plan: files.plan, work, ssh, runtime, signal,
+          onProgress: (bytes) => tell('uploading', total ? Math.floor(99 * bytes.sent / total) : 0, { sent: bytes.sent, total }) });
+        if (sent.error === 'cancelled') return settle(false, CANCELLED, { cancelled: true });
+        if (sent.error) return settle(false, 'The files of ' + (manifest.folder || 'the workspace') + ' did not all reach the server: ' + sent.message + ' The chat stays here.');
+      }
       for (let round = 0; ; round++) {
         // The pieces. A 409 with a size is the server saying how much it has: carry on from there.
         let done = 0;
@@ -66,7 +79,7 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
             else if (sent.status === 409 && sent.body.error === 'offset' && sent.body.size !== offset) offset = sent.body.size;
             else if (sent.status === 409 && sent.body.error === 'already-here') break;
             else return settle(false, 'The server refused the chat (' + sent.body.error + '). The chat stays here.');
-            const at = Math.min(done + offset, total);
+            const at = Math.min(fileBytes + done + offset, total);
             tell('uploading', total ? Math.floor(99 * at / total) : 0, { sent: at, total });
           }
           done += manifest.parts[kind].bytes;
@@ -78,7 +91,7 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
         for (;;) {
           if (await cancelled()) return settle(false, CANCELLED, { cancelled: true });
           landed = await server(`/chat-import/${id}`, manifest);
-          if (landed.status !== 409 || landed.body.error !== 'files-not-synced' || Date.now() - start >= syncWait) break;
+          if (landed.status !== 409 || landed.body.error !== 'files-not-synced' || files || Date.now() - start >= syncWait) break;
           if (last.phase !== 'syncing') tell('syncing', 99);
           await new Promise((resolve) => setTimeout(resolve, SYNC_EVERY));
         }
@@ -86,8 +99,9 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
         // A piece went wrong on the way (or an old upload was there): the server threw them away, so send them once more.
         if (landed.body.error === 'upload-mismatch' && round === 0) continue;
         if (landed.body.error === 'files-not-synced') {
-          return settle(false, 'The server does not have the latest copy of ' + landed.body.files.join(', ') + (landed.body.count > landed.body.files.length ? ' and ' + (landed.body.count - landed.body.files.length) + ' more' : '')
-            + '. Let the sync finish, then send the chat again. The chat stays here.');
+          const names = landed.body.files.join(', ') + (landed.body.count > landed.body.files.length ? ' and ' + (landed.body.count - landed.body.files.length) + ' more' : '');
+          return settle(false, files ? 'The server\'s copy of ' + names + ' is not the one this chat wrote (the server\'s was kept, or it changed after the send). Send the chat again. The chat stays here.'
+            : 'The server does not have the latest copy of ' + names + '. Let the sync finish, then send the chat again. The chat stays here.');
         }
         if (landed.body.error === 'folder-missing') return settle(false, 'The server has no folder ' + landed.body.folder + ' in its workspace. The chat stays here.');
         return settle(false, 'The server refused the chat (' + landed.body.error + '). The chat stays here.');
