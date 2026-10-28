@@ -11,6 +11,7 @@ import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
+import { artifactView, artifactsIn, chipArtifact } from './artifact.mjs';
 
 export function mountShell() {
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
@@ -113,7 +114,7 @@ function renderSideChat(only) {
   pick.hidden = list.length < 2; pick.innerHTML = list.map(x => `<option value="${esc(x.id)}"${x.id === s?.id ? ' selected' : ''}>${esc(x.title || x.name || x.id)}</option>`).join('');
   if (!s) { box.innerHTML = '<p class="empty">No chat yet. Start one in Chat Focus.</p>'; return; }
   if (s.stub) history(s);
-  paint(box, [s], only);
+  paint(box, [s], only); keepBox();
 }
 const danChat = { title: 'Chat', focuses: ['dev'], defaultWidth: w => w / 2,
   render: b => { b.innerHTML = '<select data-slot="select" id="sidePick" aria-label="Chat shown here" hidden></select><div class="chats" id="sideChats" data-split="false"></div>'; $('#sidePick').onchange = e => { S.sideId = e.target.value; renderSideChat(); }; renderSideChat(); },
@@ -123,6 +124,57 @@ side.onResize(() => { const on = side.current()?.slot === 'dan-chat'; $('#sideTo
 $('#sideToggle').onclick = () => setSideChat(side.current()?.slot !== 'dan-chat');
 side.tab($('#devTab .stab'), 'main');
 if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
+// Item 19 (threat model row 65): an artifact (artifact.mjs) in the side panel's 'artifact' slot, in the mode the agent
+// picked; its chip in the chat reopens it. Answer 2 in specs/side-panel.md: in Dev Focus with the chat beside the
+// editor it shows on top of that chat, above its text box, which stays usable. Comments go to the chat it came from,
+// through the composer's own send (sendText); the composer's draft and attached images stay where they are.
+const FRAME = { page: 'p9://frame/', base: new URL('frame/', location.href).href };
+const ART = { state: null, mode: 'panel' };
+const artSession = () => S.sessions.find(s => s.id === ART.state?.sid);
+function artSend(text) {
+  const s = artSession();
+  if (!canSend(s, text, false)) { toast({ kind: 'comments not sent', txt: 'That chat takes no messages now.', level: 'warn' }, true); return false; }
+  const images = s.images; s.images = []; sendText(s, text, false); s.images = images;
+  return true;
+}
+const artOverlay = () => side.body.querySelector(':scope > .art-over');
+function keepBox() { // the overlay ends where the side chat's text box starts
+  const over = artOverlay(), b = side.body.querySelector('#sideChats .pane .bottom');
+  if (over) over.style.bottom = b ? Math.max(0, side.body.getBoundingClientRect().bottom - b.getBoundingClientRect().top) + 'px' : '0px';
+}
+function openArtifact(art) {
+  if (!ART.state || ['kind', 'src', 'sid'].some(k => ART.state.art[k] !== art[k])) ART.state = { art, sid: art.sid };
+  ART.mode = art.mode ?? 'panel';
+  const full = { label: 'Full screen', on: () => side.current()?.mode === 'full', go: () => side.current()?.mode === 'full' ? side.back() : side.mode('full') };
+  if (S.focus === 'dev' && side.current()?.slot === 'dan-chat') {
+    let over = artOverlay(); if (!over) { over = document.createElement('div'); over.className = 'art-over'; side.body.append(over); } over.replaceChildren();
+    artifactView(over.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [full, { label: 'Close', go: () => over.remove() }] });
+    if (ART.mode === 'full') side.mode('full');
+    return keepBox();
+  }
+  side.open('artifact', { title: art.title, mode: ART.mode, defaultWidth: w => w / 2,
+    render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [
+      { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; side.mode(ART.mode); } }, full] }),
+    onClose: why => { if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
+}
+// Plan view: Claude's plan-mode plan (an "Approve Plan" call or approval), or the agent's plan entries, as Markdown.
+function openPlan(s, which) {
+  const e = s.events[+which], entries = s.events.find(x => x.t === 'plan')?.entries ?? [];
+  const src = e?.plan ?? entries.map(([st, t]) => `- [${st === 'completed' ? 'x' : ' '}] ${t}${st === 'in_progress' ? ' *(in progress)*' : ''}`).join('\n');
+  openArtifact({ kind: 'markdown', lang: 'md', mode: 'panel', title: 'Plan', src, sid: s.id });
+}
+// A turn ended: the newest artifact of its reply opens by itself when that chat is on screen (else its chip waits).
+function autoArtifact(s) {
+  const from = s.events.findLastIndex(e => e.t === 'user') + 1, found = [];
+  for (const e of s.events.slice(from)) if (e.t === 'agent' && !e.artSeen) { e.artSeen = true; found.push(...artifactsIn(e.text)); }
+  const onScreen = S.focus === 'chat' ? (S.split ? S.open.slice(0, 2) : S.open.slice(0, 1)).includes(s.id) : S.focus === 'dev' && sideSession()?.id === s.id;
+  if (found.length && onScreen) openArtifact({ ...found.at(-1), sid: s.id });
+}
+side.onResize(() => { ART.state?.refresh?.(); keepBox(); });
+if (sampleView) { // the test door: an agent reply arrives whole and its turn ends (reply() streams 3 characters per 18 ms)
+  const at = id => S.sessions.find(s => s.id === (id ?? (S.focus === 'dev' ? sideSession()?.id : S.open[0])));
+  window.__artifact = { reply: (text, id) => { const s = at(id); s.events.push({ t: 'agent', text }); renderChats(); turnEnd(s); }, render: () => renderChats(), state: () => ART.state, events: id => at(id).events };
+}
 const focusNames = { chat: 'Chat Focus', dev: 'Dev Focus', mission: 'Mission Control' };
 /* icons */
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
@@ -515,7 +567,7 @@ function event(e, s) {
     case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${chatImgs.get(i.hash) ? ` src="${chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${names[s.agent]}</div>${mdOf(e)}${agentImgs(e.images, names[s.agent])}</div>`;
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
-    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${agentImgs(e.images, names[s.agent])}`;
+    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, names[s.agent])}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
     case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/^(Claude Code|Codex) is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
   }
@@ -523,7 +575,7 @@ function event(e, s) {
 }
 const diff = rows => `<div class="diff">${rows.map(([k, l]) => `<div class="${esc(k)}">${k === 'add' ? '+' : k === 'del' ? '−' : ' '} ${esc(l)}</div>`).join('')}</div>`;
 function pending(s) {
-  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}${s.live ? '<p class="hint">Sending a message declines this and sends the message instead.</p>' : ''}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
+  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}${a.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" data-open-plan="${s.events.indexOf(a)}">Open plan</button>` : ''}${s.live ? '<p class="hint">Sending a message declines this and sends the message instead.</p>' : ''}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
   if (s.pending === 'question') { const q = s.events.find(e => e.t === 'question'); return `<form class="pending fx-halo" data-question><div class="eyebrow">${names[s.agent]} asks</div><h4>${esc(q.title)}</h4>${q.unsupported ? '<p class="hint">P9 cannot show this form faithfully. Decline, or answer in a message.</p>' : ''}${s.live ? '<p class="hint">Sending a message declines this question and sends the message instead.</p>' : ''}${q.fields.map((f, i) => { const head = `<span>${esc(f.label)}${f.required ? ' *' : ''}</span>${f.hint ? `<small>${esc(f.hint)}</small>` : ''}`; return f.kind === 'radio' ? `<div class="field">${head}${f.options.map(opt).map(([v, l]) => `<label><input type="radio" name="f${i}" value="${esc(v)}" ${(q.vals?.['f' + i] ?? ('def' in f ? f.def : opt(f.options[0])[0])) === v ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>`
     : f.kind === 'multi' ? `<div class="field">${head}${f.options.map(opt).map(([v, l], j) => `<label><input type="checkbox" name="f${i}~${j}" value="${esc(v)}" ${q.vals?.[`f${i}~${j}`] !== undefined ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>` : `<div class="field">${head}<input data-slot="input" name="f${i}" value="${esc(q.vals?.['f' + i] || '')}"></div>`; }).join('')}<div class="acts">${q.unsupported ? '' : '<button data-slot="button" data-variant="default" data-size="sm" type="submit">Submit answer</button>'}<button data-slot="button" data-variant="outline" data-size="sm" type="button" data-decline>Decline</button></div></form>`; }
   return '';
@@ -579,6 +631,7 @@ function renderChats(only) {
   paint($('#chats'), ss, only);
   if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
   renderSideChat(only);
+  if (side.current()?.slot === 'artifact' && ART.mode === 'panel' && S.focus === 'chat' && ![...ids, mdl.open && S.modal?.kind === 'chat' && S.modal.id].includes(ART.state?.sid)) side.close('artifact'); // item 19: a panel artifact goes with its chat; a pinned one stays
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
@@ -620,7 +673,7 @@ function paint(root, ss, only) {
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
-    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved') return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
+    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; sendText(s, t, now, when); if (bare && settings.closeOnSend) closeModal(); };
     const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
@@ -647,6 +700,8 @@ function paint(root, ss, only) {
     // Item 15: by name (the pick step now comes first), with the chat's own agent on the step even when it was not picked.
     p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude'));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
+    p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
+    p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
     p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
@@ -692,6 +747,13 @@ async function addImages(s, files) {
   }
   renderChats();
 }
+// The composer's send (go) and an artifact's Send comments (item 19) share it: queued behind a running turn, or sent.
+const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved');
+function sendText(s, t, now, when) {
+  const mid = !now && busy(s);
+  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); return; }
+  (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined);
+}
 function startTurn(s, t, when) {
   const images = s.images || []; s.images = [];
   if (s.live) return liveChat.prompt(s, t, images, when);
@@ -728,6 +790,7 @@ function finished(s) {
   if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
 }
 function turnEnd(s) {
+  autoArtifact(s);
   if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
   if (s.queue.length) { const t = s.queue.shift(); keepQueue(s); startTurn(s, t); } else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
@@ -2357,6 +2420,8 @@ addEventListener('click', e => {
   e.preventDefault(); window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
 });
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
+// Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
+const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
@@ -2416,14 +2481,14 @@ function applyChat(ev) {
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content);
         if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
-      } else if (d.sessionUpdate === 'tool_call') s.events.push({ t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content) });
+      } else if (d.sessionUpdate === 'tool_call') s.events.push({ t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) });
       else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
       else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) usageNow(); }
       else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
       break;
-    case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]) }); s.pending = 'approval'; break;
+    case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]), plan: planText(d.toolCall) }); s.pending = 'approval'; break;
     case 'question': {
       // The daemon's form (formSpec in chat.mjs) is the one P9 renders and checks; null means P9 cannot show it faithfully.
       // A required choice starts unpicked; an optional one starts on "No answer" (left out of the reply).

@@ -1,4 +1,5 @@
 import { Marked } from 'marked';
+import { artifactInfo, artifactChip } from './artifact.mjs';
 /* Popover helper: toggles [hidden] on a panel anchored under a button; closes on outside click / Esc. */
 export const popover = (btn, panel, onOpen, signal) => {
   const open = () => { document.querySelectorAll('.pop').forEach(p => { if (p !== panel) p.hidden = true; }); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); onOpen && onOpen(); };
@@ -88,7 +89,9 @@ export const webLink = href => {
 const textLink = function (t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; };
 const mdText = { html: t => esc(t.text), image: t => esc(t.text) };
 export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText, link: textLink } });
+// Item 19: a fenced block marked as an artifact (artifact.mjs) is a chip that opens it, never the code in place.
 export const mdReply = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText,
+  code(t) { const a = artifactInfo(t.lang); return a ? artifactChip(a, t.text) : false; },
   link(t) {
     const u = webLink(t.href); if (!u) return textLink.call(this, t);
     const same = [t.href, u.href, u.host, u.href.replace(/^https?:\/\//, '')].includes(t.text.trim());

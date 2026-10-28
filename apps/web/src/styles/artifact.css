@@ -1,0 +1,30 @@
+/* Item 19 (desktop shell.css tokens, else the phone's): artifacts. The chip that stands in a reply for an artifact block, and the artifact view (the 'artifact' side
+   slot, or over the Dev Focus side chat above its text box): a bar, the sandboxed frame, and the comments. */
+.artifact-chip{display:flex;align-items:center;gap:8px;max-width:100%;margin:6px 0;padding:8px 12px;border:1px solid var(--border,var(--line));border-radius:calc(var(--radius,10px) - 2px);background:var(--card,var(--raised));color:var(--foreground,var(--text));font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.artifact-chip:hover{border-color:var(--primary,var(--cyan))}
+.artifact-chip .art-kind,.art-bar .art-kind{flex:none;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted-foreground,var(--muted))}
+.artifact-chip .art-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.art{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0;min-width:0;background:var(--background,var(--bg))}
+.art-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 10px;border-bottom:1px solid var(--border,var(--line));font-size:12px;min-width:0}
+.art-bar .art-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.art-bar .art-state{color:var(--destructive,var(--red));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.art-bar .spacer,.art-acts .spacer{flex:1}
+.art-bar [aria-pressed=true]{background:var(--accent,var(--field))}
+.art-body{min-height:0;display:grid}
+.art-frame{width:100%;height:100%;border:0;background:#fff}
+.art-notes{display:grid;gap:6px;padding:8px 10px;border-top:1px solid var(--border,var(--line));align-content:start}
+.art-notes textarea{width:100%;resize:vertical;min-height:56px;box-sizing:border-box;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border,var(--line));border-radius:calc(var(--radius,10px) - 4px);background:var(--card,var(--raised));color:var(--foreground,var(--text))}
+.art-quote,.art-list blockquote{margin:0;padding:2px 8px;border-left:2px solid var(--primary,var(--cyan));color:var(--muted-foreground,var(--muted));font-size:12px;white-space:pre-wrap;max-height:5.5em;overflow:auto}
+.art-acts{display:flex;gap:6px;align-items:center}
+.art-list{margin:0;padding:0;list-style:none;display:grid;gap:6px;max-height:30vh;overflow:auto}
+.art-list:empty{display:none}
+.art-list li{position:relative;display:grid;gap:2px;padding:6px 26px 6px 8px;border:1px solid var(--border,var(--line));border-radius:calc(var(--radius,10px) - 4px);font-size:13px}
+.art-list p{margin:0;white-space:pre-wrap}
+.art-list li>button{position:absolute;top:2px;right:4px;border:0;background:none;color:var(--muted-foreground,var(--muted));cursor:pointer;font-size:15px}
+.sbody:has(>.art-over){position:relative}
+.art-over{position:absolute;top:0;left:0;right:0;z-index:5;display:grid;border-bottom:1px solid var(--border,var(--line))}
+.open-plan{margin:4px 0;font-size:11px}
+.eyebrow .open-plan{margin:0 0 0 6px;padding:0 6px;border:1px solid var(--border,var(--line));border-radius:4px;background:none;color:inherit;cursor:pointer;text-transform:none;letter-spacing:0}
+/* Phone: the artifact fills the full-screen sheet under its title. */
+#sheet.full #sheetBody:has(>.art-host){flex:1;min-height:0;display:grid}
+.art-host{min-height:0;height:calc(100dvh - 80px)}
