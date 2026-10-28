@@ -165,7 +165,7 @@ test('Remote mode connecting: a turning black hole and the reason until the remo
   const layer = page.locator('dialog#connecting[open]');
   await layer.waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
-  assert.ok((await page.locator('#connWhy').textContent()).length > 10, 'the layer says why it is waiting');
+  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there. Install P9 on it first/, 'D15: says P9 must be installed there, not that connecting installs it');
   await page.waitForTimeout(600); // a turn of the ring in the shot
   await evidence(page, 'd20-connecting');
   // P9 starts on the remote: the next try connects, the layer goes, the window is on the remote.
