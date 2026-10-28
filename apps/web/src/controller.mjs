@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-import { popover as createPopover, dragBar, svg, esc, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
-=======
-import { popover as createPopover, svg, esc, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
->>>>>>> release/v0.1.6
+import { popover as createPopover, dragBar, svg, esc, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
