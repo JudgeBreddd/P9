@@ -30,7 +30,7 @@ test('Phase 18: p9 edit and p9 diff open workspace files in the running app, and
   await writeFile(path.join(instance.directory, 'secret.txt'), 'outside\n');
   await symlink(path.join(instance.directory, 'secret.txt'), path.join(w, 'link.txt'));
   // No --user-data-dir: the CLI's second instance must find the same profile (HOME's), as it would for Builder.
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), P9_EDITOR_HOST: host, P9_SPELL_CHECK: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), P9_EDITOR_HOST: host }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   let mainErr = '';

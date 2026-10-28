@@ -465,7 +465,7 @@ const refused = async (socketPath, ms = 15000) => {
   return false;
 };
 // A daemon set up as the server: the editor server (the fixture, or the real one) on its PATH and P9_EDITOR_HOST.
-const editorDaemon = (t, editor, env = { P9_EDITOR_HOST: editor.host }) => daemon(t, undefined, false, async () => ({ path: editor.path, env: { P9_SPELL_CHECK: 'off', ...env } }));
+const editorDaemon = (t, editor, env = { P9_EDITOR_HOST: editor.host }) => daemon(t, undefined, false, async () => ({ path: editor.path, env }));
 
 test('Server mode Dev Focus: the server\'s daemon runs one editor on editor.sock, the tunnel forwards it, the daemon\'s stop ends it', { skip, timeout: 120000 }, async (t) => {
   const editor = await editorFor();
@@ -519,7 +519,7 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
   await writeFile(path.join(remote.workspace, 'on-server.txt'), 'before\n');
   // This computer's editor server would be "missing" too: a Dev Focus that worked here could only be the server's.
-  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here'), P9_SPELL_CHECK: 'off' };
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, HOME: s.directory, P9_EDITOR_HOST: path.join(s.directory, 'no-editor-here') };
   delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
@@ -566,7 +566,7 @@ test('Dev Focus\'s page when the editor server cannot start: no systemd user ses
   const local = await daemon(t), dir = await mkdtemp(path.join(os.tmpdir(), 'p9-nobus-'));
   // What systemd-run prints with no user manager to talk to (su, sudo, an ssh login on a server without lingering).
   await writeFile(path.join(dir, 'systemd-run'), '#!/bin/sh\necho "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined" >&2\nexit 1\n', { mode: 0o755 });
-  const env = { ...process.env, HOME: dir, PATH: dir + ':' + process.env.PATH, P9_EDITOR_HOST: editor.host, P9_SPELL_CHECK: 'off' };
+  const env = { ...process.env, HOME: dir, PATH: dir + ':' + process.env.PATH, P9_EDITOR_HOST: editor.host };
   delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + path.join(dir, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();

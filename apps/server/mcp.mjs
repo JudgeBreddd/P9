@@ -30,7 +30,9 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Read p9://schema/regist
   + 'and dry-run a whole file with validate_registry or validate_space. Every write tool says what changed and returns the file\'s new '
   + 'hash; pass it back as hash so a file changed meanwhile is reported instead of overwritten. Writes are refused while the agent lock '
   + 'is on, and the registry and space are read-only while File protection is on. run_script and answer_needs_you ask the user in this '
-  + 'chat first. request_restart only asks the user; nothing restarts.';
+  + 'chat first. request_restart only asks the user; nothing restarts. To show the user an artifact beside the chat, put it in a fenced '
+  + 'block whose info string is "<type> artifact [panel|pinned|full] [title]" (type: html, svg, mermaid, jsx, markdown, or any code '
+  + 'language); it runs sandboxed with no network, React may import only react and react-dom, and the user\'s comments come back as one message.';
 
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
 const sectionField = { type: 'string', description: 'A space section title. Without it the button goes to (or comes from) the registry\'s scripts.' };

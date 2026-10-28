@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Artifact</title>
+<style>html { color-scheme: light dark; } body { margin: 0; }</style>
+<script>
+// The artifact frame (item 19, threat model row 65). Served on its own origin with its own CSP (sandbox allow-scripts,
+// default-src 'none', inline scripts and styles only), inside <iframe sandbox="allow-scripts">: an opaque origin with no
+// network, no cookies, no P9 page and no window.p9. It takes one message from its parent, { p9: 'render', html, scripts },
+// runs the runtimes in scripts (Mermaid, React, TypeScript, sent by the page as text), then puts html in as its document,
+// running its inline scripts in order. It tells its parent only: ready, rendered, an error's text and the selected text.
+(() => {
+  let done = false;
+  const tell = message => parent.postMessage({ p9: 'frame', ...message }, '*'); // the parent's origin is not known here: nothing secret goes out
+  addEventListener('error', event => tell({ kind: 'error', text: String(event.message).slice(0, 500) }));
+  addEventListener('unhandledrejection', event => tell({ kind: 'error', text: String(event.reason?.message ?? event.reason).slice(0, 500) }));
+  document.addEventListener('selectionchange', () => tell({ kind: 'selection', text: String(getSelection()).slice(0, 4000) }));
+  addEventListener('message', event => {
+    const m = event.data;
+    if (event.source !== parent || done || !m || m.p9 !== 'render' || typeof m.html !== 'string' || !Array.isArray(m.scripts) || !m.scripts.every(s => typeof s === 'string')) return;
+    done = true; // one artifact per frame: a later message is ignored
+    for (const text of m.scripts) { const s = document.createElement('script'); s.textContent = text; document.head.append(s); }
+    const parsed = new DOMParser().parseFromString(m.html, 'text/html');
+    document.replaceChild(document.adoptNode(parsed.documentElement), document.documentElement);
+    // Parsed scripts never run: each is made again, in document order, so it does (external ones meet the CSP).
+    for (const old of [...document.querySelectorAll('script')]) {
+      const s = document.createElement('script');
+      for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      s.textContent = old.textContent; old.replaceWith(s);
+    }
+    document.dispatchEvent(new Event('DOMContentLoaded')); dispatchEvent(new Event('load'));
+    tell({ kind: 'rendered' });
+  });
+  tell({ kind: 'ready' });
+})();
+</script>

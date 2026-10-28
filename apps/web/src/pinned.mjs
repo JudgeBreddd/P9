@@ -7,7 +7,7 @@ const mark = st => st === 'completed' ? '✓' : st === 'in_progress' ? '▸' : '
 export function pinned(s, mdOf) {
   const plan = s.events.find(e => e.t === 'plan'), cards = [...(s.cards?.values() ?? [])];
   if (!plan?.entries.length && !cards.length) return '';
-  return `<div class="pinned" aria-label="Pinned">${plan?.entries.length ? `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan</div><ul style="margin:0;padding:0">${plan.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${mark(st)}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>` : ''}`
+  return `<div class="pinned" aria-label="Pinned">${plan?.entries.length ? `<div class="plan fx-title fx-lift"><div class="eyebrow">Plan <button type="button" class="open-plan" data-open-plan="entries" title="Open the plan to comment on it">Open</button></div><ul style="margin:0;padding:0">${plan.entries.map(([st, t]) => `<li data-s="${esc(st)}"><span class="i">${mark(st)}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>` : ''}`
     + cards.map(c => `<div class="card-pin" data-card="${esc(c.id)}"><div class="eyebrow">${esc(c.id)} · ${esc(c.kind)}</div><div class="msg agent">${mdOf(c)}</div></div>`).join('') + '</div>';
 }
 

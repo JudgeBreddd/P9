@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
-import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, parseSave } from '../../packages/protocol/index.mjs';
+import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave } from '../../packages/protocol/index.mjs';
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
@@ -456,7 +456,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // "Use what's here" (needs-done p9-wizard-respects-existing-workspace): with no settings in a folder that already has things
   // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
   // AGENTS.md at the top, a needs-you or waiting folder. Links are never followed; at most three folders deep.
-  const SKIP = new Set(['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
+  const SKIP = new Set([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
   // The folder names a workspace keeps what is waiting on its owner in (the kit's _tyler included; Mission Control labels come from the owner's own folder).
   const WAITING_NAMES = new Set(['needs-you', '_needs-you', 'waiting', '_waiting', '_tyler']);
   const byDepth = (a, b) => a.split('/').length - b.split('/').length;
@@ -791,7 +791,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       await next();
       // img-src data: (threat model row 26, v0.1.6 P9): an agent's own images and attachment chips; a data: image makes no request.
       // font-src 'self' (c18): the theme picker's fonts, the same bundled files the desktop loads.
-      c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+      // frame-src 'self' (item 19, row 65): the artifact frame, /frame/, which gets its own sandboxed CSP and may sit only in this origin's pages.
+      c.header('Content-Security-Policy', c.req.path === '/frame/' ? FRAME_CSP + "; frame-ancestors 'self'"
+        : "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; worker-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
       c.header('Referrer-Policy', 'no-referrer');
     });
     const login = (c, { status, token, csrf, ...result }) => {
@@ -826,6 +828,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       { 'content-type': 'image/png' }));
     remoteApp.get('/p9-icon.svg', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.svg')), 200,
       { 'content-type': types['.svg'] }));
+    // Item 19 (row 65): the artifact frame's page, and the runtimes the phone page fetches and hands to it (Mermaid, React, TypeScript).
+    remoteApp.get('/frame/', async (c) => c.html(await readAsset(path.join(webRoot, 'frame', 'index.html'), 'utf8')));
+    remoteApp.get('/frame/:file', async (c) => {
+      const file = c.req.param('file');
+      if (!/^[a-z0-9-]+\.js$/.test(file)) return c.json({ error: 'request-refused' }, 400);
+      return c.body(await readAsset(path.join(webRoot, 'frame', file)), 200, { 'content-type': types['.js'] });
+    });
     remoteApp.get('/_astro/:file', async (c) => {
       const file = c.req.param('file');
       if (!/^[a-zA-Z0-9_.-]+$/.test(file)) return c.json({ error: 'request-refused' }, 400);
