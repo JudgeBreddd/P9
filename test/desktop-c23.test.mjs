@@ -104,10 +104,16 @@ test('D2: a dragged pet keeps its place beside the message box when a side panel
   const pane = page.locator('#chats .pane').first(), pet = pane.locator('canvas.pet'), box = pane.locator('.composer');
   await pet.waitFor({ timeout: 10000 });
   const from = async () => { const p = await pet.boundingBox(), b = await box.boundingBox(); return [p.x + p.width / 2 - b.x, p.y + p.height / 2 - b.y, b.x]; };
-  const p = await pet.boundingBox(), b = await box.boundingBox();
-  await page.mouse.move(p.x + p.width / 2, p.y + p.height / 2); await page.mouse.down();
-  await page.mouse.move(b.x + 60, b.y - 40, { steps: 5 }); await page.mouse.up();
-  await page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('p9-pet-spots') || '{}')).some((spot) => Array.isArray(spot.box)));
+  // The pet may still be settling into its spot when the page first shows it: grab it again until the drag is saved.
+  const saved = () => page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('p9-pet-spots') || '{}')).some((spot) => Array.isArray(spot.box)), null, { timeout: 4000 }).then(() => true, () => false);
+  for (let i = 0; i < 4; i++) {
+    await page.waitForTimeout(500);
+    const p = await pet.boundingBox(), b = await box.boundingBox();
+    await page.mouse.move(p.x + p.width / 2, p.y + p.height / 2); await page.mouse.down();
+    await page.mouse.move(b.x + 60, b.y - 40, { steps: 5 }); await page.mouse.up();
+    if (await saved()) break;
+    assert.ok(i < 3, 'the drag is saved');
+  }
   const before = await from();
   await page.evaluate(() => window.__side.open('artifact', { title: 'Editor', render: (b) => { b.textContent = 'editor'; } }));
   await page.waitForFunction(() => !!document.querySelector('.stage')?.dataset.side, null, { timeout: 5000 });
@@ -153,4 +159,30 @@ test('D12: the brand mark is the P9 icon in every theme', { timeout: 90000 }, as
     if (theme === 'event-horizon-prime' || theme === 'daylight') await shot('c23-d12-' + theme, false, true);
   }
   console.log('PASS D12');
+});
+
+test('D6: Settings is wide, its sections sit side by side, and a page selector shows one section at a time', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.click('#setBtn'); await page.locator('#setDlg[open] .set-pages').waitFor({ timeout: 10000 }); await page.waitForTimeout(400);
+    assert.ok((await page.locator('#setDlg').boundingBox()).width > 1000, 'wider than the old 560px');
+    const boxes = await page.locator('#setBody>.set-group').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
+    assert.ok(new Set(boxes.map((b) => b[0])).size >= 2, 'sections in more than one column: ' + JSON.stringify(boxes));
+    assert.match(await page.locator('#setBody>.set-group>legend').first().innerText(), /^General\b/);
+    await shot('c23-d6-settings-' + theme);
+    await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  }
+  await page.click('#setBtn'); await page.locator('#setDlg[open] .set-pages').waitFor({ timeout: 10000 });
+  await page.click('[data-set-page="Focus modes"]');
+  await page.locator('[data-set-page="Focus modes"][aria-pressed="true"]').waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#setBody>.set-group:visible').count(), 1, 'one page shown');
+  assert.match(await page.locator('#setBody>.set-group:visible legend').first().innerText(), /^Focus modes/);
+  await page.locator('#setBody input[type=checkbox]:visible').first().click(); // a save re-renders: the page stays
+  await page.waitForTimeout(400);
+  assert.equal(await page.locator('[data-set-page="Focus modes"]').getAttribute('aria-pressed'), 'true', 'the page stays after a save');
+  await shot('c23-d6-settings-page');
+  await page.click('[data-set-page="All"]');
+  assert.ok(await page.locator('#setBody>.set-group:visible').count() >= 5, 'All shows every section');
+  console.log('PASS D6');
 });

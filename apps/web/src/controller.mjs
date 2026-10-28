@@ -1921,6 +1921,23 @@ async function setUnrestricted(on) {
   setWarnsLoose(!on); setStarts(on, START);
   renderSettings();
 }
+// D6: the loose rows at the top become a General group; past four groups a page selector shows one (or all) at a time.
+let setPage = 'All';
+function settingsPages() {
+  const body = $('#setBody'), loose = [...body.children].filter(c => c.tagName !== 'FIELDSET');
+  if (loose.length) { const g = document.createElement('fieldset'); g.className = 'set-group'; g.innerHTML = '<legend>General ' + info('The docs, zoom, your name, and how P9 opens and closes its windows.', 'settings') + '</legend>'; g.append(...loose); body.prepend(g); }
+  const groups = [...body.children], name = g => g.querySelector('legend')?.firstChild?.textContent.trim() || '';
+  if (groups.length < 5) return $('#setDlg .set-pages')?.remove();
+  if (setPage !== 'All' && !groups.some(g => name(g) === setPage)) setPage = 'All';
+  $('#setDlg .set-pages')?.remove();
+  const nav = document.createElement('nav'); nav.className = 'set-pages'; nav.setAttribute('aria-label', 'Settings pages');
+  for (const n of ['All', ...groups.map(name)]) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = n; b.dataset.setPage = n; b.setAttribute('aria-pressed', n === setPage);
+    b.onclick = () => { setPage = n; renderSettings(); }; nav.append(b);
+  }
+  groups.forEach(g => { g.hidden = setPage !== 'All' && name(g) !== setPage; });
+  body.classList.toggle('one', setPage !== 'All'); $('#setDlg .dlg-head').after(nav);
+}
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -1937,6 +1954,7 @@ function renderSettings() {
     + (serverInfo ? serverRow() : '')
     + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to remote (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
     + maintenanceGroup(updates);
+  settingsPages();
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
   $('#setName').value = settings.name || '';
