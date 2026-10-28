@@ -141,6 +141,10 @@ install)
     # With the rule loaded Electron prints its version; the SUID-sandbox FATAL means the rule did not take.
     started=$(as_p9 'node_modules/electron/dist/electron --version 2>&1 | tail -1' || true)
     echo "BARE_ELECTRON_STARTS $started"
+    # Why, if it did not: the file the kernel runs, the attach line in the rule, and the kernel's loaded profiles.
+    echo "BARE_ELECTRON_REAL $(as_p9 'readlink -f node_modules/electron/dist/electron' || true)"
+    docker exec "$NAME" grep -h '^profile' /etc/apparmor.d/p9-electron | sed 's/^/BARE_RULE /' || true
+    docker exec "$NAME" grep p9-electron /sys/kernel/security/apparmor/profiles | sed 's/^/BARE_KERNEL_PROFILE /' || true
     [[ "$started" =~ ^v[0-9] ]] || status=1
   fi
   [ "$status" = 0 ]

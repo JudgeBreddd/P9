@@ -91,10 +91,21 @@ export async function packageManager(exists = (file) => access(file, constants.X
 export const PROFILE = '/etc/apparmor.d/p9-electron';
 export const cloneElectron = (root = fileURLToPath(new URL('../../', import.meta.url))) =>
   path.join(root, 'node_modules', 'electron', 'dist', 'electron');
+// AppArmor attaches a profile by the program's real path, and pnpm's node_modules/electron is a link into
+// .pnpm/electron@<version> (CI run 40614561848: a rule naming the link loaded and never applied). So the rule names the
+// clone's real folder and pnpm's real layout, built from the path rather than read from the file, because a new install
+// asks before pnpm install has downloaded Electron. The version is a glob, so an update that moves Electron does not
+// ask for the admin password again. A path holding a quote, a backslash, a line break, NUL or one of AppArmor's pattern
+// characters is refused, so that glob is the only one in the rule.
+const LINK = '/node_modules/electron/dist/electron';
 export function profileText(electron) {
-  if (/["\\\r\n\x00]/.test(electron)) throw new Error('profile-path-refused');
+  const clone = electron.endsWith(LINK);
+  let attach = clone ? electron.slice(0, -LINK.length) : electron;
+  if (clone) try { attach = realpathSync(attach); } catch {} // a clone that is not there (tests): the folder as given
+  if (/["\\\r\n\x00*?[\]{}^]/.test(attach)) throw new Error('profile-path-refused');
+  if (clone) attach += '/node_modules/.pnpm/electron@*/node_modules/electron/dist/electron';
   return 'abi <abi/4.0>,\ninclude <tunables/global>\n\n# Written by P9 (item 15): lets P9\'s Electron use its sandbox on Ubuntu 23.10 and newer.\n' +
-    `profile p9-electron "${electron}" flags=(unconfined) {\n  userns,\n}\n`;
+    `profile p9-electron "${attach}" flags=(unconfined) {\n  userns,\n}\n`;
 }
 const shellQuote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
 // The kernel's loaded profiles, one folder per profile named <name>.<n>; readable without root. The rule counts only once
