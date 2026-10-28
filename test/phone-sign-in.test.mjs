@@ -21,6 +21,9 @@ test('P9: the phone signs in to Claude and Codex; only a vendor page and a code-
   await page.locator('nav [data-nav="usage"]').click();
   const card = (agent) => page.locator(`#signIn [data-agent="${agent}"]`);
   await card('claude').getByText('Not signed in').waitFor({ timeout: left() });
+  // P8: Codex is not signed in here, so its plan line says so (not an old figure).
+  await page.locator('[data-limits]').getByText('Codex not logged in').waitFor({ timeout: left() });
+  await shot(page, 'p8-phone-codex-not-logged-in');
   assert.equal(await page.evaluate(async () => (await fetch('/phone/sign-in', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"agent":"claude"}' })).status), 403, 'no CSRF token, no sign-in');
 
   // Claude: a tap-to-open link to the vendor page, and the code box.
