@@ -364,8 +364,6 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   const { instance } = await start(t, [], { without: ['ssh'] });
   const bin = path.join(instance.directory, '.local', 'share', 'p9', 'bin');
   await mkdir(bin, { recursive: true });
-  await chmod(bin, 0o500);
-  t.after(() => chmod(bin, 0o700).catch(() => {}));
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d16-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
@@ -384,6 +382,8 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   await body.locator('[data-act="choose:claude"]').click();
   await body.locator('[data-act="choose:codex"]').click();
   assert.equal(await foot.locator('[data-act="install"]').innerText(), 'Continue');
+  await chmod(bin, 0o500);
+  t.after(() => chmod(bin, 0o700).catch(() => {}));
   await foot.locator('[data-act="install"]').click();
   await foot.locator('[data-act="install"]', { hasText: 'Continue without it' }).waitFor({ timeout: left() });
   assert.match(await body.innerText(), /P9 could not put the agent where its terminals find it\.[\s\S]*Continue without it goes on/);
