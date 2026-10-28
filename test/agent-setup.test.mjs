@@ -297,3 +297,65 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   assert.deepEqual(errors, []);
   console.log('PASS item 15 desktop: why line first, Install waits for a pick, Install writes Claude only, Next reaches its sign-in; admin screen: reason, why the password, command; typed, not run');
 });
+
+// D17: a login that expired leaves its file, so /setup says signed in. The chat's "not signed in" opens the agents step
+// on that agent as Sign-in expired with Sign in and the terminal row (it was "Signed in" with no button: a dead end), and
+// the sign-in URL an agent prints in a P9 terminal opens on Ctrl+click through row 18's checked opener (threat model row 13).
+test('D17: chat sign-in on an expired login is not a dead end; a URL in the terminal opens on Ctrl+click only, also when broken into rows', { skip: !linux, timeout: 90000 }, async (t) => {
+  const deadline = Date.now() + 85000, left = () => Math.max(1000, deadline - Date.now());
+  const { instance, tmux } = await start(t, ['claude']);
+  await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
+  await writeFile(path.join(instance.directory, '.claude', '.credentials.json'), '{}');
+  assert.equal((await call(instance, '/setup')).body.claude, true, 'the stale file reads as signed in');
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'auth-required' })).status, 202);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d17-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const opened = path.join(home, 'opened.txt'), opener = path.join(home, 'open.sh');
+  await writeFile(opener, '#!/bin/sh\nprintf "%s\\n" "$1" >> "' + opened + '"\n', { mode: 0o755 });
+  const env = { ...process.env, HOME: home, P9_OPEN_URL: opener }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+
+  await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: left() });
+  await page.locator('.pane[data-id="' + id + '"] [data-signin]').click({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#welDlg').open && document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
+  const body = page.locator('#welBody');
+  await body.locator('[data-act="start:claude"]').waitFor({ timeout: left() });
+  assert.match(await body.innerText(), /Claude[\s\S]*Sign-in expired/);
+  assert.doesNotMatch(await body.innerText(), /Signed in/);
+  assert.equal(await body.locator('[data-act="start:claude"]').innerText(), 'Sign in');
+  assert.equal(await body.locator('[data-act="term:claude:login"]').innerText(), 'Sign in in a terminal');
+  await shot('d17-wizard-expired', page.locator('#welDlg'));
+
+  await body.locator('[data-act="term:claude:login"]').click();
+  await page.waitForFunction(() => !document.querySelector('#welDlg').open, null, { timeout: left() });
+  let fresh;
+  for (const end = Date.now() + 10000; Date.now() < end && !fresh; await wait(100)) fresh = (await call(instance, '/terminals')).terminals.find((x) => x.state === 'running');
+  await typedNotRun(tmux, fresh.id, 'claude auth login');
+  const target = '=p9-' + fresh.id + ':';
+  const cols = Number(tmux('display-message', '-p', '-t', target, '#{pane_width}').trim());
+  // One URL the terminal wraps, one broken into full rows by the program (as Claude Code prints its sign-in URL).
+  const soft = 'https://example.com/d17/soft?' + 'a'.repeat(cols + 20), hard = 'https://example.com/d17/hard?' + 'b'.repeat(cols + 20);
+  tmux('send-keys', '-t', target, 'C-u', "clear; printf '%s\\n\\n%s\\n%s\\n' '" + soft + "' '" + hard.slice(0, cols) + "' '" + hard.slice(cols) + "'", 'Enter');
+  const rows = page.locator('#termView .xterm-rows > div');
+  await rows.filter({ hasText: /^b{20}/ }).waitFor({ timeout: left() });
+  const read = () => readFile(opened, 'utf8').catch(() => '');
+  const click = async (row, modifiers) => { const box = await row.boundingBox(); await page.mouse.move(box.x + 30, box.y + box.height / 2); await page.waitForTimeout(300); await row.click({ position: { x: 30, y: box.height / 2 }, modifiers }); };
+  await click(rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }), []);
+  await page.waitForTimeout(800);
+  assert.equal(await read(), '', 'a plain click opens nothing');
+  await click(rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }), ['Control']);
+  for (const end = Date.now() + 5000; Date.now() < end && !(await read()); await wait(100));
+  await click(rows.filter({ hasText: /^b{20}/ }), ['Control']);
+  for (const end = Date.now() + 5000; Date.now() < end && (await read()).split('\n').length < 3; await wait(100));
+  assert.deepEqual((await read()).trim().split('\n'), [soft, hard], 'each whole URL, the second from a click on its second row');
+  await shot('d17-terminal-link');
+  assert.deepEqual(errors, []);
+  console.log('PASS D17: expired login shows Sign-in expired with Sign in and the terminal row; terminal URLs open on Ctrl+click only, whole');
+});

@@ -25,7 +25,7 @@ for (const type of ['compositionend', 'keydown']) addEventListener(type, (event)
 export const TMUX_MISSING = 'tmux not found. Install it (Debian/Ubuntu: sudo apt install tmux · Fedora: sudo dnf install tmux · Arch: sudo pacman -S tmux), then press Refresh.';
 // What they say when this computer has no terminal backend, or the Windows one could not start (issue #11).
 export const unavailableText = (reason) => "Terminal isn't available on this computer yet" + (reason ? ': ' + reason : '.');
-export function createTerminal({ screen, state, connect }) {
+export function createTerminal({ screen, state, connect, open }) {
   const term = { view: null, socket: null, leases: [] };
   function show(text, live = false) {
     state(text, live);
@@ -88,6 +88,27 @@ export function createTerminal({ screen, state, connect }) {
     const old = term.socket; term.socket = null; term.leases = []; old?.close();
     return Boolean(old);
   }
+  // D17 (threat model row 13): a plain http(s) address in the output opens on Ctrl/Cmd+click only, through the caller's
+  // checked opener; the link is the text on screen (OSC 8 links above stay inert: their target is not shown). A full row
+  // whose next row starts with no space is one line: Claude Code breaks its sign-in URL into rows itself.
+  // ponytail: one cell per character, so a row with wide characters before a URL places its underline off by their count.
+  function links(y, done) {
+    const buf = term.view.buffer.active, cols = term.view.cols, row = (n) => buf.getLine(n)?.translateToString(false) ?? '';
+    const joined = (n) => n > 0 && n < buf.length && !/^\s/.test(row(n)) && (buf.getLine(n).isWrapped || !/\s$/.test(row(n - 1)));
+    let top = y - 1, end = y;
+    while (joined(top)) top--;
+    while (joined(end)) end++;
+    const text = Array.from({ length: end - top }, (_, i) => row(top + i)).join(''), found = [];
+    for (const m of text.matchAll(/https?:\/\/[^\s"'<>\x60]+/g)) {
+      const url = m[0].replace(/[.,;:!?)\]}]+$/, ''), first = top + Math.floor(m.index / cols), last = top + Math.floor((m.index + url.length - 1) / cols);
+      if (first > y - 1 || last < y - 1) continue;
+      found.push({ text: url, range: { start: { x: m.index % cols + 1, y: first + 1 }, end: { x: (m.index + url.length - 1) % cols + 1, y: last + 1 } },
+        decorations: { underline: true, pointerCursor: true },
+        hover: () => { screen.title = 'Ctrl+click to open in your browser'; }, leave: () => { screen.title = ''; },
+        activate: (event, href) => { if (event.ctrlKey || event.metaKey) open(href); } });
+    }
+    done(found.length ? found : undefined);
+  }
   function attach(id) {
     close();
     if (!term.view) {
@@ -95,6 +116,7 @@ export function createTerminal({ screen, state, connect }) {
         // xterm opens OSC 8 links in its core (confirm, then window.open); surface 13 says links do not open.
         linkHandler: { activate() {} } });
       term.view.open(screen);
+      if (open) term.view.registerLinkProvider({ provideLinks: links });
       term.view.onData((data) => { const safe = mended(data); if (safe) sendKeys(safe, pasting); });
     }
     term.view.reset();

@@ -704,7 +704,7 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => { b.disabled = true; await sendAway(s); b.disabled = false; });
     // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
     // Item 15: by name (the pick step now comes first), with the chat's own agent on the step even when it was not picked.
-    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude'));
+    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude', true));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
     p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
     p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
@@ -1668,7 +1668,7 @@ const openDock = () => docking ??= (async () => {
 if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING, unavailableText: text }) => {
   if (lifetime.signal.aborted) return;
   tmuxMissing = TMUX_MISSING; unavailableText = text;
-  dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, state: (text, on) => {
+  dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, open: url => window.p9.openLink(url).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true)), state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
   dockTerm.show('No terminal open');
@@ -2151,9 +2151,11 @@ const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, 
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
 const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
-async function welcome(at, agent) {
+// D17: stale = the chat said this agent is not signed in. Its login file can outlive the login, so /setup still says
+// signed in; the step believes the chat until a sign-in started here ends well.
+async function welcome(at, agent, stale) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null, picked: null });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
   W.s = await loadSetup();
   if (agent) W.picked = [...new Set([...wizPicked(), agent])];
   const d = W.s && setupDone(W.s);
@@ -2166,6 +2168,8 @@ async function welcome(at, agent) {
 async function wizRefresh() {
   const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
   W.s = s; W.login = l?.status === 200 ? l.body : {};
+  const began = W.login[W.began];
+  if (began && !began.running) { if (began.exit === 0 && W.stale === W.began) W.stale = null; W.began = null; }
   if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
   if (s && !S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
   else if (!W.timer && $('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
@@ -2250,13 +2254,14 @@ function wizRender() {
     const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
     body = '<p class="muted sm">Chats need at least one agent signed in. Sign in opens your browser at its sign-in page; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
       + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].filter(([a]) => shown.includes(a)).map(([a, name, sub]) => {
-        const l = W.login[a] || {}, ended = !s[a] && !l.running && l.exit !== null && l.exit !== undefined;
-        return row(name, sub, s[a] ? yes(true, 'Signed in') : l.running ? '<span class="muted sm">Waiting for the browser…</span>' : yes(false, '', 'Not signed in'),
-          s[a] ? '' : l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : 'Sign in', 'default'))
+        const l = W.login[a] || {}, on = s[a] && W.stale !== a, ended = !on && !l.running && l.exit !== null && l.exit !== undefined;
+        // D17: a login that expired still reads as signed in here, so Sign in again is always offered.
+        return row(name, sub, l.running ? '<span class="muted sm">Waiting for the browser…</span>' : on ? yes(true, 'Signed in') : yes(false, '', s[a] ? 'Sign-in expired' : 'Not signed in'),
+          l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : on ? 'Sign in again' : 'Sign in', on ? undefined : 'default'))
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
           + (ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
           // D8: its own sign-in command in a P9 terminal, run by the CLI P9 ships (item 15). Nothing runs before Enter.
-          + (s[a + 'Cli'] && !s[a] && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
+          + (s[a + 'Cli'] && !on && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
           + (W.note[a]?.error ? fail(W.note[a].error, W.note[a].detail) : '');
       }).join('');
     if (!d.agents) next = '<span class="muted sm">Sign in to one to go on, or Skip.</span>' + btn('next', 'Next', 'default').replace('<button', '<button disabled');
@@ -2378,6 +2383,7 @@ $('#welDlg').addEventListener('click', async e => {
     const r = await run(() => (act === 'code' ? window.p9.agentLogin('code', agent, W.code.trim()) : window.p9.agentLogin(act, agent)).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.note[agent] = r.status >= 400 ? { error: r.body?.error || String(r.status) } : null;
     if (act === 'code' && r.status < 400) W.code = '';
+    if (act === 'start' && r.status < 400) W.began = agent;
   }
   await wizRefresh();
 });
