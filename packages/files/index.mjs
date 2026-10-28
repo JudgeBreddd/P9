@@ -351,9 +351,10 @@ async function save(root, relative, expectedHash, content, recovery) {
 // A tunnel send's writes (threat model rows 4 and 7): a whole file from a staged copy, or a delete, never past a change
 // made since the plan. The walk is resolveSafe's, creating missing folders on the way; the current file must hash to
 // `expect` (null: must not exist). The old copy goes to <recovery>/replaced/<tag>/<path> (0600, fsynced) first.
-// Linux only: Windows has no anchored copy-into-place here yet, so a Windows receiver refuses ('unsupported-platform').
+// Windows (win32.mjs anchored): the same walk on NT handles, the file held without write sharing until the rename or delete.
 async function anchored(root, relative, create) {
   const parts = partsFor(relative), canonicalRoot = path.resolve(root), handles = [];
+  if (win) return win.anchored(canonicalRoot, parts, create);
   try {
     let parent = await open(canonicalRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     handles.push(parent);
@@ -379,52 +380,81 @@ async function anchored(root, relative, create) {
     throw error;
   }
 }
+// Every piece read through `file`, a FileHandle or a win32.mjs handle (the same read()), never the name again.
+async function* pieces(file) {
+  const buffer = Buffer.alloc(1024 * 1024);
+  for (let at = 0; ;) {
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, at);
+    if (!bytesRead) return;
+    yield { piece: buffer.subarray(0, bytesRead), at };
+    at += bytesRead;
+  }
+}
 const handleHash = async (file) => {
   const digest = createHash('sha256');
-  for await (const chunk of file.createReadStream({ start: 0, autoClose: false })) digest.update(chunk);
+  for await (const { piece } of pieces(file)) digest.update(piece);
   return digest.digest('hex');
 };
-// The old bytes, read through the open handle (never the name again), into the recovery folder.
+async function copyThrough(from, to) {
+  for await (const { piece, at } of pieces(from)) {
+    for (let done = 0; done < piece.length;) done += (await to.write(piece, done, piece.length - done, at + done)).bytesWritten;
+  }
+}
+// The old bytes, read through the open handle, into the recovery folder.
 async function keepCopy(recovery, tag, relative, file) {
-  const directory = await open(recovery, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  // ponytail: no uid or mode bits on Windows; the folder's ACL is the installer's there, as for preserveDraft.
+  const directory = win ? win.openRecovery(recovery) : await open(recovery, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
     const stat = await directory.stat();
-    if (stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700) throw new Error('unsafe-recovery-directory');
+    if (win ? win.canonical(directory) !== path.resolve(recovery) : stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700) {
+      throw new Error('unsafe-recovery-directory');
+    }
   } finally { await directory.close(); }
   const target = path.join(recovery, 'replaced', tag, ...relative.split('/'));
   await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-  const copy = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try {
-    // A loop through the handles: stream.pipeline into a write stream with autoClose false never settled.
-    for await (const chunk of file.createReadStream({ start: 0, autoClose: false })) {
-      for (let at = 0; at < chunk.length;) at += (await copy.write(chunk, at)).bytesWritten;
-    }
-    await copy.sync();
-  } finally { await copy.close(); }
+  const copy = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+  try { await copyThrough(file, copy); await copy.sync(); }
+  finally { await copy.close(); }
   return path.join('replaced', tag, relative);
 }
 // The name still holds the inode the walk opened (or still nothing).
 const unchanged = async (safe) => {
+  if (win) return win.unchanged(safe);
   const now = await lstat(safe.name).catch(() => null);
   return safe.stat ? now?.ino === safe.stat.ino && now.dev === safe.stat.dev : !now;
 };
 
 export async function replaceFile(root, relative, staged, expect, recovery, tag) {
-  if (win) throw new Error('unsupported-platform');
   const safe = await anchored(root, relative, true);
   let temporary;
   try {
     if ((safe.file ? await handleHash(safe.file) : null) !== expect) return { kind: 'changed' };
     const kept = safe.file ? await keepCopy(recovery, tag, relative, safe.file) : null;
-    temporary = `/proc/self/fd/${safe.parent.fd}/.p9-xfer-${randomUUID()}`;
-    await copyFile(staged, temporary, constants.COPYFILE_EXCL);
-    const file = await open(temporary, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try { await file.chmod(safe.stat ? safe.stat.mode & 0o777 : 0o644); await file.sync(); }
-    finally { await file.close(); }
-    // ponytail: a same-user process can change the file between this check and the rename, as in guardedSave.
+    if (win) {
+      // A staged temp (createExclusive): over an existing file it starts open only to this user and takes the file's
+      // owner and DACL just before the rename, as a save does; metadata the copy would lose (EFS, a label) refuses.
+      let copy;
+      ({ name: temporary, file: copy } = win.createExclusive(safe.parent, '.p9-xfer-', safe.file ?? undefined));
+      const from = await open(staged, 'r');
+      try { await copyThrough(from, copy); } finally { await from.close(); }
+      await copy.sync();
+      if (safe.file && !win.matchSecurity(copy, safe.file)) return { kind: 'changed', ...(kept && { recovery: kept }) };
+    } else {
+      temporary = `/proc/self/fd/${safe.parent.fd}/.p9-xfer-${randomUUID()}`;
+      await copyFile(staged, temporary, constants.COPYFILE_EXCL);
+      const file = await open(temporary, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { await file.chmod(safe.stat ? safe.stat.mode & 0o777 : 0o644); await file.sync(); }
+      finally { await file.close(); }
+    }
+    // ponytail: a same-user process can move the file between this check and the rename, as in guardedSave (on Linux
+    // also change it; on Windows the held handle shares no writes).
     if (!await unchanged(safe)) return { kind: 'changed', ...(kept && { recovery: kept }) };
-    // A new name is link()ed, so a file created meanwhile fails with EEXIST rather than being replaced.
-    if (safe.file) await rename(temporary, safe.name);
+    // A new name is link()ed (Linux) or renamed without replace (Windows), so a file created meanwhile fails with
+    // EEXIST rather than being replaced.
+    if (win) {
+      try { await win.renameAt(safe.parent, temporary, safe.name, Boolean(safe.file)); }
+      catch (error) { if (!safe.file && error.code === 'EEXIST') return { kind: 'changed' }; throw error; }
+    } else if (safe.file) await rename(temporary, safe.name);
     else {
       try { await link(temporary, safe.name); } catch (error) { if (error.code === 'EEXIST') return { kind: 'changed' }; throw error; }
       await unlink(temporary);
@@ -433,13 +463,12 @@ export async function replaceFile(root, relative, staged, expect, recovery, tag)
     await safe.parent.sync();
     return { kind: 'written', ...(kept && { recovery: kept }) };
   } finally {
-    if (temporary) await unlink(temporary).catch(() => {});
+    if (temporary) await (win ? win.unlinkAt(safe.parent, temporary) : unlink(temporary)).catch(() => {});
     await safe.close();
   }
 }
 
 export async function removeFile(root, relative, expect, recovery, tag) {
-  if (win) throw new Error('unsupported-platform');
   const safe = await anchored(root, relative, false).catch((error) => {
     if (error.code === 'ENOENT') return null; // a parent folder is gone, so the file is too
     throw error;
@@ -449,7 +478,7 @@ export async function removeFile(root, relative, expect, recovery, tag) {
     if (await handleHash(safe.file) !== expect) return { kind: 'changed' };
     const kept = await keepCopy(recovery, tag, relative, safe.file);
     if (!await unchanged(safe)) return { kind: 'changed', recovery: kept };
-    await unlink(safe.name);
+    if (win) win.deleteHeld(safe.file); else await unlink(safe.name);
     await safe.parent.sync();
     return { kind: 'removed', recovery: kept };
   } finally { await safe.close(); }
