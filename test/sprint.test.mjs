@@ -149,7 +149,7 @@ test('Phone Sprint window: rings by state, the scripts ask first, Open tmux atta
   assert.equal(new Set(colours).size, 4, 'each state its own colour: ' + colours);
   assert.ok(await dialog.evaluate((d) => d.querySelector('.wbody').scrollWidth <= d.clientWidth + 1), 'the window is wider than the phone');
   await shot(page, 'phone-sprint-window');
-  // Every activity word the feed writes, drawn from one file (the picture Tyler looks at).
+  // Every activity word the feed writes, drawn from one file (the picture the Builder looks at).
   await dialog.evaluate((d) => d.close());
   const words = ['testing', 'in line', 'needs you', 'building', 'idle', 'done'];
   await writeStatus(server, { sprint: 'Feed sprint', updatedAt: new Date().toISOString(), cutoff: new Date(Date.now() + 86400000).toISOString(), overall: 55,

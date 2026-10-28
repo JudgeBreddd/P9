@@ -36,7 +36,7 @@ export const svg = {
 };
 export const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // The Sprint tracker's times, readable: an ISO time is the device's local time without seconds ("6:53 PM"), with
-// "tomorrow" / "yesterday" or a short date when the day is not today; anything else (Tyler's "07:00") is shown as written.
+// "tomorrow" / "yesterday" or a short date when the day is not today; anything else (the Builder's "07:00") is shown as written.
 const ISO = /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d/;
 export function sprintTime(value, now = new Date()) {
   const raw = String(value ?? '').trim(), at = new Date(raw);
