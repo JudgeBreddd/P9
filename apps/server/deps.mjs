@@ -5,14 +5,19 @@
 // that installs it, which needs the admin password. install.sh prints that list before it asks; the wizard shows it.
 import { readFile, rename, stat, writeFile, mkdir, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { windowsStateRoot } from './windows.mjs';
 
 export const AGENTS = ['claude', 'codex'];
-// The words each adapter takes to hand its arguments to the CLI it ships (chat.mjs's sign-in uses the same).
-const PASS = { claude: '--cli', codex: 'cli' };
+// What each launcher runs with node. Claude: the adapter, whose --cli hands everything else to the CLI it ships. Codex:
+// the CLI the adapter ships, directly, resolved the way the adapter resolves it: codex-acp 2.1.1 answers --version
+// anywhere in its arguments with its own name before it reads "cli", so through it "codex --version" (or a prompt
+// holding those words) never reached Codex.
+const PASS = { claude: ' --cli', codex: '' };
+const cliEntry = (agent, adapter) => agent === 'codex' ? createRequire(adapter).resolve('@openai/codex/bin/codex.js') : adapter;
 
 // P9's bin folder: the user's own, never on a system path.
 export const binFolder = (platform = process.platform, env = process.env, home = os.homedir()) =>
@@ -21,16 +26,16 @@ export const binFolder = (platform = process.platform, env = process.env, home =
 const executable = (file) => stat(file).then((info) => info.isFile(), () => false);
 const launcherName = (agent, platform) => platform === 'win32' ? agent + '.cmd' : agent;
 
-// A launcher holds two absolute paths and nothing from a request: node and the adapter that ships the CLI.
+// A launcher holds two absolute paths and nothing from a request: node and the CLI's entry (above).
 function launcher(agent, node, entry, platform) {
   if (platform === 'win32') {
     // cmd.exe reads % and " in a .cmd line; a path holding one is refused rather than escaped.
     if (/["%\r\n]/.test(node + entry)) throw new Error('launcher-path-refused');
-    return `@"${node}" "${entry}" ${PASS[agent]} %*\r\n`;
+    return `@"${node}" "${entry}"${PASS[agent]} %*\r\n`;
   }
   if (/[\r\n\x00]/.test(node + entry)) throw new Error('launcher-path-refused');
   const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
-  return `#!/bin/sh\n# Written by P9 (item 15): the ${agent} CLI that ships with P9. Rewritten at each start; delete it to remove.\nexec ${quote(node)} ${quote(entry)} ${PASS[agent]} "$@"\n`;
+  return `#!/bin/sh\n# Written by P9 (item 15): the ${agent} CLI that ships with P9. Rewritten at each start; delete it to remove.\nexec ${quote(node)} ${quote(entry)}${PASS[agent]} "$@"\n`;
 }
 
 // Writes the launcher of each named agent (a temp file, then rename). refresh: only those already there, so a daemon start
@@ -43,7 +48,7 @@ export async function placeAgents(agents, { platform = process.platform, bin = b
   const written = [];
   for (const agent of agents) {
     const file = path.join(bin, launcherName(agent, platform));
-    const text = launcher(agent, node, entry(agent), platform);
+    const text = launcher(agent, node, cliEntry(agent, entry(agent)), platform);
     if (refresh && !await executable(file)) continue;
     if (await readFile(file, 'utf8').catch(() => null) !== text) {
       await writeFile(file + '.tmp', text, { mode: 0o755 });

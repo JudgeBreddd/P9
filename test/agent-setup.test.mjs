@@ -175,13 +175,13 @@ test('Item 15: /setup/agents writes a launcher for each agent picked, pointing a
   const mode = (await stat(path.join(bin, 'codex'))).mode;
   assert.ok((mode & 0o100) && !(mode & 0o022), 'the launcher runs for its owner, and only its owner can change it (the umask decides the rest): ' + mode.toString(8));
   const text = await readFile(path.join(bin, 'codex'), 'utf8');
-  // Two absolute paths, node and the adapter that ships the CLI, and nothing from the request.
-  assert.match(text, /^#!\/bin\/sh\n# Written by P9 \(item 15\)[^\n]*\nexec '\/[^'\n]+' '\/[^'\n]+codex[^'\n]*' cli "\$@"\n$/);
+  // Two absolute paths, node and the Codex CLI the adapter ships, and nothing from the request.
+  assert.match(text, /^#!\/bin\/sh\n# Written by P9 \(item 15\)[^\n]*\nexec '\/[^'\n]+' '\/[^'\n]+\/@openai\/codex\/bin\/codex\.js' "\$@"\n$/);
   s = await call(instance, '/setup');
   assert.deepEqual([s.claudeCli, s.codexCli], [false, true]);
-  // The launcher runs P9's own Codex.
+  // The launcher runs P9's own Codex, not the adapter (codex-acp answers --version with its own name).
   const version = execFileSync(path.join(bin, 'codex'), ['--version'], { timeout: 20000, env: { ...process.env, PATH: '/usr/bin:/bin' } }).toString();
-  assert.match(version, /\d+\.\d+\.\d+/);
+  assert.match(version, /^codex-cli \d+\.\d+\.\d+/);
 
   const both = await call(instance, '/setup/agents', 'POST', { claude: true, codex: true });
   assert.deepEqual([both.status, both.installed, await readdir(bin)], [200, ['claude', 'codex'], ['claude', 'codex']]);
