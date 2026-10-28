@@ -5,6 +5,9 @@ import { artifactView, chipArtifact } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
+import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
+import { FILE_PROTECTION_RISK } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
 
@@ -1277,18 +1280,74 @@ function paintBar() {
 }
 DUWOP.init(); paintBar(); onLookChange(paintBar);
 function openTheme() { openSheet('Theme', '<div id="themeMenu"></div>'); DUWOP.menu(one('#themeMenu')); }
-// Settings: what the daemon owns, and Maintenance. Rebuild + reload is offered only when the daemon runs from a source checkout.
+// Settings: Security settings and Mission Control files (c18, threat model row 66), as the desktop's Settings has them
+// (security.mjs and mission-files.mjs: the same rows and words), through the desktop's own routes behind this phone's
+// session, CSRF and op ID; then Maintenance. Rebuild + reload is offered only when the daemon runs from a source checkout.
 const REBUILD = MAINTENANCE.find((item) => item.id === 'mtRebuild')!;
+const START = 'p9-mode:'; // a new chat on the phone starts in its last pick for the agent (row 25)
+type Build = { available: boolean; running: boolean } | null;
+const sec: { lock: boolean | null; protect: boolean | null; settings: Record<string, unknown> | null; build: Build } = { lock: null, protect: null, settings: null, build: null };
 async function openSettings() {
   openSheet('Settings', '<div id="phoneSettings" class="stack"><p class="muted">Loading…</p></div>');
-  const build = await request('/rebuild').catch(() => null) as { available: boolean; running: boolean } | null;
+  const [build, lock, protect, files] = await Promise.all(['/rebuild', '/agent-lock', '/file-protection', '/setup/settings'].map((path) => request(path).catch(() => null)));
+  Object.assign(sec, { build, lock: lock?.on ?? null, protect: protect?.on ?? null, settings: files?.settings ?? null });
+  drawSettings();
+}
+const toggle = (id: string, [label, note]: string[], checked: boolean, disabled = false) => `<label class="set"><input type="checkbox" id="${id}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}><span><strong>${escape(label)}</strong><span class="muted">${escape(note)}</span></span></label>`;
+function drawSettings(note = '') {
   const box = document.getElementById('phoneSettings'); if (!box) return;
-  box.innerHTML = '<h2 class="eyebrow">Maintenance</h2>' + (build?.available
+  const { lock, protect, settings, build } = sec;
+  box.innerHTML = '<h2 class="eyebrow">Security settings</h2>'
+    + toggle('setLock', lock === null ? [SECURITY.lock[0], SECURITY.unknown] : SECURITY.lock, lock === true, lock === null)
+    + toggle('setProtect', protect === null ? [SECURITY.protect[0], SECURITY.unknown] : protect ? SECURITY.protect : [SECURITY.protect[0], SECURITY.protectOff], protect !== false, protect === null)
+    + toggle('setWarn', SECURITY.warn, warnsLoose())
+    + toggle('setFree', SECURITY.unrestricted, unrestricted(lock, protect, START), lock === null || protect === null)
+    + `<p class="muted" id="secNote" role="status">${escape(note)}</p>`
+    + (settings ? '<h2 class="eyebrow">Mission Control files</h2>' + missionKeys().map(([k, name]) => `<label class="mission-file"><strong>${escape(name)}</strong>`
+      + (k === 'notes_roots' ? `<textarea class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${escape(missionShown(k, settings[k]))}</textarea>`
+        : `<input class="mono" data-mission="${k}" value="${escape(missionShown(k, settings[k]))}" maxlength="400" autocomplete="off" spellcheck="false">`) + '</label>').join('')
+      + '<p class="muted">Each row saves when you leave it. The old file is kept as settings.json.bak.</p>' : '')
+    + '<h2 class="eyebrow">Maintenance</h2>' + (build?.available
     ? `<button type="button" class="quiet" id="mtRebuild"${build.running ? ' disabled' : ''}>${build.running ? 'Rebuilding…' : REBUILD.label}</button>`
       + '<p class="muted" id="mtRebuildNote" role="status">Source checkouts only: rebuilds P9\'s pages from the server\'s code (pnpm build), then reloads this page with the new build. Chats keep running; nothing restarts.</p>'
     : '<p class="muted">Rebuild + reload is for a P9 that runs from its source code. This server runs an installed build.</p>');
   const button = document.getElementById('mtRebuild') as HTMLButtonElement | null;
   if (button) button.onclick = () => void rebuildUi(button);
+  const input = (id: string) => one<HTMLInputElement>('#' + id);
+  input('setLock').onchange = (event) => void setSecurity({ lock: (event.target as HTMLInputElement).checked });
+  input('setProtect').onchange = (event) => void setSecurity({ protect: (event.target as HTMLInputElement).checked });
+  input('setWarn').onchange = (event) => { setWarnsLoose((event.target as HTMLInputElement).checked); drawSettings(); };
+  input('setFree').onchange = (event) => void setFree((event.target as HTMLInputElement).checked);
+  box.querySelectorAll<HTMLInputElement>('[data-mission]').forEach((field) => { field.onchange = () => void saveMission(field); });
+}
+const said = (result: { status: number; body: Record<string, unknown> }) => String(result.body.detail ?? result.body.error ?? result.status);
+const sent = (path: string, body: Json) => mutate(path, body).catch((error: Error) => ({ status: 0, body: { error: error.message } as Record<string, unknown> }));
+// The lock and protection are the daemon's, for every device; protection off asks first, in the desktop's warning words.
+async function setSecurity(change: { lock?: boolean; protect?: boolean }) {
+  if (change.protect === false && !confirm('Turn off file protection?\n\n' + FILE_PROTECTION_RISK)) return drawSettings();
+  const [path, key, on] = change.lock === undefined ? ['/file-protection', 'protect', change.protect!] as const : ['/agent-lock', 'lock', change.lock] as const;
+  const result = await sent(path, { on });
+  if (result.status === 200) sec[key] = result.body.on as boolean;
+  drawSettings(result.status === 200 ? '' : 'Not changed: ' + said(result));
+}
+// Unrestricted mode: one confirm, then every restriction off; off puts the defaults back (the lock stays off).
+async function setFree(on: boolean) {
+  if (on && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1] + '\n\n' + FILE_PROTECTION_RISK)) return drawSettings();
+  for (const [path, key, want] of [['/file-protection', 'protect', !on], ['/agent-lock', 'lock', false]] as const) {
+    if (sec[key] === want || (key === 'lock' && !on)) continue;
+    const result = await sent(path, { on: want });
+    if (result.status !== 200) return drawSettings('Not changed: ' + said(result));
+    sec[key] = result.body.on as boolean;
+  }
+  setWarnsLoose(!on); setStarts(on, START);
+  drawSettings();
+}
+// One row at a time, as on the desktop: the daemon checks it as it checks the file at start; a refusal stays with its reason.
+async function saveMission(field: HTMLInputElement) {
+  const result = await sent('/setup/settings', { [field.dataset.mission!]: missionValue(field.dataset.mission!, field.value) });
+  if (result.status === 200) { sec.settings = result.body.settings as Record<string, unknown>; return drawSettings(); }
+  field.setAttribute('aria-invalid', 'true'); field.closest('label')?.querySelector('[data-mission-err]')?.remove();
+  field.closest('label')?.insertAdjacentHTML('beforeend', `<small class="field-err" data-mission-err role="alert">Not saved: ${escape(said(result))}</small>`);
 }
 // The desktop's mtRebuild: the button says Rebuilding… until the daemon answers, then the page loads the new build.
 async function rebuildUi(button: HTMLButtonElement) {

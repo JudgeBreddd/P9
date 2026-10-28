@@ -293,6 +293,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/apps/:id/launch', async (c) => reply(c, await mission.launch('apps', c.req.param('id'), await json(c))));
   api.post('/pages/:id/launch', async (c) => reply(c, await mission.launch('pages', c.req.param('id'), await json(c))));
   api.get('/agent-lock', (c) => reply(c, chat.lock()));
+  // Settings > Security (c18, threat model rows 15, 4, 49 and 66): the phone changes the agent lock, File protection and
+  // Mission Control files too, through the desktop's own handlers, behind its session, CSRF and the op ledger.
+  api.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   api.get('/chat', (c) => c.json({ conversations: chat.list() }));
   api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until');
@@ -382,9 +385,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.post('/update/:id/commit', async (c) => reply(c, await update.commit(c.req.param('id'), await json(c))));
   app.post('/update/fetch', async (c) => reply(c, await update.fetch(await json(c))));
   app.get('/update/status', async (c) => reply(c, await update.status()));
-  // Threat model row 15: only the desktop turns the agent lock on or off; reading it is on the shared api.
-  app.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
-  // Threat model row 4: file protection is read and changed by the desktop only; the phone just lives with it.
   // New files from Dev Focus (threat model row 4): create-only through packages/files, so it never replaces a file.
   app.post('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
@@ -616,17 +616,17 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     }
     return c.json({ created, settings: true }, 201);
   });
-  // ST1/ST2: Settings → Mission Control files edits the loaded settings.json, desktop only like the rest of /setup. The body
+  // ST1/ST2: Settings → Mission Control files edits the loaded settings.json; the phone too since c18 (row 66), unlike the rest of /setup. The body
   // names only settings.json keys (null removes one); the result is checked by parseSettings, the same rules as at start, so
   // this route has none of its own. Notes folders keep their read-time refusals (home, workspace, recovery).
   // ponytail: read-change-write with no lock; the one caller saves one row at a time.
-  app.get('/setup/settings', async (c) => {
+  api.get('/setup/settings', async (c) => {
     const disk = await settingsOnDisk();
     // remoteOrigin: this daemon's own phone address (--remote-origin), for "Continue on phone"; absent with remote logins off.
-    return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null, ...(remote ? { remoteOrigin: remote.origin } : {}) });
+    return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null, ...(remote && !c.get('device') ? { remoteOrigin: remote.origin } : {}) });
   });
   let settingsSaves = Promise.resolve();
-  app.post('/setup/settings', async (c) => {
+  api.post('/setup/settings', async (c) => {
     const body = await json(c);
     if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length || !Object.keys(body).every((key) => Object.hasOwn(SETTINGS, key))) return c.json({ error: 'request-refused' }, 400);
     if (!settingsFile) return c.json({ error: 'settings-file-unknown' }, 409);
@@ -682,8 +682,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const made = await terminals.create({}, { cwd: workspace, typed: command });
     return reply(c, made.terminal ? { status: 201, terminal: made.terminal, command } : { ...made, command });
   });
-  app.get('/file-protection', (c) => c.json({ on: protection() }));
-  app.post('/file-protection', async (c) => {
+  api.get('/file-protection', (c) => c.json({ on: protection() }));
+  api.post('/file-protection', async (c) => {
     const body = await json(c);
     if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') return c.json({ error: 'request-refused' }, 400);
     ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('file-protection', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.on ? 'on' : 'off');

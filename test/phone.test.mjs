@@ -94,13 +94,14 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.deepEqual(usage.body.totals, { inputTokens: 27600, outputTokens: 3820, cachedTokens: 19200, costUsd: 0.2768 });
   assert.equal(usage.body.discarded, 1);
   assert.equal(JSON.stringify(usage.body).includes('command'), false);
-  // Threat model row 15 case 3: a phone reads the agent lock but has no route that changes it.
+  // Threat model row 66 (c18, Builder, 2026-10-27, amending rows 15 and 4): a phone reads and changes the agent lock and file
+  // protection through the desktop's routes, behind its session and CSRF (test/phone-c18.test.mjs has the refusals).
   const reader = await enrollDevice(server, await passkeyDevice(browser, server, 'lock-probe'));
   assert.deepEqual((await server.remote('/agent-lock', { session: reader })).body, { on: false });
-  assert.equal((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: true }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
-  // Threat model row 4: the phone can neither read nor change file protection.
-  assert.equal((await server.remote('/file-protection', { session: reader })).status, 404);
-  assert.equal((await server.remote('/file-protection', { method: 'POST', session: reader, body: { on: false }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
+  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: true }, headers: { 'x-p9-op': crypto.randomUUID() } })).body, { on: true });
+  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: false }, headers: { 'x-p9-op': crypto.randomUUID() } })).body, { on: false });
+  assert.deepEqual((await server.remote('/file-protection', { session: reader })).body, { on: true });
+  assert.equal((await server.remote('/file-protection', { method: 'POST', session: reader, body: { on: true, x: 1 }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 400);
   // Threat model row 4: creating files from the editor is desktop-only.
   assert.equal((await server.remote('/files', { method: 'POST', session: reader, body: { path: 'phone-made.txt', content: 'x' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
   // Conversations are labelled title · start time · state; New chat creates one and selects it.
@@ -651,9 +652,13 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
-  assert.equal((await server.remote('/setup/settings', { session: auth })).status, 404);
-  // The wizard's writes, sign-in and Settings → Mission Control files are desktop-only too (threat model rows 17, 31).
-  for (const route of ['/setup/starter', '/setup/settings', '/setup/login', '/setup/login/code', '/setup/login/stop', '/setup/agent-terminal']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
+  // Settings → Mission Control files is the phone's too since c18 (row 66): the desktop's settings, without the desktop's
+  // phone address or the settings file's path.
+  const files = await server.remote('/setup/settings', { session: auth });
+  assert.deepEqual([files.status, files.body], [200, { settings: (await server.desk('/setup/settings')).body.settings, error: null }]);
+  assert.ok(files.body.settings && !files.text.includes('settings.json'), files.text);
+  // The wizard's writes and sign-in stay desktop-only (threat model rows 17, 31).
+  for (const route of ['/setup/starter', '/setup/login', '/setup/login/code', '/setup/login/stop', '/setup/agent-terminal']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {
     const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });

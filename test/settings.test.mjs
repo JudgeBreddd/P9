@@ -1306,6 +1306,68 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
   assert.equal(await (await chat('codex')).inputValue(), 'Read-only');
 });
 
+test('Security settings: one switch per restriction; Unrestricted mode asks once through File protection, turns them all off, new chats start loosened; off puts the defaults back (threat model row 66)', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-sec-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  // main's native warning, answered by the test (file-protection.test.mjs does the same).
+  const answers = (list) => app.evaluate(({ dialog }, list) => {
+    globalThis.asked = [];
+    dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.title); return { response: list.shift() ?? 0 }; };
+  }, list);
+  const asked = () => app.evaluate(() => globalThis.asked);
+  const boxes = () => page.$$eval('#setSecurity input[type=checkbox]', (all) => Object.fromEntries(all.map((b) => [b.id, b.checked])));
+  const settled = (want) => page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#setSecurity input[type=checkbox]')].map((b) => b.checked)) === want, JSON.stringify(want), { timeout: 5000 });
+  const daemonSide = async () => [(await call(instance, '/agent-lock')).on, (await call(instance, '/file-protection')).on];
+  const local = () => page.evaluate(() => ['p9-mode-ok:Full access', 'p9-mode-ok:Bypass permissions', 'p9-mode-default:codex', 'p9-mode-default:claude'].map((k) => localStorage.getItem(k)));
+  await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree').waitFor();
+  assert.match(await page.locator('#setSecurity legend').first().innerText(), /^Security settings/);
+  assert.deepEqual(await page.$$eval('#setSecurity strong', (s) => s.map((x) => x.textContent)), ['Agent lock', 'File protection', 'Warn before Full access and Bypass permissions', 'Unrestricted mode']);
+  assert.deepEqual(await boxes(), { setLock: false, setProtect: true, setWarn: true, setFree: false }, 'the defaults are unchanged');
+  // The warnings switch: off sets "don't show again" for both loosened modes on this computer, on clears it.
+  await page.click('#setWarn'); await settled([false, true, false, false]);
+  assert.deepEqual(await local(), ['1', '1', null, null]);
+  await page.click('#setWarn'); await settled([false, true, true, false]);
+  assert.deepEqual(await local(), [null, null, null, null]);
+  // Unrestricted mode with the lock on: "Keep protection on" changes nothing at all.
+  await page.click('#setLock'); await settled([true, true, true, false]);
+  await answers([0]);
+  await page.click('#setFree'); await settled([true, true, true, false]);
+  assert.deepEqual([await asked(), await daemonSide(), await local()], [['Turn off file protection?'], [true, true], [null, null, null, null]]);
+  // "Turn off protection": every restriction off, and new chats start in Full access and Bypass permissions.
+  await answers([1]);
+  await page.click('#setFree'); await settled([false, false, false, true]);
+  assert.deepEqual([(await asked()).length, await daemonSide(), await local()], [1, [false, false], ['1', '1', 'Full access', 'Bypass permissions']]);
+  assert.equal(await page.locator('[data-default-mode="codex"]').inputValue(), 'Full access', 'New chats start in shows it');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-security-unrestricted ' + (await page.locator('#setDlg').screenshot()).toString('base64'));
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  const id = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
+  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  const mode = page.locator(`#chats .pane[data-id="${id}"] [data-mode]`);
+  await mode.waitFor();
+  assert.equal(await mode.inputValue(), 'Full access');
+  assert.equal(await page.locator('#looseDlg[open]').count(), 0, 'no red warning in Unrestricted mode');
+  // Off: protection back on without asking, the warnings on, new chats in the agents' own modes; the lock stays off.
+  await answers([]);
+  await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree:checked').waitFor();
+  await page.click('#setFree'); await settled([false, true, true, false]);
+  assert.deepEqual([await asked(), await daemonSide(), await local()], [[], [false, true], [null, null, null, null]]);
+  // Protection already off: no native warning comes, so Unrestricted asks once itself; Cancel changes nothing.
+  await answers([1]); await page.click('#setProtect'); await settled([false, false, true, false]);
+  // The page's confirm() is answered in the page: Playwright's dialog events in this Electron window are not reliable.
+  await page.evaluate(() => { window.__confirms = []; window.confirm = (text) => { window.__confirms.push(text); return false; }; });
+  await page.click('#setFree'); await settled([false, false, true, false]);
+  const confirms = await page.evaluate(() => window.__confirms);
+  assert.equal(confirms.length, 1); assert.match(confirms[0], /^Turn on Unrestricted mode\?/);
+  assert.deepEqual([(await asked()).length, await daemonSide(), await local()], [1, [false, false], [null, null, null, null]]);
+  console.log('PASS Security settings: four switches, defaults unchanged; Unrestricted Keep changes nothing, Turn off frees all and a new Codex chat starts in Full access; off restores; with protection already off it asks itself');
+});
+
 test('Chat folder: Start in offers the workspace, recent folders and Choose folder...; a chosen folder reaches the chat, outside picks are refused (threat model row 24)', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.workspace, 'proj/sub'), { recursive: true });
