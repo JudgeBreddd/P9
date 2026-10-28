@@ -282,7 +282,7 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   assert.equal(await title(), 'This needs your admin password');
   const ssh = body.locator('[data-admin="ssh"]');
   const said = await ssh.innerText(), command = await ssh.locator('[data-command]').innerText();
-  const reason = said.indexOf('Server mode and Send to server reach your other machine over SSH.'), password = said.indexOf('only an admin can change that, so your computer asks for your password.');
+  const reason = said.indexOf('Remote mode and Send to remote reach your other machine over SSH.'), password = said.indexOf('only an admin can change that, so your computer asks for your password.');
   assert.ok(said.startsWith('SSH client') && reason > 0 && password > reason && said.indexOf(command) > password, 'reason, then why the password, then the command: ' + said);
   assert.match(command, /^sudo .*\bopenssh/);
   assert.equal(await body.locator('[data-admin="tmux"]').count(), 0, 'tmux is there');
