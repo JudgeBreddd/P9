@@ -1704,7 +1704,7 @@ function walkthrough(i = 0, from = S.focus) {
   const r = at?.getBoundingClientRect(), clamp = (v, max) => Math.min(Math.max(12, v), max - 12);
   if (!r?.width || !r.height) { at?.classList.remove('walk-at'); Object.assign(el.style, { left: (innerWidth - w) / 2 + 'px', top: (innerHeight - h) / 2 + 'px' }); }
   else {
-    if (r.left < 80) Object.assign(el.style, { left: r.right + 14 + 'px', top: clamp(r.top - 8, innerHeight - h) + 'px' }); // the rail: beside it
+    if (r.right < 80) Object.assign(el.style, { left: r.right + 14 + 'px', top: clamp(r.top - 8, innerHeight - h) + 'px' }); // the rail: beside it
     else Object.assign(el.style, { left: clamp(r.left, innerWidth - w) + 'px', top: (r.bottom + 14 + h < innerHeight ? r.bottom + 14 : clamp(r.top - 14 - h, innerHeight - h)) + 'px' });
   }
   el.querySelectorAll('[data-walk]').forEach(b => b.onclick = () => walkthrough(+b.dataset.walk, from));
