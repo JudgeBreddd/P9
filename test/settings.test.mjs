@@ -1017,7 +1017,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   assert.deepEqual([await sort.inputValue(), ...await needs.allInnerTexts()], ['updated', 'Old question', 'Made by the chat'], 'newest first by default');
   await sort.selectOption('project');
   assert.deepEqual(await needs.allInnerTexts(), ['Made by the chat', 'Old question'], 'by project: new-question.md before old-question.md');
-  if (process.env.P9_EVIDENCE) { await page.waitForTimeout(400); await page.locator('#fMission .needs').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'tyler-sort-project.png') }); }
+  if (process.env.P9_EVIDENCE) { await page.waitForTimeout(400); await page.locator('#fMission .needs').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'sort-project.png') }); }
   await page.reload(); await page.click('#rMission');
   await page.waitForFunction(() => document.querySelector('#fMission .needs [data-list] li .txt')?.textContent === 'Made by the chat', null, { timeout: 10000 });
   assert.equal(await sort.inputValue(), 'project', 'the choice survives a reload');

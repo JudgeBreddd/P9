@@ -27,7 +27,7 @@ const fromOk = (value) => typeof value === 'string' && value.length > 0 && value
 // The Hand off host check (remote.mjs HOST), for the host named in a moved event.
 const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
 const refused = (status, error, extra) => ({ status, error, ...extra });
-const BUSY = 'Finish or stop the turn first, then send the chat to the server.';
+const BUSY = 'Finish or stop the turn first, then send the chat to the remote.';
 const sha256 = (file) => new Promise((resolve, reject) => {
   const hash = createHash('sha256');
   createReadStream(file).on('error', reject).on('data', (chunk) => hash.update(chunk)).on('end', () => resolve(hash.digest('hex')));
@@ -153,7 +153,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       }
       try {
         const files = await edited(id);
-        if (!files) { unfreeze(id); emit(id, 'move-failed', { message: 'This chat changed more than ' + MAX_FILES + ' files; P9 cannot check them all on the server.' }); return refused(409, 'too-many-files'); }
+        if (!files) { unfreeze(id); emit(id, 'move-failed', { message: 'This chat changed more than ' + MAX_FILES + ' files; P9 cannot check them all on the remote.' }); return refused(409, 'too-many-files'); }
         await mkdir(moves, { recursive: true, mode: 0o700 });
         // The history the server shows, without this computer's own move events.
         const lines = [];

@@ -10,7 +10,7 @@ declare global {
 const REMOTE_WHY: Record<string, string> = {
   'server-connecting': 'Opening the ssh tunnel and waiting for P9 there to answer.',
   'server-unreachable': 'The remote is not reachable over ssh: check it is on and that ssh to it works without a password prompt.',
-  'server-no-p9': 'The remote answered, but P9 is not running there.',
+  'server-no-p9': 'The remote answered, but P9 is not running there. Install P9 on it first (the README\'s Install section, the Linux command), then connect again.',
   'server-not-answering': 'The tunnel opened, but P9 on the remote did not answer.',
   'server-host-refused': 'ssh refused that host name.',
   'server-dropped': 'Lost the remote: connecting again.',

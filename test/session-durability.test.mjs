@@ -71,7 +71,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   await writeFile(path.join(workspace, 'note.txt'), 'phase9');
   const environment = { ...process.env, P9_TEST_HOME: base, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: tmuxTmp };
   const tmux = (which, args) => run('tmux', ['-L', which, ...args], { env: environment });
-  tmux(unrelated, ['new-session', '-d', '-s', 'tyler-unrelated']);
+  tmux(unrelated, ['new-session', '-d', '-s', 'someone-unrelated']);
   run('systemd-run', ['--user', '--unit', hubUnit, '--collect', '--property=KillMode=process', '--', 'sleep', '300']);
   const hubPid = Number(run('systemctl', ['--user', 'show', hubUnit, '-p', 'MainPID', '--value']).trim());
 
@@ -135,7 +135,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   credentials = await waitFor(async () => { const next = JSON.parse(await readFile(path.join(state, 'desktop.json'), 'utf8')); return next.cookie !== firstCookie && next; }, 'restart credentials');
   assert.ok(alive(panePid));
   assert.equal(Number(run('systemctl', ['--user', 'show', hubUnit, '-p', 'MainPID', '--value']).trim()), hubPid);
-  assert.match(tmux(unrelated, ['list-sessions']), /tyler-unrelated/);
+  assert.match(tmux(unrelated, ['list-sessions']), /someone-unrelated/);
   for (const provider of ['claude', 'codex']) {
     assert.equal((await call(credentials, `/chat/${chats[provider]}/prompt`, 'POST', { text: provider + '-after-restart' })).status, 202);
     const resumed = await events(credentials, (event) => event.conversation === chats[provider] && event.type === 'turn-end', cursor);
@@ -190,7 +190,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   try { tmuxState = run('systemctl', ['--user', 'is-active', tmuxUnit]).trim(); } catch (error) { tmuxState = String(error.stdout).trim(); }
   assert.ok(['inactive', 'failed'].includes(tmuxState), 'tmux unit after Stop All: ' + tmuxState);
   assert.equal(Number(run('systemctl', ['--user', 'show', hubUnit, '-p', 'MainPID', '--value']).trim()), hubPid);
-  assert.match(tmux(unrelated, ['list-sessions']), /tyler-unrelated/);
+  assert.match(tmux(unrelated, ['list-sessions']), /someone-unrelated/);
   assert.deepEqual((await call(credentials, '/terminals')).body.terminals.map((item) => item.state), ['stopped']);
   console.log('PASS phase9 durability: window close kept the daemon and one side effect; restart + SIGKILL kept tmux; providers resumed; pending approval expired; adapter crash stopped; failed kill reported; creation barrier refused a concurrent start; repeated Stop All verified P9 work gone; unrelated tmux and session-hub sentinel untouched');
 });

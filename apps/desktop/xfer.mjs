@@ -54,10 +54,10 @@ export function plan(laptop, server, record, folder) {
       else if (r !== l.sha256) conflicts.push(item);
     } else if (l) {
       if (r === undefined) send.push(item);       // new on the laptop
-      else if (r !== l.sha256) conflicts.push(item); // changed on the laptop, deleted on the server
+      else if (r !== l.sha256) conflicts.push(item); // changed on the laptop, deleted on the remote
     } else if (r !== undefined) {
       if (r === s.sha256) deletes.push(item);     // deleted on the laptop
-      else conflicts.push(item);                  // deleted on the laptop, changed on the server
+      else conflicts.push(item);                  // deleted on the laptop, changed on the remote
     }
   }
   const newer = (item) => !item.server ? 'laptop' : !item.laptop ? 'server' : item.laptop.mtimeMs >= item.server.mtimeMs ? 'laptop' : 'server';
@@ -71,11 +71,12 @@ export function plan(laptop, server, record, folder) {
 // What differs about one asked-about file, in words (NEXT-ROUND item 23 wording).
 export function describe(item, record) {
   const { laptop: l, server: s } = item;
-  if (!l) return record ? 'deleted on the laptop; changed on the server since your last send (' + clock(s.mtimeMs) + ')' : 'only on the server';
-  if (!s) return 'changed on the laptop (' + clock(l.mtimeMs) + '); deleted on the server since your last send';
+  if (!l) return record ? 'deleted on the laptop; changed on the remote since your last send (' + clock(s.mtimeMs) + ')' : 'only on the remote';
+  if (!s) return 'changed on the laptop (' + clock(l.mtimeMs) + '); deleted on the remote since your last send';
+const WHO = { laptop: 'laptop', server: 'remote' }; // the side's internal name, the side's name on screen
   const side = l.mtimeMs >= s.mtimeMs ? ['laptop', l, 'server', s] : ['server', s, 'laptop', l];
   return (record ? 'changed on both since your last send; ' : 'different on the two; ')
-    + 'the ' + side[0] + '\'s copy is newer (' + clock(side[1].mtimeMs) + ') than the ' + side[2] + '\'s (' + clock(side[3].mtimeMs) + ')';
+    + 'the ' + WHO[side[0]] + '\'s copy is newer (' + clock(side[1].mtimeMs) + ') than the ' + WHO[side[2]] + '\'s (' + clock(side[3].mtimeMs) + ')';
 }
 
 // The work a choice makes of the plan. choice: 'laptop' | 'server' | 'newer' for conflicts and first-send differences
@@ -131,11 +132,11 @@ export async function planFolder({ local, host, folder, userData, ssh = 'ssh', r
   if (laptop.status !== 200) return { error: laptop.body.error, message: 'This computer could not list ' + (folder || 'the workspace') + ' (' + laptop.body.error + ').' };
   let link;
   try { link = await open({ local, host, ssh, runtime }); }
-  catch (error) { return { error: 'unreachable', message: 'Could not reach the server (' + error.message + ').' }; }
+  catch (error) { return { error: 'unreachable', message: 'Could not reach the remote (' + error.message + ').' }; }
   try {
     const server = await link.serverCall('POST', '/xfer/manifest', { folder });
     if (server.status === 409 && server.body.error === 'folder-missing') server.body = { files: [], skipped: {}, truncated: false, syncthing: [] };
-    else if (server.status !== 200) return { error: server.body.error, message: 'The server could not list ' + (folder || 'its workspace') + ' (' + server.body.error + ').' };
+    else if (server.status !== 200) return { error: server.body.error, message: 'The remote could not list ' + (folder || 'its workspace') + ' (' + server.body.error + ').' };
     const record = await readRecord(userData, host);
     // Nothing recorded under this folder yet: a first send for it.
     const entries = Object.entries(record ?? {}).filter(([name]) => !folder || name.startsWith(folder + '/'));
@@ -192,7 +193,7 @@ export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh
   onProgress({ total, sent });
   let link;
   try { link = await open({ local, host, ssh, runtime }); }
-  catch (error) { return { error: 'unreachable', message: 'Could not reach the server (' + error.message + '). Nothing was sent.' }; }
+  catch (error) { return { error: 'unreachable', message: 'Could not reach the remote (' + error.message + '). Nothing was sent.' }; }
   const record = { ...(await readRecord(userData, host) ?? {}) };
   const result = { sent: [], received: [], deletedOnServer: [], deletedHere: [], recovery: { server: [], laptop: [] }, changed: [] };
   try {

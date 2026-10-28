@@ -515,7 +515,7 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
     const model = one<HTMLSelectElement>('#model'), options = [...model.options];
     openSheet('Model', options.length ? options.map((option) => `<button type="button" class="opt" data-model="${escape(option.value)}" aria-checked="${option.selected}">${escape(option.textContent)}</button>`).join('') : '<div class="empty">This agent lists no models.</div>');
     // L4: Send to server is desktop-only by design (a chat on this phone already runs on the server), so say where it lives.
-    one('#sheetBody').insertAdjacentHTML('beforeend', '<p class="empty">Send to server is in the desktop app, on a chat that runs on that computer. A chat here is already on the server.</p>');
+    one('#sheetBody').insertAdjacentHTML('beforeend', '<p class="empty">Send to remote is in the desktop app, on a chat that runs on that computer. A chat here is already on the remote.</p>');
   }
 });
 one('#sheetBody').addEventListener('click', async (event) => {
@@ -1372,8 +1372,8 @@ function drawSettings(note = '') {
       + '<p class="muted">Each row saves when you leave it. The old file is kept as settings.json.bak.</p>' : '')
     + '<h2 class="eyebrow">Maintenance</h2>' + (build?.available
     ? `<button type="button" class="quiet" id="mtRebuild"${build.running ? ' disabled' : ''}>${build.running ? 'Rebuilding…' : REBUILD.label}</button>`
-      + '<p class="muted" id="mtRebuildNote" role="status">Source checkouts only: rebuilds P9\'s pages from the server\'s code (pnpm build), then reloads this page with the new build. Chats keep running; nothing restarts.</p>'
-    : '<p class="muted">Rebuild + reload is for a P9 that runs from its source code. This server runs an installed build.</p>');
+      + '<p class="muted" id="mtRebuildNote" role="status">Source checkouts only: rebuilds P9\'s pages from its source code (pnpm build), then reloads this page with the new build. Chats keep running; nothing restarts.</p>'
+    : '<p class="muted">Rebuild + reload is for a P9 that runs from its source code. This machine runs an installed build.</p>');
   const button = document.getElementById('mtRebuild') as HTMLButtonElement | null;
   if (button) button.onclick = () => void rebuildUi(button);
   const input = (id: string) => one<HTMLInputElement>('#' + id);

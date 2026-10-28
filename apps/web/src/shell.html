@@ -39,7 +39,7 @@
       <div class="focuses">
         <section class="fpane on" id="fChat" data-focus="chat" aria-label="Chat Focus">
     <aside class="files" id="files" aria-label="Files" hidden>
-      <div class="hd"><select data-slot="select" id="fileScope" aria-label="Files from" hidden></select><input data-slot="input" id="fileSearch" placeholder="Search files" aria-label="Search files"><button data-slot="button" data-variant="outline" data-size="sm" id="xferBtn" hidden>Send files to server</button></div>
+      <div class="hd"><select data-slot="select" id="fileScope" aria-label="Files from" hidden></select><input data-slot="input" id="fileSearch" placeholder="Search files" aria-label="Search files"><button data-slot="button" data-variant="outline" data-size="sm" id="xferBtn" hidden>Send files to remote</button></div>
       <div class="tree" id="tree"></div>
     </aside>
           <main class="content"><div class="chats" id="chats" data-split="false"></div></main>
@@ -109,7 +109,7 @@
   <div class="dlg-head"><div><h2 id="looseT"></h2><p id="looseP"></p><p class="muted sm">The agent lock in Settings still overrides it. Mode changes back at any time.</p></div></div>
   <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no" autofocus>Cancel</button><button data-slot="button" data-variant="outline" value="never">Turn on, don't show again</button><button data-slot="button" data-variant="destructive" value="yes">Turn on</button></div>
 </form></dialog>
-<!-- Send to server (items 24, 25, specs/move-progress-events.md): the black hole over the chat that is moving, P9 turning in
+<!-- Send to remote (items 24, 25, specs/move-progress-events.md): the black hole over the chat that is moving, P9 turning in
      it like the logo, the bar with the % under it and Cancel while it uploads; then "Open it on <host>?". -->
 <div id="moveFx" class="move-fx" hidden>
   <canvas id="moveSky" aria-hidden="true"></canvas>

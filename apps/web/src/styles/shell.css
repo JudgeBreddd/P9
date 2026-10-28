@@ -569,3 +569,5 @@ dialog.connecting p{margin:0;max-width:46ch;color:oklch(0.76 0.03 262)}
 dialog.connecting button{margin-top:12px}
 @keyframes conn-turn{to{rotate:360deg}}
 @media (prefers-reduced-motion:reduce){.conn-hole{animation:none}}
+.remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+#setRemoteAdd input{flex:1;min-width:0}
