@@ -210,6 +210,8 @@ test('Remote list in Settings: nothing built in, Add remote refuses an option, a
   await page.locator('#mdlBody ol.steps').waitFor({ timeout: 10000 });
   assert.match(await page.locator('#mdlBody').innerText(), /P9 on test-host runs 0\.1\.5, too old to update itself\. Update it once by hand/);
   assert.deepEqual(await page.locator('#mdlBody ol.steps li').allTextContents(), ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'systemctl --user restart p9-foundation', 'bash scripts/install.sh']);
+  assert.doesNotMatch(await page.locator('#mdlBody').innerText(), /In the real app/);
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)));
   await evidence(page, 'k1-too-old');
   console.log('PASS remote list: nothing built in, an option refused, added and removed; too-old shows the steps');
 });
