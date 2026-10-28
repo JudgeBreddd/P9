@@ -3,7 +3,7 @@
 // launcher in P9's own bin folder, which every terminal P9 opens has on its PATH. No download and no admin password.
 // What P9 cannot carry is a system package; dependencies() names each missing one, why P9 needs it, and the one command
 // that installs it, which needs the admin password. install.sh prints that list before it asks; the wizard shows it.
-import { readFile, rename, stat, writeFile, mkdir, access } from 'node:fs/promises';
+import { readFile, readdir, rename, stat, writeFile, mkdir, access } from 'node:fs/promises';
 import { constants, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -97,12 +97,17 @@ export function profileText(electron) {
     `profile p9-electron "${electron}" flags=(unconfined) {\n  userns,\n}\n`;
 }
 const shellQuote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
-export async function sandboxDependency({ electron = cloneElectron(), read = (file) => readFile(file, 'utf8') } = {}) {
+// The kernel's loaded profiles, one folder per profile named <name>.<n>; readable without root. The rule counts only once
+// it is loaded: a written file whose apparmor_parser failed (CI run 40611561200, a container with no securityfs) passed
+// install.sh while the window still could not open.
+const loadedProfiles = () => readdir('/sys/kernel/security/apparmor/policy/profiles').catch(() => []);
+export async function sandboxDependency({ electron = cloneElectron(), read = (file) => readFile(file, 'utf8'), loaded = loadedProfiles } = {}) {
   const restricted = (await read('/proc/sys/kernel/apparmor_restrict_unprivileged_userns').catch(() => '0')).trim() === '1';
   const text = profileText(electron);
   // A chrome-sandbox the owner made setuid root (Electron's other documented fix) needs no profile.
   const setuid = await stat(path.join(path.dirname(electron), 'chrome-sandbox')).then((info) => info.uid === 0 && (info.mode & 0o4000) !== 0, () => false);
-  const ok = !restricted || setuid || await read(PROFILE).then((current) => current === text, () => false);
+  const ok = !restricted || setuid || (await read(PROFILE).then((current) => current === text, () => false)
+    && (await loaded()).some((name) => name.replace(/\.\d+$/, '') === 'p9-electron'));
   return { id: 'sandbox', ok, admin: !ok,
     why: "Ubuntu stops P9's window from opening until AppArmor allows its sandbox. This adds a rule for P9's own Electron only.",
     command: ok ? null : `printf '%s' ${shellQuote(text)} | sudo tee ${PROFILE} >/dev/null && sudo apparmor_parser -r ${PROFILE}` };

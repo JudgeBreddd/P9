@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { root, daemon } from './helpers.mjs';
-import { bundleDaemon } from '../scripts/bundle-daemon.mjs';
+import { appLocalRuntime, bundleDaemon } from '../scripts/bundle-daemon.mjs';
 
 // B10: package-windows.mjs builds the installer's daemon folder with bundleDaemon; this builds the same layout with this
 // platform's agent binaries and runs it, so a bundle that cannot start or find its agents fails here before Windows CI.
@@ -56,4 +56,21 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
     + "console.log(createRequire(import.meta.resolve('@anthropic-ai/claude-agent-sdk')).resolve(process.argv[2]));\n");
   const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8' });
   assert.equal(probe.stdout.trim(), path.join(modules, '@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude'), probe.stderr);
+});
+
+// Item 15 (Windows): CI run 40611561200 found rg.exe importing vcruntime140.dll on Windows arm64 with no copy beside it.
+test('Item 15: a Windows bundle puts the vcruntime140.dll Codex ships beside rg.exe, and a Codex without it fails the package', async (t) => {
+  const vendor = await mkdtemp(path.join(os.tmpdir(), 'p9-vendor-'));
+  t.after(() => rm(vendor, { recursive: true, force: true }));
+  const bin = path.join(vendor, 'aarch64-pc-windows-msvc', 'codex-resources', 'voice', 'bin'), rg = path.join(vendor, 'aarch64-pc-windows-msvc', 'codex-path');
+  await mkdir(bin, { recursive: true });
+  await mkdir(rg, { recursive: true });
+  await writeFile(path.join(bin, 'vcruntime140.dll'), 'arm64 runtime');
+  await writeFile(path.join(rg, 'rg.exe'), 'rg');
+  await appLocalRuntime(vendor);
+  assert.equal(await readFile(path.join(rg, 'vcruntime140.dll'), 'utf8'), 'arm64 runtime');
+  await rm(path.join(bin, 'vcruntime140.dll'));
+  await rm(path.join(rg, 'vcruntime140.dll'));
+  await assert.rejects(appLocalRuntime(vendor), { code: 'ENOENT' });
+  console.log('PASS item 15 Windows: vcruntime140.dll copied beside rg.exe; a missing source fails the package');
 });

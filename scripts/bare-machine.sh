@@ -52,7 +52,11 @@ RUN apt-get update && apt-get install -y systemd systemd-sysv dbus-user-session 
 CMD ["/sbin/init"]
 EOF
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$NAME" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock p9-bare >/dev/null
+  # The host's securityfs, as a real Ubuntu has it: without it apparmor_parser cannot load install.sh's rule (CI run
+  # 40611561200: "unable to find a suitable fs"), and Electron's sandbox stays blocked. CI only, like install desktop:
+  # it lets the container load profiles into the host's kernel.
+  sec=(); [ "${GITHUB_ACTIONS:-}" = true ] && sec=(-v /sys/kernel/security:/sys/kernel/security)
+  docker run -d --name "$NAME" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock "${sec[@]}" p9-bare >/dev/null
   for i in $(seq 1 100); do docker exec "$NAME" test -S /run/user/1000/bus 2>/dev/null && break; sleep 0.3; done
   docker exec "$NAME" test -S /run/user/1000/bus || { docker logs "$NAME" | tail -40; echo "BARE_NOT_BOOTED"; exit 1; }
   git ls-files -z | tar --null -T - -cf - | docker exec -i "$NAME" bash -c 'mkdir -p /srv/p9/p9 && tar -xf - -C /srv/p9/p9 && chown -R p9:p9 /srv/p9/p9'
@@ -134,7 +138,10 @@ install)
   daemon_check
   if [ "$mode" = desktop ]; then
     echo "BARE_USERNS_RESTRICTED $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
-    as_p9 'node_modules/electron/dist/electron --version 2>&1 | tail -1' | sed 's/^/BARE_ELECTRON_STARTS /' || true
+    # With the rule loaded Electron prints its version; the SUID-sandbox FATAL means the rule did not take.
+    started=$(as_p9 'node_modules/electron/dist/electron --version 2>&1 | tail -1' || true)
+    echo "BARE_ELECTRON_STARTS $started"
+    [[ "$started" =~ ^v[0-9] ]] || status=1
   fi
   [ "$status" = 0 ]
   ;;
