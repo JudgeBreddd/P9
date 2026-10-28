@@ -124,6 +124,17 @@ const checks = {
     await page.mouse.click(195, 20);
     await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 3000 });
   },
+  // The side panel's phone form (specs/side-panel.md check 5): an artifact opens the sheet with full: it fills the viewport, and the next ordinary sheet does not keep it.
+  async sheetFull(page) {
+    await page.waitForSelector('h1:text("Chats")');
+    await page.evaluate(() => dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Artifact', html: '<p>body</p>', full: true } })));
+    await page.waitForSelector('#sheet.full[open]');
+    await page.waitForFunction(() => !document.querySelector('#sheet').getAnimations().length); // it slides in 24 px first
+    assert.deepEqual(await page.locator('#sheet').evaluate(d => { const r = d.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.height), innerHeight]; }), [0, 844, 844]);
+    await shot(page, 'phone-sheet-full');
+    await page.evaluate(() => { document.querySelector('#sheet').close(); dispatchEvent(new CustomEvent('p9-sheet', { detail: { title: 'Pick one', html: '<p>x</p>' } })); });
+    await page.waitForSelector('#sheet[open]:not(.full)');
+  },
 };
 const breaks = {
   column: { fix: [[/(#app\{[^}]*?)height:\s*var\(--vvh,\s*100dvh\)/, '$1height:300px']] },
@@ -131,6 +142,7 @@ const breaks = {
   inchat: { fix: [['body.inchat nav{display:none}', 'body.inchat nav{}']] },
   slot: { fix: [['id="composerSlot"', 'id="composerSlotGone"']] },
   sheet: { init: () => { HTMLDialogElement.prototype.close = function () {}; } },
+  sheetFull: { fix: [['dialog.sheet.full{', 'dialog.sheet.fullx{']] },
 };
 
 test('P5 and the shell: a fixed column, a 44 px bar on every tab, the tab bar yields to a short viewport, a composer slot, a shared sheet (A/B)', { timeout: 300000 }, async (t) => {
@@ -141,7 +153,7 @@ test('P5 and the shell: a fixed column, a 44 px bar on every tab, the tab bar yi
   const failures = [];
   for (const [name, check] of Object.entries(checks)) {
     const good = await open(await phoneOn(t, server, browser), server);
-    try { await check(good.page); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0]); await good.page.context().close(); continue; }
+    try { await check(good.page); } catch (error) { failures.push(name + ' (good page): ' + String(error.message).split('\n')[0] + (error.actual === undefined ? '' : ' actual ' + JSON.stringify(error.actual))); await good.page.context().close(); continue; }
     await good.page.context().close();
     const bad = await open(await phoneOn(t, server, browser), server, breaks[name]);
     if (breaks[name].fix && bad.missed()) { failures.push(name + ' (A/B): ' + bad.missed()); await bad.page.context().close(); continue; }

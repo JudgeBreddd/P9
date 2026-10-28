@@ -1,4 +1,4 @@
-import { popover as createPopover, svg, esc, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { popover as createPopover, dragBar, svg, esc, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -10,6 +10,7 @@ import { editorModal, editItems } from './mission-editor.mjs';
 import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
+import { createSide } from './side.mjs';
 
 export function mountShell() {
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
@@ -102,6 +103,26 @@ const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startM
 // Send to server's drawing (items 24, 25; below with the black hole): pull is the pane pulled into it.
 const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
 const names = { claude: 'Claude', codex: 'Codex' };
+// The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
+const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });
+const chatOn = () => localStorage.getItem('eh-dan-chat:dev') !== 'off';
+const sideSession = () => S.sessions.find(s => s.id === S.sideId && !s.hidden) ?? S.sessions.find(s => s.id === S.open[0]) ?? S.sessions.find(s => !s.hidden);
+function renderSideChat(only) {
+  const box = $('#sideChats'); if (!box || side.current()?.slot !== 'dan-chat') return;
+  const s = sideSession(), pick = $('#sidePick'), list = S.sessions.filter(x => !x.hidden);
+  pick.hidden = list.length < 2; pick.innerHTML = list.map(x => `<option value="${esc(x.id)}"${x.id === s?.id ? ' selected' : ''}>${esc(x.title || x.name || x.id)}</option>`).join('');
+  if (!s) { box.innerHTML = '<p class="empty">No chat yet. Start one in Chat Focus.</p>'; return; }
+  if (s.stub) history(s);
+  paint(box, [s], only);
+}
+const danChat = { title: 'Chat', focuses: ['dev'], defaultWidth: w => w / 2,
+  render: b => { b.innerHTML = '<select data-slot="select" id="sidePick" aria-label="Chat shown here" hidden></select><div class="chats" id="sideChats" data-split="false"></div>'; $('#sidePick').onchange = e => { S.sideId = e.target.value; renderSideChat(); }; renderSideChat(); },
+  onClose: why => { if (why === 'close') localStorage.setItem('eh-dan-chat:dev', 'off'); } };
+function setSideChat(on) { localStorage.setItem('eh-dan-chat:dev', on ? 'on' : 'off'); if (on) side.open('dan-chat', danChat); else side.close('dan-chat'); }
+side.onResize(() => { const on = side.current()?.slot === 'dan-chat'; $('#sideToggle').setAttribute('aria-pressed', String(on)); placeDev(); });
+$('#sideToggle').onclick = () => setSideChat(side.current()?.slot !== 'dan-chat');
+side.tab($('#devTab .stab'), 'main');
+if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
 const focusNames = { chat: 'Chat Focus', dev: 'Dev Focus', mission: 'Mission Control' };
 /* icons */
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
@@ -113,7 +134,7 @@ Object.assign(svg, {
   bell: ic('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
   bot: ic('<path d="M12 4v3"/><circle cx="12" cy="3" r="1"/><rect x="4" y="7" width="16" height="13" rx="3"/><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/><path d="M9.5 17h5M2 12v3M22 12v3"/>'),
 });
-for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rSearch','search'],['rFiles','files'],['rSplit','split'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x']]) $('#'+id).innerHTML = svg[k];
+for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rSearch','search'],['rFiles','files'],['rSplit','split'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x'],['sideToggle','chat']]) $('#'+id).innerHTML = svg[k];
 
 /* ---------- tabs ---------- */
 function renderTabs() {
@@ -246,17 +267,35 @@ function renderBots() {
   setHTML($('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${num(s) ? ` data-n="${num(s)}"` : ''}${busy(s) ? ' data-busy' : ''} title="${esc(label(s))}" aria-label="${esc(label(s))}">${svg.bot}</button>`).join(''));
   $('#rBots').querySelectorAll('[data-bot]').forEach(b => b.onclick = () => { const k = 'run' + b.dataset.bot; openModal(S.resume[k] || { kind: 'chat', id: b.dataset.bot }, k); });
 }
+// The x and the body of a card: from the card itself, or from the Dev Focus overlay (main passes the clicked card's key).
+function cardAct(c, what) {
+  if (!c) return;
+  if (c.key === 'welcome') return what === 'x' ? skipWelcome() : welcome();
+  if (what === 'x') { S.snoozed.add(c.key); renderCards(); return; }
+  // D10-6: a card reopens where you left it, unless that item is already handled
+  const k = c.key.split(':')[0] + (c.id || ''), r = S.resume[k]; openModal(r && !(k === 'asks' && !S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k);
+}
+// Dev Focus: the editor is a native view above this page, so the cards are drawn by their own overlay view (apps/desktop/cards-page.mjs).
+// This page's own stack stays in the layout, hidden, so the overlay lands where the stack would be.
+function cardsOverlay() {
+  if (!window.p9?.cards) return;
+  const cards = cardList(), r = $('#cards').getBoundingClientRect(), on = S.focus === 'dev' && cards.length > 0 && !document.querySelector('dialog[open]') && r.width > 0;
+  const items = cards.slice(0, 8).map(c => ({ key: c.key.slice(0, 300), title: String(c.title).slice(0, 200), sub: String(c.sub ?? '').slice(0, 300), ...(c.n ? { n: Math.min(Number(c.n) || 0, 99999) } : {}) }));
+  const next = on ? { visible: true, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), items } : { visible: false }, json = JSON.stringify(next);
+  if (json === lastCards) return; // renderCards runs on every event; main hears only a change
+  lastCards = json; window.p9.cards(next).catch(() => { lastCards = ''; });
+}
+let lastCards = '';
+window.p9?.onCardAct?.(({ key, action }) => cardAct(cardList().find(c => c.key === key), action));
 function renderCards() {
   renderIndicator(); renderBots();
   const cards = cardList();
   morph($('#cards'), cards.map(c => `<article class="card${c.halo ? ' fx-halo' : ''}" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
   $('#cards').querySelectorAll('.card').forEach((el, i) => {
-    const c = cards[i];
-    if (c.key === 'welcome') { el.querySelector('.x').onclick = skipWelcome; el.querySelector('.open').onclick = () => welcome(); return; }
-    el.querySelector('.x').onclick = () => { S.snoozed.add(c.key); renderCards(); };
-    // D10-6: a card reopens where you left it, unless that item is already handled
-    el.querySelector('.open').onclick = () => { const k = c.key.split(':')[0] + (c.id || ''), r = S.resume[k]; openModal(r && !(k === 'asks' && !S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k); };
+    el.querySelector('.x').onclick = () => cardAct(cards[i], 'x');
+    el.querySelector('.open').onclick = () => cardAct(cards[i], 'open');
   });
+  cardsOverlay();
   const n = centerCount();
   $('#rBell').innerHTML = svg.bell + `<b>${n || ''}</b>`;
   $('#rBell').title = 'Notification Center' + (n ? ` (${n})` : '') + ' · Ctrl Shift N';
@@ -294,11 +333,7 @@ function renderModal() {
     const s = S.sessions.find(x => x.id === m.id); if (!s) return closeModal();
     $('#mdlT').textContent = s.title; paint(body, [s]);
   } else if (m.kind === 'file' && m.live) {
-    // A real file from the Chat Focus browser, read-only (threat model row 23).
-    $('#mdlT').textContent = m.name;
-    if (m.text === undefined && !m.loading) { m.loading = true; window.p9.mission('read', { path: m.name }).then(r => { m.text = r.status === 200 ? r.body.content : null; m.error = r.body?.error || String(r.status); if (S.modal === m) renderModal(); }); }
-    body.innerHTML = m.text === undefined ? '<p class="sm muted">Loading…</p>' : m.text === null ? `<p class="sm muted">Not readable: ${esc(m.error)}</p>` : `<pre class="fileview">${esc(m.text)}</pre>`;
-    $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only · edit in Dev Focus</span>`;
+    liveFileModal(m, body);
   } else if (m.kind === 'file') {
     // D03: one file at a time, explicit Save; the draft lives in S.docs, so closing loses nothing
     const d = doc(m.name); $('#mdlT').textContent = m.name;
@@ -533,7 +568,7 @@ function pane(s, i, bare) {
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
 // state a person owns lives in S or is carried across: draft in s.draft, images in s.images,
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
-const view = {}; // 'container:session id' -> { top, pinned, selection }
+const wiredBars = new WeakSet(), view = {}; // 'container:session id' -> { top, pinned, selection }
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
 function renderChats(only) {
   const ids = S.split ? S.open.slice(0, 2) : S.open.slice(0, 1);
@@ -543,6 +578,7 @@ function renderChats(only) {
   for (const s of [...ss, mdl.open && S.modal?.kind === 'chat' && S.sessions.find(x => x.id === S.modal.id)]) if (s?.stub) history(s);
   paint($('#chats'), ss, only);
   if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
+  renderSideChat(only);
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
@@ -556,7 +592,9 @@ function paint(root, ss, only) {
   panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); addHalos(t.content); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
-  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
+  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the two chats (arrow keys)"></div>'));
+  const split = root.id === 'chats' && root.querySelector(':scope > .handle-v'); // morph keeps the bar by position; wire it once
+  if (split && !wiredBars.has(split)) { wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: lifetime.signal }); }
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
@@ -1184,6 +1222,47 @@ function notesModal(m, body, row) {
   body.querySelector('[data-create]').onclick = create;
   input.onkeydown = e => { if (e.key === 'Enter') create(); };
 }
+// A real file from the Chat Focus browser (threat model rows 23, 4, 7): the same editor as Dev Focus's fallback; Save is the one "save"
+// action, the daemon's guarded PUT /files, so a changed file answers 409 and the draft stays (like a Mission note).
+const liveKey = name => 'live:' + name;
+function liveFileModal(m, body) {
+  const key = liveKey(m.name);
+  $('#mdlT').textContent = m.name;
+  if (!m.asked && !dirty(key)) {
+    m.asked = true;
+    window.p9.mission('read', { path: m.name }).then(r => {
+      if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
+      else if (r.status !== 200) m.error = r.body?.error || String(r.status);
+      if (S.modal === m) renderModal();
+    }).catch(() => { m.error = 'daemon-unavailable'; if (S.modal === m) renderModal(); });
+  }
+  const d = S.docs[key];
+  if (!d) { body.innerHTML = `<p class="sm muted">${m.error ? 'Not readable: ' + esc(m.error) : 'Loading…'}</p>`; $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span>`; return; }
+  const c = m.conflict;
+  body.innerHTML = (c ? `<div class="review notes-conflict" data-conflict>${c.diskHash !== undefined
+    ? `<p>Changed on disk since you opened it. Your text is still here.</p><div class="notes-row"><button data-slot="button" data-variant="outline" data-size="sm" data-disk>Load disk version</button><button data-slot="button" data-size="sm" data-mine>Save mine over it</button></div>`
+    : `<p>This file is no longer on disk (moved, renamed or deleted elsewhere). Your text is still here: copy it before you close.</p><div class="notes-row"><button data-slot="button" data-size="sm" data-copytext>Copy my text</button></div>`}</div>` : '')
+    + editorHtml(key, 'mdlEd');
+  wireEditor(body, key, () => liveFoot(m), () => saveLive(m));
+  body.querySelector('[data-disk]')?.addEventListener('click', () => { Object.assign(d, { text: c.diskContent, saved: c.diskContent, hash: c.diskHash }); m.conflict = null; renderModal(); });
+  body.querySelector('[data-mine]')?.addEventListener('click', () => saveLive(m, c.diskHash));
+  body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
+  liveFoot(m);
+}
+function liveFoot(m) {
+  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${saveBtn(liveKey(m.name))}`;
+  const b = $('#mdlFoot [data-savefile]'); if (b) b.onclick = () => saveLive(m);
+}
+async function saveLive(m, hash) {
+  const key = liveKey(m.name), d = S.docs[key]; if (!d || m.saving || (!hash && !dirty(key))) return;
+  m.saving = true; const text = d.text;
+  const r = await window.p9.mission('save', { path: m.name, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
+  m.saving = false;
+  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
+  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  if (S.modal === m) renderModal();
+}
 // One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
 function noteModal(m, body) {
   const key = noteKey(m.root, m.path);
@@ -1421,15 +1500,20 @@ function setFocus(f, stay = false) {
   renderIndicator(); // each focus has its own pets
   $('#focusTitle').textContent = focusNames[f];
   showTerm();
+  side.focus();
   placeDev();
+  cardsOverlay();
 }
 // In the desktop, Dev Focus is the real editor: a separate view (p9://dev) laid over this pane. In a browser the sample editor stays.
 // The view draws above this page, so it steps aside: hidden while a dialog is open, and short of the cards' column while a card shows.
 function placeDev() {
   if (!window.p9?.devView) return;
-  const r = $('#fDev').getBoundingClientRect(), c = $('#cards').getBoundingClientRect();
-  const visible = S.focus === 'dev' && r.width > 0 && r.height > 0 && !document.querySelector('dialog[open]');
-  let x = r.x, y = r.y, right = c.height > 0 && c.left < r.right ? c.left - 8 : r.right;
+  const r = $('#fDev').getBoundingClientRect(), now = side.current();
+  const visible = S.focus === 'dev' && r.width > 0 && r.height > 0 && !document.querySelector('dialog[open]') && now?.mode !== 'full';
+  let x = r.x, y = r.y, right = r.right;
+  // The side panel and its drag bar stay clear of the view (8 px), on whichever side the swap put it. The cards are not reserved for: they float over it (their own overlay view).
+  if (now) { const s = $('#side').getBoundingClientRect(); if (s.left > r.x) right = Math.min(right, s.left - 8); else x = Math.max(x, s.right + 8); }
+  const tab = $('#devTab').getBoundingClientRect(); if (tab.height) y = Math.max(y, tab.bottom);
   // The walkthrough card is on this page too: the editor starts right of it or below it, whichever leaves more editor.
   const k = $('#walk')?.getBoundingClientRect();
   if (k && k.right > x && k.left < right && k.bottom > y && k.top < r.bottom) {
@@ -1438,8 +1522,8 @@ function placeDev() {
   window.p9.devView(visible ? { visible, x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, r.bottom - y)) } : { visible });
 }
 new ResizeObserver(placeDev).observe($('#fDev'));
-new ResizeObserver(placeDev).observe($('#cards'));
-new MutationObserver(placeDev).observe(document.body, { subtree: true, attributeFilter: ['open'] });
+new ResizeObserver(cardsOverlay).observe($('.stage'));
+new MutationObserver(() => { placeDev(); cardsOverlay(); }).observe(document.body, { subtree: true, attributeFilter: ['open'] });
 window.p9?.onFocus?.(f => { if (Object.hasOwn(focusNames, f)) setFocus(f); });
 document.querySelectorAll('[data-focus-btn]').forEach(b => b.onclick = () => setFocus(b.dataset.focusBtn));
 // Ctrl+1/2/3 is what Builder asked for; Chrome keeps Ctrl+1-8 for its own tabs, so Alt+1/2/3 works in a browser too.
@@ -1505,9 +1589,8 @@ if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TM
   lifetime.signal.addEventListener('abort', () => dockTerm.close());
   showTerm();
 });
-let dragY = null; const dock = $('#dock');
-$('#grip').onpointerdown = e => { dragY = e.clientY; const h0 = dock.offsetHeight; const mv = ev => { dock.style.height = Math.max(120, Math.min(innerHeight * .7, h0 + (dragY - ev.clientY))) + 'px'; }; const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); }; addEventListener('pointermove', mv); addEventListener('pointerup', up); };
-$('#grip').onkeydown = e => { if (e.key === 'ArrowUp') dock.style.height = dock.offsetHeight + 24 + 'px'; if (e.key === 'ArrowDown') dock.style.height = Math.max(120, dock.offsetHeight - 24) + 'px'; };
+const dock = $('#dock');
+dragBar($('#grip'), { axis: 'y', dir: -1, get: () => dock.offsetHeight, set: px => { dock.style.height = px + 'px'; }, min: 120, max: () => innerHeight * .7, signal: lifetime.signal });
 $('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
 // Floating terminal (Builder, 2026-10-17: "wigs out on click and drag to move, highlights all the stuff below it, and wont resize").
 // left/top are relative to the dock's parent, not the viewport (the jump); pointer capture and preventDefault stop the selection;
@@ -2562,6 +2645,7 @@ function moveReloaded() {
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
 if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); }, () => {});
+if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the

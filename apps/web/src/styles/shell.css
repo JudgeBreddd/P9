@@ -56,7 +56,6 @@ html,body{height:100%;overflow:hidden}
 .win .big{font-size:22px;font-weight:700;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .win .line{font-size:12px;color:var(--muted-foreground);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35}
 #mdl .panel{border:0;background:none}#mdl .panel>h3{display:none}#mdl .pbody{overflow:visible} /* #mdlBody is a window's one scroller (winTop) */
-.stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))}
 .tiles{grid-column:1/-1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
 .tile{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:6px;padding:8px 10px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent);color:var(--foreground);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;min-width:0}
 .tile:hover{background:var(--accent)}
@@ -97,7 +96,8 @@ html,body{height:100%;overflow:hidden}
 #fMission .kind,#fMission .tint,#mdl .panel .kind,#mdl .panel .tint{color:var(--tint)}
 #fMission .plist .mono b,#mdl .panel .plist .mono b{color:var(--tint)}
 /* Dev Focus: VS Code-shaped mock. Explorer | editor; editor tabs live in the top bar like chat tabs */
-#fDev{grid-template-columns:240px 1fr}
+#fDev{grid-template-columns:240px 1fr;grid-template-rows:auto minmax(0,1fr)}
+#fDev>.explorer,#fDev>.editor{grid-row:2}
 .explorer{display:grid;grid-template-rows:auto 1fr;min-height:0;border-right:1px solid var(--border);background:color-mix(in oklch,var(--card) 40%,transparent)}
 .explorer .hd{padding:10px 12px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground);display:flex;gap:8px}
 .explorer .hd .muted{text-transform:none;letter-spacing:0}
@@ -106,9 +106,9 @@ html,body{height:100%;overflow:hidden}
 .ed{display:grid;grid-template-columns:auto 1fr;min-height:0;min-width:0;background:var(--background)}
 .ed .gut{margin:0;padding:10px 10px 10px 14px;overflow:hidden;text-align:right;color:var(--muted-foreground);user-select:none;font-size:12.5px;line-height:1.6;opacity:.7}
 .ed textarea{margin:0;padding:10px 12px;border:0;outline:0;resize:none;background:none;color:var(--foreground);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;font-size-adjust:none;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;min-width:0;tab-size:2}
-.stage:has(.card) #fDev .ed textarea{padding-right:calc(var(--card-w) + var(--card-gap))}
 .mdl-body[data-kind="file"]{overflow:hidden;align-content:stretch;grid-template-rows:minmax(0,1fr)}
 .mdl-body[data-kind="file"] .ed{height:100%}
+.mdl-body[data-kind="file"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}
 /* Notes (threat model row 34): the list's New note box, the 409 banner, the preview and the editor filling the rest */
 .notes-new,.notes-row{display:flex;gap:8px;align-items:center}.notes-new{padding:10px 14px 4px}.notes-new input{flex:1;min-width:0}
 .mdl-body[data-kind="note"]{align-content:stretch;grid-template-rows:minmax(0,1fr)}.mdl-body[data-kind="note"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}.mdl-body[data-kind="note"] .ed{min-height:320px}
@@ -125,13 +125,12 @@ html,body{height:100%;overflow:hidden}
 .rail .bell b:empty{display:none}
 .soon{display:grid;place-content:center;text-align:center;gap:6px;color:var(--muted-foreground)}
 .soon h2{margin:0;color:var(--foreground);font-size:22px}
-/* Cards float top-right in the blank space beside the chat column, as their own items (Builder 2026-10-14).
-   The single chat column narrows to leave that gutter free; a split chat steps left of it. */
+/* Cards float top-right over the page as their own items (Builder 2026-10-14). They never resize a pane (Builder, 2026-10-27);
+   in Dev Focus the editor is a native view above the page, so there the cards are drawn by their own overlay view instead. */
 .stage{--card-w:208px;--card-gap:24px}
 .cards{position:absolute;top:50px;right:14px;width:var(--card-w);display:flex;flex-direction:column;gap:8px;z-index:20;pointer-events:none}
 .cards>*{pointer-events:auto}
-#chats[data-split="false"] .col{max-width:min(760px,100% - 2 * (var(--card-w) + var(--card-gap)))}
-.stage:has(.card) #chats[data-split="true"]{margin-right:calc(var(--card-w) + var(--card-gap))}
+.shell[data-focus=dev] .cards{visibility:hidden} /* Dev Focus: the overlay view draws them above the editor */
 .card{position:relative;border-radius:11px;background:color-mix(in oklch,var(--popover) 95%,transparent);border:1px solid var(--border);backdrop-filter:blur(8px)}
 .card .open{display:grid;grid-template-columns:auto 1fr;gap:3px 9px;align-items:center;width:100%;padding:7px 28px 7px 10px;border:0;background:none;color:var(--foreground);font:inherit;font-size:12px;text-align:left;cursor:pointer;border-radius:inherit}
 .card .open:focus-visible{outline:2px solid var(--ring)}
@@ -208,8 +207,8 @@ html,body{height:100%;overflow:hidden}
 .tree .mod{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--warn)}
 .content{display:grid;grid-template-rows:1fr auto;min-height:0;min-width:0}
 .chats{display:grid;grid-template-columns:1fr;min-height:0}
-.chats[data-split="true"]{grid-template-columns:1fr 1px 1fr}
-.handle-v{background:var(--border);cursor:col-resize;position:relative}
+.chats[data-split="true"]{grid-template-columns:var(--split-l,minmax(0,1fr)) 1px minmax(0,1fr)}
+.handle-v{background:var(--border);cursor:col-resize;position:relative;z-index:2} /* above the panes beside it, so its wider grab area gets the pointer */
 .handle-v::after{content:"";position:absolute;inset:0 -4px}
 .handle-v:hover{background:var(--primary)}
 /* ---- Chat pane ---- */
@@ -523,3 +522,29 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 .spr[data-state="merged"]{--ring-c:var(--ok)}.spr[data-state="waiting"]{--ring-c:var(--warn)}
 .spr[data-state="running"]{--ring-c:oklch(0.68 0.15 245)}.spr[data-state="blocked"]{--ring-c:var(--destructive)}
 @media (max-width:520px){.springs{grid-template-columns:minmax(0,1fr)}}
+
+/* Side panel (specs/side-panel.md): a column beside .focuses, on the right or, swapped, on the left. The terminal dock spans both. */
+.stage[data-side=right]{grid-template-columns:minmax(0,1fr) var(--side-w)}
+.stage[data-side=left]{grid-template-columns:var(--side-w) minmax(0,1fr)}
+.stage[data-side=left]>.focuses{grid-column:2}
+.stage[data-side=left]>.side{grid-column:1;grid-row:1}
+.stage[data-side=right]>.side{grid-column:2;grid-row:1}
+.stage[data-side]>.dock{grid-column:1/-1}
+.side{display:flex;min-width:0;min-height:0;background:var(--background);overflow:hidden}
+.side[hidden]{display:none}
+.stage[data-side=left]>.side .handle-v{order:2}
+.side .handle-v{flex:none;width:1px}
+.side .handle-v::after{inset:0 -4px}
+.sidebox{flex:1;min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr)}
+.shead{display:flex;align-items:center;gap:4px;height:30px;padding:0 6px 0 0;border-bottom:1px solid var(--border);font-size:12px}
+.stab,.dtab .stab{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 12px;border-right:1px solid var(--border);cursor:grab;user-select:none;touch-action:none;color:var(--foreground);font-size:12px}
+.shead .spacer{flex:1}
+.sbody{min-height:0;min-width:0;overflow:hidden;display:grid}
+.sbody>.chats{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+.dtab{grid-column:1/-1;display:flex;align-items:center;height:30px;border-bottom:1px solid var(--border)}
+#fDev .dtab{display:none}
+.stage[data-side] #fDev .dtab{display:flex}
+.stage.tabdrag{cursor:grabbing;user-select:none}
+.stage[data-side-mode=full]{grid-template-columns:minmax(0,1fr)}
+.stage[data-side-mode=full]>.side{grid-area:1/1;z-index:15}
+.stage[data-side-mode=full]>.focuses{visibility:hidden;grid-area:1/1} /* both in row 1: the dock keeps its own row and the side gets the 1fr */
