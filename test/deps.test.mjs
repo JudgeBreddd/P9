@@ -25,8 +25,11 @@ test('Item 15 (row 61): the sandbox rule names this Electron only, and its comma
     assert.equal(rest, `sudo tee ${PROFILE} >/dev/null && sudo apparmor_parser -r ${PROFILE}`);
     assert.equal(execFileSync('sh', ['-c', printf]).toString(), profileText(electron), electron);
     // The rule already there, exactly: nothing to do. Another text (an older P9, or the clone moved): written again.
-    assert.deepEqual(Object.values(await sandboxDependency({ electron, read: restricted(profileText(electron)) })).slice(1, 3), [true, false]);
-    assert.equal((await sandboxDependency({ electron, read: restricted(profileText('/elsewhere/electron')) })).ok, false);
+    const on = async () => ['brave.14', 'p9-electron.7'];
+    assert.deepEqual(Object.values(await sandboxDependency({ electron, read: restricted(profileText(electron)), loaded: on })).slice(1, 3), [true, false]);
+    // The file written but never loaded (apparmor_parser failed): still missing, so install.sh says so instead of passing.
+    assert.equal((await sandboxDependency({ electron, read: restricted(profileText(electron)), loaded: async () => ['p9-electron-old.2'] })).ok, false);
+    assert.equal((await sandboxDependency({ electron, read: restricted(profileText('/elsewhere/electron')), loaded: on })).ok, false);
     assert.equal((await sandboxDependency({ electron, read: async () => '0\n' })).command, null, 'a kernel that does not restrict userns needs no rule');
   }
   for (const electron of ['/a"b/electron', '/a\\b/electron', '/a\nb/electron', '/a\rb/electron', '/a\x00b/electron']) {

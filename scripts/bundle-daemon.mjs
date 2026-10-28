@@ -25,14 +25,25 @@ async function bundle(input, file) {
   return chunk.moduleIds;
 }
 
+// Codex's rg.exe (its file search, on PATH from codex-path) imports vcruntime140.dll on Windows arm64, which a Windows
+// without the VC++ runtime lacks, and Codex ships no copy beside it (bare-windows, CI run 40611561200). Its voice/bin
+// carries the same arch's copy, and Windows loads a DLL from the exe's own folder first, so no admin install is needed.
+// A Codex that stops shipping that copy fails the package here instead of an installed P9's file search.
+export async function appLocalRuntime(vendor) {
+  for (const triple of await readdir(vendor)) {
+    await cp(path.join(vendor, triple, 'codex-resources', 'voice', 'bin', 'vcruntime140.dll'), path.join(vendor, triple, 'codex-path', 'vcruntime140.dll'));
+  }
+}
+
 // platform is the agents' binary package suffix, win32-x64 or win32-arm64 for an installer. Returns the notices of
 // every package inlined into a bundle, which lose their own licence files.
 export async function bundleDaemon(root, out, platform) {
   for (const folder of ['apps', 'node_modules']) await rm(path.join(out, folder), { recursive: true }).catch((error) => { if (error.code !== 'ENOENT') throw error; });
   const modules = await bundle(path.join(root, 'apps', 'server', 'main.mjs'), path.join(out, 'apps', 'server', 'main.mjs'));
   // The P9 MCP relay runs as its own process beside main.mjs (chat.mjs). The daemon's teh.mjs (doctor, and the AppImage's
-  // install-service.mjs) imports windows.mjs and child-env.mjs from here. All three import only Node's standard library.
-  for (const file of ['mcp-relay.mjs', 'windows.mjs', 'child-env.mjs']) await cp(path.join(root, 'apps', 'server', file), path.join(out, 'apps', 'server', file));
+  // install-service.mjs) imports windows.mjs and child-env.mjs from here, and child-env.mjs imports deps.mjs (run8 caught
+  // its absence: the doctor could not start). All four import only Node's standard library and each other.
+  for (const file of ['mcp-relay.mjs', 'windows.mjs', 'child-env.mjs', 'deps.mjs']) await cp(path.join(root, 'apps', 'server', file), path.join(out, 'apps', 'server', file));
   const modulesDir = path.join(out, 'node_modules');
   const claudeAcp = await packageDir(root, '@agentclientprotocol/claude-agent-acp');
   modules.push(...await bundle(path.join(claudeAcp, 'dist', 'index.js'), path.join(modulesDir, '@agentclientprotocol', 'claude-agent-acp', 'dist', 'index.js')));
@@ -53,6 +64,7 @@ export async function bundleDaemon(root, out, platform) {
     if (!files) await cp(from, path.join(modulesDir, name), { recursive: true });
     else for (const file of files) await cp(path.join(from, file), path.join(modulesDir, name, file));
   }
+  if (platform.startsWith('win32')) await appLocalRuntime(path.join(modulesDir, '@openai', `codex-${platform}`, 'vendor'));
   const packages = new Set(modules.flatMap((id) => /^(.*[\\/]node_modules[\\/](?:@[^\\/]+[\\/])?[^\\/]+)[\\/]/.exec(id)?.[1] ?? []));
   let notices = '# Packages bundled into the P9 daemon\n\nEach package below is inlined into resources/daemon; its notices follow.\n';
   for (const dir of [...packages].sort()) {
