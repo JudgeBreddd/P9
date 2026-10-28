@@ -258,3 +258,4 @@ body.inchat nav{display:none}
 #themeMenu .hd{margin:12px 0 6px}#themeMenu :is(.tnote,.fx-row){padding-left:0;padding-right:0}#themeMenu .roll{margin:8px 0 0}
 #phoneSettings h2{margin-top:8px}#phoneSettings p{margin:0}
 #phoneSettings label.set{display:flex;align-items:flex-start;gap:4px}#phoneSettings label.set input{margin-top:2px;flex:none}#phoneSettings label.set>span,#phoneSettings label.mission-file{display:grid;gap:4px}#phoneSettings label.set .muted{font-size:13px}#phoneSettings .field-err{color:var(--red)}
+.sign-in h2{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.sign-in h2 small{font-weight:400;color:var(--dim)}.sign-in p+p,.sign-in p+form,.sign-in form+p{margin-top:8px}.sign-in a{font-weight:600}.sign-code code{font-size:1.6em;letter-spacing:.08em}.sign-form{display:flex;gap:8px;margin-top:8px}.sign-form input{flex:1;min-width:0}.sign-acts{display:flex;justify-content:flex-end;margin-top:10px}

@@ -1252,7 +1252,74 @@ const meter = (label: string, window: { usedPercent: number; resetsAt: number | 
 };
 // Spec §6: "$0.28 recorded". A cost under a cent is not shown as $0.00.
 const cents = (usd: number) => usd > 0 && usd < 0.005 ? '< $0.01' : '$' + usd.toFixed(2);
+// P9 (threat model row 31): sign in to Claude or Codex from the phone, the wizard's own login on the daemon's machine. The
+// daemon hands over only a vendor's sign-in URL and Codex's code; the link is set as a property and opens only on a tap.
+type SignIn = { signedIn: boolean; running: boolean; url: string | null; code: string | null; unsupported: boolean; exit: number | null };
+const SIGN_IN: [agent: 'claude' | 'codex', name: string, page: string][] = [['claude', 'Claude', 'Claude'], ['codex', 'Codex', 'OpenAI']];
+let signInShown = '', signInTimer = 0, signInData: Record<string, SignIn> | null = null;
+const signInNote: Record<string, string> = {};
+async function loadSignIn() {
+  clearTimeout(signInTimer);
+  const box = one('#signIn');
+  // Unreachable after a first answer: the cards stay as last seen (a code typed in the box with them) and say so.
+  let stale = false;
+  try { signInData = await request('/phone/sign-in'); }
+  catch { stale = true; }
+  const data = signInData;
+  if (!data) { box.innerHTML = '<article class="card warn"><h2>Sign-in unavailable</h2><p>The daemon did not answer.</p></article>'; signInShown = ''; return; }
+  const key = JSON.stringify([data, signInNote, stale]);
+  if (key !== signInShown) {
+    signInShown = key;
+    const typed = box.querySelector<HTMLInputElement>('[data-sign-code]')?.value ?? '';
+    box.innerHTML = (stale ? '<p class="muted card">The daemon did not answer: this is the last sign-in state it sent.</p>' : '') + SIGN_IN.map(([agent, name, page]) => {
+      const s = data[agent], note = signInNote[agent];
+      const ended = !s.running && s.exit !== null && !s.signedIn;
+      const said = s.unsupported ? `This Codex has no sign-in with a code (P9 was built with Codex 0.159.3, which has one). Sign in from the desktop's Sign in in a terminal and follow what Codex prints there.`
+        : ended ? `${name} sign-in ended without signing in. Sign in starts it again; finish on ${page}'s page before it ends.` : '';
+      const running = !s.running ? '' : !s.url ? '<p class="muted">Starting sign-in…</p>'
+        : `<p><a data-sign-link="${agent}" target="_blank" rel="noopener noreferrer"></a></p>`
+          + (agent === 'codex' ? (s.code ? `<p class="muted">Enter this one-time code there. It lasts 15 minutes.</p><p class="sign-code"><code>${escape(s.code)}</code></p>` : '<p class="muted">Getting a code…</p>')
+            : `<p class="muted">After you sign in, Claude shows a code. Paste it here.</p><form class="sign-form" data-sign-send="${agent}"><input data-sign-code autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Claude's code" placeholder="Code from Claude" maxlength="512"><button type="submit">Send code</button></form>`);
+      const act = s.running ? `<button type="button" data-sign="stop:${agent}">Cancel</button>`
+        : `<button type="button" data-sign="start:${agent}">${s.signedIn || ended ? 'Sign in again' : 'Sign in'}</button>`;
+      return `<article class="card sign-in${said || note ? ' warn' : ''}" data-agent="${agent}"><h2>${name} <small>${s.signedIn ? 'Signed in' : 'Not signed in'}</small></h2>${running}`
+        + (said ? `<p>${escape(said)}</p>` : '') + (note ? `<p>${escape(note)}</p>` : '') + `<div class="sign-acts">${act}</div></article>`;
+    }).join('');
+    for (const link of box.querySelectorAll<HTMLAnchorElement>('[data-sign-link]')) {
+      const agent = link.dataset.signLink as 'claude' | 'codex';
+      link.href = data[agent].url!;
+      link.textContent = `Open ${SIGN_IN.find(([a]) => a === agent)![2]}'s sign-in page`;
+    }
+    const input = box.querySelector<HTMLInputElement>('[data-sign-code]');
+    if (input) input.value = typed;
+  }
+  if (SIGN_IN.some(([agent]) => data[agent].running) && !one<HTMLElement>('[data-view="usage"]').hidden) signInTimer = window.setTimeout(() => void loadSignIn(), 2000);
+}
+async function signIn(path: string, body: Json, agent: string) {
+  try {
+    const { status, body: result } = await mutate(path, body);
+    signInNote[agent] = status < 300 ? '' : result.error === 'login-running' ? 'A sign-in is already running.' : result.error === 'login-not-running' ? 'That sign-in has ended. Sign in starts a new one.'
+      : 'The daemon refused that (' + String(result.error ?? status) + ').';
+    return status < 300;
+  } catch (error) {
+    signInNote[agent] = (error as Error).message === 'offline' ? 'You are offline. Nothing was sent; try again when back online.' : 'The daemon did not answer. Try again.';
+    return false;
+  } finally { void loadSignIn(); }
+}
+one('#signIn').addEventListener('click', (event) => {
+  const [act, agent] = ((event.target as Element).closest<HTMLElement>('[data-sign]')?.dataset.sign ?? '').split(':');
+  if (act) void signIn(act === 'start' ? '/phone/sign-in' : '/phone/sign-in/stop', { agent }, agent);
+});
+one('#signIn').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.target as HTMLFormElement, agent = form.dataset.signSend!, input = form.querySelector<HTMLInputElement>('[data-sign-code]')!;
+  const code = input.value.trim();
+  if (!code) return;
+  // The typed code stays in the box until the daemon takes it.
+  if (await signIn('/phone/sign-in/code', { agent, code }, agent)) input.value = '';
+});
 async function loadUsage() {
+  void loadSignIn();
   try {
     const data = await request('/usage') as Usage;
     // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two bars under the text.
