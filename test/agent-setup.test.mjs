@@ -346,7 +346,7 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   const rows = page.locator('#termView .xterm-rows > div');
   await rows.filter({ hasText: /^b{20}/ }).waitFor({ timeout: left() });
   const read = () => readFile(opened, 'utf8').catch(() => '');
-  const click = async (row, modifiers) => { const box = await row.boundingBox(); await page.mouse.move(box.x + 30, box.y + box.height / 2); await page.waitForTimeout(300); await row.click({ position: { x: 30, y: box.height / 2 }, modifiers }); };
+  const click = async (row, modifiers) => { const box = await row.boundingBox(); await page.mouse.move(box.x + 30, box.y + box.height / 2); await page.waitForTimeout(300); for (const key of modifiers) await page.keyboard.down(key); await page.mouse.down(); await page.mouse.up(); for (const key of modifiers) await page.keyboard.up(key); };
   await click(rows.filter({ hasText: /^https:\/\/example\.com\/d17\/soft/ }), []);
   await page.waitForTimeout(800);
   assert.equal(await read(), '', 'a plain click opens nothing');
