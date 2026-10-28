@@ -306,7 +306,7 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   const { instance, tmux } = await start(t, ['claude']);
   await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
   await writeFile(path.join(instance.directory, '.claude', '.credentials.json'), '{}');
-  assert.equal((await call(instance, '/setup')).body.claude, true, 'the stale file reads as signed in');
+  assert.equal((await call(instance, '/setup')).claude, true, 'the stale file reads as signed in');
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   assert.equal((await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'auth-required' })).status, 202);
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d17-'));
