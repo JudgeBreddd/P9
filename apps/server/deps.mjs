@@ -109,7 +109,7 @@ export async function dependencies({ platform = process.platform, env = process.
   const agents = await Promise.all(AGENTS.map(async (id) => ({ id, ok: await found(id, { platform, env, home }), admin: false, command: null,
     why: id === 'claude' ? 'Claude Code, for Claude chats and a terminal.' : 'Codex, for Codex chats and a terminal.' })));
   if (platform !== 'linux') return agents;
-  manager ??= await packageManager();
+  if (manager === undefined) manager = await packageManager(); // null: no known package manager, so no command
   const system = await Promise.all(LINUX.map(async ({ id, program, why, packages }) => {
     const ok = await found(program, { platform, env, home });
     return { id, ok, why, admin: !ok, package: manager && packages[manager.name], command: ok || !manager ? null : manager.command + ' ' + packages[manager.name] };

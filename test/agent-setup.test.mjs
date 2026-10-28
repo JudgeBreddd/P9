@@ -171,8 +171,9 @@ test('Item 15: /setup/agents writes a launcher for each agent picked, pointing a
   const r = await call(instance, '/setup/agents', 'POST', { claude: false, codex: true });
   assert.deepEqual([r.status, r.installed], [200, ['codex']]);
   assert.deepEqual(await readdir(bin), ['codex']);
-  assert.equal((await stat(bin)).mode & 0o777, 0o700);
-  assert.equal((await stat(path.join(bin, 'codex'))).mode & 0o777, 0o755);
+  assert.equal((await stat(bin)).mode & 0o077, 0, 'the bin folder is the owner\'s only');
+  const mode = (await stat(path.join(bin, 'codex'))).mode;
+  assert.ok((mode & 0o100) && !(mode & 0o022), 'the launcher runs for its owner, and only its owner can change it (the umask decides the rest): ' + mode.toString(8));
   const text = await readFile(path.join(bin, 'codex'), 'utf8');
   // Two absolute paths, node and the adapter that ships the CLI, and nothing from the request.
   assert.match(text, /^#!\/bin\/sh\n# Written by P9 \(item 15\)[^\n]*\nexec '\/[^'\n]+' '\/[^'\n]+codex[^'\n]*' cli "\$@"\n$/);
@@ -185,7 +186,7 @@ test('Item 15: /setup/agents writes a launcher for each agent picked, pointing a
   const both = await call(instance, '/setup/agents', 'POST', { claude: true, codex: true });
   assert.deepEqual([both.status, both.installed, await readdir(bin)], [200, ['claude', 'codex'], ['claude', 'codex']]);
   assert.equal((await call(instance, '/setup')).claudeCli, true);
-  console.log('PASS item 15 agents: 9 bad bodies refused; Install writes 0755 launchers (0700 folder) for the agents picked; the Codex one runs P9\'s copy: ' + version.trim());
+  console.log('PASS item 15 agents: 9 bad bodies refused; Install writes owner-only launchers in an owner-only folder for the agents picked; the Codex one runs P9\'s copy: ' + version.trim());
 });
 
 // Item 15 (threat model row 61): a system package P9 cannot carry. The command comes from deps.mjs's table for a
@@ -240,7 +241,8 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
     assert.deepEqual(await page.evaluate(([a, x]) => window.p9.chat(a, x), [action, b]), { status: 400, body: { error: 'request-refused' } }, action + JSON.stringify(b));
   }
 
-  // First run: nothing installed or signed in, so the wizard opens; Next walks to the pick step.
+  // Nothing installed or signed in: the setup card opens the wizard at the first step not done, the pick.
+  await page.locator('#cards [data-key="welcome"] .open').click({ timeout: left() });
   await page.waitForFunction(() => document.querySelector('#welDlg').open, null, { timeout: left() });
   for (let i = 0; i < 4 && await title() !== 'Claude, Codex or both?'; i++) await foot.locator('[data-act="next"]').click({ timeout: left() });
   assert.equal(await title(), 'Claude, Codex or both?');

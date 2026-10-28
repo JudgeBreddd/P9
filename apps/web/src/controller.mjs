@@ -1953,6 +1953,7 @@ function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') 
 const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
 // What the pick step shows as picked: this run's choice, else what is installed or signed in already.
 const wizPicked = () => W.picked || AGENTS_PICK.filter(([a]) => W.s?.[a + 'Cli'] || W.s?.[a]).map(([a]) => a);
+const wizReady = () => { const on = wizPicked(); return on.length > 0 && on.every(a => W.s?.[a + 'Cli']); };
 // The admin screen's name for each system item /setup can report missing (deps.mjs wizardDependencies).
 const ADMIN_NAMES = { tmux: 'tmux', ssh: 'SSH client' };
 const STEP_NAMES = { workspace: 'workspace folder', agents: 'agent sign-in', mission: 'Mission Control files', terminal: 'terminal' };
@@ -2067,7 +2068,8 @@ function wizRender() {
       + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('choose:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
       + `<p class="muted sm">Install sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
       + (note?.error ? fail(note.error, note.detail) : '') + (note?.installed ? `<p class="ok sm" data-installed>Installed: ${note.installed.map(a => AGENTS_PICK.find(([k]) => k === a)[1]).join(' and ')}</p>` : '');
-    next = on.length ? btn('install', note?.installed ? 'Next' : 'Install', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Install', 'default').replace('<button', '<button disabled');
+    // Next, not Install, when the ones picked are there already (installed earlier, or the owner's own CLI).
+    next = on.length ? btn('install', note?.installed || wizReady() ? 'Next' : 'Install', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Install', 'default').replace('<button', '<button disabled');
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
     const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
@@ -2180,7 +2182,7 @@ $('#welDlg').addEventListener('click', async e => {
   // choose, not pick: pick is the folder picker's.
   if (act === 'choose') { const on = wizPicked(); W.picked = on.includes(agent) ? on.filter(a => a !== agent) : [...on, agent]; W.note.pick = null; return wizRender(); }
   if (act === 'install') {
-    if (W.note.pick?.installed) { W.i += 1; return wizRender(); }
+    if (W.note.pick?.installed || wizReady()) { W.i += 1; return wizRender(); }
     const on = wizPicked();
     const r = await run(() => liveChat.call('installAgents', { claude: on.includes('claude'), codex: on.includes('codex') }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
     W.picked = on;
