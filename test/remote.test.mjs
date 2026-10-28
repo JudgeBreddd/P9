@@ -352,6 +352,85 @@ test('xfer window: the first-send and conflict prompts ask in words, and a limit
   console.log('PASS xfer window limit: refused before sending, named Largest file to send, and Open Settings focused it');
 });
 
+// Send to server with the chat's folder (item 23; Builder, 2026-10-27): a folder that needs a choice shows the Send files prompt
+// before the chat is frozen ("Same prompt first"); Cancel freezes nothing, a choice sends the folder and then the chat. A
+// Syncthing folder sends no files and keeps the wait ("Keep today's wait").
+test('xfer window move: the prompt comes before the freeze, the folder goes first; a Syncthing folder sends no files', { skip, timeout: 60000 }, async (t) => {
+  const fill = (files) => async ({ workspace, directory }) => {
+    files = { ...files, 'hub/registry.json': JSON.stringify({ scripts: [], apps: [], pages: [] }), 'projects/AGENTS.md': '# Projects\n', 'uuid-sessions': '', 'claude-home': '' };
+    for (const [name, text] of Object.entries(files)) { await mkdir(path.dirname(path.join(workspace, name)), { recursive: true }); await writeFile(path.join(workspace, name), text); }
+    await mkdir(path.join(workspace, 'waiting'));
+    await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: 'waiting' }));
+    return { args: ['--settings', path.join(directory, 'settings.json'), '--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] };
+  };
+  const laptop = await daemon(t, undefined, false, fill({ 'docs/a.md': 'laptop' }));
+  const server = await daemon(t, undefined, false, fill({ 'docs/a.md': 'server' }));
+  const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+    headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => ({ status: result.status, ...(result.status === 404 ? {} : JSON.parse(result.text)) }));
+  const until = async (check, what, ms = 20000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 100))) if (await check()) return;
+    assert.fail('timed out: ' + what);
+  };
+  const listed = async (instance, id) => (await call(instance, '/chat')).conversations.find((c) => c.id === id);
+  const chat = async (text) => {
+    const id = (await call(laptop, '/chat', 'POST', { provider: 'claude' })).conversation;
+    assert.equal((await call(laptop, '/chat/' + id + '/prompt', 'POST', { text })).status, 202);
+    await until(async () => (await call(laptop, '/chat/events?after=0&only=' + id)).events.some((e) => e.type === 'turn-end'), text + ' answered');
+    return id;
+  };
+  const s = await stage(server), profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, TZ: 'UTC' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', laptop.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
+  const dialog = page.locator('#xferDlg'), read = (box, name) => readFile(path.join(box.workspace, name), 'utf8');
+  const press = async (id) => {
+    await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: 20000 });
+    await page.locator('.pane[data-id="' + id + '"] [data-send-away]').click({ timeout: 20000 });
+  };
+
+  // docs/a.md differs and nothing was sent before: the first-send prompt, with the chat still runnable here.
+  const id = await chat('edit moved-notes.md');
+  await press(id);
+  await dialog.waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#xferT').innerText(), 'First send to test-host');
+  assert.match(await page.locator('#xferP').innerText(), /The chat moves once they are there\./);
+  assert.deepEqual(await dialog.locator('[data-xfer-choice]').allInnerTexts(), ['Laptop wins', 'Keep the newer of each']);
+  assert.notEqual((await listed(laptop, id)).state, 'moving', 'frozen before the choice');
+  await shot('xfer-move-ask');
+  await dialog.locator('[data-xfer-close]').click();
+  await page.waitForTimeout(500);
+  assert.notEqual((await listed(laptop, id)).state, 'moving', 'Cancel froze it');
+  assert.equal(await listed(server, id), undefined);
+  // Laptop wins: the folder goes, then the chat; no Syncthing wait.
+  await press(id);
+  await dialog.waitFor({ timeout: 20000 });
+  await dialog.locator('[data-xfer-choice="laptop"]').click();
+  await until(async () => (await listed(laptop, id))?.state === 'moved', 'the chat moved');
+  assert.ok(await listed(server, id));
+  assert.deepEqual([await read(server, 'docs/a.md'), await read(server, 'moved-notes.md')], ['laptop', await read(laptop, 'moved-notes.md')]);
+  await page.locator('#moveDlg[open]').waitFor({ timeout: 20000 });
+  await page.click('#moveNo');
+  console.log('PASS xfer window move: the prompt came before the freeze, Cancel froze nothing, Laptop wins sent the folder and then the chat');
+
+  // A Syncthing folder: no prompt and no files, though docs/a.md differs again; the chat moves once the server has its file.
+  await writeFile(path.join(laptop.workspace, 'docs/a.md'), 'laptop again');
+  await mkdir(path.join(laptop.workspace, '.stfolder'));
+  const synced = await chat('edit synced.md');
+  await writeFile(path.join(server.workspace, 'synced.md'), await read(laptop, 'synced.md')); // as Syncthing would
+  await press(synced);
+  await until(async () => (await listed(laptop, synced))?.state === 'moved', 'the Syncthing chat moved');
+  assert.equal(await dialog.isVisible(), false, 'no prompt for a Syncthing folder');
+  assert.equal(await read(server, 'docs/a.md'), 'laptop', 'no files sent into a Syncthing folder');
+  console.log('PASS xfer window move: a Syncthing folder moved with no prompt and no files');
+});
+
 // ---- Item 33: Dev Focus in Server mode (threat model row 50). The server's daemon starts its editor server on editor.sock;
 // the tunnel's second forward carries it, and a loopback relay on the laptop hands it to the same Dev Focus page as Local's.
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
