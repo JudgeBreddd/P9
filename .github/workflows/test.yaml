@@ -160,6 +160,7 @@ jobs:
           $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find '**\dumpbin.exe' | Select-Object -First 1
           if (-not $dumpbin) { throw 'dumpbin not found' }
           $programs = @((Get-Command node).Source) + @(Get-ChildItem node_modules\.pnpm -Recurse -Filter *.exe | Where-Object { $_.FullName -match 'claude|codex' } | ForEach-Object FullName)
+          foreach ($cli in 'claude.exe', 'codex.exe') { if (-not ($programs | Where-Object { (Split-Path $_ -Leaf) -eq $cli })) { throw "$cli not found in node_modules: the adapters ship it some other way here" } }
           $out = New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\bare-windows"
           foreach ($program in $programs) {
             $text = & $dumpbin /nologo /dependents $program
@@ -183,9 +184,10 @@ jobs:
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
           $failed = 0
           foreach ($program in $programs) {
-            $version = & $program --version 2>&1 | Select-Object -First 1
-            Write-Output "BARE_WIN_RUN $(Split-Path $program -Leaf) exit $LASTEXITCODE $version"
-            if ($LASTEXITCODE -ne 0) { $failed++ }
+            $text = & $program --version 2>&1
+            $code = $LASTEXITCODE
+            Write-Output "BARE_WIN_RUN $(Split-Path $program -Leaf) exit $code $($text | Select-Object -First 1)"
+            if ($code -ne 0) { $failed++ }
           }
           if ($failed) { throw "$failed program(s) did not start with PATH cut to Windows' folders" }
       - name: Evidence
