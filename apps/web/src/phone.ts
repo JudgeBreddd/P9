@@ -22,7 +22,7 @@ const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char
 let restored: { id: string; text: string } | null = (() => {
   try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
 })();
-const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
+const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
@@ -59,7 +59,7 @@ mountBar('usage', { title: 'Usage', subId: 'usageWhen', sub: '', acts: [{ id: 'r
 // Files: one bar for the folder list and for an open file (the CSS shows one set), so #fileState, #up and #closeFile stay single elements.
 one('[data-bar="files"]').innerHTML = `<button type="button" id="up" class="back" aria-label="Up one folder" disabled>${ICON.back}</button><button type="button" id="closeFile" class="back" aria-label="Back">${ICON.back}</button>`
   + '<div class="title"><h1><span id="dirPath">Workspace</span><span id="openPath"></span></h1><small id="fileState">Not loaded</small></div><span class="sync" role="img" aria-label="Live"></span>'
-  + `<button type="button" id="save" disabled>Save</button><button type="button" id="moreFile" aria-label="More">${svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>')}</button>`;
+  + `<button type="button" id="pickFolder" aria-label="Change folder">${ICON.folder}</button><button type="button" id="save" disabled>Save</button><button type="button" id="moreFile" aria-label="More">${svg('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>')}</button>`;
 // The hairline under a top bar shows only once its screen has scrolled.
 one('main').addEventListener('scroll', (event) => { const box = event.target as HTMLElement; box.closest('section')?.querySelector(':scope > .bar')?.classList.toggle('ruled', box.scrollTop > 0); }, true);
 // Bottom sheet: one shared <dialog>. Fill the body with .opt rows (or anything); a tap on the backdrop closes it.
@@ -137,7 +137,7 @@ async function mutate(path: string, body: Json) {
   const csrf = csrfToken();
   if (!csrf) throw relogin();
   let response: Response;
-  try { response = await fetch(path, { method: path.startsWith('/files') ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
+  try { response = await fetch(path, { method: path === '/files' ? 'PUT' : 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': pending.id }, body: JSON.stringify(body) }); }
   catch (error) { throw error; }
   const result = await response.json().catch(() => ({}));
   if (response.status === 401) throw relogin();
@@ -1242,18 +1242,26 @@ setInterval(() => { if (document.body.dataset.view === 'usage' && !document.hidd
 // P10: the title is the folder shown. Only the newest load draws (a slow answer for the folder left must not put its name
 // back), and an open file's name is not left beside it (phone.css shows #openPath only while a file is open).
 let folder = '', listing = 0;
+// P15: the folder the Files tab works in: null is the workspace, else the outside folder the daemon checked and returned.
+let place: string | null = null;
+const at = (path: string) => 'path=' + encodeURIComponent(path) + (place ? '&root=' + encodeURIComponent(place) : '');
+const placeName = () => place ? place.split('/').filter(Boolean).pop() || place : 'Workspace';
 async function loadFolder(path = folder) {
   const mine = ++listing;
   try {
-    const { entries } = await request('/files/list?path=' + encodeURIComponent(path)) as { entries: { name: string; dir?: boolean }[] };
+    const { entries } = await request('/files/list?' + at(path)) as { entries: { name: string; dir?: boolean }[] };
     if (mine !== listing) return;
     folder = path;
-    one('#dirPath').textContent = path.split('/').pop() || 'Workspace';
+    one('#dirPath').textContent = path.split('/').pop() || placeName(); one<HTMLElement>('#dirPath').title = place ?? '';
     one<HTMLButtonElement>('#up').disabled = !path;
     const sorted = [...entries.filter((entry) => entry.dir), ...entries.filter((entry) => !entry.dir)];
     one('#fileList').innerHTML = sorted.map((entry) => `<li><button class="quiet" data-name="${escape(entry.name)}" data-dir="${entry.dir ? 1 : ''}">${entry.dir ? ICON.folder : ICON.file}${escape(entry.name)}</button></li>`).join('') || '<li class="empty">This folder is empty.</li>';
     one('#fileState').textContent = 'Pick a file';
-  } catch (error) { if (mine !== listing) return; one('#fileState').textContent = 'Folder unavailable'; one('#fileList').innerHTML = `<li class="empty">Could not list this folder (${escape((error as Error).message)}).</li>`; }
+  } catch (error) {
+    if (mine !== listing) return;
+    // The daemon forgot the outside folder (it restarted): back to the workspace, and say so.
+    if (place && /^dev-root-(unset|changed)$/.test((error as Error).message)) { place = null; folder = ''; void loadFolder('').then(() => { one('#fileState').textContent = 'Outside folder closed: back in the workspace'; }); return; }
+    one('#fileState').textContent = 'Folder unavailable'; one('#fileList').innerHTML = `<li class="empty">Could not list this folder (${escape((error as Error).message)}).</li>`; }
 }
 one('#fileList').addEventListener('click', (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-name]');
@@ -1262,6 +1270,21 @@ one('#fileList').addEventListener('click', (event) => {
   void (button.dataset.dir ? loadFolder(path) : openFile(path));
 });
 one<HTMLButtonElement>('#up').onclick = () => void loadFolder(folder.split('/').slice(0, -1).join('/'));
+// P15: change the folder, as the desktop's Open Folder: a full path on the server, which the daemon checks (not P9's own
+// folders, not one holding the home folder or the workspace); Back to workspace returns. Saves go through the same guarded writer.
+one<HTMLButtonElement>('#pickFolder').onclick = () => {
+  openSheet('Folder', `<form class="pickfolder" data-pickfolder><label for="folderPath">A folder on the server, by its full path</label><input id="folderPath" name="path" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="/home/you/projects/site" value="${escape(place ?? '')}"><p class="muted" data-folder-note>${place ? 'Working in ' + escape(place) : 'Working in the workspace'}</p><div class="actions start"><button type="submit">Open folder</button>${place ? '<button type="button" class="quiet" data-folder-home>Back to workspace</button>' : ''}</div></form>`);
+};
+const FOLDER_REFUSED: Record<string, string> = { 'root-not-found': 'No folder there.', 'root-refused': 'Not that folder: it holds P9\'s own files or your home folder.', 'inside-workspace': 'That folder is in the workspace: open it from the list.', 'request-refused': 'Type the full path, starting with /.' };
+async function setPlace(path: string | null) {
+  const result = await mutate('/files/root', { path });
+  if (result.status !== 200) { const note = document.querySelector('[data-folder-note]'); if (note) note.textContent = FOLDER_REFUSED[String(result.body.error)] ?? 'Not opened: ' + (result.body.error ?? result.status); return; }
+  place = (result.body.root as string | null) ?? null; sheet.close(); await loadFolder('');
+}
+one('#sheetBody').addEventListener('submit', (event) => { const form = (event.target as Element).closest<HTMLFormElement>('[data-pickfolder]'); if (!form) return; event.preventDefault(); const path = (new FormData(form).get('path') as string).trim(); void setPlace(path || null); });
+one('#sheetBody').addEventListener('click', (event) => { if ((event.target as Element).closest('[data-folder-home]')) void setPlace(null); });
+// The daemon keeps the phone's folder until it restarts; a reload picks it up.
+void request('/files/root').then((body) => { place = (body as { root: string | null }).root ?? null; if (place && document.body.dataset.view === 'files' && one<HTMLElement>('#fileView').hidden) void loadFolder(''); }, () => {});
 one('#mission').addEventListener('click', (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>('button[data-note]');
   if (!button) return;
@@ -1288,7 +1311,7 @@ one('#sheetBody').addEventListener('click', (event) => {
 });
 async function openFile(path: string, root?: string) {
   try {
-    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?path=' + encodeURIComponent(path)); state.file = { path, hash: file.hash, content: file.content, root };
+    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }) };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root);
@@ -1304,7 +1327,7 @@ async function openFile(path: string, root?: string) {
 async function saveFile(hash: string) {
   if (!state.file) return;
   const { path, root } = state.file, content = editor.state.doc.toString();
-  const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content });
+  const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content, ...(state.file.place && { root: state.file.place }) });
   if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; syncSave(); }
   else if (result.status === 409) {
     // the disk version, when the file is still there, so the draft can be kept or the disk loaded (as on the desktop)

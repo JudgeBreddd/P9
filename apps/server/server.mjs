@@ -165,9 +165,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // version: the daemon's own; the installed app counts a start healthy only when it matches its own (AU5, rollback.mjs).
   api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
-  api.get('/files', async (c) => c.json(await readWorkspaceFile(workspace, c.req.query('path'))));
-  // The file tree never shows the folders P9 does not crawl (HEAVY: node_modules, .venv and the like).
-  api.get('/files/list', async (c) => c.json({ entries: (await listDirectory(workspace, c.req.query('path') ?? '')).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) }));
   // File protection off lifts these three read-only rules too (Builder, 2026-10-18: "Everything").
   const readOnly = (path, name = path.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
@@ -196,12 +193,37 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (!devRoot) return { status: 409, error: 'dev-root-unset' };
     return body.root === devRoot ? devCheck(devRoot) : { status: 409, error: 'dev-root-changed' };
   };
+  // P15: the phone's own outside folder (threat model row 41, changed 2026-10-28: the owner wants the phone to edit files
+  // outside the workspace "just like the desktop app"). The phone sets it (POST /files/root), with Dev Focus's checks; it is
+  // kept in memory only and apart from Dev Focus's, so neither moves the other's saves. A read or save names it by the
+  // path the daemon returned; another path is dev-root-changed, as on the desktop.
+  let phoneRoot = null;
+  const phoneTarget = (root) => (root === undefined ? { root: workspace } : !phoneRoot ? { status: 409, error: 'dev-root-unset' } : root === phoneRoot ? devCheck(phoneRoot) : { status: 409, error: 'dev-root-changed' });
+  // The desktop's reads stay in the workspace (its outside folder is read by Dev Focus's editor); a root here is the phone's.
+  const readTarget = (c) => (c.get('device') ? phoneTarget(c.req.query('root')) : { root: workspace });
+  api.get('/files', async (c) => { const target = await readTarget(c); return target.error ? reply(c, target) : c.json(await readWorkspaceFile(target.root, c.req.query('path'))); });
+  // The file tree never shows the folders P9 does not crawl (HEAVY: node_modules, .venv and the like).
+  api.get('/files/list', async (c) => {
+    const target = await readTarget(c); if (target.error) return reply(c, target);
+    return c.json({ entries: (await listDirectory(target.root, c.req.query('path') ?? '')).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) });
+  });
+  api.get('/files/root', (c) => (c.get('device') ? c.json({ root: phoneRoot }) : c.json({ error: 'not-found' }, 404)));
+  api.post('/files/root', async (c) => {
+    if (!c.get('device')) return c.json({ error: 'not-found' }, 404); // the desktop's is POST /dev/root, from main
+    const input = await json(c);
+    if (!input || typeof input !== 'object' || Object.keys(input).join() !== 'path' || (input.path !== null && (typeof input.path !== 'string' || !path.isAbsolute(input.path)))) return c.json({ error: 'request-refused' }, 400);
+    phoneRoot = null;
+    if (input.path === null) return c.json({ root: null });
+    const target = await devCheck(input.path);
+    if (target.error) return reply(c, target);
+    phoneRoot = target.root;
+    return c.json({ root: phoneRoot });
+  });
   const withoutRoot = (body) => (body && typeof body === 'object' && Object.hasOwn(body, 'root') ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'root')) : body);
   api.put('/files', async (c) => {
     if (c.req.header('content-type') !== 'application/json') return c.json({ error: 'json-required' }, 415);
     const body = await c.req.json(), dev = Boolean(body) && typeof body === 'object' && Object.hasOwn(body, 'root');
-    if (dev && c.get('device')) return c.json({ error: 'request-refused' }, 403); // the phone never writes in the second root
-    const target = await devTarget(body);
+    const target = await (c.get('device') ? phoneTarget(dev ? body.root : undefined) : devTarget(body));
     if (target.error) return reply(c, target);
     const input = parseSave(withoutRoot(body));
     await reloadSettings();

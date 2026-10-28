@@ -165,7 +165,9 @@ details.more[open] summary::after{transform:rotate(135deg)}details.more p{margin
 [data-bar=files] h1{display:block}
 [data-bar=files] #openPath,[data-bar=files] #closeFile,[data-bar=files] #save,[data-bar=files] #moreFile{display:none}
 section[data-view=files]:has(#fileView:not([hidden])) :is(#closeFile,#save,#moreFile){display:inline-flex;align-items:center;justify-content:center}
-section[data-view=files]:has(#fileView:not([hidden])) :is(#up,#dirPath){display:none}
+section[data-view=files]:has(#fileView:not([hidden])) :is(#up,#dirPath,#pickFolder){display:none}
+/* P15: the folder sheet. */
+.pickfolder{display:grid;gap:8px}.pickfolder label{font-size:13px;color:var(--dim)}.pickfolder input{width:100%;font:16px "JetBrains Mono",ui-monospace,monospace}.pickfolder .muted{margin:0;font-size:13px;overflow-wrap:anywhere}
 section[data-view=files]:has(#fileView:not([hidden])) #openPath{display:inline}
 [data-bar=files] #up:disabled{display:none}
 [data-bar=files] #save{min-width:64px;padding:0 12px}[data-bar=files] #save:disabled{opacity:.4}

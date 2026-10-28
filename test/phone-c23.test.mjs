@@ -127,3 +127,29 @@ test('K9, K10: attached photos survive a reload; a sheet opened over the Mode sh
   await page.waitForSelector('#attached img[alt="dot.png"]', { timeout: 15000 });
   console.log('PASS K9 K10');
 });
+
+test('P15: the Files tab opens a folder outside the workspace by its path, saves there, and goes back', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  const outside = path.join(server.directory, 'site');
+  await mkdir(outside); await writeFile(path.join(outside, 'index.txt'), 'outside\n');
+  const { page } = await phone(t, server);
+  await page.click('[data-nav="files"]');
+  await page.click('#pickFolder');
+  await page.fill('#folderPath', server.directory);
+  await page.click('[data-pickfolder] button[type="submit"]');
+  await page.waitForSelector('[data-folder-note]:text("holds P9")', { timeout: 5000 });
+  await page.fill('#folderPath', outside);
+  await page.click('[data-pickfolder] button[type="submit"]');
+  await page.waitForSelector('#fileList button[data-name="index.txt"]', { timeout: 10000 });
+  assert.equal(await page.locator('[data-bar="files"] h1').innerText(), 'site');
+  await shot(page, 'c23-phone-files-outside');
+  await page.click('#fileList button[data-name="index.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
+  await page.locator('.cm-content').click(); await page.keyboard.press('Control+A'); await page.keyboard.type('saved from the phone');
+  await page.click('#save'); await page.waitForSelector('#fileState:text("Saved")', { timeout: 10000 });
+  assert.equal(await (await import('node:fs/promises')).readFile(path.join(outside, 'index.txt'), 'utf8'), 'saved from the phone');
+  await page.click('#closeFile');
+  await page.click('#pickFolder'); await page.click('[data-folder-home]');
+  await page.waitForSelector('#fileList button[data-name="note.txt"]', { timeout: 10000 });
+  assert.equal(await page.locator('[data-bar="files"] h1').innerText(), 'Workspace');
+  console.log('PASS P15');
+});
