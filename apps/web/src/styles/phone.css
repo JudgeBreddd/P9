@@ -203,6 +203,7 @@ body.inchat nav{display:none}
 .bar .run[data-run=working]{border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan)}
 .chips{flex:none;display:flex;gap:8px;min-height:32px;align-items:center;padding:0 16px 6px}
 .chip{min-height:32px;padding:0 12px;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:var(--raised);color:var(--text);font-size:13px;font-weight:600}
+#earlier{display:block;margin:12px auto 0;padding:0 18px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--dim);font-size:14px}#earlier[hidden]{display:none}#earlier:disabled{opacity:.6}
 #events{display:flex;flex-direction:column;gap:12px;padding:12px 16px 16px}
 #events>article{margin:0}
 #events>article[data-kind=user]+article:not([data-kind=user]){margin-top:4px}

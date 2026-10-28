@@ -72,6 +72,8 @@ export function rollbackLedger(file) {
 // then a <file>.migrating marker naming that copy is written. A start that finds the marker (the last migration died
 // part way) restores the copy first. A file newer than this build is refused, never opened for writing.
 // steps: test hook to stand in for a later build's longer migration list.
+// The event types the phone draws as a block of their own (P20's tail read counts them).
+const BLOCKS = new Set(['user', 'approval', 'answered', 'question', 'error', 'steer-lost', 'interrupted', 'exited', 'stopped']);
 const parsed = (row) => {
   try { return { ...row, data: JSON.parse(row.data) }; }
   catch { return { ...row, type: 'invalid', data: { error: 'malformed-event' } }; }
@@ -116,6 +118,12 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     // Agent chunks, images included, are skipped in SQL instead of parsed. JSON.stringify never escapes 'usage_update'.
     usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
       + " WHERE e.cursor > ? AND (e.type = 'turn-end' OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
+    // P20, the tail read: a chat's events newest first, with only what a block count needs (malformed data reads as none).
+    back: db.prepare("SELECT cursor, type, CASE WHEN json_valid(data) THEN json_extract(data, '$.sessionUpdate') END AS u,"
+      + " CASE WHEN json_valid(data) THEN json_extract(data, '$.stopReason') END AS r FROM events WHERE conversation = ? AND cursor <= ? ORDER BY cursor DESC LIMIT ?"),
+    span: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor >= ? AND cursor <= ? ORDER BY cursor'),
+    kept: db.prepare("SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type IN ('card', 'unpin', 'config')"),
+    latest: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE conversation = ? AND cursor < ? AND type = ? AND instr(data, ?) > 0 ORDER BY cursor DESC LIMIT 1'),
     operation: db.prepare('SELECT * FROM operations WHERE id = ?'),
     recent: db.prepare('SELECT COUNT(*) AS n FROM operations WHERE login = ? AND at > ?'),
     begin: db.prepare("INSERT INTO operations (id, login, fingerprint, state, at) VALUES (?, ?, ?, 'running', ?)"),
@@ -136,6 +144,37 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     of(only, cursor, until = Infinity, limit = 500) {
       const top = Math.min(until, statements.top.get().n), rows = statements.of.all(cursor, top, JSON.stringify(only), limit);
       return { events: rows.map(parsed), cursor: rows.length === limit ? rows.at(-1).cursor : Math.max(cursor, top) };
+    },
+    // P20: the newest blocks of each chat in only, up to until, counted as the phone draws them (phone.ts build()): a
+    // run of streamed chunks is one block, bookkeeping updates are none. It always reaches back to the chat's latest
+    // message from the user, so a turn still running reads as running. Older events the chat screen still needs come
+    // along (pinned cards, the agent's picks, the latest mode, plan and slash commands). more[id] is the first cursor
+    // kept, for a chat with older events left out; the next read asks up to the one before it.
+    // ponytail: one turn longer than the window loads whole, back to its message.
+    tail(only, until = Infinity, blocks = 30) {
+      const top = Math.min(until, statements.top.get().n), events = [], more = {};
+      for (const id of only) {
+        let count = 0, run = null, user = false, from = 0, cut = false;
+        for (let before = top; !cut;) {
+          const rows = statements.back.all(id, before, 500);
+          for (const { cursor, type, u, r } of rows) {
+            const chunk = type === 'update' && (u === 'agent_message_chunk' || u === 'agent_thought_chunk') ? u : null;
+            const starts = chunk ? chunk !== run : BLOCKS.has(type) || (type === 'update' && u === 'tool_call') || (type === 'turn-end' && r !== 'end_turn');
+            if (starts) { if (count >= blocks && user) { cut = true; break; } count++; run = chunk; }
+            if (type === 'user') user = true;
+            from = cursor;
+          }
+          if (rows.length < 500) break;
+          before = rows.at(-1).cursor - 1;
+        }
+        events.push(...statements.span.all(id, from, top));
+        if (cut) {
+          more[id] = from;
+          events.push(...statements.kept.all(id, from), ...[['mode', ''], ['update', '"sessionUpdate":"plan"'], ['update', '"sessionUpdate":"available_commands_update"']]
+            .map(([type, text]) => statements.latest.get(id, from, type, text)).filter(Boolean));
+        }
+      }
+      return { events: events.map(parsed).sort((a, b) => a.cursor - b.cursor), cursor: top, more };
     },
     // What the adapters send (ACP, checked against claude-agent-acp 0.88.0): token counts per turn in the prompt
     // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the

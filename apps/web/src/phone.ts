@@ -227,7 +227,8 @@ async function replay() {
   const ids = state.conversations.filter((item) => item.state !== 'stopped').map((item) => String(item.id));
   let scoped = ids.length <= 100;
   for (;;) {
-    try { await pull(scoped ? '&only=' + ids.map(encodeURIComponent).join(',') : ''); break; }
+    // P20: a chat that is not stopped starts with its newest blocks only; Load earlier reads the ones before.
+    try { if (!scoped) await pull(''); else { const result = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + ids.map(encodeURIComponent).join(',')); take(result, ids); state.cursor = Math.max(state.cursor, Number(result.cursor)); } break; }
     // A listed ID the daemon will not take (only a seeded test ledger has one) replays everything, as before.
     catch (error) { if (!scoped || (error as Error).message !== 'request-refused') throw error; scoped = false; }
   }
@@ -247,20 +248,26 @@ async function fetchEvents(wait = 0) {
   else { await pull('', wait); gapAfter(state.events.find((event) => Number(event.cursor) > state.seen)); }
   state.seen = state.cursor; localStorage.setItem('p9-cursor', String(state.cursor));
 }
-// A stub chat's events, up to where the first read stopped; live events for it come after, so none repeat.
+// P20: a tail read's events go in once each, in cursor order. older holds, per chat, the first cursor read when
+// older events were left out; Load earlier reads up to the one before it.
+const TAIL = 30, older = new Map<string, number>();
+let changedEarlier = ''; // the chat the Load earlier button was last reset for
+function take(result: Json, ids: string[]) {
+  const held = new Set(state.events.map((event) => Number(event.cursor)));
+  state.events.push(...(result.events as Json[]).filter((event) => !held.has(Number(event.cursor))));
+  state.events.sort((a, b) => Number(a.cursor) - Number(b.cursor));
+  const more = (result.more ?? {}) as Json;
+  for (const id of ids) if (typeof more[id] === 'number') older.set(id, more[id] as number); else older.delete(id);
+}
+// A stub chat's newest events, up to where the first read stopped; live events for it come after, so none repeat.
 const loading = new Map<string, Promise<void>>();
 function history(id: string) {
   if (!state.stubs.has(id)) return Promise.resolve();
   if (!loading.has(id)) loading.set(id, (async () => {
     try {
-      for (let after = 0; ;) {
-        const result = await request('/chat/events?after=' + after + '&only=' + encodeURIComponent(id) + '&until=' + state.base);
-        state.events.push(...result.events as Json[]); after = Number(result.cursor);
-        if ((result.events as Json[]).length < 500) break;
-      }
+      take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + state.base), [id]);
     } catch (error) { if ((error as Error).message !== 'request-refused') throw error; } // an ID the daemon will not take has no history to show
     state.stubs.delete(id);
-    state.events.sort((a, b) => Number(a.cursor) - Number(b.cursor));
   })().finally(() => loading.delete(id)));
   return loading.get(id)!;
 }
@@ -475,6 +482,9 @@ function render() {
   seenItems = all.length;
   const shown = all.slice(-windowSize);
   hiddenBlocks = all.length - shown.length;
+  const earlier = one<HTMLButtonElement>('#earlier');
+  earlier.hidden = !older.has(picked) || hiddenBlocks > 0; // what is read is drawn first, as the reader scrolls up
+  if (changedEarlier !== picked) { changedEarlier = picked; earlier.disabled = false; earlier.textContent = 'Load earlier'; }
   const height = body.scrollHeight, top = body.scrollTop;
   patch(events, shown);
   if (!blocks.length) events.insertAdjacentHTML('beforeend', '<div class="empty">No messages yet.</div>');
@@ -488,6 +498,17 @@ function render() {
   chatBar(picked, digest().get(picked)?.run ?? 'idle');
   renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
+// P20: the next TAIL blocks before the oldest read, drawn above; the reader stays where they were.
+one('#earlier').addEventListener('click', async () => {
+  const id = openId, from = older.get(id), button = one<HTMLButtonElement>('#earlier');
+  if (!id || from === undefined || button.disabled) return;
+  button.disabled = true; button.textContent = 'Loading…';
+  try {
+    take(await request('/chat/events?after=0&tail=' + TAIL + '&only=' + encodeURIComponent(id) + '&until=' + (from - 1)), [id]);
+    button.disabled = false; button.textContent = 'Load earlier';
+    if (openId === id) { anchored = true; render(); }
+  } catch { button.disabled = false; button.textContent = 'Not loaded · Tap to try again'; }
+});
 body.addEventListener('scroll', () => {
   stuck = body.scrollHeight - body.scrollTop - body.clientHeight < 80; one<HTMLElement>('#jump').hidden = stuck;
   if (body.scrollTop < 60 && hiddenBlocks > 0) { windowSize += 60; anchored = true; render(); } // older history loads when the reader reaches the top
