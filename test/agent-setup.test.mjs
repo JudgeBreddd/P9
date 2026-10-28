@@ -363,7 +363,6 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   const deadline = Date.now() + 55000, left = () => Math.max(1000, deadline - Date.now());
   const { instance } = await start(t, [], { without: ['ssh'] });
   const bin = path.join(instance.directory, '.local', 'share', 'p9', 'bin');
-  await mkdir(bin, { recursive: true });
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-d16-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
@@ -382,6 +381,7 @@ test('D16: the pick step says Continue; a failed setup names why and still goes 
   await body.locator('[data-act="choose:claude"]').click();
   await body.locator('[data-act="choose:codex"]').click();
   assert.equal(await foot.locator('[data-act="install"]').innerText(), 'Continue');
+  await mkdir(bin, { recursive: true });
   await chmod(bin, 0o500);
   t.after(() => chmod(bin, 0o700).catch(() => {}));
   await foot.locator('[data-act="install"]').click();
