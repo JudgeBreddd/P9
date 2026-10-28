@@ -428,7 +428,7 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   for (const n of [1, 2, 3]) await shot('move-frame-' + n, page);
   // No event for 15 s (three missed heartbeats): the label says so; the next event clears it.
   await page.locator('#moveFx[data-wait]').waitFor({ timeout: 20000 });
-  assert.equal(await page.locator('#moveWhat').textContent(), 'Waiting for the server…');
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Waiting for the remote…');
   // Long after the chat has fallen in (scaled to a dot), the overlay still covers the pane's whole place.
   const c = await fx.boundingBox();
   assert.deepEqual([c.x, c.y, c.width, c.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round), 'the overlay keeps the pane\'s size');

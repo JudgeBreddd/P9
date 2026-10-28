@@ -161,9 +161,9 @@ test('xfer plan: a first send asks, a laptop delete asks, delete against change 
   const p = plan(side(f('a', '7'), f('b', '2'), f('e', '8'), f('g', '9', Date.parse('2026-10-27T11:02:00'))),
     side(f('a', '1'), f('b', 'a'), f('c', '3'), f('d', 'b'), f('g', 'c', Date.parse('2026-10-27T13:40:00'))), record, '');
   assert.deepEqual([names(p.send), names(p.deletes), names(p.conflicts)], [['a'], ['c'], ['d', 'e', 'g']]);
-  assert.match(describe(p.conflicts[0], record), /deleted on the laptop; changed on the server since your last send/);
-  assert.match(describe(p.conflicts[1], record), /changed on the laptop .*; deleted on the server since your last send/);
-  assert.match(describe(p.conflicts[2], record), /changed on both since your last send; the server's copy is newer \(.*1:40.*\) than the laptop's \(.*11:02.*\)/);
+  assert.match(describe(p.conflicts[0], record), /deleted on the laptop; changed on the remote since your last send/);
+  assert.match(describe(p.conflicts[1], record), /changed on the laptop .*; deleted on the remote since your last send/);
+  assert.match(describe(p.conflicts[2], record), /changed on both since your last send; the remote's copy is newer \(.*1:40.*\) than the laptop's \(.*11:02.*\)/);
   // Delete unticked: the server keeps c and the record forgets it. "Newer" never turns a change into a silent delete.
   const newer = resolve(p, 'newer', false);
   assert.deepEqual([names(newer.toServer), names(newer.toLaptop), names(newer.serverDeletes), names(newer.laptopDeletes), names(newer.forget)],

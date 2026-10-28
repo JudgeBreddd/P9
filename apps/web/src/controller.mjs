@@ -2199,8 +2199,8 @@ const WIZ_ERR = {
 function wizRemote(btn) {
   const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
   return '<div data-wiz-remote>' + (hosts.length
-    ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">Its Host name from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
-    : `<p class="muted sm">No Host lines in ~/.ssh/config yet. Add the machine there, check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
+    ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">A remote added in Settings > Remote, or a Host from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
+    : `<p class="muted sm">No remotes yet. Add one with Add remote in Settings > Remote (a Host name from ~/.ssh/config or user@address), check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
     + (W.note.remote?.error ? `<p class="warn sm" role="alert">Could not connect (${esc(W.note.remote.error)}). Settings > Remote shows why and switches back to this computer.</p>` : '') + '</div>';
 }
 function wizRender() {

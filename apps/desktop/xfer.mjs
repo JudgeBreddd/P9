@@ -73,9 +73,10 @@ export function describe(item, record) {
   const { laptop: l, server: s } = item;
   if (!l) return record ? 'deleted on the laptop; changed on the remote since your last send (' + clock(s.mtimeMs) + ')' : 'only on the remote';
   if (!s) return 'changed on the laptop (' + clock(l.mtimeMs) + '); deleted on the remote since your last send';
+const WHO = { laptop: 'laptop', server: 'remote' }; // the side's internal name, the side's name on screen
   const side = l.mtimeMs >= s.mtimeMs ? ['laptop', l, 'server', s] : ['server', s, 'laptop', l];
   return (record ? 'changed on both since your last send; ' : 'different on the two; ')
-    + 'the ' + side[0] + '\'s copy is newer (' + clock(side[1].mtimeMs) + ') than the ' + side[2] + '\'s (' + clock(side[3].mtimeMs) + ')';
+    + 'the ' + WHO[side[0]] + '\'s copy is newer (' + clock(side[1].mtimeMs) + ') than the ' + WHO[side[2]] + '\'s (' + clock(side[3].mtimeMs) + ')';
 }
 
 // The work a choice makes of the plan. choice: 'laptop' | 'server' | 'newer' for conflicts and first-send differences
