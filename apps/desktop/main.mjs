@@ -11,7 +11,7 @@ import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTa
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { sendToServer } from './move.mjs';
-import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer } from './xfer.mjs';
+import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -725,7 +725,7 @@ export async function createDesktop({ state, open } = {}) {
     if (files) xferBusy = true;
     const onProgress = move => { if (!window.isDestroyed()) window.webContents.send('p9:move', move); };
     try { return await sendToServer({ local: localState, id, host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal, files }); }
-    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+    catch (error) { return { status: 503, body: { error: 'daemon-unavailable', message: noAnswer(error, serverLast) } }; }
     finally { sending.delete(id); if (files) xferBusy = false; }
   });
   ipcMain.handle('p9:move-cancel', (event, ...args) => {
@@ -772,7 +772,7 @@ export async function createDesktop({ state, open } = {}) {
         onProgress: progress => { if (!window.isDestroyed()) window.webContents.send('p9:xfer', { id: a, ...progress }); } });
       return { ...r, sent: r.sent?.length ?? 0, received: r.received?.length ?? 0, deletedOnServer: r.deletedOnServer?.length ?? 0, deletedHere: r.deletedHere?.length ?? 0,
         kept: (r.recovery?.server.length ?? 0) + (r.recovery?.laptop.length ?? 0), recovery: undefined, changed: r.changed?.length ?? 0 };
-    } catch { return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' }; }
+    } catch (error) { return { error: 'daemon-unavailable', message: noAnswer(error, serverLast) }; }
     finally { xferBusy = false; }
   });
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {

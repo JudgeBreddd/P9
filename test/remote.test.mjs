@@ -137,7 +137,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   };
   await status({ status: 'ok', mode: 'server', host: 'test-host' });
   assert.equal(JSON.parse(await readFile(path.join(forward, 'desktop.json'), 'utf8')).cookie, remote.credentials.cookie);
-  await page.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor();
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor();
   // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
     await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused'))]),
@@ -148,6 +148,33 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host' });
+});
+
+// D20: while the remote is not answering yet the window shows the connecting layer, not a blank page; once it answers the
+// layer goes and the window is on the remote.
+test('Remote mode connecting: a turning black hole and the reason until the remote answers, then the remote', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(null);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const layer = page.locator('dialog#connecting[open]');
+  await layer.waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
+  assert.ok((await page.locator('#connWhy').textContent()).length > 10, 'the layer says why it is waiting');
+  await page.waitForTimeout(600); // a turn of the ring in the shot
+  await evidence(page, 'd20-connecting');
+  // P9 starts on the remote: the next try connects, the layer goes, the window is on the remote.
+  await symlink(remote.state, path.join(s.server, 'p9-foundation'));
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 45000 });
+  await page.locator('dialog#connecting[open]').waitFor({ state: 'detached', timeout: 45000 });
+  assert.equal(await page.locator('dialog#connecting[open]').count(), 0);
+  await evidence(page, 'd20-connected');
+  console.log('PASS remote connecting: the layer while not answering, gone once on the remote');
 });
 
 // Send to server (D14) in the window: the button beside Hand off, then the pane frozen as moved. Screenshots go to the log (P9_SHOT).
@@ -218,7 +245,7 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   const page = await app.firstWindow();
   await page.setViewportSize({ width: 1280, height: 800 });
   const shot = async name => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
-  await page.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor({ timeout: 20000 });
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
   await page.locator('#rMission').click();
   const tile = page.locator('#fMission [data-sprint]');
   await tile.waitFor({ timeout: 15000 });
@@ -525,7 +552,7 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
   const shell = await app.firstWindow();
-  await shell.locator('#serverBadge', { hasText: 'Server · test-host' }).waitFor({ timeout: 20000 });
+  await shell.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 20000 });
   const devPage = () => app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
   let opened = devPage();
   await shell.keyboard.press('Control+2');

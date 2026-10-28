@@ -107,15 +107,27 @@ export function overLimit(work, limits, truncated) {
   return null;
 }
 
+// D19: a request with no answer says which P9 it was, so the message is not "this computer" for both.
+export const tagSide = (side, asked) => asked.catch((error) => { throw Object.assign(error, { side: error.side ?? side }); });
+// What a send says when a daemon gave no answer. bad-response is a non-JSON answer: a daemon without the route, older than this app.
+export function noAnswer(error, host) {
+  const why = String(error?.message ?? error).slice(0, 200);
+  if (error?.side === 'remote') return why === 'bad-response' ? 'P9 on ' + host + ' is older than this app and cannot take files or chats. Update P9 there, then send again.'
+    : 'P9 on ' + host + ' did not answer (' + why + '). Check it in Settings > Remote, then send again.';
+  if (error?.side === 'local') return why === 'bad-response' ? 'P9\'s background service on this computer is older than this app. Restart P9 (Settings), then send again.'
+    : 'P9 on this computer did not answer (' + why + '). Restart P9 (Settings), then send again.';
+  return 'The send stopped (' + why + ').';
+}
+
 // Opens the tunnel and gives the two daemons' requests. Closed by the caller.
 async function open({ local, host, ssh, runtime }) {
   const tunnel = await connectServer({ host, ssh, editor: false, runtime: path.join(runtime, 'p9-xfer-' + randomUUID().slice(0, 8)) });
-  return { tunnel, laptopCall: (method, route, body) => daemonRequest(local, method, route, body, undefined, LONG),
-    serverCall: (method, route, body) => daemonRequest(tunnel.state, method, route, body, undefined, LONG) };
+  return { tunnel, laptopCall: (method, route, body) => tagSide('local', daemonRequest(local, method, route, body, undefined, LONG)),
+    serverCall: (method, route, body) => tagSide('remote', daemonRequest(tunnel.state, method, route, body, undefined, LONG)) };
 }
 
 export async function planFolder({ local, host, folder, userData, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir() }) {
-  const laptop = await daemonRequest(local, 'POST', '/xfer/manifest', { folder }, undefined, LONG);
+  const laptop = await tagSide('local', daemonRequest(local, 'POST', '/xfer/manifest', { folder }, undefined, LONG));
   if (laptop.status !== 200) return { error: laptop.body.error, message: 'This computer could not list ' + (folder || 'the workspace') + ' (' + laptop.body.error + ').' };
   let link;
   try { link = await open({ local, host, ssh, runtime }); }

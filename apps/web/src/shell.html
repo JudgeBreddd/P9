@@ -70,6 +70,11 @@
   <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
 </div>
 
+<!-- D20: while this window connects to a remote, a black hole turning instead of a blank window. Shell.tsx opens and closes it. -->
+<dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"></div>
+  <h2 id="connT">Connecting</h2><p id="connWhy" class="muted" role="status" aria-live="polite"></p>
+  <button data-slot="button" data-variant="outline" data-size="sm" id="connLocal">Use this computer instead</button></dialog>
+
 <!-- Landing page (Builder, plan.md "Landing page"): the black hole intro, then a greeting, the focus modes and the pets. -->
 <dialog id="land" class="land" tabindex="-1" aria-labelledby="landHi" data-stage="intro" data-pending>
   <canvas id="landSky" aria-hidden="true"></canvas>

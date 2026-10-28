@@ -249,3 +249,21 @@ test('xfer send: a first send asks; the next carries changes, asks for conflicts
   assert.deepEqual((await planned('proj')).conflicts, []);
   console.log('PASS xfer keep the server\'s: the server\'s copy came here and the laptop\'s went to recovery');
 });
+
+// D19: "P9 did not answer" named neither side nor cause. A daemon older than the routes answers a 404 page, not JSON.
+test('xfer no answer: an older daemon here or there is named, with what to do', { skip, timeout: 30000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  const { noAnswer, tagSide } = await import('../apps/desktop/xfer.mjs');
+  const state = await mkdtemp(path.join(os.tmpdir(), 'p9-old-'));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const old = createServer((_req, res) => res.writeHead(404, { 'content-type': 'text/plain' }).end('404 Not Found'));
+  await new Promise((done) => old.listen(path.join(state, 'daemon.sock'), done));
+  t.after(() => old.close());
+  await writeFile(path.join(state, 'desktop.json'), JSON.stringify({ cookie: 'c', csrf: 'x' }));
+  const here = await planFolder({ local: state, host: 'box', folder: '', userData: state }).catch((error) => error);
+  assert.match(noAnswer(here, 'box'), /^P9's background service on this computer is older than this app\. Restart P9/);
+  const there = await tagSide('remote', Promise.reject(new Error('bad-response'))).catch((error) => error);
+  assert.match(noAnswer(there, 'box'), /^P9 on box is older than this app/);
+  assert.match(noAnswer(Object.assign(new Error('timeout'), { side: 'remote' }), 'box'), /^P9 on box did not answer \(timeout\)/);
+  console.log('PASS xfer no answer: the old daemon here and there each named');
+});
