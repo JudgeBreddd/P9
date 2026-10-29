@@ -92,7 +92,7 @@ test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads 
   // Item 1: with the browser's own cache gone, the worker still has the build (before: 10 files, 1.09 MB again).
   if (cold.workerAstro !== 0) misses.push('item 1: the worker downloaded ' + cold.workerAstro + ' build files on a reopen');
   // Item 2: the terminal's code is not loaded before the first chat screen.
-  if (cold.astroBeforePaint.some((name) => /terminal/i.test(name))) misses.push('item 2: the terminal loaded before the first screen: ' + cold.astroBeforePaint.join(' '));
+  if (cold.astroBeforePaint.some((name) => /terminal[^/]*\.js$/i.test(name))) misses.push('item 2: the terminal loaded before the first screen: ' + cold.astroBeforePaint.join(' '));
   // Item 3: the first read names one chat, the one last shown; the others read theirs when opened.
   const reads = cold.api.filter(([name]) => name.startsWith('/chat/events?after=0&tail='));
   if (reads.length !== 1 || !reads[0][0].endsWith('only=' + third)) misses.push('item 3: the first reads were ' + JSON.stringify(reads.map((r) => r[0])));
@@ -103,7 +103,7 @@ test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads 
   await page.click('[data-back]'); await page.waitForSelector('#chatList [data-chat]', { timeout: 10000 });
   // The terminal loaded after the first screen, while the phone was idle, or loads now on the tap.
   await page.click('[data-nav="terminal"]');
-  await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/_astro\/.*terminal/i.test(e.name)), null, { timeout: 60000 })
+  await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/_astro\/[^/]*terminal[^/]*\.js/i.test(e.name)), null, { timeout: 60000 })
     .catch(() => misses.push('no terminal chunk was ever loaded (its name has no "terminal"?)'));
   // Loading terminal…: a fresh page with no worker and the terminal's file held, tapped at once.
   const context = await page.context().browser().newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
@@ -112,7 +112,7 @@ test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads 
   await context.addInitScript(() => { Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }); window.requestIdleCallback = () => 0; });
   const slow = await context.newPage();
   let release; const held = new Promise((resolve) => { release = resolve; });
-  await slow.route(/\/_astro\/.*terminal/i, async (route) => { await held; await route.continue(); });
+  await slow.route(/\/_astro\/[^/]*terminal[^/]*\.js/i, async (route) => { await held; await route.continue(); });
   await slow.goto(server.origin + '/phone/');
   await slow.waitForFunction(() => performance.getEntriesByName('p9-chat-painted').length, null, { timeout: 30000 });
   await slow.click('[data-nav="terminal"]');
