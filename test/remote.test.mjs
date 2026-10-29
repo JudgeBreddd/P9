@@ -706,3 +706,35 @@ test('What is new: after an update the window lists the changes and links the fu
   await page.locator('#rChat').waitFor();
   assert.equal(await page.evaluate(() => window.p9.whatsNew()), null);
 });
+
+// The machine menu's live state (threat model row 50, c23 adds): remotes saved here and the last one used are probed over ssh
+// as the menu opens, at most once per 30 s each; a ~/.ssh/config host never saved or used is not, and the IPC refuses it.
+test('Machine menu probes: saved remotes read P9 running, P9 not running or Unreachable; config-only hosts are not asked', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile'), home = path.join(s.directory, 'home');
+  await mkdir(profile); await mkdir(path.join(home, '.ssh'), { recursive: true });
+  await writeFile(path.join(home, '.ssh', 'config'), 'Host from-config\n  HostName 192.0.2.1\n');
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'no-p9-box', remotes: ['test-host', 'unreachable-box'] }));
+  const env = { ...process.env, HOME: home, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor({ timeout: 20000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot({ animations: 'disabled' })).toString('base64')); };
+  const want = { 'no-p9-box': 'P9 not running', 'test-host': 'P9 running', 'unreachable-box': 'Unreachable', 'from-config': 'Not connected' };
+  const settled = async () => { for (const [h, say] of Object.entries(want)) await page.locator('#serverPop [data-server-go="' + h + '"] .muted', { hasText: say }).waitFor({ timeout: 15000 }); };
+  const probes = async () => (await s.calls()).filter((c) => c.argv.includes('ConnectTimeout=4')).map((c) => c.argv.at(-2)).sort();
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.locator('#serverBadge').click();
+    await settled();
+    await shot('c23-machine-probe-' + theme);
+    await page.keyboard.press('Escape');
+  }
+  // Three probes in all: the second open, within 30 s, used the cached answers; from-config was never asked.
+  assert.deepEqual(await probes(), ['no-p9-box', 'test-host', 'unreachable-box']);
+  assert.deepEqual(await page.evaluate(() => Promise.all(['from-config', 'somewhere-else', '-oProxyCommand=x'].map((h) => window.p9.remoteState(h).then(() => 'taken', (e) => e.message.includes('ipc-sender-refused'))))), [true, true, true]);
+  console.log('PASS machine menu probes');
+});

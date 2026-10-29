@@ -214,8 +214,10 @@ test('Machine menu: the Local/Remote badge lists This computer and the saved rem
     await page.keyboard.press('Escape');
   }
   await badge.click();
+  // Saved remotes are probed as the menu opens (remote.test.mjs covers each state); no such machines here, so Unreachable.
+  for (const h of ['build-box', 'gpu-rig']) await pop.locator('[data-server-go="' + h + '"] .muted', { hasText: 'Unreachable' }).waitFor({ timeout: 15000 });
   const listed = await rows();
-  assert.deepEqual(listed.slice(0, 3), [['', 'In use'], ['build-box', 'Not connected'], ['gpu-rig', 'Not connected']]);
+  assert.deepEqual(listed.slice(0, 3), [['', 'In use'], ['build-box', 'Unreachable'], ['gpu-rig', 'Unreachable']]);
   // Remove beside a saved remote: gone from the menu and from the list Settings shows.
   await pop.locator('[data-server-rm="gpu-rig"]').click();
   await pop.locator('[data-server-go="gpu-rig"]').waitFor({ state: 'detached', timeout: 5000 });
