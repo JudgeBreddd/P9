@@ -72,7 +72,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 22);
+  assert.equal((await client.listTools()).tools.length, 23);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -339,7 +339,7 @@ test('M1 describe_mission: a tools-only client gets the schema, an example of ev
   const { isError, ...told } = await tool('describe_mission');
   assert.equal(isError, false);
   assert.ok(told.schema.properties.sections.items.properties.buttons);
-  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes']);
+  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes', 'folders', 'refs']);
   for (const entry of told.items) assert.ok(entry.example[entry.item] !== undefined && entry.about, entry.item + ' has an example');
   assert.ok(told.templates.some((template) => template.name === 'blank'));
   // Every example is a section the parser keeps whole.

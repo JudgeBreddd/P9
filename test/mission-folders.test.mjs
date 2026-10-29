@@ -76,7 +76,7 @@ test('folder list: workspace folders, ? patterns, refused roots and malformed it
   const invalid = (await call(instance, '/mission')).body.invalid.filter((entry) => entry.reason === 'malformed-record').map((entry) => entry.detail);
   assert.equal(invalid.length, 2);
   assert.match(invalid.join('\n'), /pattern: /);
-  assert.match(invalid.join('\n'), /unknown field where/);
+  assert.match(invalid.join('\n'), /where is not a field of this record/);
   console.log('PASS folder list: ? pattern, a root holding the workspace 403, unknown id 404, bad id 400, malformed items dropped');
 });
 
