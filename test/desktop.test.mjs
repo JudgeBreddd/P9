@@ -298,6 +298,51 @@ test('First launch D9 (fresh-install finding 2): a fresh Mission opens at its on
   await shot('mission-empty');
 });
 
+// Fresh-install finding 3a (threat model row 72): P9's four built-in panels (Waiting on you, Usage, Apps and pages,
+// Notifications) draw on a space only where a section names them, and only the ICM template adds those sections.
+test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless the ICM template made it', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  const widgets = () => page.evaluate(() => {
+    const seen = (el) => Boolean(el?.checkVisibility());
+    return { waiting: seen(document.querySelector('#fMission .needs')), usage: seen(document.querySelector('#fMission [data-panel="musage"]')),
+      apps: seen(document.querySelector('#fMission [data-panel="mlaunch"]')), notifications: seen(document.querySelector('#fMission [data-win="mnotes"]')) };
+  });
+  for (const name of ['blank', 'obsidian', 'homelab', 'icm']) {
+    // Each template into its own scratch space (the user's click confirms past File protection), then that space is shown.
+    const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
+    assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));
+    assert.equal((await page.evaluate((name) => window.p9.mission('space', { name }), name)).status, 200, name + ': space');
+    await page.reload();
+    await page.click('#rMission');
+    await page.locator('#fMission .tiles').waitFor({ timeout: 15000 });
+    await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
+    const on = name === 'icm';
+    assert.deepEqual(await widgets(), { waiting: on, usage: on, apps: on, notifications: on }, name);
+    // A widget section is its panel, not a tile.
+    assert.doesNotMatch(await page.locator('#fMission .tiles').innerText(), /Waiting on you|Usage|Apps and pages|Notifications/, name + ': widget tiles');
+    await shot('template-' + name + '-dark');
+    const theme = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await shot('template-' + name + '-light');
+    await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, theme);
+  }
+  // An existing install (settings name a registry) on a space with sections but no widget section keeps all four, and
+  // no file is written for it.
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  await writeFile(path.join(instance.workspace, 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+  await writeFile(settingsFile, JSON.stringify({ ...JSON.parse(await readFile(settingsFile, 'utf8')), registry: 'registry.json' }));
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'homelab' }))).status, 200, 'homelab: space');
+  const spaceFile = path.join(instance.directory, '.config', 'p9', 'spaces', 'homelab.json');
+  const bytes = await readFile(spaceFile, 'utf8');
+  await page.reload();
+  await page.click('#rMission');
+  await page.waitForFunction(() => document.querySelector('#fMission [data-space-pick]')?.value === 'homelab', null, { timeout: 15000 });
+  assert.deepEqual(await widgets(), { waiting: true, usage: true, apps: true, notifications: true }, 'existing install');
+  assert.equal(await readFile(spaceFile, 'utf8'), bytes, 'the space file is unchanged');
+});
+
 test('First launch D1: the welcome screen offers a P9 on another machine', { timeout: 60000 }, async (t) => {
   const { page, shot } = await emptyFirst(t);
   await openWelcome(page);

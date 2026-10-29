@@ -1122,9 +1122,9 @@ function applyOverview(o) {
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
-  M.space = o.space || [];
+  M.space = o.space || []; M.icmFiles = !!o.icmFiles;
   live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null;
-  for (const s of M.space) M.scripts[s.title] ||= [];
+  for (const s of M.space) if (!s.widget) M.scripts[s.title] ||= []; // a widget section is its panel, not a tile
   applyQueue(o);
 }
 // M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
@@ -1229,6 +1229,10 @@ async function runLive(m, id) {
 // section in the modal window (Builder, 2026-10-17: "hard to navigate because its so long ... group everything so
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
+// Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
+// names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
+// written. A fresh install has neither, so it gets none.
+const widgetOn = w => sampleView || M.space.some(s => s.widget === w) || (M.icmFiles && !M.space.some(s => s.widget));
 const allNotes = () => [...(H.notices || []), ...S.alerts];
 const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
@@ -1237,17 +1241,17 @@ const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-l
 const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
-  mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
+  mnotes: { show: () => widgetOn('notifications'), title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
   minbox: { show: () => sampleView || H.on, title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
   mlogs: { show: () => sampleView || H.on, title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
     body: () => `<ul class="plist">${M.logs.incidents.map((i, n) => `<li><button data-inc="${n}"${i.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(i.level)}"></span><span class="txt">${esc(i.txt)}</span></button></li>`).join('')}${M.logs.rows.map((r, n) => `<li class="mono sm"${tint(r[0])}><button data-log="${n}"><b>${esc(r[0])}</b><span class="muted">${esc(r[1])}</span><span class="truncate">${esc(r[2])}</span></button></li>`).join('')}</ul>` },
   mwork: { show: () => sampleView || H.on, title: () => 'Workspace' + sample(), card: () => [M.stats[0][1], `${M.stats[1][1]} ideas · ${M.stats[2][1]} punch-list · solo ${M.solo.when}`, 'ok'],
     body: () => `<div class="stats">${M.stats.map(([k, v], n) => `<div${n === 0 && H.on ? ' data-handoffs role="button" tabindex="0"' : ''}><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div><p class="sm"><span class="kind"${tint('audit')}>audit</span> ${esc(M.audit.run)}: ${esc(M.audit.ticked)} of ${esc(M.audit.total)} ticked, ${esc(M.audit.contradictions)} contradictions</p><p class="sm"${M.solo.live ? ' data-solo role="button" tabindex="0"' : ''}><span class="kind"${tint('last solo run')}>last solo run</span> ${esc(M.solo.when)}: ${esc(M.solo.txt)}</p>` },
-  mlaunch: { title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
+  mlaunch: { show: () => widgetOn('apps'), title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
     body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
-  musage: { title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
+  musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's 5 h and week as rings
     inline: () => { const rows = usageRings();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
@@ -1322,14 +1326,15 @@ function renderMission() {
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
-    + '<div class="mrow"><section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>'
+    + '<div class="mrow">' + (widgetOn('waiting') ? '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>' : '')
     + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   bindSpacePick($('#fMission'));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
-  const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
+  const sort = $('#fMission [data-sort]'); // only where Waiting on you is drawn (finding 3a)
+  if (sort) { sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); }; }
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
