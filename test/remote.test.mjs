@@ -147,8 +147,8 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.equal(await page.locator('#xferBtn').isVisible(), false, 'no Send files to remote in Remote mode');
   // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
-    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused'))]),
-  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true]);
+    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')), await window.p9.remoteInstall()]),
+  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true, { error: 'remote-install-refused' }]);
   // The badge switches to Local: the window reloads onto this computer's daemon and the forward closes.
   await page.locator('#serverBadge').click();
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
@@ -172,9 +172,20 @@ test('Remote mode connecting: a turning black hole and the reason until the remo
   const layer = page.locator('dialog#connecting[open]');
   await layer.waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
-  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there. Install P9 on it first/, 'D15: says P9 must be installed there, not that connecting installs it');
+  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there. Install it there from here/);
   await page.waitForTimeout(600); // a turn of the ring in the shot
   await evidence(page, 'd20-connecting');
+  // D15a: Install P9 there asks first, in place, saying where and what it never does; Not now goes back and installs nothing.
+  await page.locator('#connInstall', { hasText: 'Install P9 there' }).click({ timeout: 10000 });
+  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\? Over your ssh login, P9 puts its source in ~\/p9 there.*never uses sudo or a password/);
+  assert.equal(await page.locator('#connInstall').textContent(), 'Install');
+  await page.waitForTimeout(1500); // the status poll does not overwrite the question
+  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\?/);
+  await evidence(page, 'd15a-ask');
+  await page.click('#connNo');
+  assert.equal(await page.locator('#connNo').isVisible(), false);
+  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there/);
+  assert.equal(await page.evaluate(() => window.p9.getStatus().then((r) => r.install ?? null)), null, 'Not now ran nothing');
   // P9 starts on the remote: the next try connects, the layer goes, the window is on the remote.
   await symlink(remote.state, path.join(s.server, 'p9-foundation'));
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 45000 });

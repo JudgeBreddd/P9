@@ -10,6 +10,7 @@ import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
+import { installRemote } from './remote-install.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
@@ -267,6 +268,8 @@ export async function createDesktop({ state, open } = {}) {
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
+  // D15a (remote-install.mjs, threat model row 67): the asked-first install on this remote, its last event for the status poll.
+  let remoteInstall = null;
   // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
   const ownVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   // One attempt chain per choice (serverTry): retried 1 s, then doubling to 30 s; a drop starts it again.
@@ -290,7 +293,7 @@ export async function createDesktop({ state, open } = {}) {
   };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
-    serverUpdate = null;
+    serverUpdate = null; if (remoteInstall?.phase !== 'running') remoteInstall = null;
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
     await old?.close().catch(() => {});
@@ -469,7 +472,7 @@ export async function createDesktop({ state, open } = {}) {
     // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
     if (serverHost) {
       const h = await server?.check().catch(() => null);
-      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting' };
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }) };
     }
     try {
       const h = state && await health(state);
@@ -697,6 +700,18 @@ export async function createDesktop({ state, open } = {}) {
     devFolder = null; devServing = null;
     if (devView) reopenDev();
     setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
+    return { ok: true };
+  });
+  // D15a: the connecting screen's Install P9 there, after the person said yes. Only this window's remote, only while it
+  // answered without P9, one at a time. A source checkout sends its committed HEAD; a packaged app has the remote download its version.
+  ipcMain.handle('p9:remote-install', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
+    const host = serverHost, checkout = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? fileURLToPath(new URL('../../', import.meta.url)) : null;
+    const archive = checkout ? spawn('git', ['-C', checkout, 'archive', '--format=tar.gz', '--prefix=p9/', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }).stdout : null;
+    remoteInstall = { phase: 'running', line: '' };
+    installRemote({ host, ssh: sshCommand, version: ownVersion, archive, tell: e => { if (serverHost === host) remoteInstall = e; } })
+      .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
     return { ok: true };
   });
   // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).

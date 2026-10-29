@@ -3,23 +3,33 @@ import markup from './shell.html?raw';
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; install?: RemoteInstall }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
 const REMOTE_WHY: Record<string, string> = {
   'server-connecting': 'Opening the ssh tunnel and waiting for P9 there to answer.',
   'server-unreachable': 'The remote is not reachable over ssh: check it is on and that ssh to it works without a password prompt.',
-  'server-no-p9': 'The remote answered, but P9 is not running there. Install P9 on it first (the README\'s Install section, the Linux command), then connect again.',
+  'server-no-p9': 'The remote answered, but P9 is not running there. Install it there from here, or on that machine run the Linux command from the README\'s Install section.',
   'server-not-answering': 'The tunnel opened, but P9 on the remote did not answer.',
   'server-host-refused': 'ssh refused that host name.',
   'server-dropped': 'Lost the remote: connecting again.',
 };
 
+// D15a (desktop/remote-install.mjs): the asked-first install of P9 on a remote that has none, as the status poll reports it.
+type RemoteInstall = { phase: 'running' | 'done' | 'failed' | 'already-there'; line?: string; tail?: string; error?: string };
+const lastLine = (text = '') => text.split('\n').filter(l => l.trim() && !l.startsWith('P9_INSTALL')).pop() ?? '';
+const installWhy = (host: string, i: RemoteInstall) => ({
+  running: 'Installing P9 on ' + host + '. This takes a few minutes. ' + lastLine(i.line),
+  done: 'P9 is installed on ' + host + '. Connecting…',
+  'already-there': host + ' already has a ~/p9 folder that this app did not make, so it was left alone. If it is P9, start it there with: systemctl --user start p9-foundation',
+  failed: 'The install on ' + host + ' stopped' + (i.error === 'timed-out' ? ' after 30 minutes' : i.error === 'server-unreachable' ? ': ssh lost the remote' : '') + '. ' + lastLine(i.tail),
+}[i.phase]);
+
 export default function Shell() {
   useEffect(() => {
     const dispose = mountShell();
-    let active = true, waited = false, connected = false, timer: ReturnType<typeof setTimeout> | undefined;
+    let active = true, waited = false, connected = false, asking = false, timer: ReturnType<typeof setTimeout> | undefined;
     // The title-bar badge: Remote · host while on a remote; Local once a server was used, so one click goes back to it.
     void window.p9?.server?.().then(({ host, last }) => {
       const badge = document.getElementById('serverBadge');
@@ -42,7 +52,24 @@ export default function Shell() {
           const layer = document.getElementById('connecting') as HTMLDialogElement | null, ok = result.status === 'ok';
           if (layer && !ok) {
             document.getElementById('connT')!.textContent = 'Connecting to ' + result.host;
-            document.getElementById('connWhy')!.textContent = REMOTE_WHY[result.error ?? ''] ?? 'Not connected yet (' + result.error + ')';
+            const why = document.getElementById('connWhy')!, install = document.getElementById('connInstall') as HTMLButtonElement, no = document.getElementById('connNo')!;
+            const host = result.host ?? '', running = result.install?.phase === 'running' || result.install?.phase === 'done';
+            // D15a: Install P9 there asks first, in place: what happens, where, and what it never does. Then the poll shows its progress.
+            if (!asking) why.textContent = result.install ? installWhy(host, result.install) : REMOTE_WHY[result.error ?? ''] ?? 'Not connected yet (' + result.error + ')';
+            install.hidden = running || !(asking || result.error === 'server-no-p9') || !window.p9?.remoteInstall;
+            install.textContent = asking ? 'Install' : result.install?.phase === 'failed' ? 'Try the install again' : 'Install P9 there';
+            no.hidden = !asking;
+            install.onclick = () => {
+              if (!asking) {
+                asking = true; install.textContent = 'Install'; no.hidden = false;
+                why.textContent = 'Install P9 on ' + host + '? Over your ssh login, P9 puts its source in ~/p9 there, builds it and starts its background service for your user. '
+                  + 'It never uses sudo or a password: anything that needs an admin is listed for you to run. It takes a few minutes.';
+                return;
+              }
+              asking = false; no.hidden = true; install.hidden = true; why.textContent = 'Installing P9 on ' + host + '…';
+              void window.p9?.remoteInstall?.().catch(() => {});
+            };
+            no.onclick = () => { asking = false; no.hidden = true; install.textContent = 'Install P9 there'; why.textContent = REMOTE_WHY[result.error ?? ''] ?? ''; };
             document.getElementById('connLocal')!.onclick = () => void window.p9?.server?.(null);
             if (!layer.open) { layer.addEventListener('cancel', e => e.preventDefault()); layer.showModal(); }
           }

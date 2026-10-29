@@ -10,7 +10,7 @@ import { health } from '../../scripts/teh.mjs';
 
 // A Host alias or host name: no leading dash (ssh would read it as an option), no spaces, no shell characters.
 export const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
-const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3'];
+export const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3'];
 // What the server runs over ssh: its runtime folder, then its desktop credentials. The server's login shell expands $XDG_RUNTIME_DIR;
 // a non-tty ssh session can come without it (a home server, 2026-10-26), so systemd's own default /run/user/<uid> stands in.
 // exit 0: a server that answers always succeeds, so an ssh failure is server-unreachable and a missing file is server-no-p9.
