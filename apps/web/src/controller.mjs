@@ -11,7 +11,7 @@ import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './
 import { editorModal, editItems } from './mission-editor.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
-import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
+import { onboardCard, templateWords } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
 import { mountLandingVideo } from './components/landing-v5/playback.mjs';
 import landPoster from './components/landing-v5/black-hole.webp?url';
@@ -1285,14 +1285,36 @@ async function loadGuide() {
   if (live.empty) renderMission();
   if (mdl.open && S.modal?.kind === 'guide') renderModal();
 }
-function bindSpacePick(root) {
-  const pick = root.querySelector('[data-space-pick]');
-  if (pick) pick.onchange = async () => {
-    const r = await window.p9.mission('space', { name: pick.value || null });
+// Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Switching sets
+// settings.space_name through the space route; no space file is written or deleted here.
+let spacePop = null;
+function renderSpaceBtn() {
+  const b = $('#spaceBtn'), pop = $('#spacePop');
+  b.hidden = !live.on;
+  b.dataset.spaceCurrent = live.spaceName || '';
+  b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
+  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; renderSpaceMenu(); });
+  if (!pop.hidden) renderSpaceMenu();
+}
+function renderSpaceMenu() {
+  const pop = $('#spacePop'), now = live.spaceName || '';
+  pop.innerHTML = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
+    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button>';
+  pop.querySelectorAll('[data-space]').forEach(b => b.onclick = async () => {
+    spacePop.close(); live.adding = false; live.preview = null;
+    const r = await window.p9.mission('space', { name: b.dataset.space || null });
     if (r.status !== 200) toast({ kind: 'not saved', txt: 'Space: ' + (r.body?.error || r.status), level: 'bad' }, true);
     refreshMission();
-  };
+  });
+  pop.querySelector('[data-space-add]').onclick = () => { spacePop.close(); live.adding = true; live.preview = null; renderMission(); };
 }
+// A template click shows what it holds; only Choose template writes (a new scratch space, then made current).
+const previewHtml = t => `<section class="onboard" data-preview aria-labelledby="previewTitle"><h3 id="previewTitle">${esc(t.title)}</h3><p class="muted">${esc(t.about)}</p>`
+  + (t.sections?.length ? '<h4>Its sections</h4><div class="onboard-tpls">' + t.sections.map(s => `<div class="onboard-tpl"><b>${esc((s.icon ? s.icon + ' ' : '') + s.title)}</b><span>${esc(s.text || '')}</span></div>`).join('') + '</div>'
+    : '<p class="muted">No sections yet: an empty space to fill in.</p>')
+  + `<div class="onboard-go"><button type="button" data-slot="button" data-variant="default" data-choose="${esc(t.name)}">Choose template</button>`
+  + '<button type="button" data-slot="button" data-variant="outline" data-preview-back>Back to wizard</button></div><p class="muted" data-onboard-note role="status"></p></section>';
 function bindOnboard(root) {
   root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
     b.disabled = true;
@@ -1303,16 +1325,27 @@ function bindOnboard(root) {
   });
   root.querySelectorAll('[data-yourself]').forEach(b => b.onclick = () => openModal({ kind: 'guide' }));
   root.querySelectorAll('[data-open-protect]').forEach(b => b.onclick = async () => { await $('#setBtn').onclick(); const input = $('#setProtect'); input?.scrollIntoView({ block: 'center' }); input?.focus(); });
-  // File protection answers the first click 403 and arms the tile; the second click sends the user's confirmation, as the edit form does.
-  root.querySelectorAll('[data-template]').forEach(b => b.onclick = async () => {
-    const r = await window.p9.mission('template', { name: b.dataset.template, ...(b.dataset.armed ? { confirm: true } : {}) });
-    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; b.querySelector('span').textContent = 'File protection is on. Click again to add this template.'; return; }
-    toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: templateWords(r.status, r.body), level: r.status === 201 ? 'ok' : 'bad' }, true);
-    if (r.status === 201) refreshMission();
+  root.querySelectorAll('[data-template]').forEach(b => b.onclick = () => { live.preview = b.dataset.template; renderMission(); });
+  root.querySelectorAll('[data-preview-back]').forEach(b => b.onclick = () => { live.preview = null; renderMission(); });
+  root.querySelectorAll('[data-add-cancel]').forEach(b => b.onclick = () => { live.adding = false; renderMission(); });
+  // Choose: the template into a new scratch space under a free name (the route also refuses a space with sections), then shown.
+  // File protection answers the first click 403 and arms the button; the second click sends the user's confirmation, as the edit form does.
+  root.querySelectorAll('[data-choose]').forEach(b => b.onclick = async () => {
+    const name = b.dataset.choose, note = root.querySelector('[data-onboard-note]');
+    let space = name;
+    for (let i = 2; (live.spaces || []).includes(space); i++) space = name + '-' + i;
+    b.disabled = true;
+    const r = await window.p9.mission('template', { name, space, ...(b.dataset.armed ? { confirm: true } : {}) });
+    const shown = r.status === 201 && (await window.p9.mission('space', { name: space })).status === 200;
+    b.disabled = false;
+    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; note.textContent = 'File protection is on. Click Choose template again to add it.'; return; }
+    toast({ kind: r.status === 201 ? 'saved' : 'not saved', level: r.status === 201 ? 'ok' : 'bad',
+      txt: r.status !== 201 ? templateWords(r.status, r.body) : shown ? 'Space ' + space + ' added. Rename and fill its sections.' : 'Space ' + space + ' added. Pick it in the Space menu.' }, true);
+    if (r.status !== 201) return;
+    live.adding = false; live.preview = null; refreshMission();
     // ponytail: the one template that needs a folder asks for it as it is added; a template field for this is out of scope.
-    if (r.status === 201 && b.dataset.template === 'obsidian' && window.p9.pickVault) await pickVault();
+    if (name === 'obsidian' && window.p9.pickVault) await pickVault();
   });
-  bindSpacePick(root);
 }
 // The Obsidian vault folder (threat model row 73): desktop only. Main shows the native picker and a confirm, then tells the daemon.
 // On a remote the vault is the remote's folder (finding 3b, answer A): the setup chat opens with the ask typed, not sent,
@@ -1340,15 +1373,19 @@ async function pickVault() {
   return ok;
 }
 function renderMission() {
-  // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet.
-  if (live.empty && !sampleView) {
-    setHTML($('#fMission'), onboardCard({ templates: guide?.templates, spaces: live.spaces, current: live.spaceName, protect: live.fileProtection }, esc));
+  renderSpaceBtn();
+  // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet. + Add shows it too (finding 4);
+  // a template click shows its preview.
+  if ((live.empty || live.adding) && !sampleView) {
+    const t = live.preview && guide?.templates?.find(x => x.name === live.preview);
+    setHTML($('#fMission'), t ? previewHtml(t) : onboardCard({ templates: guide?.templates, protect: live.fileProtection }, esc)
+      + (live.adding ? `<p class="onboard-back"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-add-cancel>Back to ${esc(live.spaceName || 'Main')}</button></p>` : ''));
     bindOnboard($('#fMission'));
     if (!guide) loadGuide();
     return;
   }
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}${spacePicker(live.spaces || [], live.spaceName, esc)}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint && icmSpace() ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
@@ -1360,7 +1397,6 @@ function renderMission() {
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
-  bindSpacePick($('#fMission'));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
   const sort = $('#fMission [data-sort]'); // only where Waiting on you is drawn (finding 3a)
   if (sort) { sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); }; }

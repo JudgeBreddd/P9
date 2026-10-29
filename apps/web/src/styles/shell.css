@@ -27,6 +27,7 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 #fChat>.content{grid-column:2}
 .shell:not([data-focus="chat"]) [data-in="chat"]{display:none}
 .shell:not([data-focus="dev"]) [data-in="dev"]{display:none}
+.shell:not([data-focus="mission"]) [data-in="mission"]{display:none}
 /* Mission Control: category tiles on top, then one small card per section; a card opens its section in the modal (Builder, 2026-10-17) */
 #fMission{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto;gap:10px;padding:12px;align-content:start;overflow:auto}
 #fMission{grid-template-rows:auto auto minmax(0,1fr)}#fMission:not(:has([data-mission-note])){grid-template-rows:auto minmax(0,1fr)}
@@ -685,6 +686,9 @@ dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 .onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
 .onboard-tpl:hover,.onboard-tpl:focus-visible{border-color:var(--primary)}.onboard-tpl span{font-size:12px;color:var(--muted-foreground);line-height:1.4}
 .onboard-tpl[data-armed]{border-color:var(--primary)}
+div.onboard-tpl{cursor:default}div.onboard-tpl:hover{border-color:var(--border)} /* a preview's sections: shown, not clicked */
+.onboard-back{max-width:760px;margin:-12px auto 0}
+#spaceBtn{align-self:center;gap:4px;max-width:220px}#spaceBtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2}
 .space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
 /* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */
 .tiles>.space-pick{grid-column:span 2;align-self:center;padding:0 4px}.tiles>.space-pick select{flex:1;min-width:0}
