@@ -56,6 +56,9 @@ test('Agent warnings, desktop: a grey line above the reply, not in it; its i say
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
     await page.mouse.move(0, 0);
+    await page.waitForFunction((dark) => document.documentElement.classList.contains('dark') === dark, theme !== 'daylight', { timeout: 5000 });
+    // builder-look.css painted the chat history black in every theme: in a light one the reply read dark on black.
+    if (theme === 'daylight') assert.notEqual(await page.evaluate(() => getComputedStyle(document.querySelector('#chats .hist')).backgroundColor), 'rgb(0, 0, 0)', 'the Daylight chat is black');
     shot('agent-warning-desktop-' + theme, await page.screenshot({ animations: 'disabled' }));
   }
   console.log('PASS agent warning desktop');
