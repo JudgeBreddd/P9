@@ -12,7 +12,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { stage, bash, nodeLog, stopDaemon } from './install-runtime.test.mjs';
 import { createKeeper } from '../apps/desktop/keep.mjs';
-import { READ, remoteMode } from '../apps/desktop/remote.mjs';
+import { READ, remoteMode, startServer } from '../apps/desktop/remote.mjs';
 import { watchIdle } from '../apps/server/idle.mjs';
 import { daemon, fixture, root } from './helpers.mjs';
 
@@ -172,4 +172,20 @@ test('The daemon refuses a state folder whose socket path is longer than Linux a
   const [code] = await once(child, 'exit');
   assert.notEqual(code, 0);
   assert.match(out, /socket-path-too-long/);
+});
+
+// Start P9 there (the connecting screen, never a terminal command).
+test('Start P9 there: the user service where one is installed, the background start in background mode, none where neither', { skip, timeout: 40000 }, async (t) => {
+  const service = await stage(true);
+  assert.equal(await startServer('test-host', path.join(service.bin, 'ssh')), 'ok');
+  assert.match(await read(service.systemctlLog), /^--user start p9-foundation\.service$/m);
+  const s = await background(t);
+  await stopDaemon(s);
+  assert.ok(await until(() => !existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json'))), 'stopped');
+  assert.equal(await startServer('test-host', path.join(s.bin, 'ssh')), 'ok');
+  assert.equal(await starts(s), 2);
+  assert.equal(await read(s.systemctlLog), '', 'background mode: not the service');
+  const none = await stage(true, 'refused', { installed: false });
+  assert.equal(await startServer('test-host', path.join(none.bin, 'ssh')), 'none');
+  assert.equal(await startServer('-oProxyCommand=x', path.join(none.bin, 'ssh')), 'failed', 'HOST check');
 });

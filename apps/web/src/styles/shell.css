@@ -594,6 +594,7 @@ dialog.connecting::backdrop{background:#000}
 dialog.connecting h2{margin:0;font:500 20px/1.2 "Space Grotesk",sans-serif;letter-spacing:.02em}
 dialog.connecting p{margin:0;max-width:46ch;color:oklch(0.76 0.03 262)}
 dialog.connecting>button{margin-top:12px}
+dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 /* D15a: the install in progress (a spinner, the last line, the time so far) and, if it stopped, its last lines. */
 .conn-progress{display:flex;align-items:center;gap:10px;max-width:46ch;margin-top:12px;font-size:13px;color:oklch(0.86 0.03 262)}
 .conn-progress[hidden],.conn-log[hidden]{display:none}

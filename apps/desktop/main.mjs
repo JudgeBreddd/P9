@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, sshHosts, serverFolder, probeServer, remoteMode, HOST } from './remote.mjs';
+import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive } from './remote-install.mjs';
 import { createKeeper } from './keep.mjs';
@@ -742,6 +742,14 @@ export async function createDesktop({ state, open } = {}) {
       remoteInstall = { phase: 'failed', error: error.message, started };
     }
     return { ok: true };
+  });
+  // Start P9 there: this window's remote answered without a running P9 (row I1: never a terminal command). ok connects now.
+  ipcMain.handle('p9:remote-start', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || server || remoteInstall?.phase === 'running') return { error: 'remote-start-refused' };
+    const host = serverHost, result = await startServer(host, sshCommand);
+    if (result === 'ok' && serverHost === host) await useServer(host);
+    return { result };
   });
   // The machine menu's live state (threat model row 50, c23 adds): only a remote saved here or used last, one probe per host
   // per 30 s, shared by calls in flight. ponytail: the cache is never pruned; at most 51 hosts can be in it.

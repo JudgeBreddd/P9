@@ -63,6 +63,18 @@ export function remoteMode(host, action, ssh = 'ssh') {
   }));
 }
 
+// startServer(host): Start P9 there, for a remote that answered without a running P9 (never a terminal command, row I1).
+// Its user service if one is installed and P9 is not in background mode, else the background start script. Fixed argv, BatchMode.
+// -> 'ok' | 'none' (nothing to start there: Install P9 there) | 'failed'.
+export function startServer(host, ssh = 'ssh') {
+  if (!HOST.test(host)) return Promise.resolve('failed');
+  const command = 'b=' + RUN + '; export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; '
+    + 'if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] && [ ! -f "$b/background" ]; then systemctl --user start p9-foundation.service >/dev/null 2>&1; '
+    + 'elif [ -f "$b/start" ]; then sh "$b/start" up >/dev/null 2>&1; else echo P9_START none; exit 0; fi && echo P9_START ok || echo P9_START failed';
+  return new Promise(resolve => execFile(ssh, [...SSH_OPTIONS, host, command], { timeout: 60000 }, (error, out) =>
+    resolve(/^P9_START (ok|none)$/m.exec(out ?? '')?.[1] ?? 'failed')));
+}
+
 // restartServer(host): the server's own unit restarted over ssh, as Restart P9 restarts the local one. Fixed argv.
 export function restartServer(host, ssh = 'ssh') {
   if (!HOST.test(host)) return Promise.resolve(false);
