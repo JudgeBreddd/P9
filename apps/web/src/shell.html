@@ -73,7 +73,9 @@
 <!-- D20: while this window connects to a remote, a black hole turning instead of a blank window. Shell.tsx opens and closes it. -->
 <dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"></div>
   <h2 id="connT">Connecting</h2><p id="connWhy" class="muted" role="status" aria-live="polite"></p>
-  <button data-slot="button" data-size="sm" id="connInstall" hidden>Install P9 there</button>
+  <button data-slot="button" data-variant="default" id="connInstall" hidden>Install P9 there</button>
+  <div id="connProgress" class="conn-progress" hidden><span class="conn-spin" aria-hidden="true"></span><span id="connStep" class="truncate"></span><span id="connTime"></span></div>
+  <pre id="connLog" class="conn-log" hidden></pre>
   <button data-slot="button" data-variant="ghost" data-size="sm" id="connNo" hidden>Not now</button>
   <button data-slot="button" data-variant="outline" data-size="sm" id="connLocal">Use this computer instead</button></dialog>
 
