@@ -1406,6 +1406,7 @@ function notesModal(m, body, row) {
 // action, the daemon's guarded PUT /files, so a changed file answers 409 and the draft stays (like a Mission note).
 const liveKey = name => 'live:' + name;
 function liveFileModal(m, body) {
+  if (/\.(png|jpe?g|gif|webp)$/i.test(m.name)) return imageModal(m, body);
   const key = liveKey(m.name);
   $('#mdlT').textContent = m.name;
   if (!m.asked && !dirty(key)) {
@@ -1428,6 +1429,25 @@ function liveFileModal(m, body) {
   body.querySelector('[data-mine]')?.addEventListener('click', () => saveLive(m, c.diskHash));
   body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
   liveFoot(m);
+}
+// An image from the Files pane (rows 23/26/27 adds): read-only, through GET /files/image, which names the type from the bytes.
+// Only that type and plain base64 reach the img tag.
+const imageError = { 'not-an-image': 'Not a PNG, JPEG, GIF or WebP image. P9 checks the file\'s first bytes, not its name.',
+  'request-refused': 'P9 does not show this file: it is over 6 MB, a link, or a locked name.', 'not-found': 'This file is no longer on disk.' };
+function imageModal(m, body) {
+  $('#mdlT').textContent = m.name;
+  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
+  if (m.image === undefined) {
+    m.image = null;
+    window.p9.mission('image', { path: m.name }).then(r => {
+      m.image = r.status === 200 && /^image\/(png|jpeg|gif|webp)$/.test(r.body?.mimeType) && /^[A-Za-z0-9+/]+=*$/.test(r.body.data) ? r.body
+        : { error: r.status === 404 ? 'not-found' : r.body?.error || String(r.status) };
+      if (S.modal === m) renderModal();
+    }).catch(() => { m.image = { error: 'daemon-unavailable' }; if (S.modal === m) renderModal(); });
+  }
+  const i = m.image;
+  body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(imageError[i.error] || 'Not readable: ' + i.error)}</p>`
+    : `<div class="file-image"><img src="data:${i.mimeType};base64,${i.data}" alt="${esc(m.name)}"></div>`;
 }
 function liveFoot(m) {
   $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${saveBtn(liveKey(m.name))}`;

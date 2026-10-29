@@ -11,7 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
@@ -223,6 +223,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // The desktop's reads stay in the workspace (its outside folder is read by Dev Focus's editor); a root here is the phone's.
   const readTarget = (c) => (c.get('device') ? phoneTarget(c.req.query('root')) : { root: workspace });
   api.get('/files', async (c) => { const target = await readTarget(c); return target.error ? reply(c, target) : c.json(await readWorkspaceFile(target.root, c.req.query('path'))); });
+  // A workspace image for the Chat Focus file window (rows 23/26/27 adds): GET /files's walk and target, then row 27's size and
+  // byte checks; anything else is not-an-image or request-refused, and its bytes stay here.
+  api.get('/files/image', async (c) => {
+    const target = await readTarget(c); if (target.error) return reply(c, target);
+    try { return c.json(await readWorkspaceImage(target.root, c.req.query('path'))); }
+    catch (error) { if (error.message === 'not-an-image') return c.json({ error: 'not-an-image' }, 415); throw error; }
+  });
   // The file tree never shows the folders P9 does not crawl (HEAVY: node_modules, .venv and the like).
   api.get('/files/list', async (c) => {
     const target = await readTarget(c); if (target.error) return reply(c, target);
