@@ -291,6 +291,14 @@ section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-w
 #phoneSettings h2{margin-top:8px}#phoneSettings p{margin:0}
 #phoneSettings label.set{display:flex;align-items:flex-start;gap:4px}#phoneSettings label.set input{margin-top:2px;flex:none}#phoneSettings label.set>span,#phoneSettings label.mission-file{display:grid;gap:4px}#phoneSettings label.set .muted{font-size:13px}#phoneSettings .field-err{color:var(--red)}
 .sign-in h2{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.sign-in h2 small{font-weight:400;color:var(--dim)}.sign-in p+p,.sign-in p+form,.sign-in form+p{margin-top:8px}.sign-in a{font-weight:600}.sign-code code{font-size:1.6em;letter-spacing:.08em}.sign-form{display:flex;gap:8px;margin-top:8px}.sign-form input{flex:1;min-width:0}.sign-acts{display:flex;justify-content:flex-end;margin-top:10px}
+/* A space reference whose ID nothing has: a row that is not a button, dim, saying not found. */
+dialog.window .row.missing{display:grid;gap:3px;min-height:52px;padding:8px 0;align-content:center;border-bottom:1px solid var(--hair);color:var(--dim)}
+dialog.window .row.missing small{font-size:13px}
+/* A folder list's files sit inside its row: indented on a hairline, lighter and smaller than the rows around them. */
+dialog.window [data-folder]{display:grid;margin-left:2px;padding-left:12px;border-left:1px solid var(--hair)}
+dialog.window [data-folder] details.row:last-child{border-bottom:0}
+dialog.window [data-folder] details.row summary{min-height:44px;padding:6px 0;font-weight:500;font-size:14px}
+dialog.window [data-folder] details.row summary small{font-size:12px}
 
 /* Mission data tiles and links (M3): a script's JSON drawn as text. */
 .tile-note{margin:0;font-size:13px;color:var(--dim)}

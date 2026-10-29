@@ -1024,7 +1024,7 @@ type Hub = { notices: { kind: string; text: string }[] | null; incidents: { host
   inbox: { branch: string; decision: string; pages: string[] }[]; logs: { host: string; name: string; age_min: number; last: string }[]; handoffs: { project: string; age_days: number }[];
   audit: { run?: string; review?: string; ticked?: number; changes?: number; contradiction_count?: number | null }; solo: { name: string; bluf: string }; ideas: number; needs_done: number };
 let mission: { queue: Waiting[]; scripts: Item[] } = { queue: [], scripts: [] };
-const row = (summary: string, body: string) => `<details class="row"><summary>${summary}</summary><div class="body">${body}</div></details>`;
+const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
 // its in a window i can open"). Callers escape title and line.
 const win = (id: string, title: string, count: number | string, line: string, body: string, bad = false) => {
@@ -1046,6 +1046,7 @@ function keepOpen(render: () => void) {
   holdTyped(); render(); putTyped();
   const again = windowNow() as HTMLDialogElement | null;
   if (again && !again.open) again.showModal();
+  if (again) void loadFolders(again);
   rows(again).forEach((d) => { if (!d.open && expanded.has(title(d))) d.open = true; });
 }
 // T7: the last Mission and hub answers are kept here and in localStorage (threat model row 56; a 401 forgets them). A tap
@@ -1118,6 +1119,7 @@ async function loadMission(cached = false) {
         ? `<form data-answer="${index}"><label>Your answer<textarea rows="3" required maxlength="4000"></textarea></label><button type="submit">Send answer</button><p class="muted" data-note></p></form>`
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
     const groups = new Map<string, string[]>(), names = new Map<string, string[]>(); // a section's rows, and their titles for its detail line
+    const scriptParts = new Map<string, [string, string]>(); // a script's summary and body by id, for a space section that references it
     (data.scripts as Item[]).forEach((item, index) => {
       const inputs = (item.args as unknown as (string | { label: string; choices?: string[] })[]).map((arg) => typeof arg === 'string'
         ? `<label>${escape(arg)}<input maxlength="8000" autocomplete="off" /></label>`
@@ -1127,20 +1129,37 @@ async function loadMission(cached = false) {
         : `<form data-run="${index}">${inputs}${inputs ? `<button type="submit">${item.confirm ? 'Run (asks first)' : 'Run'}</button>` : ''}</form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`);
       // Spec §6: the closed row has a Run pill at its right. A script with fields keeps its Run button by them; the pill opens the row there.
       const pill = item.terminal ? '' : `<button type="button" class="pill" data-run-now>${item.confirm ? 'Run…' : 'Run'}</button>`;
+      scriptParts.set(item.id, [escape(item.title) + pill, body]);
       groups.set(item.group || 'Scripts', [...(groups.get(item.group || 'Scripts') ?? []), row(escape(item.title) + pill, body)]);
       names.set(item.group || 'Scripts', [...(names.get(item.group || 'Scripts') ?? []), item.title]);
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[] }[]) {
+    type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[] }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
       // Data tiles (threat model row 70) run while their row is open; links are http(s) only (the daemon refused the rest).
       const tiles = (space.data ?? []).map((tile) => row(escape(tile.title), `<div data-tile="${escape(tile.id)}">${tileHtml(null, escape)}</div>`));
       const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape)}</p>`);
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks]);
-      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title)]);
+      // Folder lists (threat model row M2-a): the count fills when the window opens; each file opens read-only in its row.
+      const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
+        `<div data-folder="${escape(list.id)}"><p class="muted">Loading…</p></div>`));
+      // References: a script is its own row (Run included), a page its link, an app is the laptop's; an ID nothing has says so.
+      const refs = (space.refs ?? []).map((ref) => {
+        if (ref.missing || !ref.title) return `<div class="row missing" data-ref-missing aria-disabled="true"><span>${escape(ref.id)}</span><small>not found</small></div>`;
+        const attrs = ` data-ref="${escape(ref.id)}"`, part = ref.kind === 'scripts' ? scriptParts.get(ref.id) : undefined;
+        if (part) return row(part[0], part[1], attrs);
+        const page = ref.kind === 'pages' ? (data.pages as Item[]).find((item) => item.id === ref.id) : undefined;
+        if (page) return row(`${escape(ref.title)}<small>link</small>`, /^https?:\/\//i.test(page.url)
+          ? `<a class="link" href="${escape(page.url)}" target="_blank" rel="noopener noreferrer">${escape(page.url)}</a>`
+          : `<button type="button" class="link" data-open-page="${escape(page.id)}" data-url="${escape(page.url)}">Open on the laptop</button>`, attrs);
+        return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
+      });
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks, ...lists, ...refs]);
+      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
+        ...(space.folders ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
       ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
@@ -1238,11 +1257,32 @@ one('#mission').addEventListener('click', (event) => {
     details.open = true;
     if (field) field.focus(); else form.requestSubmit();
   }
-  else if (open) { openWindow = open.dataset.open!; (document.getElementById('w-' + openWindow) as HTMLDialogElement).showModal(); }
+  else if (open) { openWindow = open.dataset.open!; const box = document.getElementById('w-' + openWindow) as HTMLDialogElement; box.showModal(); void loadFolders(box); }
   else if (target.closest('[data-close]')) target.closest('dialog')!.close();
 });
 // Close button or Escape; a dialog removed by a reload is outside #mission by then, so it never clears this.
 one('#mission').addEventListener('close', () => { openWindow = ''; expanded = new Set(); }, true);
+// A window's folder lists, once per drawing: the count in the row, the files (newest first) in its body, each a row whose
+// text loads read-only from the folder's own list (a path the list does not hold is refused by the daemon).
+async function loadFolders(box: HTMLElement) {
+  await Promise.all([...box.querySelectorAll<HTMLElement>('div[data-folder]:not([data-loaded])')].map(async (list) => {
+    list.dataset.loaded = '1';
+    const id = list.dataset.folder!, count = box.querySelector<HTMLElement>(`[data-folder-count="${CSS.escape(id)}"]`), unit = count?.nextElementSibling as HTMLElement | null;
+    try {
+      const { files, total, partial } = await request('/mission/folder?' + new URLSearchParams({ id })) as { files: { path: string; name: string; modified: number }[]; total: number; partial: boolean };
+      if (count) count.textContent = String(total);
+      if (unit) unit.textContent = total === 1 ? ' file' : ' files';
+      list.innerHTML = (files.length < total || partial ? `<p class="muted">${files.length < total ? `The newest ${files.length} of ${total}` : ''}${partial ? ' · a very big folder: some subfolders were not read' : ''}</p>` : '')
+        + (files.length ? files.map((f) => row(`${escape(f.name)}<small>${ago(Math.max(0, Math.round((Date.now() - f.modified) / 60000)))} ago</small>`,
+          `<pre data-src="/mission/folder/file" data-text="${escape(new URLSearchParams({ id, path: f.path }).toString())}">Loading…</pre>`)).join('') : '<p class="muted">No files match.</p>');
+    } catch (error) {
+      const code = (error as Error).message, refused = code === 'root-refused';
+      if (count) count.textContent = refused ? 'refused' : 'unreadable';
+      if (unit) unit.textContent = refused ? ': it holds the workspace or P9\'s own files' : '';
+      list.innerHTML = `<p class="muted">${refused ? 'Mission does not list this folder: it holds the workspace or P9\'s own files.' : `Could not list this folder (${escape(code)}).`}</p>`;
+    }
+  }));
+}
 one('#mission').addEventListener('toggle', async (event) => {
   const tile = (event.target as HTMLDetailsElement).open && (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-tile]');
   if (tile && !tile.dataset.timer) {
@@ -1265,7 +1305,7 @@ one('#mission').addEventListener('toggle', async (event) => {
   const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > pre[data-text]');
   if (!pre || pre.dataset.loaded) return;
   pre.dataset.loaded = '1';
-  try { pre.textContent = (await request('/mission/hub/text?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
+  try { pre.textContent = (await request((pre.dataset.src ?? '/mission/hub/text') + '?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
 }, true);
 // A data tile's answer (threat model row 70), drawn as text by the same code as the desktop's.
 async function pullTile(tile: HTMLElement) {

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, symlink, utimes, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { chromium } from '@playwright/test';
+import { daemon, http, authenticated, root, remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
@@ -40,6 +41,7 @@ async function seed({ directory, workspace }) {
   await mkdir(path.join(directory, 'other'));
   return { args: ['--acp-override', fake, '--settings', path.join(directory, 'settings.json')] };
 }
+const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 const start = (t) => daemon(t, undefined, false, seed);
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
@@ -146,4 +148,50 @@ test('allow_folder: nothing is added without the user\'s yes; P9\'s own folders 
   const after = JSON.parse(await readFile(settingsFile, 'utf8'));
   assert.deepEqual(after, { ...JSON.parse(before), notes_roots: { ...JSON.parse(before).notes_roots, other: await realpath(other) } });
   console.log('PASS allow_folder: reject and cancel write nothing; refused folders never ask; allow adds only that key');
+});
+
+// The phone (plan: one look for every focus mode): the section's window shows folder lists with their counts and the
+// references; a folder row lists its files newest first, and a file opens read-only; a missing reference says not found.
+test('folder lists and references on the phone at 390x844', { timeout: 90000, skip: process.platform === 'win32' && 'Windows CI has no Playwright Chromium' }, async (t) => {
+  const server = await remoteDaemon(t, { setup: seed });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const device = await passkeyDevice(browser, server, 'phone-folders');
+  const session = await enrollDevice(server, device);
+  const page = device.page;
+  await device.context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  await page.goto(server.origin + '/phone/');
+  await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
+  await page.reload();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.click('[data-nav="mission"]');
+  const tile = page.locator('#mission [data-open]', { has: page.locator('span', { hasText: /^Plans$/ }) });
+  await tile.waitFor({ timeout: 15000 });
+  await tile.click();
+  const box = page.locator('#mission dialog[open]');
+  // Counts fill when the window opens: 3 open plans, 3 top-level .md plans, 2 run logs; the root holding the workspace is refused.
+  await box.locator('[data-folder-count="open-plans"]', { hasText: '3' }).waitFor({ timeout: 10000 });
+  assert.deepEqual(await box.locator('[data-folder-count]').evaluateAll((all) => all.map((n) => n.textContent.trim())), ['3', '3', '2', 'refused']);
+  assert.deepEqual(await box.locator('[data-ref]').evaluateAll((all) => all.map((n) => n.dataset.ref)), ['hello', 'editor', 'dash']);
+  assert.match(await box.locator('[data-ref-missing]').innerText(), /gone\s*not found/);
+  await shot(page, 'phone-space-event-horizon-prime');
+  // The phone's own theme menu (it does not follow the browser's scheme), then the same window again in Daylight.
+  await page.keyboard.press('Escape');
+  await page.click('[data-nav="chat"]');
+  await page.click('[data-bar="chat"] #themeBtn');
+  await page.click('#themeMenu [data-theme-pick="daylight"]');
+  await page.keyboard.press('Escape');
+  await page.click('[data-nav="mission"]');
+  await tile.click();
+  await box.locator('[data-folder-count="open-plans"]', { hasText: '3' }).waitFor({ timeout: 10000 });
+  await shot(page, 'phone-space-daylight');
+  await box.locator('summary', { hasText: 'Open plans' }).click();
+  const files = box.locator('[data-folder="open-plans"] summary');
+  await files.first().waitFor({ timeout: 10000 });
+  assert.deepEqual(await files.evaluateAll((all) => all.map((n) => n.firstChild.textContent.trim())), ['c.md', 'sub/b.md', 'a.md']);
+  await files.nth(1).click();
+  await box.locator('[data-folder="open-plans"] pre', { hasText: 'Status: open' }).waitFor({ timeout: 10000 });
+  assert.equal(await box.locator('textarea, [contenteditable="true"]').count(), 0, 'read-only');
+  await shot(page, 'phone-space-folder');
+  console.log('PASS phone: counts 3/3/2/refused, 3 refs + not found, files newest first, one opens read-only');
 });
