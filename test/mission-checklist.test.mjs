@@ -24,12 +24,13 @@ const DECISION = (day) => '---\nreview: pending\n---\n\n# Audit run ' + day + '\
 
 async function seed({ directory, workspace }) {
   const runs = path.join(workspace, 'wiki/_private/audit/runs');
-  for (const folder of ['projects', 'hub', '_waiting', 'notes', 'inbox/librarian-a', 'inbox/librarian-b', 'inbox/librarian-twice', runs + '/2026-10-21', runs + '/2026-10-28', path.join(directory, 'far')])
+  for (const folder of ['projects', 'hub', '_waiting', 'notes', 'inbox/librarian-a', 'inbox/librarian-b', 'inbox/librarian-twice', runs + '/2026-10-21', runs + '/2026-10-28', runs + '/backfill-undated', path.join(directory, 'far')])
     await mkdir(path.resolve(workspace, folder), { recursive: true });
   await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
   await writeFile(path.join(workspace, SETTINGS.registry), JSON.stringify({ scripts: [] }));
   await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify(SPACE, null, 2) + '\n');
-  for (const day of ['2026-10-21', '2026-10-28']) await writeFile(path.join(runs, day, '_decision.md'), DECISION(day));
+  // The owner's runs folder also holds backfill-* runs; letters sort after digits, so newest must skip them.
+  for (const day of ['2026-10-21', '2026-10-28', 'backfill-undated']) await writeFile(path.join(runs, day, '_decision.md'), DECISION(day));
   await writeFile(path.join(workspace, 'inbox/librarian-a/_decision.md'), 'review: pending\n\nTwo pages to merge.\n');
   await writeFile(path.join(workspace, 'inbox/librarian-b/_decision.md'), 'review: "merge"\n');
   await writeFile(path.join(workspace, 'inbox/librarian-twice/_decision.md'), 'review: pending\nreview: pending\n');

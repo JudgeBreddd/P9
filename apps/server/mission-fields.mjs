@@ -98,7 +98,7 @@ export const CHECKLIST = {
   path: relative('A .md file; with file, a folder whose subfolders each hold that file. Without it, the root itself.'),
   file: { type: 'string', check: (value) => typeof value === 'string' && /^[^/\\\0.][^/\\\0]{0,119}$/.test(value) && /\.md$/i.test(value),
     doc: 'The .md file each subfolder of path holds, e.g. _decision.md: one entry per subfolder, by name.' },
-  newest: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'Only the last subfolder by name (dated runs). Default false.' },
+  newest: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'Only the newest dated subfolder: the last by name of those starting YYYY-MM-DD (other folders are skipped). Default false.' },
   heading: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n]/.test(value),
     doc: 'Only rows under the heading with this text, up to the next heading.' },
   marks: { type: 'object', check: (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length >= 1

@@ -431,7 +431,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       let entries;
       try { entries = await listDirectory(target.root, base); } catch { return { status: 404, error: 'not-found' }; }
       let names = entries.filter((entry) => entry.dir && !entry.name.startsWith('.')).map((entry) => entry.name).sort();
-      if (item.newest) names = names.slice(-1);
+      // Newest is the last date-named folder (YYYY-MM-DD...): a run folder like backfill-undated sorts after every date.
+      if (item.newest) names = names.filter((name) => /^\d{4}-\d{2}-\d{2}/.test(name)).slice(-1);
       paths = names.slice(0, CHECK_FILES).map((name) => [(base ? base + '/' : '') + name + '/' + item.file, name]);
     }
     const files = [];
