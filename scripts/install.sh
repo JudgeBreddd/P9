@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Installs P9 for this user from this clone: checks the tools, installs pnpm if missing, builds, and starts the
 # daemon as a user service (the README's Linux steps in one command).
-# Usage: bash scripts/install.sh [--headless] [workspace folder, default ~/work]
+# Usage: bash scripts/install.sh [--headless [--background]] [workspace folder, default ~/work]
 # --headless: a server with no screen. The daemon only, no Electron download; desktops and phones connect to it.
+# --background: the desktop's "No" to Keep P9 running there (threat model row I1): no linger and no service; P9 runs as a
+# background process while a desktop is connected, the way VS Code's server runs. Without it, a server keeps P9 running.
 set -euo pipefail
-headless=
-if [ "${1:-}" = --headless ]; then headless=1; shift; fi
+headless= background=
+while case "${1:-}" in --headless) headless=1 ;; --background) background=1 ;; *) false ;; esac; do shift; done
+[ -z "$background" ] || [ -n "$headless" ] || { echo "--background goes with --headless."; exit 1; }
+run_dir="$HOME/.local/share/p9/run"
 workspace=$(realpath -m -- "${1:-$HOME/work}")
 cd "$(dirname -- "$0")/.."
 
 missing=()
-for t in git systemctl systemd-run sha256sum tar; do command -v "$t" >/dev/null || missing+=("$t"); done
+for t in git systemctl systemd-run sha256sum tar flock setsid; do command -v "$t" >/dev/null || missing+=("$t"); done
 # The Node download needs one of the two; Ubuntu Desktop ships wget and not curl (bare-machine.sh, v0.1.6).
 command -v curl >/dev/null || command -v wget >/dev/null || missing+=(curl)
 if [ ${#missing[@]} -gt 0 ]; then
@@ -25,17 +29,51 @@ fi
 # this user's own account. systemd's polkit default for that (set-self-linger) needs no password; where a rule asks for
 # one, --no-ask-password fails at once instead of waiting for an answer nobody can give.
 lingered=
-if [ -n "$headless" ] && command -v loginctl >/dev/null && [ "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null)" != yes ]; then
+if [ -n "$headless" ] && [ -z "$background" ] && command -v loginctl >/dev/null && [ "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null)" != yes ]; then
   if loginctl --no-ask-password enable-linger 2>/dev/null; then lingered=1; echo "P9 keeps running on this machine when nobody is logged in (linger is on for this user)."; fi
 fi
-if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+# A server with no user manager even so (linger refused, no systemd user session) still gets P9, as a background process of
+# this user, the way VS Code's server runs (threat model row I1): scripts/background.sh. It stops when nobody uses it, a
+# desktop's next connect starts it again, and the app's Keep it running moves it to the service once linger is on.
+if [ -z "$background" ] && [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   # Linger starts the user manager, which makes the folder a moment later.
   if [ -n "$lingered" ]; then for _ in $(seq 20); do [ -d "/run/user/$(id -u)" ] && break; sleep 0.5; done; fi
-  if [ -d "/run/user/$(id -u)" ] && [ -O "/run/user/$(id -u)" ]; then export XDG_RUNTIME_DIR="/run/user/$(id -u)"; else
+  if [ -d "/run/user/$(id -u)" ] && [ -O "/run/user/$(id -u)" ]; then export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  elif [ -n "$headless" ]; then background=1
+  else
     echo "P9 runs as a service of this user, and this user has none running here. Run this on this machine: loginctl enable-linger $(id -un)   (it keeps the service running when nobody is logged in), then Install again."
     exit 1
   fi
 fi
+# Linux keeps a Unix socket's path in 107 bytes (the daemon refuses a longer one too); a long home folder path leaves none.
+socket_length=$(printf %s "$run_dir/p9-foundation/daemon.sock" | wc -c)
+if [ -n "$background" ] && [ "$socket_length" -gt 107 ]; then
+  echo "P9_INSTALL socket-path-too-long"
+  echo "P9 cannot run for this user here: Linux allows 107 characters for the path of P9's connection file, and in this user's home folder it is $socket_length."
+  exit 1
+fi
+# Row I1: ~/.local/share/p9/run/start, the one script that starts, keeps or releases P9 on a server: these values, then
+# scripts/background.sh. Written for every server install, so the desktop can switch modes later; the file background
+# marks background mode (remote.mjs READ starts the daemon only then), lingered marks linger P9 turned on.
+# Each value single-quoted (a ' as '\''), so sh, dash too, reads a path with spaces or quotes as it was.
+q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
+write_start() {
+  (umask 077 && mkdir -p -- "$run_dir")
+  chmod 700 -- "$run_dir"
+  [ -O "$run_dir" ] || { echo "P9 cannot use $run_dir: that folder is not this user's."; exit 1; }
+  {
+    echo '#!/bin/sh'
+    echo "# Written by P9's install.sh: sh start [up | keep | release] (scripts/background.sh)."
+    echo "r=$(q "$run_dir") node=$(q "$node") checkout=$(q "$PWD")"
+    echo "workspace=$(q "$workspace") recovery=$(q "$HOME/.local/state/p9-foundation/conflicts")"
+    echo "PATH=$(q "$PATH"); export PATH"
+    cat scripts/background.sh
+  } > "$run_dir/start.new"
+  chmod 700 -- "$run_dir/start.new"
+  mv -f -- "$run_dir/start.new" "$run_dir/start"
+  if [ -n "$background" ]; then : > "$run_dir/background"; else rm -f -- "$run_dir/background"; fi
+  if [ -n "$lingered" ]; then : > "$run_dir/lingered"; fi
+}
 
 # Item 15 (row 61): the admin password only for what P9 cannot carry, and only after the reason is on the screen.
 # $1: the command, shown in full before the question. No answer (a pipe that ends, a closed terminal) is a no.
@@ -109,12 +147,14 @@ if ! node_error=$(node --version 2>&1 >/dev/null); then
   esac
 fi
 node=$(command -v node)
-if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ]; then
+if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] || { [ -n "$background" ] && [ -e "$run_dir/background" ]; }; then
   # An update checks the system again: a new version can need something the old one did not. Node is in place by now
   # (above), so the check never skips. An install from before the editor server was part of it gets it now (issue #14);
   # one on the pinned release is left alone.
   system_deps --update ${headless:+--headless} || exit 1
   "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
+  if [ -n "$background" ]; then write_start; echo "P9 is already installed here; a desktop's connect starts it."; exit 0; fi
+  if [ -n "$headless" ]; then write_start; fi
   echo "P9 is already installed. To update: git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart p9-foundation"
   exit 0
 fi
@@ -129,7 +169,8 @@ fi
 if [ -n "$headless" ]; then pnpm install --frozen-lockfile --ignore-scripts; else pnpm install --frozen-lockfile; fi
 pnpm build
 mkdir -p -- "$workspace"
-node scripts/install-service.mjs "$workspace"
+if [ -n "$headless" ]; then write_start; fi
+if [ -n "$background" ]; then sh "$run_dir/start" up; else node scripts/install-service.mjs "$workspace"; fi
 # Dev Focus's editor server (pinned and checked, threat model row 52). Headless too: a desktop in Server mode runs Dev Focus
 # on the server's editor server. If it fails, Dev Focus offers the same install as a button.
 node scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."

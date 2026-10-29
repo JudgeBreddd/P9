@@ -8,9 +8,10 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, sshHosts, serverFolder, probeServer, HOST } from './remote.mjs';
+import { connectServer, restartServer, sshHosts, serverFolder, probeServer, remoteMode, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive } from './remote-install.mjs';
+import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
@@ -264,7 +265,9 @@ export async function createDesktop({ state, open } = {}) {
   let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
-  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes }), { mode: 0o600 });
+  // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
+  const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action) => remoteMode(h, action, sshCommand), save: () => keepServer() });
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep }), { mode: 0o600 });
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
@@ -279,6 +282,7 @@ export async function createDesktop({ state, open } = {}) {
       const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
       server = s; serverError = null;
+      keeper.connected(serverHost, !!s.background);
       if (!serverUpdating) {
         // Item 14 (server-update.mjs): an older server is updated from this app; a newer one only says to update this app.
         serverUpdating = true;
@@ -473,7 +477,9 @@ export async function createDesktop({ state, open } = {}) {
     // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
     if (serverHost) {
       const h = await server?.check().catch(() => null);
-      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }) };
+      // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
+      const there = keeper.status(serverHost, !!server?.background);
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }) };
     }
     try {
       const h = state && await health(state);
@@ -711,7 +717,7 @@ export async function createDesktop({ state, open } = {}) {
   // the window reloads onto that daemon. Neither daemon is stopped.
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
-    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes };
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep };
     endDock();
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
@@ -730,7 +736,7 @@ export async function createDesktop({ state, open } = {}) {
     remoteInstall = { phase: 'running', line: '', started };
     try {
       const archive = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null;
-      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, tell: e => { if (serverHost === host) remoteInstall = { ...e, started }; } })
+      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, keep: keeper.keep[host] === true, tell: e => { if (serverHost === host) remoteInstall = { ...e, started }; } })
         .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
     } catch (error) {
       remoteInstall = { phase: 'failed', error: error.message, started };
@@ -748,6 +754,21 @@ export async function createDesktop({ state, open } = {}) {
     const state = probeServer(host, sshCommand);
     probes.set(host, { at: Date.now(), state });
     return state;
+  });
+  // Row I1: the answer to Keep P9 running on this window's remote (yes: boolean), stored when remember is true, applied now.
+  ipcMain.handle('p9:remote-keep', async (event, ...args) => {
+    const [yes, remember] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof yes !== 'boolean' || typeof remember !== 'boolean') throw new Error('ipc-sender-refused');
+    if (!serverHost || !server) return { error: 'not-connected' };
+    await keeper.answer(serverHost, !!server.background, yes, remember);
+    return { ok: true, keep: keeper.keep };
+  });
+  // Settings > Remote: the stored choice for one remote (true, false, or null: ask). This window's remote gets it now.
+  ipcMain.handle('p9:remote-keep-setting', async (event, ...args) => {
+    const [host, choice] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof host !== 'string' || !HOST.test(host) || ![true, false, null].includes(choice)) throw new Error('ipc-sender-refused');
+    await keeper.set(host, host === serverHost && server ? !!server.background : null, choice);
+    return { keep: keeper.keep };
   });
   // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
   ipcMain.handle('p9:remotes', async (event, ...args) => {

@@ -68,7 +68,7 @@
       </section>
     </div>
   </div>
-  <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
+  <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span id="keepNote" class="keep-note" hidden><span id="keepText" role="status"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="keepBtn" hidden>Keep it running</button></span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
 </div>
 
 <!-- D20: while this window connects to a remote, a black hole turning instead of a blank window. Shell.tsx opens and closes it. -->
@@ -135,6 +135,12 @@
     <button data-slot="button" data-variant="outline" data-size="sm" id="moveCancel">Cancel</button>
   </div>
 </div>
+<!-- Row I1: after the first connect to a remote where P9 runs only while connected, the one question: keep it running there? -->
+<dialog id="keepDlg" aria-labelledby="keepT" aria-describedby="keepP"><form method="dialog">
+  <div class="dlg-head"><div><h2 id="keepT"></h2><p id="keepP"></p><p class="muted sm" id="keepQ"></p></div></div>
+  <div class="dlg-body"><label class="sm"><input type="checkbox" id="keepRemember"> Do not ask again for this machine</label></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no">Only while connected</button><button data-slot="button" value="yes" autofocus>Keep it running</button></div>
+</form></dialog>
 <dialog id="moveDlg" aria-labelledby="moveT" aria-describedby="moveP"><form method="dialog">
   <div class="dlg-head"><div><h2 id="moveT"></h2><p id="moveP"></p></div></div>
   <div class="dlg-body" id="moveNeverRow"><label class="sm"><input type="checkbox" id="moveNever"> Don't show again</label></div>

@@ -14,11 +14,17 @@ export const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-
 // What the server runs over ssh: its runtime folder, then its desktop credentials. The server's login shell expands $XDG_RUNTIME_DIR;
 // a non-tty ssh session can come without it (a home server, 2026-10-26), so systemd's own default /run/user/<uid> stands in.
 // exit 0: a server that answers always succeeds, so an ssh failure is server-unreachable and a missing file is server-no-p9.
-export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; printf "%s\\n" "$r"; cat "$r/p9-foundation/desktop.json" 2>/dev/null; exit 0';
+// Background mode (threat model row I1: no service there, by the person's choice or because linger was refused): with no
+// service's desktop.json and the background marker there, READ starts P9 with its start script first (it does nothing while
+// one runs) and reads the folder that one uses. So every connect, a reconnect too, starts a P9 that stopped when idle.
+const RUN = '"$HOME/.local/share/p9/run"';
+export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; b=' + RUN + '; if [ ! -e "$r/p9-foundation/desktop.json" ] && [ -f "$b/background" ]; then r="$b"; sh "$b/start" up >&2 || true; fi; '
+  + 'printf "%s\\n" "$r"; cat "$r/p9-foundation/desktop.json" 2>/dev/null; exit 0';
 
 // The machine menu's state for a saved remote that is not in use: is a P9 running there? It checks desktop.json exists, never
 // reads it (the cookie stays there). Fixed argv, no shell here, BatchMode, 4 s to connect, 8 s in all; only three words come back.
-export const PROBE = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; test -e "$r/p9-foundation/desktop.json" && echo p9; exit 0';
+// A background-mode P9 (row I1) counts as there: it may be stopped, and connecting starts it.
+export const PROBE = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; { test -e "$r/p9-foundation/desktop.json" || test -f ' + RUN + '/background; } && echo p9; exit 0';
 export const probeServer = (host, ssh = 'ssh') => new Promise(resolve => execFile(ssh, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', host, PROBE], { timeout: 8000 },
   (error, out) => resolve(error ? 'unreachable' : out.trim() === 'p9' ? 'p9' : 'no-p9')));
 
@@ -34,13 +40,26 @@ export async function sshHosts(file = path.join(os.homedir(), '.ssh', 'config'))
 export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir()) => path.join(runtime, 'p9-server', host);
 
 function readServer(host, ssh) {
-  return new Promise((resolve, reject) => execFile(ssh, [...SSH_OPTIONS, host, READ], { timeout: 20000, maxBuffer: 65536 }, (error, out) => {
+  // 60 s: a background start waits up to 30 s for its daemon.
+  return new Promise((resolve, reject) => execFile(ssh, [...SSH_OPTIONS, host, READ], { timeout: 60000, maxBuffer: 65536 }, (error, out) => {
     if (error) return reject(new Error('server-unreachable'));
     const [runtime, ...rest] = out.split('\n');
     let credentials;
     try { credentials = JSON.parse(rest.join('\n')); } catch { return reject(new Error('server-no-p9')); }
     if (!/^\/[\w./-]+$/.test(runtime) || runtime.includes('..') || typeof credentials?.cookie !== 'string' || typeof credentials.csrf !== 'string') return reject(new Error('server-no-p9'));
-    resolve({ remoteSocket: runtime + '/p9-foundation/daemon.sock', remoteEditor: runtime + '/p9-foundation/editor.sock', credentials: { cookie: credentials.cookie, csrf: credentials.csrf } });
+    resolve({ remoteSocket: runtime + '/p9-foundation/daemon.sock', remoteEditor: runtime + '/p9-foundation/editor.sock', credentials: { cookie: credentials.cookie, csrf: credentials.csrf }, background: runtime.endsWith('/.local/share/p9/run') });
+  }));
+}
+
+// remoteMode(host, action): Keep P9 running there, Yes ('keep': linger for the user's own account, then the service) or No
+// ('release': the service off, then the background daemon); start's own steps (scripts/background.sh). Fixed argv, BatchMode.
+// -> 'ok' | 'refused' (linger needs an admin there) | 'no-start' (a P9 installed before this, update it first) | 'failed'.
+export function remoteMode(host, action, ssh = 'ssh') {
+  if (!HOST.test(host) || !['keep', 'release'].includes(action)) return Promise.resolve('failed');
+  const command = 'b=' + RUN + '; [ -f "$b/start" ] || { echo P9_MODE no-start; exit 0; }; sh "$b/start" ' + action;
+  return new Promise(resolve => execFile(ssh, [...SSH_OPTIONS, host, command], { timeout: 180000 }, (error, out) => {
+    const said = /^P9_(?:KEEP|RELEASE|MODE) (ok|refused|no-start)$/m.exec(out ?? '')?.[1];
+    resolve(said ?? 'failed');
   }));
 }
 
@@ -50,13 +69,13 @@ export function restartServer(host, ssh = 'ssh') {
   return new Promise(resolve => execFile(ssh, [...SSH_OPTIONS, host, 'systemctl --user restart p9-foundation.service'], { timeout: 60000 }, error => resolve(!error)));
 }
 
-// connectServer({ host }) -> { state, host, close(), check() }. check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock and editor.sock (the forwards) and desktop.json.
+// connectServer({ host }) -> { state, host, close(), check(), background }. background: P9 there runs in background mode (row I1). check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock and editor.sock (the forwards) and desktop.json.
 // editor.sock answers only once Dev Focus has asked the server's daemon to start its editor (POST /dev/editor); ssh connects each forwarded socket when it is used.
 // editor: false leaves the editor forward off (the move's tunnel has no use for it).
 // onDrop runs when the tunnel ends without close() (lid closed, network gone, server restarted); the caller reconnects.
 export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {} }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
-  const { remoteSocket, remoteEditor, credentials } = await readServer(host, ssh);
+  const { remoteSocket, remoteEditor, credentials, background } = await readServer(host, ssh);
   const state = serverFolder(host, runtime), parent = path.dirname(state);
   await mkdir(state, { recursive: true, mode: 0o700 });
   await chmod(parent, 0o700); await chmod(state, 0o700);
@@ -81,7 +100,7 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon.
   for (let i = 0; i < 60; i++) {
     if (exited) break;
-    if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check }; }
+    if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check, background }; }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   await close();

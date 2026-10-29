@@ -359,6 +359,9 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 /* ---- Status bar ---- */
 .statusbar{display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted-foreground);background:color-mix(in oklch,var(--card) 60%,transparent)}
 .statusbar .spacer{flex:1}
+.statusbar .keep-note{display:inline-flex;align-items:center;gap:6px}
+.statusbar .keep-note[hidden]{display:none}
+.statusbar .keep-note button{height:20px;padding:0 8px;font-size:11px}
 /* ---- Palette ---- */
 #palette .dlg-body{padding:0}
 #palette input{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:14px 18px;font-size:15px}

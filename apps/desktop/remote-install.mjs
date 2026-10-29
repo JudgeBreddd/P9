@@ -16,7 +16,9 @@ const quote = (text) => "'" + text.replace(/'/g, "'\\''") + "'";
 
 // The remote's script. version: null when this app's source comes over ssh's stdin, else the release to download there.
 // A ~/p9 this install made (its marker file) gets install.sh again; any other ~/p9 is left alone.
-export function script(version) {
+// keep: the remembered Yes to Keep P9 running there (keep.mjs): linger and the service. Otherwise --background (row I1): no
+// linger, no service, until the person answers after the first connect.
+export function script(version, keep = false) {
   if (version !== null && !VERSION.test(version)) throw new Error('remote-install-version');
   const source = version === null ? 'cat > "$t/p9.tar.gz"'
     : 'u=' + quote(ARCHIVE + 'v' + version + '.tar.gz') + '; if command -v curl >/dev/null; then curl -fsSL --proto =https -o "$t/p9.tar.gz" "$u"; '
@@ -25,7 +27,7 @@ export function script(version) {
     'set -eu', 'd="$HOME/p9"',
     'if [ -e "$d" ] || [ -L "$d" ]; then [ -f "$d/.p9-remote-install" ] || { echo "P9_INSTALL already-there"; exit 3; }',
     'else t=$(mktemp -d); trap \'rm -rf "$t"\' EXIT; ' + source + '; mkdir "$d"; : > "$d/.p9-remote-install"; tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; echo "P9_INSTALL unpacked"; fi',
-    'bash "$d/scripts/install.sh" --headless </dev/null',
+    'bash "$d/scripts/install.sh" --headless' + (keep ? '' : ' --background') + ' </dev/null',
     'echo "P9_INSTALL done"',
   ].join('\n');
 }
@@ -51,9 +53,9 @@ function run(command, args) {
 
 // tell(event): { phase: 'running' | 'done' | 'failed' | 'already-there', line?, tail? } for the window. archive: a readable
 // stream of this app's source as tar.gz (a checkout's git archive), or null to have the remote download version.
-export function installRemote({ host, ssh = 'ssh', version = null, archive = null, tell = () => {}, limit = LIMIT_MS }) {
+export function installRemote({ host, ssh = 'ssh', version = null, archive = null, keep = false, tell = () => {}, limit = LIMIT_MS }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
-  const command = 'sh -c ' + quote(script(archive ? null : version));
+  const command = 'sh -c ' + quote(script(archive ? null : version, keep === true));
   return new Promise((resolve) => {
     const child = spawn(ssh, [...SSH_OPTIONS, host, command], { stdio: ['pipe', 'pipe', 'pipe'] });
     let tail = '', done = false;

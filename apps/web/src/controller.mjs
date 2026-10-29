@@ -2047,10 +2047,13 @@ function wireMission() {
 // Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
 // lists them). Nothing is built in; Add remote takes a Host name or user@address.
 function serverRow() {
-  const { host, connected, error, hosts, remotes = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
+  const { host, connected, error, hosts, remotes = [], keep = {} } = serverInfo, all = [...new Set([...remotes, ...hosts])];
+  // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
+  const keepPick = h => window.p9?.remoteKeepSetting ? '<select data-slot="select" data-remote-keep="' + esc(h) + '" aria-label="P9 on ' + esc(h) + ' when you disconnect" title="What P9 on ' + esc(h) + ' does when you disconnect">'
+    + [['', 'Ask'], ['keep', 'Keeps running'], ['stop', 'Stops']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
   const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
     : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
-  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>'
+  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>' + keepPick(h)
     + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
     + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
   return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. ssh to the remote must work without a password prompt. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
@@ -2135,6 +2138,10 @@ function renderSettings() {
   $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
   const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); serverMenu(); };
   $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
+  $('#setBody').querySelectorAll('[data-remote-keep]').forEach(s => { s.onchange = async () => {
+    const r = await window.p9.remoteKeepSetting(s.dataset.remoteKeep, s.value === 'keep' ? true : s.value === 'stop' ? false : null).catch(() => null);
+    if (r) serverInfo.keep = r.keep;
+  }; });
   if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
     e.preventDefault();
     const name = $('#setRemoteName').value.trim(), err = $('#setRemoteErr');
