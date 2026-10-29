@@ -15,7 +15,7 @@
 .tab:hover .close{opacity:.7}.tab .close:hover{opacity:1;background:var(--accent)}
 .tab[data-state="stopped"]{opacity:.6}
 .spacer{flex:1}
-html,body{height:100%;overflow:hidden}
+html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a focused off-screen node scroll the body sideways */
 .body{display:grid;grid-template-columns:40px 1fr;min-height:0}
 /* Focus modes: all three stay mounted in one grid cell and only the active one is visible,
    so drafts, scroll and selection survive switching (Builder 2026-10-14) */
