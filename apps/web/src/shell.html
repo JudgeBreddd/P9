@@ -68,13 +68,13 @@
       </section>
     </div>
   </div>
-  <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
+  <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span id="keepNote" class="keep-note" hidden><span id="keepText" role="status"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="keepBtn" hidden>Keep it running</button></span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
 </div>
 
 <!-- D20: while this window connects to a remote, the P9 black hole (black-hole.html) instead of a blank window. Shell.tsx opens and closes it. -->
 <dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"><!--black-hole--></div>
   <h2 id="connT">Connecting</h2><p id="connWhy" class="muted" role="status" aria-live="polite"></p>
-  <button data-slot="button" data-variant="default" id="connInstall" hidden>Install P9 there</button>
+  <div class="conn-acts"><button data-slot="button" data-variant="outline" id="connStart" hidden>Start P9 there</button><button data-slot="button" data-variant="default" id="connInstall" hidden>Install P9 there</button></div>
   <div id="connProgress" class="conn-progress" hidden><span class="conn-spin" aria-hidden="true"></span><span id="connStep" class="truncate"></span><span id="connTime"></span></div>
   <pre id="connLog" class="conn-log" hidden></pre>
   <button data-slot="button" data-variant="ghost" data-size="sm" id="connNo" hidden>Not now</button>
@@ -140,6 +140,34 @@
     <button data-slot="button" data-variant="outline" data-size="sm" id="moveCancel">Cancel</button>
   </div>
 </div>
+<!-- Row I1: after the first connect to a remote where P9 runs only while connected, the one question: keep it running there? -->
+<dialog id="keepDlg" class="keep-dlg" aria-labelledby="keepT" aria-describedby="keepP"><form method="dialog">
+  <div class="dlg-head"><div><h2 id="keepT"></h2><p id="keepP">P9 there can stay on, or run only while this app is connected to it.</p></div></div>
+  <div class="dlg-body">
+    <dl class="keep-ways">
+      <div><dt>Keep it running</dt><dd>Stays on after you disconnect and after the machine restarts. Your phone can reach it, and long turns finish.</dd></div>
+      <div><dt>Only while connected</dt><dd>Starts when you connect and stops 5 minutes after the last desktop, phone or turn, the way VS Code's server does. Uses no memory when idle.</dd></div>
+    </dl>
+    <label class="keep-again sm"><input type="checkbox" id="keepRemember"> Do not ask again for this machine</label>
+    <p class="muted sm keep-later">Settings &gt; Remote changes this later.</p>
+  </div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no">Only while connected</button><button data-slot="button" data-variant="default" value="yes" autofocus>Keep it running</button></div>
+</form></dialog>
+<!-- Row I2: the admin password for one admin step on a remote, typed here instead of in a terminal there. What is missing and
+     why, the exact command it runs, then the field. The field is cleared when the dialog closes; nothing keeps the password. -->
+<dialog id="adminDlg" class="admin-dlg" aria-labelledby="adminT" aria-describedby="adminP"><form method="dialog" id="adminForm">
+  <div class="dlg-head"><div><h2 id="adminT"></h2><p id="adminP"></p></div></div>
+  <div class="dlg-body">
+    <ul id="adminNeed" class="admin-need"></ul>
+    <p class="sm admin-what" id="adminWhat"></p>
+    <pre id="adminCmd" class="admin-cmd" tabindex="0" aria-label="The command it runs as admin"></pre>
+    <label class="admin-pw" for="adminPw"><span id="adminL"></span></label>
+    <input data-slot="input" type="password" id="adminPw" autocomplete="off" spellcheck="false" maxlength="1024" required aria-describedby="adminErr adminNote">
+    <p id="adminErr" class="admin-err sm" role="alert" hidden></p>
+    <p id="adminNote" class="muted sm">Sent once over your ssh connection to sudo there. Never saved, never shown in any log.</p>
+  </div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="cancel" formnovalidate>Cancel</button><button data-slot="button" data-variant="default" value="ok" id="adminOk"></button></div>
+</form></dialog>
 <dialog id="moveDlg" aria-labelledby="moveT" aria-describedby="moveP"><form method="dialog">
   <div class="dlg-head"><div><h2 id="moveT"></h2><p id="moveP"></p></div></div>
   <div class="dlg-body" id="moveNeverRow"><label class="sm"><input type="checkbox" id="moveNever"> Don't show again</label></div>
