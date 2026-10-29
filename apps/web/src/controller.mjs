@@ -10,6 +10,7 @@ import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-fi
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
 import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
+import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
@@ -1151,10 +1152,10 @@ function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'p
 // The old workspace-hub sections, live: notifications, Wiki inbox, logs and incidents, work in flight, audit, last solo run.
 const H = { on: false, notices: [], handoffs: [], timer: 0, hint: '', unchecked: null };
 // Why no job was checked: an empty list then never reads as "every job reported in" (finding 8).
-const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings' };
+const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings', 'space-set': 'Mission shows your space now, so they show only through a data tile or button it names' };
 const noticeLine = () => (H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
 // A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
-const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.links?.length || 0) : 0); };
+const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function loadHub() {
   clearTimeout(H.timer);
@@ -1163,8 +1164,9 @@ async function loadHub() {
   // No hub in the settings: the sections stay off and the page says why. Asked again, as the settings load live; any other
   // failure is asked again sooner.
   if (r.status !== 200) {
-    const off = r.body?.error === 'hub-not-set', hint = off ? 'Logs, incidents and work in flight are off: set hub in the Mission settings file.' : '';
-    if (off) H.unchecked = 'hub-not-set';
+    // A space file turns the built-in layer off for good (row M4-b): no hint, its windows go.
+    const off = ['hub-not-set', 'space-set'].includes(r.body?.error), hint = r.body?.error === 'hub-not-set' ? 'Logs, incidents and work in flight are off: set hub in the Mission settings file.' : '';
+    if (off) { H.unchecked = r.body.error; H.on = false; }
     if (hint !== H.hint) { H.hint = hint; renderMission(); }
     H.timer = setTimeout(loadHub, off ? 60000 : 15000);
     return;
@@ -1471,6 +1473,22 @@ function missionModal(m, body, row) {
     // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is open on screen, every 30 s.
     m.tiles ||= {};
     if (sp?.data?.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
+    // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
+    m.ck ||= {};
+    if (sp?.checklists?.length) body.insertAdjacentHTML('beforeend', `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>`);
+    const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });
+    if (sp?.checklists?.length && !m.ckRead) { m.ckRead = true; Promise.all(sp.checklists.map(c => ckLoad(c.id))).then(() => S.modal === m && renderModal()); }
+    body.querySelectorAll('[data-ck] button').forEach(b => b.onclick = async () => {
+      const id = b.closest('[data-ck]').dataset.ck, act = checklistAction(b, m.ck[id], m.armed);
+      if (!act) return;
+      m.armed = act.arm || '';
+      if (act.arm) return renderModal();
+      b.disabled = true;
+      const r = await window.p9.mission('checklistSet', act.body);
+      await ckLoad(id);
+      if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
+      if (S.modal === m) renderModal();
+    });
     const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (S.modal === m) renderModal(); });
     if (sp?.data?.length && !m.pulling) { sp.data.forEach(pull); m.pulling = setInterval(() => { if (S.modal !== m) return clearInterval(m.pulling); if (!document.hidden) sp.data.forEach(pull); }, 30000); }
     body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = sp.data.find(x => x.id === b.closest('[data-tile]').dataset.tile);
