@@ -105,7 +105,7 @@ const AGENT_COMMANDS = { claude: { login: 'claude auth login' }, codex: { login:
 // answers as a packaged app would, P9_BUILD runs instead of pnpm build. Outside it both are ignored.
 export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P9_PACKAGED === '1', build: (env.P9_TEST_HOME && env.P9_BUILD) || null });
 
-export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs }) {
+export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs, claudeUsage }) {
   const lifecycle = createLifecycle();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
   let hub = createHub({ workspace, settings });
@@ -332,7 +332,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/usage', async (c) => {
     const { claudeLive, ...usage } = ledger.usage(), window = await claudeWindow(agentDirs(os.homedir()).claudeDir);
     const contexts = usage.contexts?.map((item) => (window && item.provider === 'claude' && item.size > window ? { ...item, size: window } : item));
-    const limits = await planLimits({ home: os.homedir(), claudeLive }), signedOut = (await signedIn()).codex ? [] : ['codex'];
+    const limits = await planLimits({ home: os.homedir(), claudeLive, claudePolled: claudeUsage?.look() }), signedOut = (await signedIn()).codex ? [] : ['codex'];
     return c.json({ ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } });
   });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
