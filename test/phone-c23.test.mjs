@@ -81,15 +81,10 @@ test('P3, P5, P16, P19, K8: running chat bar, named and capped context, a readab
   console.log('PASS P3 P5 P16 P19 K8');
 });
 
-test('P4, P6, P7, P17: boot black hole, refresh turns while it loads, Usage reloads itself, iPhone focus zoom off', { timeout: 120000 }, async (t) => {
+test('P4, P6, P7, P17: boot P9 logo, refresh turns while it loads, Usage reloads itself, iPhone focus zoom off', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   const { page } = await phone(t, server);
-  // P4: the loading mark is a black hole that bobs (the ring around it still turns, phone-loading.test.mjs).
-  // The boot screen is gone once the page loads, so its rules are read from the stylesheet.
-  const bob = await page.evaluate(() => { const all = (rules) => [...rules].flatMap((r) => [r, ...(r.cssRules ? all(r.cssRules) : [])]);
-    const rules = [...document.styleSheets].flatMap((s) => all(s.cssRules));
-    return { keyframes: rules.some((r) => r.type === CSSRule.KEYFRAMES_RULE && r.name === 'bob'), hole: rules.some((r) => r.selectorText?.includes('.hole') && /\bbob\b/.test(r.style?.animation ?? '')) }; });
-  assert.deepEqual(bob, { keyframes: true, hole: true });
+  // The loading mark is the real P9 logo, breathing (phone-loading.test.mjs watches it on a held first load).
   // The real P9 logo top left (docs/brand/icon-simplified-256.png at 64 px), loaded, not the old D-in-a-ring placeholder.
   await page.locator('[data-bar="chat"] img.mark').evaluate((el) => el.decode());
   const mark = await page.locator('[data-bar="chat"] img.mark').evaluate((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width), new URL(el.src).pathname, el.naturalWidth]; });
