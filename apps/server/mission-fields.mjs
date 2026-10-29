@@ -73,6 +73,19 @@ export const LOG = {
   title: { type: 'string', required: true, check: text, doc: 'The log view label.' },
   path: { ...relative('The workspace file whose last 200 lines it shows.'), required: true },
 };
+// A folder list (threat model row M2-a): file names and times only, read through packages/files, never written.
+export const FOLDER = {
+  id,
+  title: { type: 'string', required: true, check: text, doc: 'The list label.' },
+  root: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'A key of settings.notes_roots: the folder is in that root. Without it, the folder is in the workspace. Never a path.' },
+  path: relative('The folder inside the root or the workspace. Without it, the root itself.'),
+  pattern: { type: 'string', check: (value) => typeof value === 'string' && /^[^/\\\0]{1,120}$/.test(value),
+    doc: 'File names to list: * is any run of characters, ? is one character, e.g. *.md. Default *. Names starting with a dot are never listed.' },
+  recursive: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'Look in subfolders too, 8 deep. Default false.' },
+  match: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n\0]/.test(value),
+    doc: 'Only files holding a line that is exactly this text (spaces at either end ignored); the newest 200 files are checked.' },
+};
 // A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
 export const SECTION = {
@@ -88,6 +101,10 @@ export const SECTION = {
     example: [{ id: 'backup-log', title: 'Backup log', path: 'logs/backup.log' }] },
   notes: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.', example: 'vault' },
+  folders: { type: 'array', check: Array.isArray, fields: FOLDER, doc: 'Folder lists: files in a folder, newest first, with a count. Each opens read-only. A folder outside the workspace needs a notes_roots key (allow_folder asks the user).',
+    example: [{ id: 'open-handoffs', title: 'Open handoffs', path: 'projects', pattern: 'HANDOFF.md', recursive: true, match: 'Status: open' }] },
+  refs: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === 'string' && ID.test(item)),
+    doc: 'IDs of registry scripts, apps or pages (or space buttons) shown in this section too, at most 64. An ID nothing has shows "not found".', example: ['disk-free', 'dashboard'] },
 };
 // The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
 export const SPACE_FILE = 'mission-space.json';
@@ -163,7 +180,7 @@ export const SCHEMAS = {
       pages: list(jsonSchema(PAGE), 'Links.') } },
   space: { type: 'object', required: ['sections'], additionalProperties: false, description: 'The space: free-form sections. A malformed section, button or log view, '
     + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field is listed as invalid by name.',
-    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) } }, true), 'Sections in order.') } },
+    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) }, folders: { items: jsonSchema(FOLDER, {}, true) } }, true), 'Sections in order.') } },
 };
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.

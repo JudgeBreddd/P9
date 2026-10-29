@@ -559,6 +559,9 @@ export async function createDesktop({ state, open } = {}) {
     notes: ({ root }) => id(root) && ['GET', '/mission/notes?' + new URLSearchParams({ root })],
     noteRead: ({ root, path: file }) => id(root) && typeof file === 'string' && ['GET', '/mission/notes/file?' + new URLSearchParams({ root, path: file })],
     noteSave: body => ['POST', '/mission/notes/save', body],
+    // Folder lists (row 68): read-only; the daemon lists again and opens only a file its own list holds.
+    folder: ({ id: item }) => id(item) && ['GET', '/mission/folder?' + new URLSearchParams({ id: item })],
+    folderFile: ({ id: item, path: file }) => id(item) && typeof file === 'string' && ['GET', '/mission/folder/file?' + new URLSearchParams({ id: item, path: file })],
     noteCreate: body => ['POST', '/mission/notes/create', body],
     noteRename: body => ['POST', '/mission/notes/rename', body],
     // The Mission edit form (names and icons): the daemon checks the kind, fields, hash and File protection.

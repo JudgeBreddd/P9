@@ -4,15 +4,15 @@
 // parsers and File protection as the desktop; the agent lock turns every write off; running a script or answering a
 // needs-you item asks the user in the chat first.
 // ponytail: MCP by hand (JSON-RPC, tools and resources only, no SDK in the daemon); the SDK if P9 needs more of the protocol.
-import { readFile as readText, open, mkdir, lstat, chmod } from 'node:fs/promises';
+import { readFile as readText, open, mkdir, lstat, chmod, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { readFile, guardedSave, createFile } from '../../packages/files/index.mjs';
-import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, withIds, spaceAt } from './mission.mjs';
-import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, SPACE_FILE } from './mission-fields.mjs';
+import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt } from './mission.mjs';
+import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, SPACE_FILE, ID } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -30,7 +30,7 @@ const object = (value) => Boolean(value) && typeof value === 'object' && !Array.
 const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission before building the space (it also reads as p9://schema/space; the registry\'s is p9://schema/registry), '
   + 'and dry-run a whole file with validate_registry or validate_space. Every write tool says what changed and returns the file\'s new '
   + 'hash; pass it back as hash so a file changed meanwhile is reported instead of overwritten. Writes are refused while the agent lock '
-  + 'is on, and the registry and space are read-only while File protection is on. run_script and answer_needs_you ask the user in this '
+  + 'is on, and the registry and space are read-only while File protection is on. run_script, answer_needs_you and allow_folder ask the user in this '
   + 'chat first. request_restart only asks the user; nothing restarts. To show the user an artifact beside the chat, put it in a fenced '
   + 'block whose info string is "<type> artifact [panel|pinned|full] [title]" (type: html, svg, mermaid, jsx, markdown, or any code '
   + 'language); it runs sandboxed with no network, React may import only react and react-dom, and the user\'s comments come back as one message.';
@@ -61,6 +61,10 @@ const TOOLS = [
   ['remove_app', 'Remove an app by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
   ['remove_page', 'Remove a link by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
   ['remove_section', 'Remove a space section, its buttons and log views, by title.', input({ title: { type: 'string' }, hash: hashField }, ['title'])],
+  ['allow_folder', 'Ask the user, in this chat, to let Mission Control list a folder outside the workspace, read-only. On yes it is added to settings.notes_roots '
+    + 'as name: use name as a space folders item\'s root, or as a section\'s notes. A folder holding the workspace, the home folder or P9\'s own files is refused.',
+    input({ name: { type: 'string', description: 'The root\'s name: 1 to 64 of a-z 0-9 -, starting with a letter or digit, not already in settings.notes_roots.' },
+      folder: { type: 'string', description: 'The folder, as an absolute path.' } }, ['name', 'folder'])],
   ['run_script', 'Run a Mission Control script or space button by ID, after the user allows it in this chat. Waits up to 45 s; follow a longer run with status.',
     input({ id: { type: 'string' }, args: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'The values for the script\'s args, in order.' } }, ['id'])],
   ['list_needs_you', 'The needs-you items waiting for the user, with each one\'s hash and whether it has an empty answer line.', input({})],
@@ -98,7 +102,7 @@ const spaceWords = (subject, error) => (error === 'empty'
     : { error: 'invalid-space', detail: subject + ' is JSON but not a space: it must be an object with a "sections" list, such as {"sections": []}.' });
 
 // useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
-export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace }) {
+export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
 
   const need = () => { const settings = current(); if (!settings) throw new Error('settings-missing'); return settings; };
@@ -314,6 +318,31 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const { status: ignored, ...result } = output;
     return { run: started.run, ...result, output: result.output.slice(-20000), ...(result.done ? {} : { detail: 'Still running: call status with run and from = next.' }) };
   }
+  // A folder outside the workspace (threat model row M2-b): only after the user's yes in this chat, and the folder the
+  // user saw is the one written, through the Settings route's writer. A file changed during the ask is not overwritten.
+  async function allowFolder(conversation, { name, folder }, signal) {
+    if (chat.lock().on) return { error: 'agent-lock-on' };
+    if (!string(name, 64) || !ID.test(name) || !string(folder, 4096) || folder.includes('\0') || !path.isAbsolute(folder)) {
+      return { error: 'request-refused', reason: 'name: 1 to 64 of a-z 0-9 -; folder: an absolute path' };
+    }
+    if (!settingsFile || !changeSettings) return { error: 'settings-missing' };
+    const real = await realpath(folder).catch(() => null);
+    if (!real) return { error: 'folder-not-found', folder };
+    if (await rootRefused(real, { workspace, recovery, also: state ? [state] : [] })) return { error: 'root-refused', detail: 'It holds the workspace, the home folder or P9\'s own files.' };
+    let before, roots;
+    try { before = await readText(settingsFile, 'utf8'); roots = parseSettings(before).notes_roots ?? {}; }
+    catch (error) { return { ...unparsable(error), error: 'settings-invalid' }; }
+    if (Object.hasOwn(roots, name)) return { error: 'name-taken', name, folder: roots[name] };
+    if (Object.keys(roots).length >= 16) return { error: 'request-refused', reason: 'settings.notes_roots already has 16 folders' };
+    const title = 'P9 Mission Control: let Mission list the folder ' + real + ' (read-only), named ' + name;
+    if (title.length > 5000) return { error: 'request-refused', reason: 'the folder is too long to show the user in full' };
+    if (!await chat.approve(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'edit' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (await realpath(folder).catch(() => null) !== real) return { error: 'changed-since-allowed', detail: 'The folder changed after the user allowed it; nothing was added.' };
+    const saved = await changeSettings((disk, text) => text !== before ? { error: 'hash-conflict', detail: 'settings.json changed while the user was asked; nothing was added.' }
+      : { ...disk, notes_roots: { ...disk.notes_roots, [name]: real } });
+    if (saved.error) return saved;
+    return { name, folder: real, detail: 'Added to settings.notes_roots. Name it as root in a space folders item.' };
+  }
   async function answerItem(conversation, { name, hash, answer }, signal) {
     if (chat.lock().on) return { error: 'agent-lock-on' };
     if (!string(name, 120) || !string(hash, 64) || !string(answer)) return { error: 'request-refused' };
@@ -364,6 +393,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       });
     },
     run_script: (args, conversation, signal) => runScript(conversation, args, signal),
+    allow_folder: (args, conversation, signal) => allowFolder(conversation, args, signal),
     list_needs_you: async () => { need(); return { items: (await currentMission().overview()).queue.map(({ name, title, age, hash, answerable, content }) => ({ name, title, age, hash, answerable, content })) }; },
     answer_needs_you: (args, conversation, signal) => answerItem(conversation, args, signal),
     status: (args) => {

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, RECORD, PAGE, SECTION, LOG, SETTINGS } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, RECORD, PAGE, SECTION, LOG, FOLDER, SETTINGS } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -84,7 +84,7 @@ export function parseSpace(text) {
   withIds(space.sections).forEach((section, index) => {
     const wrong = problem(section, SECTION);
     if (wrong) return result.invalid.push({ kind: 'space', index, reason: 'malformed-section', detail: wrong });
-    const title = section.title.trim(), buttons = [], logs = [];
+    const title = section.title.trim(), buttons = [], logs = [], folders = [];
     if (titles.has(title) || ids.has(section.id)) return result.invalid.push({ kind: 'space', index, reason: 'duplicate-section',
       detail: (titles.has(title) ? 'Another section is already titled "' + title + '"' : 'Another section already has the id ' + section.id) + '; titles and ids must be unique. This one is not shown.' });
     titles.add(title); ids.add(section.id);
@@ -95,9 +95,25 @@ export function parseSpace(text) {
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
-    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    (section.folders ?? []).forEach((record, folder) => { const detail = problem(record, FOLDER, true);
+      if (detail) result.invalid.push({ kind: 'space', index, folder, reason: 'malformed-record', detail }); else folders.push({ ...record }); });
+    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
+}
+
+// A file name against a folder list's pattern: * any run, ? one character. Two pointers with one star to fall back to,
+// so a crafted pattern costs at most name x pattern steps (a regex of many stars can backtrack far longer).
+export function wildcard(pattern, name) {
+  let p = 0, n = 0, star = -1, mark = 0;
+  while (n < name.length) {
+    if (p < pattern.length && (pattern[p] === '?' || pattern[p] === name[n])) { p++; n++; }
+    else if (pattern[p] === '*') { star = p++; mark = n; }
+    else if (star >= 0) { p = star + 1; n = ++mark; }
+    else return false;
+  }
+  while (pattern[p] === '*') p++;
+  return p === pattern.length;
 }
 
 // The sections with an id on each one that has none, made from its title and unique against every id the file already
@@ -118,7 +134,8 @@ export function combine(reg, space) {
   const invalid = [...reg.invalid, ...space.invalid];
   const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
   const logs = new Set(unique(space.sections.flatMap((section) => section.logs), 'space', invalid));
-  const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)) }));
+  const folders = new Set(unique(space.sections.flatMap((section) => section.folders), 'space', invalid));
+  const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)), folders: section.folders.filter((folder) => folders.has(folder)) }));
   return { ...reg, scripts, invalid, space: sections };
 }
 
@@ -247,8 +264,16 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), ...(notes ? { notes } : {}) })),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}) })),
       queue: await queue(), primary: await primary() };
+  }
+  // A section's reference to a script, app or page by ID (M2): the tile names what it found, or says it is missing.
+  function reference(reg, id) {
+    for (const kind of ['scripts', 'apps', 'pages']) {
+      const found = reg[kind].find((record) => record.id === id);
+      if (found) return { id, kind, title: found.title, ...(found.icon ? { icon: found.icon } : {}) };
+    }
+    return { id, missing: true };
   }
   // ponytail: a log view reads the whole file (packages/files refuses one over MAX_BYTES) and shows the last 200 lines.
   async function spaceLog(id) {
@@ -267,8 +292,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   const note = (value) => typeof value === 'string' && value.length <= 1024 && /\.md$/i.test(value) && !value.split('/').some((part) => part.startsWith('.'));
   async function notesRoot(name) {
     if (typeof name !== 'string' || !ID.test(name)) return refused;
+    if (!(await registry()).space.some((section) => section.notes === name)) return { status: 404, error: 'unknown-root' };
+    return namedRoot(name);
+  }
+  // A settings.notes_roots folder by its key, as its realpath; refused when it holds the workspace, home or recovery folder.
+  async function namedRoot(name) {
     const folder = settings.notes_roots && Object.hasOwn(settings.notes_roots, name) ? settings.notes_roots[name] : undefined;
-    if (!folder || !(await registry()).space.some((section) => section.notes === name)) return { status: 404, error: 'unknown-root' };
+    if (!folder) return { status: 404, error: 'unknown-root' };
     let root;
     try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
     if (await rootRefused(root, { workspace, recovery })) return { status: 403, error: 'root-refused' };
@@ -293,6 +323,51 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     }
     files.sort((a, b) => b.modified - a.modified);
     return { status: 200, files: files.slice(0, NOTES_SHOWN), total: files.length, shown: NOTES_SHOWN, partial: folders.length > 0 };
+  }
+  // Folder lists (threat model row M2-a): a space item names a folder in the workspace or a notes root. The walk is
+  // listDirectory's (no links, no locked names) with the notes limits; only names and times are read, plus, for match,
+  // the newest FOLDER_MATCHED files through readFile. A file opens only when this walk lists it.
+  const FOLDER_MATCHED = 200;
+  async function folderFiles(id) {
+    if (typeof id !== 'string' || !ID.test(id)) return refused;
+    const item = (await registry()).space.flatMap((section) => section.folders).find((folder) => folder.id === id);
+    if (!item) return { status: 404, error: 'unknown-id' };
+    const target = item.root ? await namedRoot(item.root) : { root: workspace };
+    if (target.error) return target;
+    const base = item.path ?? '', depth = base ? base.split('/').length : 0, files = [], folders = [base];
+    for (let walked = 0; folders.length && walked < NOTES_FOLDERS; walked++) {
+      const folder = folders.shift();
+      let entries;
+      try { entries = await listDirectory(target.root, folder); } catch { if (folder === base) return { status: 404, error: 'not-found' }; continue; }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const relative = folder ? `${folder}/${entry.name}` : entry.name;
+        if (entry.dir) { if (item.recursive && relative.split('/').length - depth < NOTES_DEPTH) folders.push(relative); }
+        else if (wildcard(item.pattern ?? '*', entry.name)) files.push({ path: relative, name: relative.slice(base ? base.length + 1 : 0), modified: entry.mtimeMs });
+      }
+    }
+    files.sort((a, b) => b.modified - a.modified);
+    let found = files, partial = folders.length > 0;
+    if (item.match) {
+      const line = item.match.trim();
+      partial ||= files.length > FOLDER_MATCHED;
+      found = [];
+      for (const file of files.slice(0, FOLDER_MATCHED)) {
+        try { if ((await readFile(target.root, file.path)).content.split('\n').some((text) => text.trim() === line)) found.push(file); } catch {}
+      }
+    }
+    return { status: 200, root: target.root, files: found.slice(0, NOTES_SHOWN), total: found.length, shown: NOTES_SHOWN, partial };
+  }
+  async function folderList(id) {
+    const { root, ...list } = await folderFiles(id);
+    return list;
+  }
+  async function folderRead(id, relative) {
+    if (typeof relative !== 'string' || relative.length > 1024) return refused;
+    const list = await folderFiles(id);
+    if (list.error) return list;
+    if (!list.files.some((file) => file.path === relative)) return { status: 404, error: 'not-found' };
+    try { return { status: 200, text: (await readFile(list.root, relative)).content }; } catch { return { status: 404, error: 'not-found' }; }
   }
   async function notesRead(name, relative) {
     if (!note(relative)) return refused;
@@ -525,5 +600,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
 
   // What the tile icons are made from (icons.mjs): the links, the apps' programs and the sections, as parsed.
   const iconSources = async () => { const reg = await registry(); return { pages: reg.pages, apps: reg.apps, sections: reg.space }; };
-  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename };
+  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead };
 }

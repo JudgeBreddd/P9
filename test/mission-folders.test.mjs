@@ -1,0 +1,149 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, writeFile, readFile, symlink, utimes, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { daemon, http, authenticated, root } from './helpers.mjs';
+import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
+import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
+
+// Mission M2: folder lists (threat model row M2-a), registry references, and allow_folder (row M2-b).
+const fake = path.join(root, 'test/fake-acp-agent.mjs');
+const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
+const SPACE = { sections: [
+  { title: 'Plans', refs: ['hello', 'editor', 'dash', 'gone'], folders: [
+    { id: 'open-plans', title: 'Open plans', root: 'vault', path: 'plans', pattern: '*.md', recursive: true, match: 'Status: open' },
+    { id: 'all-plans', title: 'All plans', root: 'vault', path: 'plans', pattern: '*.md' },
+    { id: 'run-logs', title: 'Run logs', path: 'logs', pattern: 'run-??.log' },
+    { id: 'wide', title: 'Wide', root: 'wide' }] },
+  { title: 'Bad', folders: [{ id: 'slash', title: 'Slash', pattern: 'a/b' }, { id: 'extra', title: 'Extra', where: 'x' }] }] };
+
+async function seed({ directory, workspace }) {
+  for (const folder of ['projects', 'hub', '_waiting', 'logs']) await mkdir(path.join(workspace, folder));
+  await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
+  await writeFile(path.join(workspace, SETTINGS.registry), JSON.stringify({ scripts: [{ id: 'hello', title: 'Hello', cmd: ['true'] }],
+    apps: [{ id: 'editor', title: 'Editor', cmd: ['true'] }], pages: [{ id: 'dash', title: 'Dashboard', url: 'https://example.com' }] }));
+  await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify(SPACE, null, 2) + '\n');
+  for (const name of ['run-01.log', 'run-02.log', 'run-100.log', 'notes.txt']) await writeFile(path.join(workspace, 'logs', name), 'x\n');
+  const vault = path.join(directory, 'vault'), plans = path.join(vault, 'plans');
+  await mkdir(path.join(plans, 'sub'), { recursive: true });
+  // 3 hold the line (one indented, in a subfolder), 1 does not, 1 is a link to a file outside the root that holds it too.
+  const files = { 'a.md': '# A\nStatus: open\n', 'sub/b.md': '# B\n  Status: open  \n', 'c.md': 'Status: open\n', 'd.md': '# D\nStatus: closed\n' };
+  let minute = 0;
+  for (const [name, text] of Object.entries(files)) {
+    await writeFile(path.join(plans, name), text);
+    const when = new Date(Date.UTC(2026, 0, 1, 0, minute += 1));
+    await utimes(path.join(plans, name), when, when);
+  }
+  await writeFile(path.join(directory, 'outside.md'), 'Status: open\n');
+  await symlink(path.join(directory, 'outside.md'), path.join(plans, 'link.md'));
+  await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ ...SETTINGS, notes_roots: { vault, wide: directory } }));
+  await mkdir(path.join(directory, 'other'));
+  return { args: ['--acp-override', fake, '--settings', path.join(directory, 'settings.json')] };
+}
+const start = (t) => daemon(t, undefined, false, seed);
+const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
+  headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
+  .then((result) => ({ status: result.status, body: result.text ? JSON.parse(result.text) : null }));
+const list = (instance, id) => call(instance, '/mission/folder?' + new URLSearchParams({ id }));
+const open = (instance, id, file) => call(instance, '/mission/folder/file?' + new URLSearchParams({ id, path: file }));
+
+test('folder list: 3 files holding the line, newest first; the link out of the root is refused', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const overview = (await call(instance, '/mission')).body;
+  const plans = overview.space.find((section) => section.title === 'Plans');
+  assert.deepEqual(plans.folders.map((folder) => folder.id), ['open-plans', 'all-plans', 'run-logs', 'wide']);
+  const matched = await list(instance, 'open-plans');
+  assert.equal(matched.status, 200);
+  assert.deepEqual(matched.body.files.map((file) => file.path), ['plans/c.md', 'plans/sub/b.md', 'plans/a.md']);
+  assert.deepEqual([matched.body.total, matched.body.partial], [3, false]);
+  assert.equal(matched.body.files[1].name, 'sub/b.md');
+  // Not recursive, no match: the folder's own .md files, still without the link.
+  assert.deepEqual((await list(instance, 'all-plans')).body.files.map((file) => file.name), ['d.md', 'c.md', 'a.md']);
+  assert.deepEqual((await open(instance, 'open-plans', 'plans/link.md')).status, 404);
+  assert.deepEqual((await open(instance, 'open-plans', 'plans/../../outside.md')).status, 404);
+  assert.deepEqual((await open(instance, 'open-plans', 'plans/d.md')).status, 404, 'a file the list does not hold');
+  const opened = await open(instance, 'open-plans', 'plans/sub/b.md');
+  assert.deepEqual([opened.status, opened.body.text], [200, '# B\n  Status: open  \n']);
+  console.log('PASS folder list: 3 rows, newest first; link.md, .. and an unlisted file are refused');
+});
+
+test('folder list: workspace folders, ? patterns, refused roots and malformed items', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  assert.deepEqual((await list(instance, 'run-logs')).body.files.map((file) => file.name).sort(), ['run-01.log', 'run-02.log']);
+  assert.deepEqual([(await list(instance, 'wide')).status, (await list(instance, 'wide')).body.error], [403, 'root-refused']);
+  assert.equal((await list(instance, 'nope')).status, 404);
+  assert.equal((await list(instance, '../x')).status, 400);
+  const invalid = (await call(instance, '/mission')).body.invalid.filter((entry) => entry.reason === 'malformed-record').map((entry) => entry.detail);
+  assert.equal(invalid.length, 2);
+  assert.match(invalid.join('\n'), /pattern: /);
+  assert.match(invalid.join('\n'), /where is not a field of this record/);
+  console.log('PASS folder list: ? pattern, a root holding the workspace 403, unknown id 404, bad id 400, malformed items dropped');
+});
+
+test('refs: found ones name their script, app or page; a missing ID says so', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const refs = (await call(instance, '/mission')).body.space.find((section) => section.title === 'Plans').refs;
+  assert.deepEqual(refs, [{ id: 'hello', kind: 'scripts', title: 'Hello' }, { id: 'editor', kind: 'apps', title: 'Editor' },
+    { id: 'dash', kind: 'pages', title: 'Dashboard' }, { id: 'gone', missing: true }]);
+  console.log('PASS refs: 3 resolved, gone is missing');
+});
+
+async function until(instance, match, after = 0) {
+  for (let i = 0; i < 40; i += 1) {
+    const { body } = await call(instance, `/chat/events?after=${after}&wait=2000`);
+    after = body.cursor;
+    const hit = body.events.find(match);
+    if (hit) return { hit, cursor: after };
+  }
+  throw new Error('event-timeout');
+}
+async function agent(t, instance) {
+  const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude' });
+  await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp' });
+  const { hit, cursor } = await until(instance, (event) => event.conversation === conversation && event.data?.content?.text?.startsWith('mcp:'));
+  const [entry] = JSON.parse(hit.data.content.text.slice(4));
+  const client = new Client({ name: 'p9-test', version: '1' });
+  await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
+  t.after(() => client.close());
+  const tool = async (name, args = {}, options) => JSON.parse((await client.callTool({ name, arguments: args }, undefined, options)).content[0].text);
+  return { conversation, tool, cursor };
+}
+
+test('allow_folder: nothing is added without the user\'s yes; P9\'s own folders are refused before asking', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const { conversation, tool, cursor } = await agent(t, instance);
+  const settingsFile = path.join(instance.directory, 'settings.json'), before = await readFile(settingsFile, 'utf8');
+  const other = path.join(instance.directory, 'other');
+  const approval = (after) => until(instance, (event) => event.conversation === conversation && event.type === 'approval', after);
+  const answer = (request, optionId) => call(instance, `/chat/${conversation}/answer`, 'POST', { request, answer: { optionId } });
+
+  let pending = tool('allow_folder', { name: 'other', folder: other });
+  let asked = await approval(cursor);
+  assert.equal(asked.hit.data.toolCall.title, 'P9 Mission Control: let Mission list the folder ' + await realpath(other) + ' (read-only), named other');
+  await answer(asked.hit.data.request, 'reject');
+  assert.equal((await pending).error, 'not-allowed');
+  assert.equal(await readFile(settingsFile, 'utf8'), before);
+
+  const controller = new AbortController();
+  pending = tool('allow_folder', { name: 'other', folder: other }, { signal: controller.signal });
+  asked = await approval(asked.cursor);
+  controller.abort();
+  await assert.rejects(pending);
+  assert.equal(await readFile(settingsFile, 'utf8'), before);
+
+  // Refused with no prompt (a prompt here would hang the call): a folder holding the workspace, a drive root, a relative path, a taken name.
+  assert.equal((await tool('allow_folder', { name: 'wide2', folder: instance.directory })).error, 'root-refused');
+  assert.equal((await tool('allow_folder', { name: 'top', folder: '/' })).error, 'root-refused');
+  assert.equal((await tool('allow_folder', { name: 'rel', folder: 'other' })).error, 'request-refused');
+  assert.equal((await tool('allow_folder', { name: 'vault', folder: other })).error, 'name-taken');
+  assert.equal(await readFile(settingsFile, 'utf8'), before);
+
+  pending = tool('allow_folder', { name: 'other', folder: other });
+  asked = await approval(asked.cursor);
+  await answer(asked.hit.data.request, 'allow');
+  const added = await pending;
+  assert.equal(added.name, 'other', JSON.stringify(added));
+  const after = JSON.parse(await readFile(settingsFile, 'utf8'));
+  assert.deepEqual(after, { ...JSON.parse(before), notes_roots: { ...JSON.parse(before).notes_roots, other: await realpath(other) } });
+  console.log('PASS allow_folder: reject and cancel write nothing; refused folders never ask; allow adds only that key');
+});

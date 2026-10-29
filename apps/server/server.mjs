@@ -190,7 +190,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     settingsSaves = turn.then(() => {}, () => {});
     return turn;
   };
-  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace });
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change) });
   // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
   // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
   // the page of a folder Dev Focus has since left is refused, never written into the new one.
@@ -321,6 +321,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return reply(c, await terminals.create({}, { typed: SPRINT_TMUX, run: true, phone: !!c.get('device') }));
   });
   // Notes (threat model row 34): both listeners, the same gates; mission.mjs checks the root, path and kind.
+  api.get('/mission/folder', async (c) => reply(c, await mission.folderList(c.req.query('id'))));
+  api.get('/mission/folder/file', async (c) => reply(c, await mission.folderRead(c.req.query('id'), c.req.query('path'))));
   api.get('/mission/notes', async (c) => reply(c, await mission.notesList(c.req.query('root'))));
   api.get('/mission/notes/file', async (c) => reply(c, await mission.notesRead(c.req.query('root'), c.req.query('path'))));
   api.post('/mission/notes/save', async (c) => reply(c, await mission.notesSave(await json(c))));
@@ -674,6 +676,23 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return c.json({ settings: disk.parsed ?? null, error: disk.error ?? null, ...(remote && !c.get('device') ? { remoteOrigin: remote.origin } : {}) });
   });
   let settingsSaves = Promise.resolve();
+  // A settings.json change from the daemon itself (allow_folder, row 69), in the same queue and writer as this route.
+  // change(parsed, text) returns the next settings, or an { error } that writes nothing.
+  function changeSettings(change) {
+    const turn = settingsSaves.then(async () => {
+      await reloadSettings();
+      const disk = await settingsOnDisk();
+      if (disk.error || !disk.parsed) return { error: 'settings-invalid', ...(disk.error ? { detail: disk.error } : {}) };
+      const next = change(disk.parsed, disk.text);
+      if (next.error) return next;
+      let parsed;
+      try { parsed = parseSettings(JSON.stringify(next)); } catch (error) { return { error: 'settings-refused', detail: error.detail ?? error.message }; }
+      await replaceSettings(disk.text, parsed);
+      return { settings: parsed };
+    });
+    settingsSaves = turn.then(() => {}, () => {});
+    return turn;
+  }
   api.post('/setup/settings', async (c) => {
     const body = await json(c);
     if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length || !Object.keys(body).every((key) => Object.hasOwn(SETTINGS, key))) return c.json({ error: 'request-refused' }, 400);
