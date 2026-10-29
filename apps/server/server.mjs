@@ -179,7 +179,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     || (settings?.space && name === settings.space.toLowerCase())
     // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
     || (settings?.hub && name === (settings.hub + '/mission_control.py').toLowerCase()));
-  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection });
+  // The space P9 made on the first space write (threat model row 69) goes into settings.json through the same queue as Settings saves.
+  const useSpace = (file) => {
+    const turn = settingsSaves.then(async () => {
+      await reloadSettings();
+      const disk = await settingsOnDisk();
+      if (!disk.parsed) throw new Error(disk.error ? 'settings-invalid' : 'settings-missing');
+      if (disk.parsed.space !== file) await replaceSettings(disk.text, parseSettings(JSON.stringify({ ...disk.parsed, space: file })));
+    });
+    settingsSaves = turn.then(() => {}, () => {});
+    return turn;
+  };
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace });
   // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
   // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
   // the page of a folder Dev Focus has since left is refused, never written into the new one.

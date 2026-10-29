@@ -4,14 +4,15 @@
 // parsers and File protection as the desktop; the agent lock turns every write off; running a script or answering a
 // needs-you item asks the user in the chat first.
 // ponytail: MCP by hand (JSON-RPC, tools and resources only, no SDK in the daemon); the SDK if P9 needs more of the protocol.
-import { readFile as readText } from 'node:fs/promises';
+import { readFile as readText, open, mkdir, lstat, chmod } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { readFile, guardedSave } from '../../packages/files/index.mjs';
-import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom } from './mission.mjs';
-import { problem, jsonSchema, SCHEMAS, RECORD, PAGE, SECTION } from './mission-fields.mjs';
+import { readFile, guardedSave, createFile } from '../../packages/files/index.mjs';
+import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, withIds, spaceAt } from './mission.mjs';
+import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, SPACE_FILE } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -26,7 +27,7 @@ const rpcError = (code, message) => Object.assign(new Error(message), { rpc: { c
 const string = (value, max = 4000) => typeof value === 'string' && value.length <= max;
 const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const INSTRUCTIONS = 'P9 Mission Control, for this chat. Read p9://schema/registry and p9://schema/space before adding anything, '
+const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission before building the space (it also reads as p9://schema/space; the registry\'s is p9://schema/registry), '
   + 'and dry-run a whole file with validate_registry or validate_space. Every write tool says what changed and returns the file\'s new '
   + 'hash; pass it back as hash so a file changed meanwhile is reported instead of overwritten. Writes are refused while the agent lock '
   + 'is on, and the registry and space are read-only while File protection is on. run_script and answer_needs_you ask the user in this '
@@ -40,6 +41,7 @@ const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty st
 const cardIdField = { type: 'string', description: 'Your name for the card, like status or todo: 1 to 64 of A-Z a-z 0-9 . _ -' };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const TOOLS = [
+  ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
     input({ text: { type: 'string', description: 'The whole registry JSON. Default: the file on disk.' } })],
   ['validate_space', 'Dry-run a space file with Mission Control\'s own parser (the current registry included). Nothing is written.',
@@ -89,7 +91,14 @@ const RESOURCES = [
 const empty = () => ({ sections: [], invalid: [] });
 const unparsable = (error) => ({ error: error instanceof SyntaxError ? 'invalid-json' : error.message, detail: String(error.message).slice(0, 300) });
 
-export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection }) {
+// The space file's state in words (technical writing: what is wrong, then what to do). subject: "The space file <path>" or "The text".
+const spaceWords = (subject, error) => (error === 'empty'
+  ? { error: 'empty-space-file', detail: subject + ' is empty. A space is a JSON object such as {"sections": []}; describe_mission shows the format.' }
+  : error instanceof SyntaxError ? { error: 'invalid-json', detail: subject + ' is not valid JSON (' + String(error.message).slice(0, 200) + '). validate_space checks a whole text before you write it.' }
+    : { error: 'invalid-space', detail: subject + ' is JSON but not a space: it must be an object with a "sections" list, such as {"sections": []}.' });
+
+// useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
+export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
 
   const need = () => { const settings = current(); if (!settings) throw new Error('settings-missing'); return settings; };
@@ -103,7 +112,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
   async function files(settings = need()) {
     const registry = await readFile(workspace, settings.registry);
-    const space = settings.space ? await readFile(workspace, settings.space).catch(() => null) : null;
+    const space = settings.space ? await readFile(...spaceAt(workspace, settings.space)).catch(() => null) : null;
     return { registry, space };
   }
   const counts = (all) => ({ scripts: all.scripts.length, apps: all.apps.length, pages: all.pages.length, sections: all.space.length, invalid: all.invalid.length });
@@ -112,7 +121,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     let settings = 'missing';
     try { if (settingsFile) { parseSettings(await readText(settingsFile, 'utf8')); settings = 'ok'; } }
     catch (error) { if (error.code !== 'ENOENT') settings = 'invalid'; }
-    const result = { version: pkg.version, agentLock: chat.lock().on, fileProtection: protection(), settings, missionControl: current() ? 'on' : 'off' };
+    const result = { version: pkg.version, agentLock: chat.lock().on, fileProtection: protection(), settings, missionControl: current() ? 'on' : 'off',
+      ...(current() ? { space: current().space ?? 'no space file yet: the first add_section creates one' } : {}) };
     if (current()) {
       try { const { registry, space } = await files(); result.mission = counts(merged(registry.content, space?.content)); }
       catch (error) { result.mission = unparsable(error); }
@@ -120,9 +130,23 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     return result;
   }
 
+  // Where P9 makes the space when settings names none: beside settings.json (threat model row 69).
+  const defaultSpace = () => (settingsFile ? path.join(path.dirname(settingsFile), SPACE_FILE) : null);
+  const noSpace = () => ({ error: 'no-space-file', detail: 'There is no space file yet. ' + (defaultSpace() && useSpace
+    ? 'The first add_section creates ' + defaultSpace() + ' and names it in settings.' : 'Settings name none, and this P9 has no settings file to record one in.') });
+  const missingSpace = (file) => ({ error: 'space-file-missing', file, detail: 'Settings name the space file ' + file + ', but P9 cannot read it there (moved or deleted?). '
+    + 'The user can point Settings > Mission Control files at it again.' });
+
   async function validate(kind, text) {
     if (text !== undefined && !string(text, 6 * 1024 * 1024)) return { error: 'request-refused' };
-    const { registry, space } = await files();
+    const settings = need(), { registry, space } = await files(settings);
+    if (kind === 'space') {
+      if (text === undefined && !settings.space) return { ok: false, ...noSpace() };
+      if (text === undefined && !space) return { ok: false, ...missingSpace(settings.space) };
+      const subject = text === undefined ? 'The space file ' + settings.space : 'The text';
+      if (!(text ?? space.content).trim()) return { ok: false, ...spaceWords(subject, 'empty') };
+      try { parseSpace(text ?? space.content); } catch (error) { return { ok: false, ...spaceWords(subject, error) }; }
+    }
     try {
       const all = kind === 'registry' ? merged(text ?? registry.content, space?.content) : merged(registry.content, text ?? space?.content ?? '', true);
       return { ok: !all.invalid.length, accepted: counts(all), invalid: all.invalid };
@@ -136,15 +160,28 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   async function edit(which, hash, change, by = {}) {
     if (chat.lock().on && !by.user) return { error: 'agent-lock-on', detail: 'The agent lock is on: the user turns it off on the desktop.' };
     if (hash !== undefined && !(typeof hash === 'string' && HASH.test(hash))) return { error: 'request-refused', detail: 'hash: 64 hex characters' };
-    const settings = need(), file = which === 'registry' ? settings.registry : settings.space;
-    if (!file) return { error: 'no-space-file', detail: 'settings.json names no space file.' };
+    let settings = need(), file = which === 'registry' ? settings.registry : settings.space;
+    if (which === 'space' && !file) {
+      // No space yet: the first write makes one (threat model row 69), under the same File protection rule as every space write.
+      if (!defaultSpace() || !useSpace) return noSpace();
+      if (protection() && !(by.user && by.confirm)) return { error: 'registry-read-only', detail: 'File protection is on: P9 makes and writes no space file then. The user turns it off on the desktop.' };
+      const made = await makeSpace(defaultSpace());
+      if (made.error) return made;
+      await useSpace(defaultSpace());
+      settings = need(); file = settings.space;
+      if (file !== defaultSpace()) return { error: 'save-failed', detail: 'P9 made ' + defaultSpace() + ' but could not name it in settings.' };
+    }
     if (readOnly(file) && !(by.user && by.confirm)) return { error: 'registry-read-only', detail: 'File protection is on: P9 never writes ' + file + ' then. The user turns it off on the desktop.' };
     const both = await files(settings), disk = which === 'registry' ? both.registry : both.space;
-    if (!disk) return { error: 'file-missing', file };
+    if (!disk) return which === 'space' ? missingSpace(file) : { error: 'file-missing', file };
     if (hash !== undefined && hash !== disk.hash) return { error: 'hash-conflict', file, diskHash: disk.hash };
+    if (which === 'space' && !disk.content.trim()) return { file, ...spaceWords('The space file ' + file, 'empty') };
     let data;
-    try { data = JSON.parse(stripBom(disk.content)); } catch (error) { return { file, ...unparsable(error) }; }
-    if (!object(data)) return { error: 'invalid-' + which, file };
+    try { data = JSON.parse(stripBom(disk.content)); } catch (error) { return { file, ...(which === 'space' ? spaceWords('The space file ' + file, error) : unparsable(error)) }; }
+    if (!object(data)) return which === 'space' ? { file, ...spaceWords('The space file ' + file) } : { error: 'invalid-' + which, file };
+    // An older space gets its sections' ids saved now (the same ids parseSpace gives them on every load), its old text kept first.
+    const before = which === 'space' && Array.isArray(data.sections) && data.sections.some((entry) => object(entry) && entry.id === undefined) ? disk.content : undefined;
+    if (before !== undefined) data.sections = withIds(data.sections);
     const done = change(data);
     if (done.error) return done;
     // ponytail: the file is written back as 2-space JSON, so hand formatting is lost; a text-level splice if that matters.
@@ -153,10 +190,33 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     try { all = which === 'registry' ? merged(text, both.space?.content) : merged(both.registry.content, text, true); }
     catch (error) { return { file, ...unparsable(error) }; }
     if (done.accepted && !done.accepted(all)) return { error: 'not-accepted', detail: 'Mission Control would drop it.', file, invalid: all.invalid };
-    const saved = await guardedSave(workspace, file, disk.hash, text, recovery);
+    if (before !== undefined && !await keep(file, before)) return { error: 'save-failed', file, detail: 'P9 could not keep a copy of the space before adding section ids, so nothing was written.' };
+    const saved = await guardedSave(...(which === 'space' ? spaceAt(workspace, file) : [workspace, file]), disk.hash, text, recovery);
     if (saved.kind === 'conflict') return { error: saved.reason, file, ...(saved.diskHash ? { diskHash: saved.diskHash } : {}) };
     if (saved.kind !== 'saved') return { error: 'save-failed', file, code: saved.code };
     return { file, ...done.changed, hash: saved.hash };
+  }
+  // The new space file: owner-only, never through a link or over another file; a plain file already there is used as is.
+  async function makeSpace(file) {
+    await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    let handle;
+    try { handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
+    catch (error) {
+      if (error.code !== 'EEXIST') return { error: 'save-failed', file, code: error.code };
+      return (await lstat(file)).isFile() ? {} : { error: 'request-refused', file, detail: file + ' is there but is not a plain file, so P9 will not write it.' };
+    }
+    try { await handle.writeFile('{\n  "sections": []\n}\n'); await handle.sync(); } finally { await handle.close(); }
+    return {};
+  }
+  // A copy of the space's old text beside it, owner-only, under a new name (never over a file).
+  async function keep(file, text) {
+    const [root, name] = spaceAt(workspace, file), copy = name + '.' + Date.now() + '.bak';
+    try {
+      if ((await createFile(root, copy, text)).kind !== 'created') return false;
+      // ponytail: created 644 by createFile then narrowed; a planted link in that instant needs write access to the folder already.
+      await chmod(path.join(root, copy), 0o600);
+      return true;
+    } catch { return false; }
   }
   // The list at data[key], made if absent; null when the file holds something else there.
   const list = (data, key) => { if (data[key] === undefined) data[key] = []; return Array.isArray(data[key]) ? data[key] : null; };
@@ -266,6 +326,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
 
   const calls = {
+    describe_mission: () => describeMission(),
     validate_registry: (args) => validate('registry', args.text),
     validate_space: (args) => validate('space', args.text),
     add_button: (args) => add('scripts', args.record, args.section, args.hash),
@@ -279,8 +340,11 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         const found = section(data, title);
         if (found.error === 'invalid-space') return found;
         if (!found.error || found.error === 'ambiguous-section') return { error: 'duplicate-section', section: title };
-        list(data, 'sections').push(record);
-        return { changed: { action: 'added', kind: 'section', record }, accepted: (all) => all.space.some((entry) => entry.title === title.trim()) };
+        const sections = list(data, 'sections');
+        // ids are unique among sections (M1); every section has one by now (edit() added any missing).
+        const entry = { id: sectionId(record.title.trim(), new Set(sections.map((other) => other?.id))), ...record };
+        sections.push(entry);
+        return { changed: { action: 'added', kind: 'section', record: entry }, accepted: (all) => all.space.some((entry) => entry.title === title.trim()) };
       });
     },
     update_button: ({ id, section, ...rest }) => update('scripts', { key: id, section, ...rest }),
@@ -338,7 +402,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     }
     if (uri === 'p9://registry' || uri === 'p9://space') {
       const settings = need(), { registry, space } = await files(settings), file = uri === 'p9://registry' ? registry : space;
-      if (!file) return json({ path: settings.space ?? null, error: settings.space ? 'unreadable-space' : 'no-space-file' });
+      if (!file) return json({ path: settings.space ?? null, ...(uri === 'p9://registry' ? { error: 'unreadable-registry' } : settings.space ? missingSpace(settings.space) : noSpace()) });
       let invalid;
       try { invalid = merged(registry.content, space?.content).invalid; } catch (error) { invalid = [unparsable(error)]; }
       return json({ path: uri === 'p9://registry' ? settings.registry : settings.space, hash: file.hash, text: file.content, invalid });

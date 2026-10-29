@@ -73,16 +73,24 @@ export const LOG = {
   title: { type: 'string', required: true, check: text, doc: 'The log view label.' },
   path: { ...relative('The workspace file whose last 200 lines it shows.'), required: true },
 };
+// A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
+// new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
 export const SECTION = {
+  id: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'The section\'s id: lowercase letters, digits and dashes, unique among sections. Optional: P9 makes one from the title.' },
   title: { type: 'string', required: true, check: (value) => typeof value === 'string' && Boolean(value.trim()), doc: 'The section heading. Not blank.' },
   icon,
   picture,
   text: { type: 'string', check: text, doc: 'A paragraph shown under the heading.' },
-  buttons: { type: 'array', check: Array.isArray, doc: 'Buttons, each a script record. They share the registry scripts\' IDs: an ID used in both drops both.' },
-  logs: { type: 'array', check: Array.isArray, doc: 'Log views.' },
+  buttons: { type: 'array', check: Array.isArray, fields: RECORD, doc: 'Buttons, each a script record. They share the registry scripts\' IDs: an ID used in both drops both.',
+    example: [{ id: 'disk-free', title: 'Disk free', icon: '💾', cmd: ['df', '-h'] }, { id: 'greet', title: 'Greet', cmd: ['echo', 'hello'], args: ['Name'] }] },
+  logs: { type: 'array', check: Array.isArray, fields: LOG, doc: 'Log views, each the last 200 lines of one workspace file.',
+    example: [{ id: 'backup-log', title: 'Backup log', path: 'logs/backup.log' }] },
   notes: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
-    doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.' },
+    doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.', example: 'vault' },
 };
+// The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
+export const SPACE_FILE = 'mission-space.json';
 export const SETTINGS = {
   primary: { ...relative('The workspace file naming the main project ("**Main project: Name** (`folder/`").'), required: true },
   registry: { ...relative('The registry JSON file (scripts, apps, pages).'), required: true },
@@ -90,7 +98,8 @@ export const SETTINGS = {
   scripts_root: { type: 'string', check: (value) => typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0'),
     doc: 'An absolute folder where registry commands run and ~/workspace expands to. Default: the workspace.' },
   hub: relative('The workspace-hub folder.'),
-  space: relative('The space JSON file (free-form sections with buttons and log views).'),
+  space: { type: 'string', check: (value) => relativePath(value) || (typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0') && path.basename(value) === SPACE_FILE),
+    doc: 'The space JSON file (free-form sections with buttons and log views): a relative workspace path, or the absolute path of a file named ' + SPACE_FILE + ' (P9 makes one beside settings.json on the first space write). A relative workspace path has / separators and no empty, . or .. parts.' },
   page_schemes: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length >= 1 && value.length <= 16 && value.every((scheme) => typeof scheme === 'string' && SCHEME.test(scheme)),
     doc: 'Extra link schemes pages may use (e.g. obsidian), 1 to 16 lowercase schemes of 2 to 32 characters. javascript, file, data, vbscript and blob never open.' },
   server_host: { type: 'string', check: (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value), doc: 'The server\'s host name, letters, digits, _ . and -, at most 64.' },
@@ -107,7 +116,35 @@ export function problem(record, fields, closed = false, schemes) {
     if (!(key in record)) { if (field.required) return key + ' is required'; continue; }
     if (!field.check(record[key], schemes)) return key + ': ' + field.doc;
   }
-  if (closed) for (const key of Object.keys(record)) if (!Object.hasOwn(fields, key)) return 'unknown field ' + key;
+  if (closed) return unknownFields(record, fields, 'this record')[0];
+}
+
+// Every field of record that fields does not know, in words, with the nearest known name when one is close (a typo).
+export function unknownFields(record, fields, what) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return [];
+  return Object.keys(record).filter((key) => !Object.hasOwn(fields, key)).map((key) => {
+    const near = Object.keys(fields).map((name) => [name, distance(key.toLowerCase(), name)]).sort((a, b) => a[1] - b[1])[0];
+    const guess = near && near[1] <= Math.max(2, Math.floor(key.length / 2)) ? ' Did you mean ' + near[0] + '?' : '';
+    return key + ' is not a field of ' + what + '.' + guess + ' Known fields: ' + Object.keys(fields).join(', ') + '.';
+  });
+}
+// Edit distance, for "did you mean".
+function distance(a, b) {
+  let row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    row = next;
+  }
+  return row[b.length];
+}
+// A section id from its title, unique against taken (a Set, which it joins): "Home lab!" -> home-lab, then home-lab-2.
+export function sectionId(title, taken) {
+  const base = String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56).replace(/-+$/, '') || 'section';
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = base + '-' + n;
+  taken.add(id);
+  return id;
 }
 
 export function jsonSchema(fields, extra = {}, closed = false) {
@@ -117,11 +154,28 @@ export function jsonSchema(fields, extra = {}, closed = false) {
 }
 
 const list = (items, description) => ({ type: 'array', items, description });
+// The space templates. M1 ships the blank one; more come as files shipped with the app (M4).
+export const TEMPLATES = [{ name: 'blank', about: 'An empty space to build up section by section.', space: { sections: [] } }];
 export const SCHEMAS = {
   settings: { description: 'P9 settings.json. Unknown fields make the whole file invalid (Mission Control then answers settings-invalid).', ...jsonSchema(SETTINGS, {}, true) },
   registry: { type: 'object', description: 'The registry. Each list is optional; a malformed record or a duplicated ID is dropped and listed as invalid, never run.',
     properties: { scripts: list(jsonSchema(RECORD), 'Buttons whose output Mission Control shows.'), apps: list(jsonSchema(RECORD), 'Programs launched and left running.'),
       pages: list(jsonSchema(PAGE), 'Links.') } },
-  space: { type: 'object', required: ['sections'], description: 'The space: free-form sections. A malformed section, button or log view is dropped and listed as invalid.',
-    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD) }, logs: { items: jsonSchema(LOG) } }), 'Sections in order.') } },
+  space: { type: 'object', required: ['sections'], additionalProperties: false, description: 'The space: free-form sections. A malformed section, button or log view, '
+    + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field is listed as invalid by name.',
+    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) } }, true), 'Sections in order.') } },
 };
+
+// describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
+export function describeMission() {
+  const items = Object.entries(SECTION).filter(([, field]) => field.example !== undefined).map(([key, field]) => ({
+    item: key, about: field.doc, ...(field.fields ? { fields: jsonSchema(field.fields).properties } : {}),
+    example: { id: 'example-' + key, title: 'Example ' + key, [key]: field.example } }));
+  return {
+    about: 'Mission Control shows the space: one JSON file of sections in order. Each section has a title, optional text and icon, and items of the types below. '
+      + 'Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
+      + 'Unknown fields and a second section with the same title or id are refused. A button runs only when the user clicks it.',
+    file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
+    items, templates: TEMPLATES, schema: SCHEMAS.space,
+  };
+}
