@@ -1162,10 +1162,10 @@ async function loadMission(cached = false) {
       const tiles = (space.data ?? []).map((tile) => row(escape(tile.title), `<div data-tile="${escape(tile.id)}">${tileHtml(null, escape)}</div>`));
       // Cards (threat model row M5): the card's HTML in the artifact frame, its script's JSON posted in as data (feedCard).
       const cards = (space.cards ?? []).map((card) => row(escape(card.title), `<div data-tile="${escape(card.id)}" data-card="${escape(card.title)}"><div class="card-frame"></div><div class="card-note" role="status">${tileHtml(null, escape)}</div></div>`));
-      const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape)}</p>`);
+      const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape, false)}</p>`);
       // Folder lists (threat model row M2-a): the count fills when the window opens; each file opens read-only in its row.
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
-        `<div data-folder="${escape(list.id)}"><p class="muted">Loading…</p></div>`));
+        `<div data-folder="${escape(list.id)}"${list.root ? ` data-root="${escape(list.root)}"` : ''}><p class="muted">Loading…</p></div>`));
       // Checklists (threat model row M4-a): read when the window opens; each press is one mark or one review line.
       const checks = (space.checklists ?? []).map((list) => row(escape(list.title), `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
       // References: a script is its own row (Run included), a page its link, an app is the laptop's; an ID nothing has says so.
@@ -1330,7 +1330,7 @@ async function loadFolders(box: HTMLElement) {
       const code = (error as Error).message, refused = code === 'root-refused';
       if (count) count.textContent = refused ? 'refused' : 'unreadable';
       if (unit) unit.textContent = refused ? ': it holds the workspace or P9\'s own files' : '';
-      list.innerHTML = `<p class="muted">${refused ? 'Mission does not list this folder: it holds the workspace or P9\'s own files.' : `Could not list this folder (${escape(code)}).`}</p>`;
+      list.innerHTML = `<p class="muted">${refused ? 'Mission does not list this folder: it holds the workspace or P9\'s own files.' : code === 'unknown-root' && list.dataset.root === 'vault' ? 'Pick the vault folder in the P9 desktop app.' : `Could not list this folder (${escape(code)}).`}</p>`;
     }
   }));
 }

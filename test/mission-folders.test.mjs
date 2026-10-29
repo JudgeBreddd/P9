@@ -193,5 +193,9 @@ test('folder lists and references on the phone at 390x844', { timeout: 90000, sk
   await box.locator('[data-folder="open-plans"] pre', { hasText: 'Status: open' }).waitFor({ timeout: 10000 });
   assert.equal(await box.locator('textarea, [contenteditable="true"]').count(), 0, 'read-only');
   await shot(page, 'phone-space-folder');
+  // Only the desktop main process may set the vault folder (threat model row 73): a phone is refused even with its session.
+  const vault = await page.evaluate(async (csrf) => { const r = await fetch('/mission/vault', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': crypto.randomUUID() }, body: JSON.stringify({ folder: '/tmp' }) });
+    return { status: r.status, body: await r.json().catch(() => ({})) }; }, session.csrf);
+  assert.deepEqual(vault, { status: 403, body: { error: 'desktop-only' } }, 'a phone cannot set the vault');
   console.log('PASS phone: counts 3/3/2/refused, 3 refs + not found, files newest first, one opens read-only');
 });

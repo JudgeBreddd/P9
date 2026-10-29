@@ -19,6 +19,11 @@ const NEVER_SCHEMES = new Set(['javascript', 'file', 'data', 'vbscript', 'blob']
 // Two letters at least, so a Windows drive path (c:\...) is never a scheme.
 const SCHEME = /^[a-z][a-z0-9+.-]{1,31}$/;
 const schemeOf = (url) => url.match(/^([a-z][a-z0-9+.-]*):/i)?.[1].toLowerCase();
+// A space link (threat model row 74): http(s), or another scheme that is not on the never list. Whether it may open is
+// settings.page_schemes, checked when it opens: the space is read without the settings.
+export const linkUrl = (value) => web(value) || (typeof value === 'string' && value.length <= 2000 && !/[\s\x00-\x1f\x7f]/.test(value)
+  && schemeOf(value) !== undefined && !NEVER_SCHEMES.has(schemeOf(value)) && value.length > schemeOf(value).length + 1);
+export { NEVER_SCHEMES, schemeOf };
 // A page link: http(s), or a scheme from settings.page_schemes that is not on the never list (M6).
 const pageUrl = (value, schemes = []) => web(value) || (typeof value === 'string' && value.length <= 2000 && !/[\s\x00-\x1f\x7f]/.test(value)
   && schemeOf(value) !== undefined && !NEVER_SCHEMES.has(schemeOf(value)) && schemes.includes(schemeOf(value)) && value.length > schemeOf(value).length + 1);
@@ -141,7 +146,11 @@ export const CARD = {
 export const WEBLINK = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The link label.' },
-  url: { type: 'string', required: true, check: (value) => web(value) && value.length <= 2000, doc: 'An http:// or https:// address. Nothing else is accepted.' },
+  url: { type: 'string', required: true, check: linkUrl,
+    doc: 'An http:// or https:// address, or a link whose scheme is in settings.page_schemes (e.g. obsidian://open); never javascript, file, data, vbscript or blob. '
+      + 'A link that is not http(s) shows the full link and asks before it opens, on the device that asked.' },
+  ask: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 40 && !/[\r\n]/.test(value),
+    doc: 'Ask for one line of text first (this is its label, e.g. "Note title"). The text is URL-encoded and added to the end of url, which must end in =.' },
 };
 // What a data tile's script printed, checked against the four shapes: null when it fits, else what is wrong in plain words.
 const cell = (value) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
