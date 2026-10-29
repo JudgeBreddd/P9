@@ -684,3 +684,5 @@ dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 #mdlBody .file-image{display:grid;place-items:center;padding:16px 20px;background:color-mix(in oklab,var(--muted) 45%,transparent)}
 #mdlBody .file-image img{display:block;max-width:100%;max-height:70vh;object-fit:contain;border-radius:var(--radius-sm,6px)}
 #mdlBody .file-image-note{margin:16px 20px}
+/* History lists every chat a message was sent in: past the window it scrolls, or the last ones cannot be reached. */
+#histPop{max-height:calc(100vh - 60px);overflow-y:auto;overscroll-behavior:contain}
