@@ -98,6 +98,9 @@ test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads 
   if (reads.length !== 1 || !reads[0][0].endsWith('only=' + third)) misses.push('item 3: the first reads were ' + JSON.stringify(reads.map((r) => r[0])));
   // Another chat still opens with its history, and the list shows every chat (state from GET /chat).
   assert.equal(await page.locator('#chatList [data-chat]').count(), 6);
+  // Item 3: a chat whose events are not read yet still shows its last line (GET /chat preview), as a read one does.
+  const lines = await page.locator('#chatList [data-chat] small').allTextContents();
+  if (lines.some((text) => !/^A long answer line/.test(text))) misses.push('item 3: a row without its last line: ' + JSON.stringify(lines));
   await page.click('[data-chat="00000000-0000-4000-8000-000000000501"]');
   await page.waitForSelector('#events article[data-kind=agent]', { timeout: 60000 });
   await page.click('[data-back]'); await page.waitForSelector('#chatList [data-chat]', { timeout: 10000 });

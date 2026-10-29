@@ -449,7 +449,7 @@ let listSig = '';
 function renderList() {
   const found = digest(), row = (item: Json) => {
     // A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
-    const id = String(item.id), info = state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: '' } : found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
+    const id = String(item.id), info = state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
     return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
