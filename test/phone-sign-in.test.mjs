@@ -44,6 +44,7 @@ test('P9: the phone signs in to Claude and Codex; only a vendor page and a code-
   await card('claude').getByRole('button', { name: 'Send code' }).click();
   const sent = async () => { for (;;) { const text = await readFile(at('fake-login-code'), 'utf8').catch(() => ''); if (text || Date.now() > deadline) return text; await page.waitForTimeout(200); } };
   assert.equal(await sent(), '"abc#123 $(id)"\n', 'the code went to the CLI as typed');
+  for (const end = Date.now() + left(); await box.inputValue() && Date.now() < end;) await page.waitForTimeout(100); // the box empties on the daemon's answer, which can come after the CLI wrote the code
   assert.equal(await box.inputValue(), '');
   // Claude takes the code and exits signed in.
   await mkdir(path.join(server.directory, '.claude'), { recursive: true });

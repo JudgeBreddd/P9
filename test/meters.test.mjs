@@ -31,6 +31,8 @@ async function open(t, provider, { text = 'hello', done = (e) => e.data?.content
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.directory, '.codex', 'sessions', '2026', '10', '24'), { recursive: true });
   await rollout(instance, 74);
+  // A signed-in Codex: without its auth.json, Usage (P8) names Codex signed out and drops its figures.
+  await writeFile(path.join(instance.directory, '.codex', 'auth.json'), '{}');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-meters-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
