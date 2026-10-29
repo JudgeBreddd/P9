@@ -2620,9 +2620,10 @@ function applyChat(ev, into) {
       // usage_update (the one with a cost) marks it done.
       if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
       else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
-      // Such a turn reads the prompt cache too, so the cache clock starts again from its output (owner, 2026-10-25: a
-      // background task's wake-up left the clock at 57 min); a prompted turn's clock starts at its turn-end.
-      if (!s.prompted && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
+      // Every agent request reads and re-warms the prompt cache, so the cache clock starts again from any agent output: a
+      // turn nobody prompted (owner, 2026-10-25: a background task's wake-up left the clock at 57 min) and a long prompted
+      // turn alike (an agent working on its own for hours inside one turn left it cold); turn-end sets it once more.
+      if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
