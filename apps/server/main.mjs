@@ -18,13 +18,16 @@ import { AGENTS, placeAgents } from './deps.mjs';
 import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
 import { keepOldPhotos } from './chat.mjs';
 import { createClaudeUsage, openQuery } from './claude-usage.mjs';
+import { watchIdle } from './idle.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
 const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'usage-sdk': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
   'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' },
   // The checkout a server update rebuilds, and where a packaged app's version is downloaded from (update.mjs); tests point them elsewhere.
-  'update-root': { type: 'string' }, 'update-archive': { type: 'string' }, 'update-turn-ms': { type: 'string' } } });
+  'update-root': { type: 'string' }, 'update-archive': { type: 'string' }, 'update-turn-ms': { type: 'string' },
+  // Background mode only (install.sh's start script, row I1): stop after this many seconds with nobody using P9.
+  'idle-exit': { type: 'string' } } });
 if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbsolute(values[key]))) {
   throw new Error('absolute-workspace-state-and-recovery-required');
 }
@@ -63,6 +66,10 @@ for (const directory of [values.state, values.recovery]) {
 const state = await realpath(values.state), recovery = await realpath(values.recovery);
 if (inside(state, recovery) || inside(recovery, state)) throw new Error('state-and-recovery-must-be-separate');
 const socketPath = internalEndpoint(state);
+// Linux keeps a Unix socket's path in 108 bytes, ending NUL: a longer one fails at listen with no reason given.
+if (!windows && Buffer.byteLength(socketPath) > 107) throw new Error('socket-path-too-long: ' + socketPath);
+const idleSeconds = values['idle-exit'] === undefined ? null : Number(values['idle-exit']);
+if (idleSeconds !== null && !(Number.isInteger(idleSeconds) && idleSeconds >= 1 && idleSeconds <= 86400)) throw new Error('invalid-idle-exit');
 // ponytail: --ownership gives a second Linux daemon (the dev build's p9-dev unit) its own ledger, lock and tmux socket;
 // only a unit's ExecStart passes it. Without it, the one folder every install uses.
 if (values.ownership !== undefined && !path.isAbsolute(values.ownership)) throw new Error('absolute-ownership-required');
@@ -212,4 +219,5 @@ function stop() {
 }
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
+if (idleSeconds) watchIdle({ seconds: idleSeconds, servers: [server, server.remote].filter(Boolean), turns: () => server.chat.list().some((c) => c.state === 'turn'), stop });
 console.log('P9_READY');

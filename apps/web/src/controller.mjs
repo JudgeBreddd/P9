@@ -1,4 +1,4 @@
-import { popover as createPopover, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -1046,7 +1046,10 @@ async function loadUsage() {
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
 // ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
-const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+// Not while the window is hidden: each read tells the daemon someone is looking, which keeps its Claude usage poll (and the
+// claude process behind it) going; with no reads it stops after 2 min (claude-usage.mjs). Shown again, it reads at once.
+const pollUsage = () => { if (!document.hidden) loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadUsage().then(renderChats); });
 let usageSoon = 0;
 // Panes are redrawn only when the figures moved, so a turn end in one chat does not rebuild the others (E2).
 const usageNow = () => { clearTimeout(usageSoon); usageSoon = setTimeout(() => { const was = JSON.stringify(usage.limits); loadUsage().then(() => { if (JSON.stringify(usage.limits) !== was) renderChats(); }); }, 300); };
@@ -1404,6 +1407,7 @@ function notesModal(m, body, row) {
 // action, the daemon's guarded PUT /files, so a changed file answers 409 and the draft stays (like a Mission note).
 const liveKey = name => 'live:' + name;
 function liveFileModal(m, body) {
+  if (FILE_IMAGE.test(m.name)) return imageModal(m, body);
   const key = liveKey(m.name);
   $('#mdlT').textContent = m.name;
   if (!m.asked && !dirty(key)) {
@@ -1426,6 +1430,22 @@ function liveFileModal(m, body) {
   body.querySelector('[data-mine]')?.addEventListener('click', () => saveLive(m, c.diskHash));
   body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
   liveFoot(m);
+}
+// An image from the Files pane (rows 23/26/27 adds): read-only; the words and the check are helpers.mjs's, shared with the phone.
+function imageModal(m, body) {
+  $('#mdlT').textContent = m.name;
+  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
+  if (m.image === undefined) {
+    m.image = null;
+    window.p9.mission('image', { path: m.name }).then(r => {
+      const src = r.status === 200 && fileImageSrc(r.body);
+      m.image = src ? { src } : { error: r.status === 200 ? 'not-an-image' : r.body?.error || String(r.status) };
+      if (S.modal === m) renderModal();
+    }).catch(() => { m.image = { error: 'daemon-unavailable' }; if (S.modal === m) renderModal(); });
+  }
+  const i = m.image;
+  body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
+    : `<div class="file-image"><img src="${i.src}" alt="${esc(m.name)}"></div>`;
 }
 function liveFoot(m) {
   $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${saveBtn(liveKey(m.name))}`;
@@ -2049,10 +2069,13 @@ function wireMission() {
 // Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
 // lists them). Nothing is built in; Add remote takes a Host name or user@address.
 function serverRow() {
-  const { host, connected, error, hosts, remotes = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
+  const { host, connected, error, hosts, remotes = [], keep = {} } = serverInfo, all = [...new Set([...remotes, ...hosts])];
+  // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
+  const keepPick = h => window.p9?.remoteKeepSetting ? '<select data-slot="select" data-remote-keep="' + esc(h) + '" aria-label="P9 on ' + esc(h) + ' when you disconnect" title="What P9 on ' + esc(h) + ' does when you disconnect">'
+    + [['', 'Ask'], ['keep', 'Keeps running'], ['stop', 'Stops']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
   const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
     : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
-  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>'
+  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>' + keepPick(h)
     + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
     + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
   return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. ssh to the remote must work without a password prompt. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
@@ -2137,6 +2160,10 @@ function renderSettings() {
   $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
   const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); serverMenu(); };
   $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
+  $('#setBody').querySelectorAll('[data-remote-keep]').forEach(s => { s.onchange = async () => {
+    const r = await window.p9.remoteKeepSetting(s.dataset.remoteKeep, s.value === 'keep' ? true : s.value === 'stop' ? false : null).catch(() => null);
+    if (r) serverInfo.keep = r.keep;
+  }; });
   if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
     e.preventDefault();
     const name = $('#setRemoteName').value.trim(), err = $('#setRemoteErr');
@@ -2340,10 +2367,13 @@ async function landPets() {
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
+// The last status's mode: the wizard's in-app admin password is for this computer only (row 61).
+let setupMode = '';
 async function loadSetup(paths) {
   if (!window.p9?.chat) return null;
   // D15a: a remote that is not answering (no P9 there yet) has no setup to read: none is asked, and no toast.
   const st = await window.p9.getStatus?.().catch(() => null);
+  setupMode = st?.mode ?? '';
   if (st?.mode === 'server' && st.status !== 'ok') return null;
   const r = await liveChat.call('setup', paths || {}).catch(() => null);
   return r?.status === 200 ? r.body : null;
@@ -2421,6 +2451,10 @@ const WIZ_ERR = {
   'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
   'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Continue without it goes on: chats still work, they use the agent P9 ships.'],
   'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
+  'wrong-password': ['That password did not work.', 'Check it and press Install again.'],
+  'not-allowed': ['Your account cannot install software on this computer.', 'Someone who administers it must install it, then Retry.'],
+  'admin-failed': ['The install did not finish.', 'Retry. If it stops again, your package manager may be busy or offline.'],
+  'password-empty': ['Type your admin password first.', 'It is the one you use to sign in to this computer.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
   'no-sign-in-page': ['The sign-in has not shown its page yet.', 'Wait a few seconds, then try again.'],
@@ -2450,7 +2484,8 @@ function wizRender() {
   W.i = steps.indexOf(key);
   const yes = (ok, good, bad) => `<span class="${ok ? 'ok' : 'warn'}">${ok ? '✓ ' + good : bad}</span>`;
   const btn = (act, label, variant = 'outline') => `<button data-slot="button" data-variant="${variant}" data-act="${act}"${W.busy ? ' disabled' : ''}>${label}</button>`;
-  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${btn('retry', 'Retry')}</div>`; };
+  const PW_ERR = ['wrong-password', 'password-empty']; // fixed by Install again, not Retry
+  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${PW_ERR.includes(error) ? '' : btn('retry', 'Retry')}</div>`; };
   const row = (name, note, status, actions = '') => `<div class="set-row"><span><strong>${name}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span><span class="spacer"></span>${status}${actions}</div>`;
   const note = W.note[key];
   let title, body, next = btn('next', 'Next', 'default');
@@ -2525,12 +2560,17 @@ function wizRender() {
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
   } else if (key === 'terminal') {
     // Item 15 (threat model row 61): what P9 cannot carry. The reason comes first, then why it needs the admin password,
-    // then the command; Run in a terminal types it into a P9 terminal and sudo asks there. tmux cannot: P9's terminals are tmux.
-    const admin = (s.dependencies || []).filter(x => x.admin);
+    // then the command. In the desktop app on its own computer, the admin password field and Install run it (desktop main,
+    // p9:admin-install); elsewhere Run in a terminal types it into a P9 terminal and sudo asks there (tmux: Copy, since P9's terminals are tmux).
+    const admin = (s.dependencies || []).filter(x => x.admin), here = !!window.p9?.adminInstall && setupMode !== 'server';
     title = admin.length ? 'This needs your admin password' : 'Terminal';
     body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(ADMIN_NAMES[x.id] || esc(x.id), esc(x.why), yes(false, '', 'Not installed'))}`
         + '<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This one goes into the system itself, and only an admin can change that, so your computer asks for your password.</p>'
-        + (x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
+        + (x.command && here && ['tmux', 'ssh'].includes(x.id) ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code></div>`
+          + `<label class="sm wiz-pw-label" for="wizPw-${esc(x.id)}">Admin password for your account on this computer</label>`
+          + `<div class="set-row"><input data-slot="input" type="password" id="wizPw-${esc(x.id)}" data-admin-pw="${esc(x.id)}" autocomplete="off" spellcheck="false" maxlength="1024">${btn('pw:' + x.id, 'Install', 'default')}</div>`
+          + '<p class="muted sm">P9 runs the command above as admin with it. It goes once to sudo on this computer; never saved, never shown in any log.</p>'
+        : x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
           + (x.id === 'tmux' ? btn('copy:' + x.id, 'Copy') + '</div><p class="muted sm">P9\'s terminals need tmux, so run it in your own terminal app, then Retry.</p>'
             : btn('admin:' + x.id, 'Run in a terminal') + '</div><p class="muted sm">Types it into a P9 terminal. Read it, press Enter, then type your password there.</p>')
           : '<p class="muted sm">Install it with your system\'s package manager, then Retry.</p>')
@@ -2604,6 +2644,13 @@ $('#welDlg').addEventListener('click', async e => {
     W.note.pick = r.status === 200 ? null : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 200) W.i += 1;
   }
+  // Row 61: the password goes to desktop main once; the field is emptied first.
+  if (act === 'pw') {
+    const field = $('#welDlg').querySelector(`[data-admin-pw="${agent}"]`), password = field?.value ?? '';
+    if (field) field.value = '';
+    const r = password ? await run(() => window.p9.adminInstall(agent, password).catch(() => ({ error: 'admin-failed' }))) : { error: 'password-empty' };
+    W.note[agent] = r?.ok ? null : { error: r?.error || 'admin-failed' };
+  }
   if (act === 'copy') { const x = W.s?.dependencies?.find(d => d.id === agent); if (x?.command) copy(x.command, b); return; }
   if (act === 'admin') {
     const r = await run(() => liveChat.call('adminTerminal', { id: agent }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
@@ -2633,12 +2680,12 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 const liveChat = { on: false, cursor: 0 };
 const dataNote = () => { $('#dataNote').textContent = [live.on && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 liveChat.call = async (action, payload = {}) => {
-  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() };
+  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
-  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {

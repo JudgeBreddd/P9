@@ -8,9 +8,11 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, sshHosts, serverFolder, probeServer, HOST } from './remote.mjs';
+import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, HOST, PASSWORD } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
-import { installRemote, sourceArchive } from './remote-install.mjs';
+import { installRemote, sourceArchive, adminLocal, adminArgs } from './remote-install.mjs';
+import { adminCommand } from '../server/deps.mjs';
+import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
@@ -22,6 +24,7 @@ import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, star
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 import { updatedFrom } from './whats-new.mjs';
+import { serverPath } from './dev-folder.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -265,7 +268,9 @@ export async function createDesktop({ state, open } = {}) {
   let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
-  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes }), { mode: 0o600 });
+  // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
+  const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action, password) => remoteMode(h, action, sshCommand, password), save: () => keepServer() });
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep }), { mode: 0o600 });
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
@@ -280,6 +285,7 @@ export async function createDesktop({ state, open } = {}) {
       const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
       server = s; serverError = null;
+      keeper.connected(serverHost, !!s.background);
       if (!serverUpdating) {
         // Item 14 (server-update.mjs): an older server is updated from this app; a newer one only says to update this app.
         serverUpdating = true;
@@ -474,7 +480,9 @@ export async function createDesktop({ state, open } = {}) {
     // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
     if (serverHost) {
       const h = await server?.check().catch(() => null);
-      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }) };
+      // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
+      const there = keeper.status(serverHost, !!server?.background);
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }) };
     }
     try {
       const h = state && await health(state);
@@ -562,6 +570,7 @@ export async function createDesktop({ state, open } = {}) {
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
+    image: ({ path: file }) => typeof file === 'string' && ['GET', '/files/image?' + new URLSearchParams({ path: file })],
     // The Chat Focus file window's Save (row 23): exactly the guarded PUT /files, which re-checks the path, locked names and the hash.
     save: ({ path: file, hash, content, ...rest }) => !Object.keys(rest).length && typeof file === 'string' && file.length <= 1000 && typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash)
       && typeof content === 'string' && Buffer.byteLength(content) <= 2 * 1024 * 1024 && ['PUT', '/files', { path: file, hash, content }],
@@ -683,9 +692,11 @@ export async function createDesktop({ state, open } = {}) {
     const { op, ...rest } = payload;
     const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
-    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    // host: which P9 did not answer, so the page can say so in words (chatFailed in helpers.mjs).
+    const where = serverHost ? { host: serverHost } : {};
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable', ...where } };
     try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
-    catch (error) { return failedReply(error); }
+    catch (error) { const reply = failedReply(error); return { ...reply, body: { ...reply.body, ...where } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
@@ -712,7 +723,7 @@ export async function createDesktop({ state, open } = {}) {
   // the window reloads onto that daemon. Neither daemon is stopped.
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
-    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes };
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep };
     endDock();
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
@@ -724,19 +735,49 @@ export async function createDesktop({ state, open } = {}) {
   // D15a: the connecting screen's Install P9 there, after the person said yes. Only this window's remote, only while it
   // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
   // download its version. started: when it began, for the window's elapsed time; a throw ends it failed, never stuck running.
-  ipcMain.handle('p9:remote-install', async (event, ...args) => {
-    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
-    const host = serverHost, started = Date.now();
+  // admin: row I2's password, after the install stopped at an admin step; passed to installRemote once, kept nowhere.
+  const runInstall = (admin = null) => {
+    const host = serverHost, started = Date.now(), asked = remoteInstall;
     remoteInstall = { phase: 'running', line: '', started };
     try {
       const archive = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null;
-      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, tell: e => { if (serverHost === host) remoteInstall = { ...e, started }; } })
+      // A wrong password keeps what the window showed: the same list and command, asked again.
+      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, keep: keeper.keep[host] === true, admin,
+        tell: e => { if (serverHost === host) remoteInstall = { ...(/^(wrong-password|not-allowed)$/.test(e.error ?? '') && { need: asked?.need, command: asked?.command }), ...e, started }; } })
         .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
     } catch (error) {
       remoteInstall = { phase: 'failed', error: error.message, started };
     }
     return { ok: true };
+  };
+  ipcMain.handle('p9:remote-install', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
+    return runInstall();
+  });
+  // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's
+  // (what it showed: P9_ADMIN need and command) or Keep it running's linger. One string, one line; never stored or logged.
+  ipcMain.handle('p9:remote-admin', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !PASSWORD(args[0])) throw new Error('ipc-sender-refused');
+    if (serverHost && serverError === 'server-no-p9' && remoteInstall?.phase === 'admin' && remoteInstall.command) return runInstall(args[0]);
+    if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
+    return { error: 'remote-admin-refused' };
+  });
+  // Row 61 (commit C): the wizard's Install for tmux or ssh on this computer, with the admin password typed there. The page
+  // names the package only; the command is deps.mjs's own for a package missing now. Not in remote mode: that list is the remote's.
+  ipcMain.handle('p9:admin-install', async (event, ...args) => {
+    if (!fromApp(event) || !adminArgs(args)) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'admin-remote' };
+    const command = await adminCommand(args[0]);
+    return command ? adminLocal(command, args[1]) : { error: 'nothing-to-install' };
+  });
+  // Start P9 there: this window's remote answered without a running P9 (row I1: never a terminal command). ok connects now.
+  ipcMain.handle('p9:remote-start', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || server || remoteInstall?.phase === 'running') return { error: 'remote-start-refused' };
+    const host = serverHost, result = await startServer(host, sshCommand);
+    if (result === 'ok' && serverHost === host) await useServer(host);
+    return { result };
   });
   // The machine menu's live state (threat model row 50, c23 adds): only a remote saved here or used last, one probe per host
   // per 30 s, shared by calls in flight. ponytail: the cache is never pruned; at most 51 hosts can be in it.
@@ -749,6 +790,21 @@ export async function createDesktop({ state, open } = {}) {
     const state = probeServer(host, sshCommand);
     probes.set(host, { at: Date.now(), state });
     return state;
+  });
+  // Row I1: the answer to Keep P9 running on this window's remote (yes: boolean), stored when remember is true, applied now.
+  ipcMain.handle('p9:remote-keep', async (event, ...args) => {
+    const [yes, remember] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof yes !== 'boolean' || typeof remember !== 'boolean') throw new Error('ipc-sender-refused');
+    if (!serverHost || !server) return { error: 'not-connected' };
+    await keeper.answer(serverHost, !!server.background, yes, remember);
+    return { ok: true, keep: keeper.keep };
+  });
+  // Settings > Remote: the stored choice for one remote (true, false, or null: ask). This window's remote gets it now.
+  ipcMain.handle('p9:remote-keep-setting', async (event, ...args) => {
+    const [host, choice] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof host !== 'string' || !HOST.test(host) || ![true, false, null].includes(choice)) throw new Error('ipc-sender-refused');
+    await keeper.set(host, host === serverHost && server ? !!server.background : null, choice);
+    return { keep: keeper.keep };
   });
   // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
   ipcMain.handle('p9:remotes', async (event, ...args) => {
@@ -1013,25 +1069,40 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
-  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it.
+  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it. Server mode (rows 41/50
+  // adds): the picker would list this computer's folders, so the page asks for the server path (one string, only then) and
+  // dev-folder.mjs checks it with the server's rules; the rest is the same, through the tunnel. A refusal names its own reason.
   ipcMain.handle('p9dev:open-folder', async (event, ...args) => {
-    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!state || serverHost) return { error: 'daemon-unavailable' };
-    const workspace = await realpath((await health(state)).workspace);
-    const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
-    if (pick.canceled || !pick.filePaths[0]) return { ok: false };
-    const real = await realpath(pick.filePaths[0]).catch(() => null);
-    if (!real) return { error: 'root-not-found' };
-    const key = p => process.platform === 'win32' ? p.toLowerCase() : p; // Windows paths compare without case.
-    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + path.sep);
+    if (!fromDev(event) || args.length > 1 || (args.length && (!serverHost || typeof args[0] !== 'string'))) throw new Error('ipc-sender-refused');
+    const fail = error => ({ error, server: Boolean(serverHost) });
+    const status = state && await health(state).catch(() => null);
+    if (!status?.workspace) return fail('daemon-unavailable');
+    let workspace, real, key = p => p, sep = '/';
+    if (serverHost) {
+      if (!args.length) return { pathNeeded: true, value: devFolder?.path ?? status.workspace };
+      const typed = serverPath(args[0]);
+      if (typed.error) return fail(typed.error);
+      // Where it really is, from the server (a link inside the workspace may point outside); the check sets nothing.
+      const found = await daemonRequest(state, 'POST', '/dev/root', { path: typed.real, check: true }).catch(failedReply);
+      if (found.status !== 200) return fail(found.body?.error === 'request-refused' ? 'daemon-outdated' : found.body?.error ?? 'daemon-unavailable');
+      ({ workspace, root: real } = found.body);
+    } else {
+      workspace = await realpath(status.workspace);
+      const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
+      if (pick.canceled || !pick.filePaths[0]) return { ok: false };
+      real = await realpath(pick.filePaths[0]).catch(() => null);
+      if (!real) return fail('root-not-found');
+      key = p => process.platform === 'win32' ? p.toLowerCase() : p; sep = path.sep; // Windows paths compare without case.
+    }
+    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + sep);
     let set; // the daemon's answer: the root as it stores it, which saves must name exactly
     if (outside) {
-      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + ' in Dev Focus?',
+      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + (serverHost ? ' on ' + serverHost : '') + ' in Dev Focus?',
         detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
         buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
       if (response !== 1) return { ok: false };
-      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(() => null);
-      if (set?.status !== 200) return { error: set?.body?.error ?? 'daemon-unavailable' };
+      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(failedReply);
+      if (set.status !== 200) return fail(set.body?.error ?? 'daemon-unavailable');
     } else if (devFolder?.outside) await daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null);
     // Inside: kept as the part after the workspace, so the page gets the daemon's own spelling of it (Windows case, a linked workspace).
     devFolder = key(real) === key(workspace) ? null : { path: outside ? set.body.root : real, outside, tail: real.slice(workspace.length) };

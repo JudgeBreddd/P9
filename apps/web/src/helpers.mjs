@@ -78,6 +78,15 @@ export const info = (tip, section) => `<button class="info" type="button" data-d
 // to a client that takes no notices, as a whole reply chunk "Warning: <message>\n\n"; claude-agent-acp sends none.
 // agentWarning gives the message when a chunk is exactly that, and warnHtml draws it as a small grey line above the reply,
 // its "i" opening what it means: a known warning in plain words, any other with the generic line and the raw text.
+// A chat call main could not get an answer to says so in words, not as daemon-unavailable: which P9, for how long when it
+// was a while (a send waits up to 90 s, twice), and for a send that the message is back in the box (liveChat.prompt).
+const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop the turn', create: 'start the chat', stop: 'stop the chat' };
+export function chatFailed(action, body, ms) {
+  if (body?.error !== 'daemon-unavailable') return null;
+  const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);
+  const why = minutes >= 1 ? who + ' did not answer for ' + minutes + (minutes === 1 ? ' minute.' : ' minutes.') : who + ' is not answering.';
+  return 'Could not ' + (CHAT_VERB[action] ?? 'reach the chat') + '. ' + why + (action === 'prompt' ? ' Your message is back in the box.' : ' Try again in a moment.');
+}
 export const agentWarning = text => /^Warning: ([^]*\S)\n\n$/.exec(String(text ?? ''))?.[1] ?? null;
 const WARNINGS = [[/falling back from websockets to https/i, 'Connection dropped · Codex retried', 'The connection to OpenAI dropped mid-reply. Codex retried another way and the reply came through. Nothing to do; if it shows on every message, OpenAI is having trouble.']];
 export const warnHtml = (raw, attrs = '') => {
@@ -148,3 +157,11 @@ export const limitLine = (name, limits, now = Date.now(), signedOut = false) => 
   const old = age < 15 * 60000 ? 'just now' : hours < 1 ? Math.round(age / 60000) + ' min old' : hours < 48 ? Math.round(hours) + ' h old' : Math.round(hours / 24) + ' d old';
   return { name, text: part('5 h', limits.fiveHour) + ' · ' + part('week', limits.sevenDay) + ' · ' + old, stale: hours >= 1 };
 };
+
+// A workspace image from the Files pane, desktop and phone (rows 23/26/27 adds): read-only, through GET /files/image, which names
+// the type from the bytes. fileImageSrc lets only that type and plain base64 into an img tag; anything else is null.
+export const FILE_IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+export const fileImageError = { 'not-an-image': 'Not a PNG, JPEG, GIF or WebP image. P9 checks the file\'s first bytes, not its name.',
+  'request-refused': 'P9 does not show this file: it is over 6 MB, a link, or a locked name.', 'not-found': 'This file is no longer on disk.' };
+export const fileImageSrc = body => /^image\/(png|jpeg|gif|webp)$/.test(body?.mimeType) && typeof body.data === 'string' && /^[A-Za-z0-9+/]+=*$/.test(body.data)
+  ? 'data:' + body.mimeType + ';base64,' + body.data : null;

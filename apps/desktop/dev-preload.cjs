@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('p9dev', Object.freeze({
   create: (path, content) => ipcRenderer.invoke('p9dev:create', { path, content }),
   hostPath: (path, kind) => ipcRenderer.invoke('p9dev:host-path', path, kind),
   openInCode: (name, line, reason) => ipcRenderer.invoke('p9dev:open-in-code', { name, line, reason }),
-  openFolder: () => ipcRenderer.invoke('p9dev:open-folder'),
+  openFolder: (folder) => folder === undefined ? ipcRenderer.invoke('p9dev:open-folder') : ipcRenderer.invoke('p9dev:open-folder', folder),
   installEditor: () => ipcRenderer.invoke('p9dev:install-editor'),
   onLook: (callback) => { ipcRenderer.on('p9dev:look', (_event, look) => callback(look)); },
   // p9 edit / p9 diff: the page says when it can open files, then main sends each checked request.

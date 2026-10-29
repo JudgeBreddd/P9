@@ -87,6 +87,32 @@ async function contents(file) {
   return value;
 }
 
+// The type from a file's first bytes, never its name: PNG, JPEG, GIF or WebP, else null (threat model row 27; chat.mjs uses it too).
+export const imageType = (bytes) => {
+  const head = bytes.toString('latin1', 0, 12);
+  return head.startsWith('\x89PNG\r\n\x1a\n') ? 'image/png' : head.startsWith('\xff\xd8\xff') ? 'image/jpeg'
+    : /^GIF8[79]a/.test(head) ? 'image/gif' : head.startsWith('RIFF') && head.endsWith('WEBP') ? 'image/webp' : null;
+};
+
+// A workspace image for the Chat Focus file window (rows 23/26/27 adds): readFile's walk (no links, locked names refused, a
+// regular file opened non-blocking), then row 27's checks: 12 bytes to 6 MiB, and the type from the bytes. Read-only.
+export const MAX_IMAGE = 6 * 1024 * 1024;
+export async function readImage(root, relative) {
+  const safe = await resolveSafe(root, relative, MAX_IMAGE);
+  try {
+    const bytes = Buffer.alloc(safe.stat.size);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await safe.file.read(bytes, length, bytes.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    const mimeType = length === bytes.length && length >= 12 && imageType(bytes);
+    if (!mimeType) throw new Error('not-an-image');
+    return { mimeType, data: bytes.toString('base64') };
+  } finally { await safe.close(); }
+}
+
 export async function readFile(root, relative) {
   const safe = await resolveSafe(root, relative);
   try {

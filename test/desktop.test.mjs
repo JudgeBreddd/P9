@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'onServerUpdate', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'remoteStart', 'remoteAdmin', 'adminInstall', 'onServerUpdate', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -457,6 +457,12 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   await ask.waitFor();
   assert.equal(await page.locator('#moveT').textContent(), 'Open it on test-host?');
   await shot('move-ask', page);
+  // The switch is the filled button (a button without a variant draws as plain text), in both themes.
+  assert.equal(await page.locator('#moveYes').getAttribute('data-variant'), 'default');
+  const look = (theme) => page.evaluate((t) => { document.getElementById('themeBtn').click(); document.querySelector('[data-theme-pick="' + t + '"]').click(); }, theme);
+  await look('event-horizon-prime'); await shot('c35-move-ask-event-horizon-prime', ask);
+  await look('daylight'); await shot('c35-move-ask-daylight', ask);
+  await look('event-horizon-prime');
   // Enter from the "Don't show again" box still takes the switch (a form's own Enter would press Stay).
   await page.locator('#moveNever').check();
   await page.keyboard.press('Enter');
