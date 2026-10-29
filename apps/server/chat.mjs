@@ -663,7 +663,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent
-      FROM conversations c ORDER BY used DESC, created DESC`).all().map((c) => ({ ...c, sent: c.sent === 1 })),
+      FROM conversations c ORDER BY used DESC, created DESC`).all()
+      // waiting: a question or approval is open, so the phone's list says Needs you for a chat whose events it has not read.
+      .map((c) => ({ ...c, sent: c.sent === 1, waiting: (live.get(c.id)?.pending.size ?? 0) > 0 })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     async create(body) {
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))

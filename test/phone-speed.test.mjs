@@ -66,22 +66,58 @@ async function open(page, name, cacheOff) {
       requests: entries.map((e) => { const url = new URL(e.name); return [url.pathname + url.search.slice(0, 60), Math.round(e.startTime), Math.round(e.duration), e.transferSize, e.encodedBodySize]; }) };
   });
   const astro = out.requests.filter(([name]) => name.startsWith('/_astro/'));
-  const result = { name, cacheOff, workers, wall, painted: out.painted, astroFiles: astro.length, astroBytes: astro.reduce((sum, r) => sum + r[4], 0),
+  const early = astro.filter((r) => r[1] < out.painted);
+  const result = { name, cacheOff, workers, wall, painted: out.painted, astroFiles: early.length, astroBytes: early.reduce((sum, r) => sum + r[4], 0), astroBeforePaint: early.map((r) => r[0]),
     workerFetches: fetched.length, workerBytes: sizes.reduce((a, b) => a + b, 0), workerAstro: fetched.filter((r) => new URL(r.url()).pathname.startsWith('/_astro/')).length,
     api: out.requests.filter(([name]) => !name.startsWith('/_astro/')) };
   console.log('P9_TIME ' + name + ' ' + JSON.stringify(result));
   return result;
 }
 
-test('Phone open speed on Fast 3G: first open, then reopens with the browser cache on and off (numbers in the log)', { timeout: 600000 }, async (t) => {
+test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads after the first screen, one chat is read first (A/B, numbers in the log)', { timeout: 600000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   seed(server);
-  const { page } = await phone(t, server);
+  const { page, session } = await phone(t, server);
   await page.waitForFunction(() => performance.getEntriesByName('p9-chat-painted').length, null, { timeout: 30000 });
   // The worker is installed and running by now (phone() loads the page twice).
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 20000 });
+  // Chat 3 is the one last shown, so the next open reads its events first.
+  const third = '00000000-0000-4000-8000-000000000503';
+  await page.click('[data-chat="' + third + '"]'); await page.waitForSelector('#events article', { timeout: 20000 });
+  await page.click('[data-back]'); await page.waitForSelector('#chatList [data-chat]', { timeout: 10000 });
   const warm = await open(page, 'reopen-cache-on', false);
   const cold = await open(page, 'reopen-cache-off', true);
-  assert.ok(warm.painted > 0 && cold.painted > 0);
-  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-speed ' + (await page.screenshot()).toString('base64'));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-speed-list ' + (await page.screenshot()).toString('base64'));
+  const misses = [];
+  // Item 1: with the browser's own cache gone, the worker still has the build (before: 10 files, 1.09 MB again).
+  if (cold.workerAstro !== 0) misses.push('item 1: the worker downloaded ' + cold.workerAstro + ' build files on a reopen');
+  // Item 2: the terminal's code is not loaded before the first chat screen.
+  if (cold.astroBeforePaint.some((name) => /terminal/i.test(name))) misses.push('item 2: the terminal loaded before the first screen: ' + cold.astroBeforePaint.join(' '));
+  // Item 3: the first read names one chat, the one last shown; the others read theirs when opened.
+  const reads = cold.api.filter(([name]) => name.startsWith('/chat/events?after=0&tail='));
+  if (reads.length !== 1 || !reads[0][0].endsWith('only=' + third)) misses.push('item 3: the first reads were ' + JSON.stringify(reads.map((r) => r[0])));
+  // Another chat still opens with its history, and the list shows every chat (state from GET /chat).
+  assert.equal(await page.locator('#chatList [data-chat]').count(), 6);
+  await page.click('[data-chat="00000000-0000-4000-8000-000000000501"]');
+  await page.waitForSelector('#events article[data-kind=agent]', { timeout: 60000 });
+  // The terminal loaded after the first screen, while the phone was idle, or loads now on the tap.
+  await page.click('[data-nav="terminal"]');
+  await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/_astro\/.*terminal/i.test(e.name)), null, { timeout: 60000 })
+    .catch(() => misses.push('no terminal chunk was ever loaded (its name has no "terminal"?)'));
+  // Loading terminal…: a fresh page with no worker and the terminal's file held, tapped at once.
+  const context = await page.context().browser().newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 } });
+  t.after(() => context.close());
+  await context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  await context.addInitScript(() => { Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }); window.requestIdleCallback = () => 0; });
+  const slow = await context.newPage();
+  let release; const held = new Promise((resolve) => { release = resolve; });
+  await slow.route(/\/_astro\/.*terminal/i, async (route) => { await held; await route.continue(); });
+  await slow.goto(server.origin + '/phone/');
+  await slow.waitForFunction(() => performance.getEntriesByName('p9-chat-painted').length, null, { timeout: 30000 });
+  await slow.click('[data-nav="terminal"]');
+  await slow.waitForSelector('#termState:text("Loading terminal…")', { timeout: 10000 }).catch(() => misses.push('item 2: no Loading terminal… on a tap before it loaded'));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-speed-terminal-loading ' + (await slow.screenshot()).toString('base64'));
+  release();
+  await slow.waitForFunction(() => document.querySelector('#termState')?.textContent !== 'Loading terminal…', null, { timeout: 30000 });
+  assert.deepEqual(misses, []);
 });
