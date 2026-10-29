@@ -324,6 +324,66 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   console.log('PASS item 15 desktop: why line first, Install waits for a pick, Install writes Claude only, Next reaches its sign-in; admin screen: reason, why the password, command; the password runs it, the route types it');
 });
 
+// Row 61 on a remote: the terminal step in remote mode has no terminal or Copy button; Install with admin password opens
+// the admin window (row I2) with the command the remote computed, and only the password goes back. main's own handlers
+// refuse first (no remote connected here); then main's status, server and deps handlers are stand-ins for a remote.
+test('Row 61 on a remote: tmux or ssh missing there opens the admin password window, never a terminal', { skip: !linux, timeout: 90000 }, async (t) => {
+  const deadline = Date.now() + 85000, left = () => Math.max(1000, deadline - Date.now());
+  const { instance, PATH } = await start(t, ['claude'], { without: ['ssh'] });
+  await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
+  await writeFile(path.join(instance.directory, '.claude', '.credentials.json'), '{}');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c36-'));
+  t.after(() => rm(home, { recursive: true }));
+  const env = { ...process.env, HOME: home, PATH }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const shot = async (name, what) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  assert.deepEqual(await page.evaluate(() => window.p9.remoteDepsCheck()), { error: 'not-connected' });
+  assert.deepEqual(await page.evaluate(() => window.p9.remoteDeps('pw')), { error: 'remote-deps-refused' });
+  assert.match(await page.evaluate(() => window.p9.remoteDeps('a\nb').then(() => 'passed', (e) => e.message)), /ipc-sender-refused/);
+  const COMMAND = 'apt-get install -y openssh-client';
+  await app.evaluate(({ ipcMain }, command) => {
+    const calls = globalThis.depsCalls = [];
+    for (const name of ['p9:get-status', 'p9:server', 'p9:remote-deps-check', 'p9:remote-deps']) ipcMain.removeHandler(name);
+    ipcMain.handle('p9:get-status', () => ({ status: 'ok', mode: 'server', host: 'test-remote' }));
+    ipcMain.handle('p9:server', (e, ...a) => a.length ? { error: 'refused' } : { host: 'test-remote', last: 'test-remote', remotes: ['test-remote'], keep: {} });
+    ipcMain.handle('p9:remote-deps-check', (e, ...a) => { calls.push(['check', a.length]); return { command }; });
+    ipcMain.handle('p9:remote-deps', (e, ...a) => { calls.push(['install', a.length, a[0] === 'right p@ss']); return a[0] === 'right p@ss' ? { ok: true } : { error: 'wrong-password' }; });
+  }, COMMAND);
+  await page.reload();
+  await page.locator('#cards [data-key="welcome"] .open').click({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#welDlg').open, null, { timeout: left() });
+  const title = () => page.locator('#welT').innerText(), body = page.locator('#welBody'), foot = page.locator('#welFoot');
+  for (let i = 0; i < 6 && await title() !== 'This needs your admin password'; i++) await foot.locator('[data-act="next"]').click({ timeout: left() });
+  assert.equal(await title(), 'This needs your admin password');
+  assert.equal(await body.locator('[data-act^="admin:"], [data-act^="copy:"], [data-admin-pw]').count(), 0, 'no terminal, Copy or local password field');
+  assert.doesNotMatch(await body.innerText(), /Run in a terminal|your own terminal/);
+  await shot('c36-remote-deps-step', page.locator('#welDlg'));
+  await body.locator('[data-act="rdeps"]').click({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#adminDlg').open, null, { timeout: left() });
+  assert.equal(await page.locator('#adminCmd').innerText(), COMMAND, 'the command the remote computed');
+  assert.match(await page.locator('#adminT').innerText(), /test-remote/);
+  await page.locator('#adminPw').fill('not it');
+  await page.locator('#adminOk').click();
+  await page.locator('#adminErr', { hasText: 'That password did not work.' }).waitFor({ timeout: left() });
+  await page.waitForFunction(() => document.querySelector('#adminDlg').open, null, { timeout: left() });
+  await page.locator('#adminPw').fill('right p@ss');
+  await shot('c36-remote-deps-admin-event-horizon-prime', page.locator('#adminDlg'));
+  await page.evaluate(() => { document.getElementById('themeBtn').click(); document.querySelector('[data-theme-pick="daylight"]').click(); });
+  await shot('c36-remote-deps-admin-daylight', page.locator('#adminDlg'));
+  await page.locator('#adminOk').click();
+  await page.waitForFunction(() => !document.querySelector('#adminDlg').open, null, { timeout: left() });
+  let calls = [];
+  for (const end = Date.now() + 5000; Date.now() < end && calls.length < 4; await wait(100)) calls = await app.evaluate(() => globalThis.depsCalls);
+  assert.deepEqual(calls, [['check', 0], ['install', 1, false], ['check', 0], ['install', 1, true]], 'a check, then only the password, each time');
+  assert.equal(await page.locator('#adminPw').inputValue(), '', 'the field is emptied');
+  assert.deepEqual(errors, []);
+});
+
 // D17: a login that expired leaves its file, so /setup says signed in. The chat's "not signed in" opens the agents step
 // on that agent as Sign-in expired with Sign in and the terminal row (it was "Signed in" with no button: a dead end), and
 // the sign-in URL an agent prints in a P9 terminal opens on Ctrl+click through row 18's checked opener (threat model row 13).

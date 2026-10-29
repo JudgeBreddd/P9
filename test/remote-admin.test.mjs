@@ -5,12 +5,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { installRemote, PASSWORD, adminLocal, adminArgs } from '../apps/desktop/remote-install.mjs';
-import { remoteMode } from '../apps/desktop/remote.mjs';
+import { remoteMode, remoteDeps } from '../apps/desktop/remote.mjs';
 import { stage, bash, nodeLog, stopDaemon } from './install-runtime.test.mjs';
 
 const skip = process.platform === 'win32' ? 'sh' : false;
@@ -165,4 +165,31 @@ test('Row 61: a wrong password or an account without sudo runs nothing; only tmu
   assert.deepEqual(await adminLocal('apt-get install -y tmux', PW, s.sh), { error: 'admin-refused' }, 'deps.mjs commands start with sudo');
   for (const bad of [['sandbox', 'x'], ['libatomic1', 'x'], ['ssh', 'a\nb'], ['ssh', ''], ['ssh', 'x', 'id'], ['tmux'], 'tmux', null]) assert.equal(adminArgs(bad), false, JSON.stringify(bad));
   assert.equal(adminArgs(['ssh', PW]), true);
+});
+
+// Row 61 on a remote: tmux missing on a remote that runs P9. The start script's deps computes the command there (deps.mjs: a
+// stub that names tmux until apt-get ran as admin), shows it, then runs exactly that through p9_admin with the password.
+test('Row 61 on a remote: the remote computes the command, shows it, and the password runs exactly that as admin', { skip, timeout: 90000 }, async (t) => {
+  const s = await stage(true, 'refused', { installed: false });
+  t.after(() => stopDaemon(s));
+  const { code, out } = await bash(s, ['--headless', '--background']);
+  assert.equal(code, 0, out);
+  await sudoStub(s.bin, s.dir);
+  const node = path.join(s.bin, 'node'), done = path.join(s.dir, 'tmux-installed'), apt = path.join(s.dir, 'apt.txt');
+  await rename(node, node + '-stub');
+  await writeFile(node, '#!/bin/sh\ncase "$1" in */scripts/deps.mjs) [ -f "' + done + '" ] || echo "apt-get install -y tmux"; exit 0 ;; esac\nexec "' + node + '-stub" "$@"\n');
+  await chmod(node, 0o755);
+  await writeFile(path.join(s.bin, 'apt-get'), '#!/bin/sh\necho "${P9_ROOT:-user} $*" >> "' + apt + '"\n[ -n "${P9_ROOT:-}" ] && : > "' + done + '"\nexit 0\n');
+  await chmod(path.join(s.bin, 'apt-get'), 0o755);
+  const ssh = path.join(s.bin, 'ssh');
+  assert.deepEqual(await remoteDeps('test-host', ssh), { phase: 'admin', command: 'apt-get install -y tmux' });
+  assert.deepEqual(await remoteDeps('test-host', ssh, 'not it'), { phase: 'wrong-password' });
+  assert.equal(await read(apt), '', 'nothing ran with a wrong password');
+  assert.deepEqual(await remoteDeps('test-host', ssh, PW), { phase: 'ok' });
+  assert.equal(await read(apt), '1 install -y tmux\n', 'apt-get ran once, as admin');
+  const calls = (await read(path.join(s.dir, 'sudo-argv.txt'))).split('---\n').filter((c) => c.includes('p9-admin\n'));
+  assert.equal(calls.at(-1).trimEnd().split('\n').at(-1), 'apt-get install -y tmux', 'sudo ran the command shown');
+  assert.deepEqual(await remoteDeps('test-host', ssh), { phase: 'none' });
+  assert.deepEqual(await remoteDeps('test-host', ssh, 'two\nlines'), { phase: 'failed' });
+  await noPassword(s.dir, []);
 });
