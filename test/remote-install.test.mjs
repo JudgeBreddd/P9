@@ -75,10 +75,10 @@ test('D15a: a host ssh would read as an option, or a version that is not one, is
 // excludes goes either (threat model row 67): private notes and agent files sit beside the source in such a copy.
 test('D15a source: a copy without .git sends its files under one folder, without node_modules, dist, .env or what .gitignore excludes', { skip, timeout: 20000 }, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-rsource-')), app = path.join(dir, 'app');
-  for (const f of ['scripts/install.sh', 'node_modules/x/index.js', 'apps/web/dist/a.js', 'apps/web/src/b.mjs', '_private/notes.md', 'CLAUDE.md', 'AGENTS.md', '.env', '.cursor/rules.md', 'apps/web/src/c.log']) {
+  for (const f of ['scripts/install.sh', 'node_modules/x/index.js', 'apps/web/dist/a.js', 'apps/web/src/b.mjs', 'private-notes/notes.md', 'CLAUDE.md', 'AGENTS.md', '.env', '.cursor/rules.md', 'apps/web/src/c.log']) {
     await mkdir(path.dirname(path.join(app, f)), { recursive: true }); await writeFile(path.join(app, f), 'x\n');
   }
-  await writeFile(path.join(app, '.gitignore'), '# private\n_private/\n/CLAUDE.md\nAGENTS.md\n*.log\n!keep.log\n');
+  await writeFile(path.join(app, '.gitignore'), '# private\nprivate-notes/\n/CLAUDE.md\nAGENTS.md\n*.log\n!keep.log\n');
   const list = spawn('tar', ['-tzf', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
   sourceArchive(app).pipe(list.stdin);
   let out = ''; list.stdout.setEncoding('utf8').on('data', (c) => { out += c; });
