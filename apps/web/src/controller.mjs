@@ -2297,7 +2297,7 @@ function wizRender() {
     title = 'Welcome to Event Horizon'; next = btn('next', window.p9?.server ? 'Set up this computer' : 'Start', 'default');
     // D1: P9 can also be this window onto a P9 that runs on another machine (Server mode, Settings > Server).
     body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`
-      + (window.p9?.server ? row('Work on another machine?', 'Use this window on another machine\'s P9 over ssh (the way VS Code Remote-SSH works). Install P9 there first: on that machine, run the Linux command from the README\'s Install section. Chats there keep running when you close this window.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a P9 on another machine')) : '')
+      + (window.p9?.server ? row('Work on another machine?', 'Use this window on another machine\'s P9 over ssh (the way VS Code Remote-SSH works). If that machine has no P9 yet, connecting offers to install it there. Chats there keep running when you close this window.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a P9 on another machine')) : '')
       + (W.remote ? wizRemote(btn) : '');
   } else if (key === 'workspace') {
     title = 'Your workspace';

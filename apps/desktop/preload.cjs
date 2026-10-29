@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   xferRun: (id, choice, deleteToo) => ipcRenderer.invoke('p9:xfer', 'run', id, choice, deleteToo),
   onXfer: (callback) => { ipcRenderer.on('p9:xfer', (_event, progress) => callback(progress)); },
   serverUpdate: () => ipcRenderer.invoke('p9:server-update'),
+  remoteInstall: () => ipcRenderer.invoke('p9:remote-install'), // D15a: install P9 on this remote, asked first
   onServerUpdate: (callback) => { ipcRenderer.on('p9:server-update', (_event, update) => callback(update)); },
   pickFolder: (kind) => ipcRenderer.invoke('p9:pick-folder', ...(kind === undefined ? [] : [kind])),
   onFocus: (callback) => { ipcRenderer.on('p9:focus', (_event, focus) => callback(focus)); },
