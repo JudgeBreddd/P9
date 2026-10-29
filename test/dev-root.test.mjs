@@ -40,6 +40,24 @@ test('dev root: only the desktop sets it, never on home, a drive root, the works
   console.log('PASS dev root refused: home, drive root, workspace, state, recovery, ownership (and inside them), a file, inside the workspace, missing, bad shapes');
 });
 
+// Server mode's Open Folder (rows 41/50 adds): main asks where a typed path really is before it asks the user, so a link inside
+// the workspace that points outside gets the question, as the local picker's realpath gives it. The check sets nothing.
+test('dev root check: a link inside the workspace that points outside is outside, and the check sets no root', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t), dir = instance.directory, outside = path.join(dir, 'elsewhere');
+  await mkdir(outside, { recursive: true }); await mkdir(path.join(instance.workspace, 'src'), { recursive: true });
+  await folderLink(outside, path.join(instance.workspace, 'away'));
+  await folderLink(path.join(instance.workspace, 'src'), path.join(instance.workspace, 'near'));
+  const check = (folder) => call(instance, '/dev/root', 'POST', { path: folder, check: true });
+  const ws = await realpath(instance.workspace), real = await realpath(outside);
+  assert.deepEqual(await check(path.join(instance.workspace, 'away')), { status: 200, body: { root: real, workspace: ws, inside: false } }, 'the link is outside');
+  assert.deepEqual(await call(instance, '/files', 'PUT', { path: 'a.txt', hash: hash(''), content: 'x', root: real }), { status: 409, body: { error: 'dev-root-unset' } }, 'the check set no root');
+  assert.deepEqual(await check(path.join(instance.workspace, 'near')), { status: 200, body: { root: path.join(ws, 'src'), workspace: ws, inside: true } });
+  assert.deepEqual(await check(instance.workspace), { status: 200, body: { root: ws, workspace: ws, inside: true } });
+  assert.deepEqual(await check(dir), { status: 403, body: { error: 'root-refused' } }, 'home is still refused');
+  assert.deepEqual(await check(path.join(dir, 'missing')), { status: 404, body: { error: 'root-not-found' } });
+  for (const body of [{ path: 'relative', check: true }, { path: dir, check: true, extra: 1 }]) assert.equal((await call(instance, '/dev/root', 'POST', body)).status, 400, JSON.stringify(body));
+});
+
 test('dev root: saves stay inside it, through the guarded save, and the workspace keeps its own', { timeout: 60000 }, async (t) => {
   const instance = await daemon(t), dir = instance.directory;
   const outside = path.join(dir, 'outside'), elsewhere = path.join(dir, 'elsewhere');

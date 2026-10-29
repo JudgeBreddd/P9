@@ -1,16 +1,14 @@
-// Dev Focus's Open Folder (threat model rows 41 and 50): the check main runs on a server path typed in Server mode, and the
+// Dev Focus's Open Folder (threat model rows 41 and 50): the shape check main runs on a server path typed in Server mode, and the
 // words the editor page shows for each refusal. One module for both, so they never disagree; no node imports (the page bundles it).
 
-// A typed server path: absolute, POSIX, at most 4096 characters, no NUL. Normalised and compared with the server's rules
-// (case-sensitive, slash), whatever this computer runs, so a Windows laptop never takes an outside folder for an inside one.
-// The server's daemon still checks the real path (POST /dev/root); this only decides whether to ask first.
-export function serverPath(typed, workspace) {
+// A typed server path: absolute, POSIX, at most 4096 characters, no NUL; normalised with the server's rules (slash), whatever
+// this computer runs. Whether it is inside the workspace is the server's answer on its real path (POST /dev/root, check).
+export function serverPath(typed) {
   if (typeof typed !== 'string' || !typed.trim() || typed.length > 4096 || typed.includes('\0')) return { error: 'request-refused' };
   if (!typed.trim().startsWith('/')) return { error: 'path-not-absolute' };
   const parts = [];
   for (const part of typed.trim().split('/')) if (part === '..') parts.pop(); else if (part && part !== '.') parts.push(part);
-  const real = '/' + parts.join('/'), inside = real === workspace || real.startsWith(workspace + '/');
-  return { real, outside: !inside, tail: inside ? real.slice(workspace.length) : '' };
+  return { real: '/' + parts.join('/') };
 }
 
 // The page's words for an Open Folder refusal. server: the reply came from Server mode, so "there" is the server.

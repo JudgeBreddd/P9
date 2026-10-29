@@ -480,8 +480,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // Dev Focus's Open Folder outside the workspace (threat model row 41): main sends it after the native picker and confirm;
   // null goes back to the workspace. A refused folder leaves the root unset.
+  // check: true only answers where the path really is (Server mode's Open Folder asks the user after this), and sets nothing:
+  // a link inside the workspace that points outside is outside, as the local picker's realpath makes it.
   app.post('/dev/root', async (c) => {
-    const input = await json(c);
+    const input = await json(c), check = input?.check === true && typeof input.path === 'string';
+    if (check) {
+      if (Object.keys(input).sort().join() !== 'check,path' || !path.isAbsolute(input.path)) return c.json({ error: 'request-refused' }, 400);
+      let root; try { root = await realpath(input.path); } catch { return c.json({ error: 'root-not-found' }, 404); }
+      const real = await realpath(workspace);
+      if (inside(real, root)) return (await stat(root)).isDirectory() ? c.json({ root, workspace: real, inside: true }) : c.json({ error: 'root-refused' }, 403);
+      const target = await devCheck(root);
+      return target.error ? reply(c, target) : c.json({ root: target.root, workspace: real, inside: false });
+    }
     if (!input || typeof input !== 'object' || Object.keys(input).join() !== 'path' || (input.path !== null && (typeof input.path !== 'string' || !path.isAbsolute(input.path)))) return c.json({ error: 'request-refused' }, 400);
     devRoot = null;
     if (input.path === null) return c.json({ root: null });

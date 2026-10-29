@@ -1025,9 +1025,12 @@ export async function createDesktop({ state, open } = {}) {
     let workspace, real, key = p => p, sep = '/';
     if (serverHost) {
       if (!args.length) return { pathNeeded: true, value: devFolder?.path ?? status.workspace };
-      const typed = serverPath(args[0], status.workspace);
+      const typed = serverPath(args[0]);
       if (typed.error) return fail(typed.error);
-      workspace = status.workspace; real = typed.real;
+      // Where it really is, from the server (a link inside the workspace may point outside); the check sets nothing.
+      const found = await daemonRequest(state, 'POST', '/dev/root', { path: typed.real, check: true }).catch(failedReply);
+      if (found.status !== 200) return fail(found.body?.error === 'request-refused' ? 'daemon-outdated' : found.body?.error ?? 'daemon-unavailable');
+      ({ workspace, root: real } = found.body);
     } else {
       workspace = await realpath(status.workspace);
       const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
