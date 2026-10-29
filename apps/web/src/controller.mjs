@@ -1,4 +1,4 @@
-import { popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
+import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
@@ -2680,12 +2680,12 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 const liveChat = { on: false, cursor: 0 };
 const dataNote = () => { $('#dataNote').textContent = [live.on && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 liveChat.call = async (action, payload = {}) => {
-  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() };
+  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
-  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {

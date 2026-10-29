@@ -692,9 +692,11 @@ export async function createDesktop({ state, open } = {}) {
     const { op, ...rest } = payload;
     const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
-    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    // host: which P9 did not answer, so the page can say so in words (chatFailed in helpers.mjs).
+    const where = serverHost ? { host: serverHost } : {};
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable', ...where } };
     try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
-    catch (error) { return failedReply(error); }
+    catch (error) { const reply = failedReply(error); return { ...reply, body: { ...reply.body, ...where } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
