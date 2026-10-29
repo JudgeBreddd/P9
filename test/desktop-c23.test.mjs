@@ -142,14 +142,17 @@ test('D11: a Dev Focus that could not start keeps one editor view while the layo
   console.log('PASS D11');
 });
 
-test('D12: the brand mark is the P9 icon in every theme', { timeout: 90000 }, async (t) => {
+test('D12: the brand mark is the real P9 logo in every theme', { timeout: 90000 }, async (t) => {
   const { page, shot } = await launch(t);
   for (const theme of ['event-horizon-prime', 'daylight', 'redline', 'ascii']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
-    const mark = await page.locator('#brandBtn svg.p9mark').evaluate((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height), el.querySelector('rect').getAttribute('fill'), el.querySelector('circle').getAttribute('stroke'), getComputedStyle(el).backgroundImage]; });
-    assert.deepEqual(mark, [20, 20, '#080b10', '#6ee7f2', 'none'], theme);
+    // The brand file that reads at 20 px (docs/brand/icon-simplified-256.png at 64 px), loaded, not the old D-in-a-ring SVG.
+    await page.locator('#brandBtn img.p9mark').evaluate((el) => el.decode());
+    const mark = await page.locator('#brandBtn img.p9mark').evaluate((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height), new URL(el.src).pathname, el.naturalWidth]; });
+    assert.deepEqual(mark, [20, 20, '/p9-mark.png', 64], theme);
+    assert.equal(await page.locator('#brandBtn svg').count(), 0, 'no inline placeholder');
     assert.equal(await page.locator('#brandBtn .mark').count(), 0, 'no old square');
     if (theme === 'event-horizon-prime' || theme === 'daylight') await shot('c23-d12-' + theme, false, true);
   }

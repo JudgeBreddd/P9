@@ -866,8 +866,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       { 'content-type': types['.js'] }));
     remoteApp.get('/p9-icon.png', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.png')), 200,
       { 'content-type': 'image/png' }));
-    remoteApp.get('/p9-icon.svg', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.svg')), 200,
-      { 'content-type': types['.svg'] }));
     // Item 19 (row 65): the artifact frame's page, and the runtimes the phone page fetches and hands to it (Mermaid, React, TypeScript).
     remoteApp.get('/frame/', async (c) => c.html(await readAsset(path.join(webRoot, 'frame', 'index.html'), 'utf8')));
     remoteApp.get('/frame/:file', async (c) => {

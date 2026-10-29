@@ -3,7 +3,7 @@
 .shell{display:grid;grid-template-rows:44px 1fr 24px;grid-template-columns:minmax(0,1fr);height:100vh}
 .topbar{position:relative;z-index:50;display:flex;align-items:center;gap:6px;padding:0 10px 0 12px;border-bottom:1px solid var(--border);background:color-mix(in oklch,var(--card) 70%,transparent);backdrop-filter:blur(10px)}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;letter-spacing:-.01em;margin-right:8px}
-/* D12: the P9 icon (public/p9-icon.svg, inline), the same in every theme; the window's own icon above it is the desktop's title bar */
+/* D12: the P9 mark (public/p9-mark.png: docs/brand/icon-simplified-256.png at 64 px, the brand file that reads at 20 px), the same in every theme; the window's own icon above it is the desktop's title bar */
 .brand .p9mark{width:20px;height:20px;flex:none;display:block;border-radius:5px;box-shadow:0 0 0 1px color-mix(in oklch,var(--foreground) 14%,transparent)}
 .tabs{display:flex;align-items:stretch;align-self:stretch;overflow-x:auto;scrollbar-width:none;mask-image:linear-gradient(90deg,transparent,#000 12px,#000 calc(100% - 12px),transparent)}
 .topbar>:not(.tabs){flex-shrink:0}  /* only the tab strip gives up width; it scrolls */
