@@ -258,7 +258,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   // Registry commands run where the registry's relative paths resolve: the hub's ~/workspace, which can sit above P9's workspace.
   const root = () => settings?.scripts_root ?? workspace;
   // A settings key's file that is not there names itself (server.mjs answers file-not-found), not "storage unavailable".
-  const settingFile = (key, read) => read(settings[key]).catch((error) => {
+  // A key left out (all three are optional) reads as `none`: no file is opened.
+  const settingFile = (key, read, none) => settings[key] === undefined ? Promise.resolve(none) : read(settings[key]).catch((error) => {
     throw error.code === 'ENOENT' ? Object.assign(new Error('file-not-found'), { setting: key, file: settings[key] }) : error;
   });
   // The "plans" list: every plan.md under the scripts root, as the root-relative paths the button's command takes. Read only
@@ -287,7 +288,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   // The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
   async function registry() {
     if (!settings) throw new Error('settings-missing');
-    const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file))).content, settings.page_schemes);
+    const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file), { content: '{}' })).content, settings.page_schemes);
     let space = { sections: [], invalid: [] };
     // The space picker's scratch space (settings.space_name) is shown instead of the main one; the main file is not read then.
     const file = settings.space_name ? draftAt(drafts, settings.space_name) : settings.space;
@@ -300,7 +301,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
   async function queue() {
     const items = [];
-    for (const entry of await settingFile('waiting', (folder) => listDirectory(workspace, folder))) {
+    for (const entry of await settingFile('waiting', (folder) => listDirectory(workspace, folder), [])) {
       if (entry.dir || !entry.name.endsWith('.md') || ['AGENTS.md', 'CLAUDE.md'].includes(entry.name)) continue;
       let file;
       try { file = await readFile(workspace, `${settings.waiting}/${entry.name}`); } catch { continue; }
@@ -312,10 +313,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return items;
   }
   async function primary() {
-    const text = (await settingFile('primary', (file) => readFile(workspace, file))).content;
-    const match = text.match(/\*\*Main project: ([^*]+)\*\* \(`([^`]+)`/);
+    if (settings.primary === undefined) return null;
+    // A folder (the wizard's pick since fresh-install finding 1) is the main project itself, named by its folder.
+    const folder = await listDirectory(workspace, settings.primary).then(() => true, () => false);
+    const text = folder ? '' : (await settingFile('primary', (file) => readFile(workspace, file))).content;
+    const match = folder ? [, path.posix.basename(settings.primary.replace(/\/$/, ''))] : text.match(/\*\*Main project: ([^*]+)\*\* \(`([^`]+)`/);
     if (!match) return null;
-    const directory = path.posix.join(path.posix.dirname(settings.primary), match[2].replace(/\/$/, ''));
+    const directory = folder ? settings.primary.replace(/\/$/, '') : path.posix.join(path.posix.dirname(settings.primary), match[2].replace(/\/$/, ''));
     let status = '';
     try { status = (await readFile(workspace, `${directory}/AGENTS.md`)).content.match(/^\*\*Status:\*\*\s*(.+)$/m)?.[1].trim() ?? ''; }
     catch {}
@@ -738,6 +742,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
         || typeof body.answer !== 'string' || !body.answer.trim() || body.answer.length > 4000 || /[\x00-\x08\x0a-\x1f\x7f]/.test(body.answer)) {
       return { status: 400, error: 'request-refused' };
     }
+    if (settings.waiting === undefined) return { status: 404, error: 'file-not-found' };
     const relative = `${settings.waiting}/${body.name}`;
     const current = await readFile(workspace, relative);
     if (current.hash !== body.hash) {

@@ -2,7 +2,7 @@
 // file alone) plus each setting surviving an app restart; the agent lock goes through the real daemon.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { deflateSync, crc32 } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
@@ -151,7 +151,15 @@ function sheet(filled) {
 }
 
 test('Pets: crafted folders refused; each waiting agent and each chat shows its own pet, per focus, dragged spots kept; add and remove (threat model row 16)', { timeout: 240000 }, async (t) => {
-  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // A Mission with files (an existing install): a fresh one opens at its onboarding card with no panels (fresh-install finding 2).
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    const file = path.join(directory, '.config', 'p9', 'settings.json');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ registry: 'mission/registry.json' }));
+    await mkdir(path.join(workspace, 'mission'), { recursive: true });
+    await writeFile(path.join(workspace, 'mission', 'registry.json'), JSON.stringify({ scripts: [], apps: [{ id: 'editor', title: 'Editor', cmd: ['true'] }], pages: [] }));
+    return { args: ['--acp-override', fake] };
+  });
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-pets-')), profile = path.join(home, 'profile'), pets = path.join(profile, 'pets'), src = path.join(home, 'src');
   const pet = async (dir, name, meta, files = {}) => {
     await mkdir(path.join(dir, name), { recursive: true });
@@ -558,7 +566,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.click('#setClose');
   await page.click('#setBtn'); await page.click('[data-pet-mode="chat"]'); await page.selectOption('#setPet-system', 'other-pet'); await page.click('#setClose');
   await page.click('[data-focus-btn="mission"]');
-  // Mission #3 (Builder, 2026-10-18): with the sample's 12 apps, the Apps list scrolls and Usage keeps its full height.
+  // Mission #3 (Builder, 2026-10-18): Usage keeps its full height beside the Apps list.
   assert.ok(await page.locator('#fMission [data-panel="musage"] .pscroll').evaluate((p) => p.scrollHeight <= p.clientHeight + 1), 'Usage squeezed by Apps');
   const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); };
   const walkNow = () => page.evaluate((steps) => {
@@ -782,7 +790,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
     await page.click('#welFoot [data-act="install"]'); await at(4, 'Sign in to an agent');
   };
   await card().waitFor({ timeout: 10000 });
-  assert.match(await card().innerText(), new RegExp('Set up · ' + base + ' of 4 done[\\s\\S]*agent sign-in · Mission Control files'));
+  assert.match(await card().innerText(), new RegExp('Set up · ' + (base + 1) + ' of 4 done[\\s\\S]*agent sign-in$'));
   await shot('setup-card.png');
   // The card opens at the first step not done; Back walks to the start.
   await card().locator('.open').click();
@@ -824,37 +832,50 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await shot('wizard-2-agents.png');
 
   await next(); await at(5, 'Mission Control');
-  assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Mission Control files[\s\S]*Not there yet/);
-  // RH2: the first sentence names Mission Control; with none of the files yet, the step says what each is and opens the guide.
-  assert.match(await body(), /Mission Control's buttons, apps and pages come from files in your workspace\./);
-  assert.match(await page.locator('#welBody [data-setup-help]').innerText(), /None of these is here yet[\s\S]*Main project file[\s\S]*Buttons, apps and pages file[\s\S]*Folder of items waiting on you/);
+  // Fresh-install finding 1: Mission starts empty and is built there. Next is the main button, nothing is required, and an
+  // older setup's files sit folded under "I already have Mission files", every path optional and empty (nothing found here).
+  assert.match(await body(), /Mission starts empty\. After setup, open it and build it there: ask an agent to add buttons, apps and pages, or start from a template\./);
+  assert.equal(await page.locator('#welFoot [data-act="next"]').getAttribute('data-variant'), 'default', 'Next is the main button');
+  assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
+  assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), false, 'folded away at first');
+  assert.equal(await page.locator('#welBody [data-act="starter"]').count(), 0, 'no button that makes files');
   await page.waitForTimeout(400);
+  const step5 = async (name) => { const png = await page.locator('#welDlg').screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  await step5('wizard-mission-dark');
+  await page.click('#welBody [data-have] > summary');
+  assert.match(await page.locator('#welBody [data-have]').innerText(), /Main project folder \(optional\)[\s\S]*Buttons, apps and pages file \(optional\)[\s\S]*Folder of items waiting on you \(optional\)/);
+  assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['', '', ''], 'no starter names filled in');
+  assert.equal(await page.locator('#welBody [data-act="starter"]').count(), 0, 'Use these files waits for a path');
   // The path rows share one label column and one box column, as in Settings: every box at the same x and width.
   const wizEdges = await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
   assert.equal(wizEdges.length, 5);
   assert.deepEqual(wizEdges, wizEdges.map(() => wizEdges[0]), 'aligned wizard boxes');
-  const rh2 =await page.locator('#welDlg').screenshot({ type: 'png' });
-  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT wizard-mission-empty ' + rh2.toString('base64'));
+  await page.waitForTimeout(10500); // across one 10 s poll (BL5): the section stays open
+  assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), true, 'still open after a refresh');
+  await step5('wizard-mission-open-dark');
+  // Daylight as the theme picker sets it (the picker sits behind the wizard).
+  const theme = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+  await step5('wizard-mission-open-light');
+  await page.click('#welBody [data-have] > summary');
+  await step5('wizard-mission-light');
+  await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, theme);
   // The desktop passes scripts_root through to the daemon like the other four paths (it was refused as request-refused).
   const checked = await page.evaluate(async (folder) => {
     const r = await window.p9.chat('setup', { ...(await window.p9.chat('setup', {})).body.proposed, scripts_root: folder });
     return [r.status, r.body?.pathsInvalid ?? false, r.body?.proposed?.scripts_root];
   }, instance.workspace);
   assert.deepEqual(checked, [200, false, instance.workspace], 'scripts_root checked');
+  await page.click('#welBody [data-have] > summary');
   await page.click('[data-act="docs"]');
   await until(async () => (await readFile(opened, 'utf8')).includes('docs/guide.md#buttons-apps-and-pages'), 'the guide opened');
-  assert.equal(await page.locator('#welFile').textContent(), settingsFile);
-  // No settings in a folder with things in it: the paths P9 will use, editable, and exactly what Create adds.
-  assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)), ['AGENTS.md', 'mission/registry.json', 'needs-you', '', '']);
-  assert.equal(await page.locator('#welBody [data-creates]').textContent(), 'AGENTS.md, mission/registry.json, needs-you/AGENTS.md, ' + settingsFile);
-  await shot('wizard-3-mission.png');
-  await page.click('[data-act="starter"]');
-  await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 });
-  await page.locator('#welBody .ok', { hasText: '✓ There' }).waitFor({ timeout: 5000 });
-  assert.match(await body(), /✓ Loaded/);
-  s = await setup();
-  assert.deepEqual([s.settings, s.agentsFile, s.registryFile], [true, true, true]);
-  await shot('wizard-3-mission-done.png');
+  // Typing one path offers Use these files; clearing it takes the button away again.
+  await page.fill('#welBody [data-path="waiting"]', 'needs-you');
+  await page.locator('#welBody [data-path="waiting"]').dispatchEvent('change');
+  await page.locator('#welBody [data-act="starter"]', { hasText: 'Use these files' }).waitFor({ timeout: 10000 });
+  await page.fill('#welBody [data-path="waiting"]', '');
+  await page.locator('#welBody [data-path="waiting"]').dispatchEvent('change');
+  await page.locator('#welBody [data-act="starter"]').waitFor({ state: 'detached', timeout: 10000 });
+  for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
   await next();
   if (s.tmux !== null) {
     // Item 15: something only an admin can install (the SSH client on a machine without it) turns this step into the admin screen.
@@ -882,6 +903,21 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.locator('#walk').waitFor({ timeout: 5000 });
   assert.equal(await page.locator('#welDlg').evaluate((d) => d.open), false);
   await page.keyboard.press('Escape');
+
+  // Fresh-install finding 1: after the wizard, Mission opens at its onboarding card, with no error.
+  await page.evaluate(() => document.querySelector('#welDlg')?.close());
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.doesNotMatch(await page.locator('#fMission').innerText(), /is required|could not be read|not found|error/i);
+  // Fresh-install finding 2: P9 wrote its own settings file and no ICM files; none of the ICM widgets draw.
+  assert.equal(await readFile(settingsFile, 'utf8'), '{}\n');
+  for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
+  assert.equal(await page.locator('#fMission .needs').isVisible(), false, 'no Waiting on you');
+  assert.deepEqual(await page.locator('#fMission [data-panel]').evaluateAll((all) => all.filter((p) => p.checkVisibility()).map((p) => p.dataset.panel)), [], 'no ICM panels');
+  await page.waitForTimeout(400);
+  const mission = await page.screenshot({ type: 'png' });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT mission-after-next ' + mission.toString('base64'));
+  await page.click('#rChat').catch(() => {});
 
   // Signed out again. The x skips: the card leaves the stack for the Notification Center, and stays there after a restart.
   await rm(credentials);
@@ -2026,7 +2062,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   await page.waitForTimeout(300);
   // Plain-words tips: the owner's sentence for primary, and a long path shows its end with the whole path on hover.
   const primaryTip = await page.locator('#setMission [data-mission="primary"] ~ .info').getAttribute('title');
-  assert.equal(primaryTip, 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)');
+  assert.equal(primaryTip, 'Folder of your main project, or a file that names it (for the Mission Control Main Project card and the Chat Focus Files pane)');
   const long = 'personal-projects/workspace-hub/some/long/folder/that/shares/its/start/with/the/rest/registry.json';
   const end = await page.locator('#setMission [data-mission="registry"]').evaluate((box, value) => {
     box.value = value; box.dispatchEvent(new Event('blur'));

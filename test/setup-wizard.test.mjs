@@ -42,10 +42,9 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   assert.equal(s.tmux === null, process.platform !== 'linux');
   // A folder with things in it: what is there is found, and the plan lists only what is missing (no _ideas/).
   assert.deepEqual([s.found, s.proposed, s.creates], [{ primary: 'AGENTS.md' }, STARTER, ['mission/registry.json', 'needs-you/AGENTS.md']]);
-  assert.equal((await call(instance, '/mission')).body.error, 'settings-missing');
 
   // {} or the wizard's four keys as JSON, nothing else; paths are checked as settings.json's are.
-  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: 'relative' }], [{ ...STARTER, waiting: '../out' }], [{ primary: 'A.md' }]])
+  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: 'relative' }], [{ ...STARTER, waiting: '../out' }]])
     assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
   // The fixed starter paths never land in a folder with things in it unshown: {} there needs the paths.
   assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', {})), [409, { error: 'paths-required' }]);
@@ -132,7 +131,7 @@ test('Setup settings (ST1): only settings.json keys, checked as the file is; the
   // Refused: no key, an unknown key, not an object, and anything parseSettings refuses (a required key removed too). The file stays.
   for (const [body, type] of [[{}], [{ x: 1 }], [[]], ['null'], [{ server_host: 'box' }, 'text/plain']])
     assert.deepEqual(Object.values(await call(instance, '/setup/settings', 'POST', body, type)), [400, { error: 'request-refused' }], JSON.stringify(body));
-  for (const [body, word] of [[{ server_host: 'bad host!' }, 'server_host'], [{ waiting: '../out' }, 'waiting'], [{ primary: null }, 'primary is required'],
+  for (const [body, word] of [[{ server_host: 'bad host!' }, 'server_host'], [{ waiting: '../out' }, 'waiting'],
     [{ scripts_root: 'relative' }, 'scripts_root'], [{ page_schemes: ['javascript:'] }, 'page_schemes'], [{ notes_roots: { vault: 'rel' } }, 'notes_roots']]) {
     const r = await call(instance, '/setup/settings', 'POST', body);
     assert.deepEqual([r.status, r.body.error], [400, 'settings-refused'], JSON.stringify(body));
@@ -508,4 +507,46 @@ test('Setup wizard workspace change: only through the picker, never home or P9 s
   assert.equal(back.workspace, second, 'rolled back to the folder it was on');
   assert.equal(await readFile(unitFile, 'utf8'), moved);
   assert.equal((await health(state)).workspace, second);
+});
+
+// Fresh-install finding 1: Mission starts empty. No registry, no waiting folder and no main project is a working Mission
+// (empty), not an error; the main project may be a folder, named by the folder.
+test('Setup wizard: registry, waiting and primary are optional, and primary may be a folder', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    await mkdir(path.join(workspace, 'proj'), { recursive: true });
+    await writeFile(path.join(workspace, 'proj/AGENTS.md'), '# Proj\n\n**Status:** building\n');
+    const file = settingsPath(directory);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ primary: 'proj' }));
+    return {};
+  });
+  const m = await call(instance, '/mission');
+  assert.equal(m.status, 200, JSON.stringify(m.body));
+  assert.equal(m.body.settingsError ?? null, null);
+  assert.deepEqual([m.body.scripts, m.body.apps, m.body.pages], [[], [], []]);
+  assert.deepEqual(m.body.primary, { name: 'proj', path: 'proj', status: 'building' });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.settings, s.agentsFile, s.registryFile], [true, true, null]);
+  // An existing settings file is never rewritten by Mission's first-run write.
+  assert.equal(await readFile(settingsPath(instance.directory), 'utf8'), JSON.stringify({ primary: 'proj' }));
+});
+
+// Fresh-install finding 2 (threat model row 17): Mission's first request with no settings file writes {} once, owner-only,
+// and makes no workspace file, so a new Mission opens empty at its onboarding card. A file deleted later is not written again.
+test('Setup wizard: Mission writes its own empty settings file on first run, and nothing in the workspace', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const file = settingsPath(instance.directory), before = (await readdir(instance.workspace)).sort();
+  await assert.rejects(stat(file));
+  const [first, ...rest] = await Promise.all([call(instance, '/mission'), call(instance, '/mission/hub'), call(instance, '/mission/icons'), call(instance, '/mission')]);
+  assert.deepEqual(rest.map((r) => [r.status, r.body?.error]), [[404, 'hub-not-set'], [200, undefined], [200, undefined]], 'requests that arrive together all see the new settings');
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.deepEqual([first.body.scripts, first.body.apps, first.body.pages, first.body.queue, first.body.primary], [[], [], [], [], null]);
+  assert.equal(await readFile(file, 'utf8'), '{}\n');
+  if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'no AGENTS.md, mission/, needs-you/ or _ideas/');
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.settings, s.agentsFile, s.registryFile, s.creates], [true, null, null, []]);
+  await rm(file);
+  assert.equal((await call(instance, '/mission')).status, 200, 'the last good settings stay');
+  await assert.rejects(stat(file), 'not written again after it loaded');
 });
