@@ -6,7 +6,7 @@ import { daemon, http, authenticated, root } from './helpers.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
-// Mission M2: folder lists (threat model row 68), registry references, and allow_folder (row 69).
+// Mission M2: folder lists (threat model row M2-a), registry references, and allow_folder (row M2-b).
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
 const SPACE = { sections: [
