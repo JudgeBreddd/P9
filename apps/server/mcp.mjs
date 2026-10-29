@@ -4,7 +4,7 @@
 // parsers and File protection as the desktop; the agent lock turns every write off; running a script or answering a
 // needs-you item asks the user in the chat first.
 // ponytail: MCP by hand (JSON-RPC, tools and resources only, no SDK in the daemon); the SDK if P9 needs more of the protocol.
-import { readFile as readText, open, mkdir, lstat, chmod, realpath } from 'node:fs/promises';
+import { readFile as readText, writeFile as writeText, open, mkdir, lstat, chmod, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -77,6 +77,10 @@ const TOOLS = [
     + '. describe_mission gives each kind\'s fields and an example. A data tile runs only after the user answers Allow on it in Mission.',
     input({ title: { type: 'string', description: 'The section\'s title.' }, kind: { type: 'string', enum: ITEM_KINDS },
       items: { type: 'array', items: { type: 'object' } }, space: spaceField, hash: hashField }, ['title', 'kind', 'items'])],
+  ['migrate_mission', 'Move Mission from its built-in layer to a space file, once: P9 copies settings.json first, writes this space beside it (never over a file), '
+    + 'names it in settings, and writes mission-migration.md with every item kept or lost in plain words and how to roll back. Then the built-in layer shows nothing. '
+    + 'It adds no folder outside the workspace: a root the space names waits for allow_folder and the user\'s yes.',
+    input({ text: { type: 'string', description: 'The whole space JSON. validate_space checks it first; any invalid entry refuses it.' } }, ['text'])],
   ['run_script', 'Run a Mission Control script or space button by ID, after the user allows it in this chat. Waits up to 45 s; follow a longer run with status.',
     input({ id: { type: 'string' }, args: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'The values for the script\'s args, in order.' } }, ['id'])],
   ['list_needs_you', 'The needs-you items waiting for the user, with each one\'s hash and whether it has an empty answer line.', input({})],
@@ -114,7 +118,7 @@ const spaceWords = (subject, error) => (error === 'empty'
     : { error: 'invalid-space', detail: subject + ' is JSON but not a space: it must be an object with a "sections" list, such as {"sections": []}.' });
 
 // useSpace(file): records file as settings.space (server.mjs, through the settings save queue).
-export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, chat, readOnly, protection, useSpace, changeSettings }) {
+export function createMcp({ workspace, recovery, state, settingsFile, settings: current, mission: currentMission, hub: currentHub, chat, readOnly, protection, useSpace, changeSettings }) {
   const inflight = new Map(); // conversation + request ID -> AbortController, for notifications/cancelled
 
   const need = () => { const settings = current(); if (!settings) throw new Error('settings-missing'); return settings; };
@@ -236,6 +240,64 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     }
     try { await handle.writeFile('{\n  "sections": []\n}\n'); await handle.sync(); } finally { await handle.close(); }
     return {};
+  }
+  // A new owner-only file holding text, never through a link or over another file, synced before it counts.
+  async function exclusive(file, text) {
+    const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+    try { await handle.writeFile(text); await handle.sync(); } finally { await handle.close(); }
+  }
+  // The move to a space (threat model row M4-b): refused before anything is written unless every entry parses; then the
+  // settings backup, the space, the setting, and the before and after list. It never adds a notes root.
+  const LOST_BY_DESIGN = [
+    'Incidents are files in a folder list now: they are no longer grouped and counted per check, with the last clean run.',
+    'Log lists show file names and times: each log\'s last line is no longer shown beside it (open the file to read it).',
+    'The last solo run\'s BLUF line is no longer on the card: open the report.',
+    'Notifications (silent scheduled jobs and doctor FAIL lines) and the server\'s logs and incidents over ssh show only through data tiles or buttons the space names.',
+  ];
+  async function migrate({ text }) {
+    if (chat.lock().on) return { error: 'agent-lock-on', detail: 'The agent lock is on: the user turns it off on the desktop.' };
+    if (!string(text, 6 * 1024 * 1024)) return { error: 'request-refused' };
+    const settings = need(), hub = currentHub?.();
+    if (settings.space) return { error: 'space-set', detail: 'Settings already name a space file (' + settings.space + '): Mission already shows only the space. Nothing was written.' };
+    if (!hub?.folder) return { error: 'no-hub', detail: 'Settings name no workspace-hub folder, so there is no built-in layer to move from. add_section starts a space.' };
+    if (!settingsFile || !defaultSpace() || !useSpace) return noSpace();
+    if (protection()) return { error: 'registry-read-only', detail: 'File protection is on: P9 makes no space file then. The user turns it off on the desktop.' };
+    let parsed;
+    try { parsed = parseSpace(text); } catch (error) { return spaceWords('The text', error); }
+    const all = combine(parseRegistry((await files(settings)).registry.content, settings.page_schemes), parsed);
+    const invalid = all.invalid.filter((entry) => entry.kind === 'space' || parsed.sections.some((section) => section.buttons.some((button) => button.id === entry.id)));
+    if (invalid.length) return { error: 'invalid-space', detail: 'Mission Control would drop part of this space, so nothing was written. Fix each entry (validate_space).', invalid };
+    const before = await hub.items();
+    const backup = settingsFile + '.pre-space-' + Date.now() + '.bak';
+    try { await exclusive(backup, await readText(settingsFile)); }
+    catch (error) { return { error: 'save-failed', file: backup, code: error.code, detail: 'P9 could not copy settings.json first, so nothing was written.' }; }
+    const space = defaultSpace();
+    try { await exclusive(space, text); }
+    catch (error) { return { error: error.code === 'EEXIST' ? 'space-file-exists' : 'save-failed', file: space, backup,
+      detail: error.code === 'EEXIST' ? space + ' is already there; P9 never writes over it. Settings are unchanged.' : 'P9 could not write the space. Settings are unchanged.' }; }
+    await useSpace(space);
+    if (need().space !== space) return { error: 'save-failed', file: space, backup, detail: 'P9 wrote the space but could not name it in settings.' };
+    const after = await currentMission().reach();
+    const kept = [], lost = [], shown = new Set();
+    for (const item of before) {
+      const at = await realpath(item.path).catch(() => item.path), where = after.files.get(at);
+      if (where) { kept.push('- ' + item.what + ': ' + item.name + ': kept in ' + where); shown.add(at); }
+      else lost.push('- ' + item.what + ': ' + item.name + ': lost: no space item shows it' + (after.unallowed.length ? ' (or its folder is not allowed yet)' : ''));
+    }
+    const only = [...after.files].filter(([at]) => !shown.has(at));
+    const list = path.join(path.dirname(settingsFile), 'mission-migration.md');
+    const lines = ['# Mission moved to a space, ' + new Date().toISOString(), '',
+      'Roll back: copy ' + backup + ' over ' + settingsFile + '. Mission reads settings again on its next view; the space file ' + space + ' can stay.', '',
+      '## Kept (' + kept.length + ')', '', ...(kept.length ? kept : ['- nothing']), '',
+      '## Lost (' + lost.length + ')', '', ...(lost.length ? lost : ['- nothing']), '',
+      '## Not allowed yet: say yes in Mission (allow_folder)', '', after.unallowed.length ? '- ' + after.unallowed.join(', ') : '- none',
+      ...after.refused.map((entry) => '- ' + entry.where + ': refused (' + entry.error + ')'), '',
+      'Until the user says yes to each, its items show that the folder is not allowed yet, and what is in it counts as lost above.', '',
+      '## Lost on every move', '', ...LOST_BY_DESIGN.map((line) => '- ' + line), '',
+      '## Only in the space (' + only.length + ')', '', ...only.slice(0, 200).map(([at, where]) => '- ' + where + ': ' + at), ''];
+    await writeText(list, lines.join('\n'), { mode: 0o600 });
+    return { space, backup, list, kept: kept.length, lost: lost.length, not_allowed: after.unallowed,
+      detail: 'Show the user ' + list + ': what was kept, what was lost, and the roll-back line. Each folder not allowed yet needs allow_folder and their yes.' };
   }
   // A new draft: the drafts folder is P9's own (0700) and never a link, then the same O_EXCL, O_NOFOLLOW file as the space.
   async function makeDraft(file) {
@@ -456,6 +518,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         return { changed: { action: 'removed', kind: 'section', record: found.entry } };
       });
     },
+    migrate_mission: (args) => migrate(args),
     run_script: (args, conversation, signal) => runScript(conversation, args, signal),
     allow_folder: (args, conversation, signal) => allowFolder(conversation, args, signal),
     list_needs_you: async () => { need(); return { items: (await currentMission().overview()).queue.map(({ name, title, age, hash, answerable, content }) => ({ name, title, age, hash, answerable, content })) }; },

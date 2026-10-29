@@ -90,6 +90,31 @@ export const FOLDER = {
   match: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n\0]/.test(value),
     doc: 'Only files holding a line that is exactly this text (spaces at either end ignored); the newest 200 files are checked.' },
 };
+// A checklist (threat model row M4-a): rows like "- [x] text" and a "review: word" line in .md files, each changed one mark or
+// one line at a time through the guarded save. The audit's Approve, Park, Deny and Apply, the Wiki inbox's merge or reject.
+export const MARK = /^[^\[\]\r\n]{1,32}$/;
+const label = (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 40 && !/[\r\n]/.test(value);
+export const CHECKLIST = {
+  id,
+  title: { type: 'string', required: true, check: text, doc: 'The checklist label.' },
+  root: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'A key of settings.notes_roots whose folder is inside the workspace (allow_folder asks the user): the path is in that root. Without it, in the workspace. Never a path.' },
+  path: relative('A .md file; with file, a folder whose subfolders each hold that file. Without it, the root itself.'),
+  file: { type: 'string', check: (value) => typeof value === 'string' && /^[^/\\\0.][^/\\\0]{0,119}$/.test(value) && /\.md$/i.test(value),
+    doc: 'The .md file each subfolder of path holds, e.g. _decision.md: one entry per subfolder, by name.' },
+  newest: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'Only the newest dated subfolder: the last by name of those starting YYYY-MM-DD (other folders are skipped). Default false.' },
+  heading: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n]/.test(value),
+    doc: 'Only rows under the heading with this text, up to the next heading.' },
+  marks: { type: 'object', check: (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length >= 1
+    && Object.keys(value).length <= 8 && Object.entries(value).every(([mark, name]) => MARK.test(mark) && label(name)),
+    doc: 'The marks a row may take, each mark (what goes between [ and ], 1 to 32 characters, no brackets or line breaks) to its button label, 1 to 8: '
+      + '{"x": "Approve", "parked": "Park", " ": "Deny"}. Rows show only when marks are set.' },
+  review: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length >= 1 && value.length <= 8 && new Set(value).size === value.length
+    && value.every((word) => typeof word === 'string' && /^[\w-]{1,32}$/.test(word)),
+    doc: 'The words the file\'s one "review:" line may be set to, 1 to 8, e.g. ["merge", "reject", "pending"].' },
+  apply: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'A script or space button ID taking one arg: Apply sets "review: pending" to "review: apply", then runs it with the subfolder\'s name. Only from pending.' },
+};
 // A data tile (M3, threat model row 70): a registry script or space button, by ID, that P9 runs on its own and draws.
 export const DATA_LIMITS = { everyMs: 30_000, timeoutMs: 10_000, bytes: 64 * 1024 };
 export const DATA = {
@@ -144,6 +169,9 @@ export const SECTION = {
     doc: 'IDs of registry scripts, apps or pages (or space buttons) shown in this section too, at most 64. An ID nothing has shows "not found".', example: ['disk-free', 'dashboard'] },
   data: { type: 'array', check: Array.isArray, fields: DATA, doc: 'Data tiles: a script\'s JSON drawn as a number, list, table or rings (threat model row 70).',
     example: [{ id: 'inbox-count', title: 'Inbox', script: 'count-inbox' }] },
+  checklists: { type: 'array', check: Array.isArray, fields: CHECKLIST, doc: 'Checklists: the user sets each row\'s mark, or the file\'s review line, one at a time (threat model row M4-a). Each needs a .md path or a file.',
+    example: [{ id: 'wiki-audit', title: 'Weekly Wiki audit', root: 'audit', path: 'runs', file: '_decision.md', newest: true, heading: 'Proposed register changes',
+      marks: { x: 'Approve', parked: 'Park', ' ': 'Deny' }, apply: 'audit-apply' }] },
   links: { type: 'array', check: Array.isArray, fields: WEBLINK, doc: 'Web links, http and https only.',
     example: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] },
 };

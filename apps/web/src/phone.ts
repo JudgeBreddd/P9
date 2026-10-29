@@ -8,6 +8,7 @@ import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
+import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { FILE_PROTECTION_RISK } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
@@ -1137,7 +1138,7 @@ async function loadMission(cached = false) {
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[] }[]) {
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
@@ -1147,6 +1148,8 @@ async function loadMission(cached = false) {
       // Folder lists (threat model row M2-a): the count fills when the window opens; each file opens read-only in its row.
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
         `<div data-folder="${escape(list.id)}"><p class="muted">Loading…</p></div>`));
+      // Checklists (threat model row M4-a): read when the window opens; each press is one mark or one review line.
+      const checks = (space.checklists ?? []).map((list) => row(escape(list.title), `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
       // References: a script is its own row (Run included), a page its link, an app is the laptop's; an ID nothing has says so.
       const refs = (space.refs ?? []).map((ref) => {
         if (ref.missing || !ref.title) return `<div class="row missing" data-ref-missing aria-disabled="true"><span>${escape(ref.id)}</span><small>not found</small></div>`;
@@ -1158,9 +1161,9 @@ async function loadMission(cached = false) {
           : `<button type="button" class="link" data-open-page="${escape(page.id)}" data-url="${escape(page.url)}">Open on the laptop</button>`, attrs);
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks, ...lists, ...refs]);
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks, ...lists, ...checks, ...refs]);
       names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
-        ...(space.folders ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
+        ...(space.folders ?? []).map((list) => list.title), ...(space.checklists ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
       ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
@@ -1269,7 +1272,32 @@ one('#mission').addEventListener('click', (event) => {
 one('#mission').addEventListener('close', () => { openWindow = ''; expanded = new Set(); }, true);
 // A window's folder lists, once per drawing: the count in the row, the files (newest first) in its body, each a row whose
 // text loads read-only from the folder's own list (a path the list does not hold is refused by the daemon).
+// Checklists: the daemon's last reply per ID, and the Apply pressed once (it runs on the second press).
+const checklists: Record<string, unknown> = {};
+let checklistArmed = '';
+async function loadChecklist(list: HTMLElement) {
+  const id = list.dataset.ck!;
+  try { checklists[id] = await request('/mission/checklist?' + new URLSearchParams({ id })); }
+  catch (error) { checklists[id] = checklistAnswer(0, (error as { body?: unknown }).body ?? { error: (error as Error).message }); }
+  list.innerHTML = checklistHtml(id, checklists[id], escape, checklistArmed);
+}
+one('#mission').addEventListener('click', async (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>('[data-ck] button');
+  if (!button) return;
+  const list = button.closest<HTMLElement>('[data-ck]')!, id = list.dataset.ck!, act = checklistAction(button, checklists[id], checklistArmed);
+  if (!act) return;
+  checklistArmed = act.arm ?? '';
+  if (act.arm) { list.innerHTML = checklistHtml(id, checklists[id], escape, checklistArmed); return; }
+  button.disabled = true;
+  let refused = '';
+  try { const done = await mutate('/mission/checklist', act.body); if (done.status >= 300) refused = String((done.body as { error?: string })?.error ?? done.status); }
+  catch (error) { refused = (error as Error).message; }
+  await loadChecklist(list);
+  const reply = checklists[id] as { error?: string; note?: string };
+  if (refused && !reply.error) { reply.note = refused; list.innerHTML = checklistHtml(id, reply, escape, checklistArmed); }
+});
 async function loadFolders(box: HTMLElement) {
+  for (const list of box.querySelectorAll<HTMLElement>('div[data-ck]:not([data-loaded])')) { list.dataset.loaded = '1'; void loadChecklist(list); }
   await Promise.all([...box.querySelectorAll<HTMLElement>('div[data-folder]:not([data-loaded])')].map(async (list) => {
     list.dataset.loaded = '1';
     const id = list.dataset.folder!, count = box.querySelector<HTMLElement>(`[data-folder-count="${CSS.escape(id)}"]`), unit = count?.nextElementSibling as HTMLElement | null;

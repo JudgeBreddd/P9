@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, DATA, WEBLINK, DATA_LIMITS, SETTINGS, spaceName } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, WEBLINK, DATA_LIMITS, SETTINGS, spaceName } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -70,6 +70,38 @@ export function parseRegistry(text, schemes = []) {
   return result;
 }
 
+// Checklist lines (threat model row M4-a). Every write keeps the file's own line breaks: split keeps them as odd pieces.
+const BREAKS = /(\r\n|\n|\r)/;
+const ROW = /^(\s*[-*] \[)([^\[\]\r\n]{1,32})(\] )(.*)$/;
+const REVIEW = /^review:/;
+const HEADING = /^#{1,6}\s+(.*?)\s*#*\s*$/;
+// A checklist file's review word (null unless exactly one review: line) and its rows, under item.heading when set.
+function checklistParse(content, item) {
+  const pieces = content.split(BREAKS), reviews = pieces.filter((piece, index) => index % 2 === 0 && REVIEW.test(piece));
+  const review = reviews.length === 1 ? reviews[0].slice(7).trim().replace(/^(["'])(.*)\1$/, '$2') : null;
+  const rows = [];
+  let under = !item.heading;
+  for (let line = 0; item.marks && line < pieces.length; line += 2) {
+    const heading = pieces[line].match(HEADING);
+    if (heading && item.heading) { under = heading[1] === item.heading.trim(); continue; }
+    const row = pieces[line].match(ROW);
+    if (under && row && MARK.test(row[2])) rows.push({ n: rows.length, mark: row[2], text: row[4], line });
+  }
+  return { review, rows };
+}
+// The guard every checklist write passes: the same pieces and line breaks, exactly one line different, and that line
+// differing only between [ and ] (kind mark) or after "review: " (kind review).
+export function oneLineChange(before, after, kind) {
+  const a = before.split(BREAKS), b = after.split(BREAKS);
+  if (a.length !== b.length) return false;
+  const changed = a.flatMap((piece, index) => (piece === b[index] ? [] : [index]));
+  if (changed.length !== 1 || changed[0] % 2) return false;
+  const [x, y] = [a[changed[0]], b[changed[0]]];
+  if (kind === 'review') return REVIEW.test(x) && y.startsWith('review: ') && /^[\w-]{1,32}$/.test(y.slice(8));
+  const m = x.match(ROW), n = y.match(ROW);
+  return Boolean(kind === 'mark' && m && n && m[1] === n[1] && m[3] === n[3] && m[4] === n[4]);
+}
+
 // The free-form space (settings.space, one JSON file): sections, each with optional text, buttons, log views and notes.
 // A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file;
 // notes names a folder from settings.notes_roots by its key, never by path.
@@ -105,7 +137,11 @@ export function parseSpace(text) {
     }
     (section.folders ?? []).forEach((record, folder) => { const detail = problem(record, FOLDER, true);
       if (detail) result.invalid.push({ kind: 'space', index, folder, reason: 'malformed-record', detail }); else folders.push({ ...record }); });
-    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    const checklists = [];
+    (section.checklists ?? []).forEach((record, checklist) => {
+      const detail = problem(record, CHECKLIST, true) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
+      if (detail) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'malformed-record', detail }); else checklists.push({ ...record }); });
+    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
@@ -156,8 +192,9 @@ export function combine(reg, space) {
   const invalid = [...reg.invalid, ...space.invalid];
   const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
   const logs = new Set(unique(space.sections.flatMap((section) => [...section.logs, ...(section.data ?? [])]), 'space', invalid));
-  const folders = new Set(unique(space.sections.flatMap((section) => section.folders), 'space', invalid));
+  const folders = new Set(unique(space.sections.flatMap((section) => [...section.folders, ...(section.checklists ?? [])]), 'space', invalid));
   const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)), folders: section.folders.filter((folder) => folders.has(folder)),
+    ...(section.checklists ? { checklists: section.checklists.filter((item) => folders.has(item)) } : {}),
     ...(section.data ? { data: section.data.filter((tile) => logs.has(tile)) } : {}) }));
   return { ...reg, scripts, invalid, space: sections };
 }
@@ -290,8 +327,9 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
-        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}) })),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links, checklists }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
+        ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
       empty: !settings.space_name && !settings.hub && !reg.space.length && !reg.scripts.length && !reg.apps.length && !reg.pages.length && !waiting.length };
@@ -397,6 +435,97 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (list.error) return list;
     if (!list.files.some((file) => file.path === relative)) return { status: 404, error: 'not-found' };
     try { return { status: 200, text: (await readFile(list.root, relative)).content }; } catch { return { status: 404, error: 'not-found' }; }
+  }
+  // Checklists (threat model row M4-a): the files an item names, read through packages/files. A root must be inside the
+  // workspace. A write is one mark or one review line, checked again by oneLineChange, saved only over the hash the client read.
+  const CHECK_FILES = 200;
+  async function checklistFiles(item) {
+    const target = item.root ? await namedRoot(item.root) : { root: workspace };
+    if (target.error) return target;
+    if (item.root && !inside(await realpath(workspace).catch(() => workspace), target.root)) return { status: 403, error: 'outside-workspace' };
+    const base = item.path ?? '';
+    let paths = [[base, path.posix.basename(base)]];
+    if (item.file) {
+      let entries;
+      try { entries = await listDirectory(target.root, base); } catch { return { status: 404, error: 'not-found' }; }
+      let names = entries.filter((entry) => entry.dir && !entry.name.startsWith('.')).map((entry) => entry.name).sort();
+      // Newest is the last date-named folder (YYYY-MM-DD...): a run folder like backfill-undated sorts after every date.
+      if (item.newest) names = names.filter((name) => /^\d{4}-\d{2}-\d{2}/.test(name)).slice(-1);
+      paths = names.slice(0, CHECK_FILES).map((name) => [(base ? base + '/' : '') + name + '/' + item.file, name]);
+    }
+    const files = [];
+    for (const [relative, name] of paths) {
+      let file;
+      try { file = await readFile(target.root, relative); } catch { if (!item.file) return { status: 404, error: 'not-found' }; continue; }
+      files.push({ path: relative, name, ...file, ...checklistParse(file.content, item) });
+    }
+    return { status: 200, root: target.root, files };
+  }
+  async function checklistItem(id) {
+    if (typeof id !== 'string' || !ID.test(id)) return refused;
+    return (await registry()).space.flatMap((section) => section.checklists ?? []).find((item) => item.id === id) ?? { status: 404, error: 'unknown-id' };
+  }
+  async function checklist(id) {
+    const item = await checklistItem(id);
+    if (item.error) return item;
+    const list = await checklistFiles(item);
+    if (list.error) return list;
+    return { status: 200, marks: item.marks ?? null, review: item.review ?? null, apply: Boolean(item.apply),
+      files: list.files.map(({ path: relative, name, hash, review, rows }) => ({ path: relative, name, hash, review, rows: rows.map(({ n, mark, text }) => ({ n, mark, text })) })) };
+  }
+  async function checklistSet(body) {
+    const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body).sort().join(',') : '';
+    const kind = { 'hash,id,mark,path,row': 'mark', 'hash,id,path,review': 'review', 'apply,hash,id,path': 'apply' }[keys];
+    if (!kind || typeof body.path !== 'string' || body.path.length > 1024 || typeof body.hash !== 'string' || !/^[a-f0-9]{64}$/.test(body.hash)) return refused;
+    const item = await checklistItem(body.id);
+    if (item.error) return item;
+    const list = await checklistFiles(item);
+    if (list.error) return list;
+    const file = list.files.find((entry) => entry.path === body.path);
+    if (!file) return { status: 404, error: 'not-found' };
+    if (file.hash !== body.hash) return { status: 409, kind: 'conflict', reason: 'hash-conflict', diskHash: file.hash };
+    const pieces = file.content.split(BREAKS);
+    if (kind === 'mark') {
+      const row = Number.isInteger(body.row) ? file.rows[body.row] : undefined;
+      if (!item.marks || typeof body.mark !== 'string' || !Object.hasOwn(item.marks, body.mark) || !row) return refused;
+      const [, start, , end, rest] = pieces[row.line].match(ROW);
+      pieces[row.line] = start + body.mark + end + rest;
+    } else {
+      if (kind === 'review' && (!item.review || !item.review.includes(body.review))) return refused;
+      if (kind === 'apply' && (body.apply !== true || !item.apply || !/^[\w.-]{1,64}$/.test(file.name))) return refused;
+      const lines = pieces.flatMap((piece, index) => (index % 2 === 0 && REVIEW.test(piece) ? [index] : []));
+      if (kind === 'apply' && (lines.length !== 1 || pieces[lines[0]] !== 'review: pending')) return { status: 409, error: 'not-pending' };
+      if (lines.length !== 1) return { status: 409, error: 'review-line-count' };
+      pieces[lines[0]] = 'review: ' + (kind === 'apply' ? 'apply' : body.review);
+    }
+    const content = pieces.join('');
+    if (!oneLineChange(file.content, content, kind === 'mark' ? 'mark' : 'review')) return refused;
+    stillAuthorized();
+    const saved = await guardedSave(list.root, file.path, body.hash, content, recovery);
+    if (saved.kind !== 'saved') return { status: saved.kind === 'conflict' ? 409 : 500, ...saved };
+    if (kind !== 'apply') return { status: 200, hash: saved.hash };
+    stillAuthorized();
+    const started = await run(item.apply, { args: [file.name], confirm: true });
+    return { ...started, hash: saved.hash };
+  }
+  // What the space reaches (migrate_mission's after list): every file its folder lists and checklists show, by real path,
+  // with the item that shows it; a root not in settings.notes_roots yet is named instead.
+  // ponytail: a folder list counts its newest NOTES_SHOWN files, as Mission shows them.
+  async function reach() {
+    const files = new Map(), unallowed = new Set(), refusedItems = [];
+    for (const section of (await registry()).space) {
+      for (const [kind, item] of [...section.folders.map((entry) => ['folders', entry]), ...(section.checklists ?? []).map((entry) => ['checklists', entry])]) {
+        const where = section.title + ' › ' + item.title;
+        if (item.root && !(settings.notes_roots && Object.hasOwn(settings.notes_roots, item.root))) { unallowed.add(item.root); continue; }
+        const found = kind === 'folders' ? await folderFiles(item.id) : await checklistFiles(item);
+        if (found.error) { refusedItems.push({ where, error: found.error }); continue; }
+        for (const file of found.files) {
+          const at = await realpath(path.join(found.root, file.path)).catch(() => path.join(found.root, file.path));
+          if (!files.has(at)) files.set(at, where);
+        }
+      }
+    }
+    return { files, unallowed: [...unallowed].sort(), refused: refusedItems };
   }
   async function notesRead(name, relative) {
     if (!note(relative)) return refused;
@@ -705,5 +834,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     } finally { release?.(); }
   }
 
-  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, data, allow };
+  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, reach, data, allow };
 }

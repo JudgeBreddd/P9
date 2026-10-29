@@ -195,7 +195,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     settingsSaves = turn.then(() => {}, () => {});
     return turn;
   };
-  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change) });
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, hub: () => hub, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change) });
   // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
   // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
   // the page of a folder Dev Focus has since left is refused, never written into the new one.
@@ -354,6 +354,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // Notes (threat model row 34): both listeners, the same gates; mission.mjs checks the root, path and kind.
   api.get('/mission/folder', async (c) => reply(c, await mission.folderList(c.req.query('id'))));
+  // Checklists (threat model row M4-a): mission.mjs lists the files, and writes one mark or one review line over the hash read.
+  api.get('/mission/checklist', async (c) => reply(c, await mission.checklist(c.req.query('id'))));
+  api.post('/mission/checklist', async (c) => reply(c, await mission.checklistSet(await json(c))));
   api.get('/mission/folder/file', async (c) => reply(c, await mission.folderRead(c.req.query('id'), c.req.query('path'))));
   api.get('/mission/notes', async (c) => reply(c, await mission.notesList(c.req.query('root'))));
   api.get('/mission/notes/file', async (c) => reply(c, await mission.notesRead(c.req.query('root'), c.req.query('path'))));

@@ -570,6 +570,9 @@ export async function createDesktop({ state, open } = {}) {
     // Folder lists (row 68): read-only; the daemon lists again and opens only a file its own list holds.
     folder: ({ id: item }) => id(item) && ['GET', '/mission/folder?' + new URLSearchParams({ id: item })],
     folderFile: ({ id: item, path: file }) => id(item) && typeof file === 'string' && ['GET', '/mission/folder/file?' + new URLSearchParams({ id: item, path: file })],
+    // Checklists (row M4-a): the daemon lists the item's files again and writes one mark or one review line over the hash read.
+    checklist: ({ id: item }) => id(item) && ['GET', '/mission/checklist?' + new URLSearchParams({ id: item })],
+    checklistSet: body => ['POST', '/mission/checklist', body],
     noteCreate: body => ['POST', '/mission/notes/create', body],
     noteRename: body => ['POST', '/mission/notes/rename', body],
     // The Mission edit form (names and icons): the daemon checks the kind, fields, hash and File protection.

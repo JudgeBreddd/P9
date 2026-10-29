@@ -35,7 +35,7 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .mrow>*{min-height:0}.mrow .needs{display:flex;flex-direction:column}.mrow .needs [data-list]{flex:1;min-height:0;max-height:none}
 .bignum{font:300 40px/1 var(--display,inherit);color:var(--amber,var(--primary));margin:2px 0 8px}.bignum b{font-weight:400}
 [data-card=mprimary]>.win{width:100%}.mcol{display:flex;flex-direction:column;gap:10px;min-height:0}.mcol .wins{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
-.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
+.mpanel[hidden]{display:none}.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
 .mpanel[data-panel=mlogs]{flex:1}.mpanel[data-panel=musage],.mcol>.wins,.mcol>[data-card]{flex-shrink:0}.mpanel[data-panel=mlaunch]{flex:0 1 auto;min-height:120px}.pscroll{overflow:auto;min-height:0}
 .phead{display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11px;cursor:pointer}.phead h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.phead:hover{color:var(--foreground)}
 .uring{display:flex;flex-direction:column-reverse;align-items:center;gap:4px}.uring[data-stale]{opacity:.55}
@@ -621,6 +621,24 @@ dialog.connecting>button{margin-top:12px}
 .tile-allow{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
 .tile-link{display:grid;align-content:center;gap:2px;border:1px solid var(--border);border-radius:11px;padding:10px 12px;color:var(--foreground);text-decoration:none;font-size:13px;min-width:0}
 .tile-link:hover{background:var(--accent)}.tile-link small{font-size:11px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis}
+
+/* Mission checklists (M4): a row's marks are one segmented group; the pressed one is the mark on disk. */
+.cks{display:grid;gap:8px;padding:0 8px 8px}
+.ck{border:1px solid var(--border);border-radius:11px;padding:10px 12px;min-width:0}
+.ck h3{margin:0 0 6px;font-size:11.5px;font-weight:600;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.04em}
+.ck-file+.ck-file{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.ck-name{margin:0 0 6px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;font-size:12.5px}.ck-name b{font-weight:600;color:var(--foreground)}
+.ck-state{font-size:11.5px;color:var(--muted-foreground)}
+.ck-rows{list-style:none;margin:0;padding:0}
+.ck-rows li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:6px 0;border-top:1px solid var(--border)}.ck-rows li:first-child{border-top:0}
+.ck-rows p{margin:0;font-size:12.5px;line-height:1.4;color:var(--foreground);overflow-wrap:anywhere}
+.ck-marks{display:inline-flex;flex-wrap:wrap;gap:2px;padding:2px;border:1px solid var(--border);border-radius:999px;justify-self:start}
+.ck-marks button{border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11.5px;padding:3px 10px;border-radius:999px;cursor:pointer}
+.ck-marks button:hover{color:var(--foreground);background:var(--accent)}.ck-marks button:focus-visible,.ck-apply:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
+.ck-marks button[aria-pressed=true]{background:var(--primary);color:var(--primary-foreground);font-weight:600}
+.ck-apply{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.ck-apply[data-armed]{outline:2px solid var(--primary);outline-offset:2px}
+.ck-note{margin-bottom:6px;color:var(--foreground)}
 /* M4 onboarding card on an empty Mission, and the space picker (onboarding.mjs) */
 .onboard{max-width:760px;margin:24px auto;padding:22px 24px;display:grid;gap:12px;border:1px solid var(--border);border-radius:14px;background:color-mix(in oklch,var(--card) 70%,transparent);color:var(--foreground)}
 .onboard h3{margin:0;font-size:20px;font-weight:600}.onboard h4{margin:8px 0 0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}
