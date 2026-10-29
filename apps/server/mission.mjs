@@ -325,7 +325,9 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const reg = await registry(), waiting = await queue();
     const strip = ({ id, title, icon, picture, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
-    return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
+    // A button a checklist runs as its Apply is not drawn again as its own row; it still runs by ID through the checklist.
+    const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
+    return { waiting: settings.waiting, scripts: reg.scripts.filter((script) => !applies.has(script.id)).map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
       space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links, checklists }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
         ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
@@ -436,13 +438,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!list.files.some((file) => file.path === relative)) return { status: 404, error: 'not-found' };
     try { return { status: 200, text: (await readFile(list.root, relative)).content }; } catch { return { status: 404, error: 'not-found' }; }
   }
-  // Checklists (threat model row M4-a): the files an item names, read through packages/files. A root must be inside the
-  // workspace. A write is one mark or one review line, checked again by oneLineChange, saved only over the hash the client read.
+  // Checklists (threat model row M4-a): the files an item names, read through packages/files: in the workspace, or in a
+  // notes root the user said yes to (allow_folder, whose question names these writes). A write is one mark or one review
+  // line, checked again by oneLineChange, saved only over the hash the client read.
   const CHECK_FILES = 200;
   async function checklistFiles(item) {
     const target = item.root ? await namedRoot(item.root) : { root: workspace };
     if (target.error) return target;
-    if (item.root && !inside(await realpath(workspace).catch(() => workspace), target.root)) return { status: 403, error: 'outside-workspace' };
     const base = item.path ?? '';
     let paths = [[base, path.posix.basename(base)]];
     if (item.file) {

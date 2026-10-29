@@ -16,7 +16,9 @@ const SPACE = { sections: [
     checklists: [AUDIT,
       { id: 'inbox', title: 'Wiki inbox', path: 'inbox', file: '_decision.md', review: ['merge', 'reject', 'pending'] },
       { id: 'todo', title: 'To do', path: 'notes/todo.md', marks: { x: 'Done', ' ': 'Not done' } },
-      { id: 'far', title: 'Far', root: 'far', path: 'list.md', marks: { x: 'Done', ' ': 'Not done' } }] },
+      { id: 'far', title: 'Far', root: 'far', path: 'list.md', marks: { x: 'Done', ' ': 'Not done' } },
+      // A root the user never said yes to (no notes_roots key), like a vault before allow_folder.
+      { id: 'vault', title: 'Vault', root: 'vault', file: '_decision.md', review: ['merge', 'reject', 'pending'] }] },
   { title: 'Bad', checklists: [{ id: 'evil', title: 'Evil', path: 'notes/todo.md', marks: { 'x]\n- [x': 'Evil' } }, { id: 'up', title: 'Up', path: '../x.md' }] }] };
 const DECISION = (day) => '---\nreview: pending\n---\n\n# Audit run ' + day + '\n\n## Proposed register changes\n\n'
   + '- [x] K01 (both) still happening I-002: Jobs die silently Cards: C012\n- [parked] K02 (fable) DISAGREE on the vault sync\n- [ ] K03 (both) new issue: Compiled notes go stale\n\n'
@@ -36,6 +38,8 @@ async function seed({ directory, workspace }) {
   await writeFile(path.join(workspace, 'inbox/librarian-twice/_decision.md'), 'review: pending\nreview: pending\n');
   await writeFile(path.join(workspace, 'notes/todo.md'), '# To do\r\n\r\n- [ ] Water the plants\r\n- [x] Pay rent\r\n');
   await writeFile(path.join(directory, 'far/list.md'), '- [ ] far\n');
+  await mkdir(path.join(directory, 'vault/batch-1'), { recursive: true });
+  await writeFile(path.join(directory, 'vault/batch-1/_decision.md'), 'review: pending\n');
   await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ ...SETTINGS, notes_roots: { audit: path.join(workspace, 'wiki/audit'), far: path.join(directory, 'far') } }));
   return { args: ['--settings', path.join(directory, 'settings.json')] };
 }
@@ -62,7 +66,9 @@ test('checklists: Approve one row and Deny another, only those marks change; ref
   const instance = await daemon(t, undefined, false, seed);
   const overview = (await call(instance, '/mission')).body;
   const wiki = overview.space.find((section) => section.title === 'Wiki');
-  assert.deepEqual(wiki.checklists.map((item) => item.id), ['audit', 'inbox', 'todo', 'far']);
+  // The checklist's Apply runs audit-apply, so the section does not list it again as its own Run row.
+  assert.equal(overview.scripts.some((script) => script.id === 'audit-apply'), false, 'no second Apply row');
+  assert.deepEqual(wiki.checklists.map((item) => item.id), ['audit', 'inbox', 'todo', 'far', 'vault']);
   assert.deepEqual(overview.invalid.filter((entry) => entry.checklists !== undefined).map((entry) => entry.reason), ['malformed-record', 'malformed-record'], 'the bad mark and .. are dropped');
 
   // The newest run only, rows under the heading only.
@@ -119,12 +125,18 @@ test('checklists: Approve one row and Deny another, only those marks change; ref
   assert.equal((await set(instance, { id: 'inbox', path: a.path, hash: a.hash, review: 'reject' })).status, 200);
   assert.equal(await readFile(aFile, 'utf8'), 'review: reject\n\nTwo pages to merge.\n');
 
-  // A CRLF file keeps its CRLF; a root outside the workspace is refused.
+  // A CRLF file keeps its CRLF; a root outside the workspace works once the user said yes (notes_roots), never before.
   const todo = (await get(instance, 'todo')).body.files[0];
   assert.equal((await set(instance, { id: 'todo', path: todo.path, hash: todo.hash, row: 0, mark: 'x' })).status, 200);
   assert.equal(await readFile(path.join(instance.directory, 'workspace', 'notes/todo.md'), 'utf8'), '# To do\r\n\r\n- [x] Water the plants\r\n- [x] Pay rent\r\n');
-  assert.deepEqual([(await get(instance, 'far')).status, (await get(instance, 'far')).body.error], [403, 'outside-workspace']);
-  console.log('PASS checklist: 7 refusals change nothing; Approve K03 + Deny K01 change 2 marks; Apply writes review: apply and runs with 2026-10-28, twice refused; inbox reject; CRLF kept; far root refused');
+  const far = (await get(instance, 'far')).body.files[0];
+  assert.equal((await set(instance, { id: 'far', path: far.path, hash: far.hash, row: 0, mark: 'x' })).status, 200);
+  assert.equal(await readFile(path.join(instance.directory, 'far/list.md'), 'utf8'), '- [x] far\n');
+  assert.deepEqual([(await get(instance, 'vault')).status, (await get(instance, 'vault')).body.error], [404, 'unknown-root']);
+  const unasked = await set(instance, { id: 'vault', path: 'batch-1/_decision.md', hash: 'a'.repeat(64), review: 'merge' });
+  assert.deepEqual([unasked.status, unasked.body.error], [404, 'unknown-root'], 'no write without the yes');
+  assert.equal(await readFile(path.join(instance.directory, 'vault/batch-1/_decision.md'), 'utf8'), 'review: pending\n');
+  console.log('PASS checklist: 7 refusals change nothing; Approve K03 + Deny K01 change 2 marks; Apply writes review: apply and runs with 2026-10-28, twice refused; inbox reject; CRLF kept; far root marked once allowed; vault root refused without the yes, file unchanged');
 });
 
 test('the weekly Wiki audit on the phone at 390x844: Approve, Park, Deny per row and Apply', { timeout: 90000, skip: process.platform === 'win32' && 'Windows CI has no Playwright Chromium' }, async (t) => {

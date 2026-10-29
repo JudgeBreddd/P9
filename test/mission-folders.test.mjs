@@ -121,7 +121,7 @@ test('allow_folder: nothing is added without the user\'s yes; P9\'s own folders 
 
   let pending = tool('allow_folder', { name: 'other', folder: other });
   let asked = await approval(cursor);
-  assert.equal(asked.hit.data.toolCall.title, 'P9 Mission Control: let Mission list the folder ' + await realpath(other) + ' (read-only), named other');
+  assert.equal(asked.hit.data.toolCall.title, 'P9 Mission Control: let Mission list the folder ' + await realpath(other) + ', named other. Mission reads it, and a checklist in your space can change the review and mark lines of files in it, nothing else.');
   await answer(asked.hit.data.request, 'reject');
   assert.equal((await pending).error, 'not-allowed');
   assert.equal(await readFile(settingsFile, 'utf8'), before);
