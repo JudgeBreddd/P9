@@ -22,6 +22,7 @@ import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, star
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 import { updatedFrom } from './whats-new.mjs';
+import { serverPath } from './dev-folder.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -1013,25 +1014,40 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
-  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it.
+  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it. Server mode (rows 41/50
+  // adds): the picker would list this computer's folders, so the page asks for the server path (one string, only then) and
+  // dev-folder.mjs checks it with the server's rules; the rest is the same, through the tunnel. A refusal names its own reason.
   ipcMain.handle('p9dev:open-folder', async (event, ...args) => {
-    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!state || serverHost) return { error: 'daemon-unavailable' };
-    const workspace = await realpath((await health(state)).workspace);
-    const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
-    if (pick.canceled || !pick.filePaths[0]) return { ok: false };
-    const real = await realpath(pick.filePaths[0]).catch(() => null);
-    if (!real) return { error: 'root-not-found' };
-    const key = p => process.platform === 'win32' ? p.toLowerCase() : p; // Windows paths compare without case.
-    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + path.sep);
+    if (!fromDev(event) || args.length > 1 || (args.length && (!serverHost || typeof args[0] !== 'string'))) throw new Error('ipc-sender-refused');
+    const fail = error => ({ error, server: Boolean(serverHost) });
+    const status = state && await health(state).catch(() => null);
+    if (!status?.workspace) return fail('daemon-unavailable');
+    let workspace, real, key = p => p, sep = '/';
+    if (serverHost) {
+      if (!args.length) return { pathNeeded: true, value: devFolder?.path ?? status.workspace };
+      const typed = serverPath(args[0]);
+      if (typed.error) return fail(typed.error);
+      // Where it really is, from the server (a link inside the workspace may point outside); the check sets nothing.
+      const found = await daemonRequest(state, 'POST', '/dev/root', { path: typed.real, check: true }).catch(failedReply);
+      if (found.status !== 200) return fail(found.body?.error === 'request-refused' ? 'daemon-outdated' : found.body?.error ?? 'daemon-unavailable');
+      ({ workspace, root: real } = found.body);
+    } else {
+      workspace = await realpath(status.workspace);
+      const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
+      if (pick.canceled || !pick.filePaths[0]) return { ok: false };
+      real = await realpath(pick.filePaths[0]).catch(() => null);
+      if (!real) return fail('root-not-found');
+      key = p => process.platform === 'win32' ? p.toLowerCase() : p; sep = path.sep; // Windows paths compare without case.
+    }
+    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + sep);
     let set; // the daemon's answer: the root as it stores it, which saves must name exactly
     if (outside) {
-      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + ' in Dev Focus?',
+      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + (serverHost ? ' on ' + serverHost : '') + ' in Dev Focus?',
         detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
         buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
       if (response !== 1) return { ok: false };
-      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(() => null);
-      if (set?.status !== 200) return { error: set?.body?.error ?? 'daemon-unavailable' };
+      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(failedReply);
+      if (set.status !== 200) return fail(set.body?.error ?? 'daemon-unavailable');
     } else if (devFolder?.outside) await daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null);
     // Inside: kept as the part after the workspace, so the page gets the daemon's own spelling of it (Windows case, a linked workspace).
     devFolder = key(real) === key(workspace) ? null : { path: outside ? set.body.root : real, outside, tail: real.slice(workspace.length) };
