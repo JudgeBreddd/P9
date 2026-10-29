@@ -71,10 +71,13 @@ test('D20: after connecting, slow and failed requests show no layer and no note;
     await page.waitForFunction((dark) => document.documentElement.classList.contains('dark') === dark, name !== 'daylight', { timeout: 5000 }); };
   if (!process.env.GITHUB_ACTIONS) {
     console.log('P9_SHOT d23-send-failed ' + (await page.screenshot()).toString('base64'));
+    // One failed send, one toast (the retry inside liveChat.call does not raise its own); the light send waits for it to go.
+    await page.waitForTimeout(2500); assert.equal(await toast.count(), 1, 'one failed send shows one toast');
+    for (const end = Date.now() + 30000; await toast.count();) { assert.ok(Date.now() < end, 'the first toast did not go'); await page.waitForTimeout(250); }
     await theme('daylight'); await box.click(); await page.keyboard.press('Enter');
     for (const end = Date.now() + 20000; await box.inputValue() !== 'A long draft that must survive (slow)';) {
       assert.ok(Date.now() < end, 'light send: the draft did not come back'); await page.waitForTimeout(200); }
-    await toast.last().waitFor({ timeout: 5000 });
+    await toast.waitFor({ timeout: 5000 }); await page.waitForTimeout(2500); assert.equal(await toast.count(), 1, 'one failed send shows one toast');
     console.log('P9_SHOT d23-send-failed-light ' + (await page.screenshot()).toString('base64'));
     await theme('event-horizon-prime');
   }
