@@ -583,11 +583,11 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 .stage[data-side-mode=full]>.focuses>#fChat.on :is(.files,.pane>:not(.bottom)){visibility:hidden}
 .stage[data-side-mode=full]>.focuses>#fChat.on .bottom :is(.pinned,.meters){display:none}
 .stage[data-side-mode=full]:has(#fChat.on)>.side{margin-bottom:var(--chat-bottom,0px)}
-/* D20: connecting to a remote. A turning ring round a black hole, the window's own words under it. */
+/* D20: connecting to a remote. The P9 black hole (black-hole.css), the window's own words under it. */
 dialog.connecting{inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;border:0;padding:0;background:radial-gradient(90% 70% at 50% 42%,oklch(0.18 0.06 275),#000 70%);color:oklch(0.96 0.01 255);flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center}
 dialog.connecting[open]{display:flex}
 dialog.connecting::backdrop{background:#000}
-.conn-hole{width:112px;height:112px;border-radius:50%;margin-bottom:10px;background:radial-gradient(closest-side,#000 70%,transparent 72%),conic-gradient(from 0deg,oklch(0.9 0.09 80/.95),oklch(0.6 0.15 280/.5) 40%,transparent 60%,oklch(0.9 0.09 80/.95));filter:drop-shadow(0 0 18px oklch(0.7 0.14 265/.45));animation:conn-turn 1.6s linear infinite}
+.conn-hole{margin-bottom:10px}
 dialog.connecting h2{margin:0;font:500 20px/1.2 "Space Grotesk",sans-serif;letter-spacing:.02em}
 dialog.connecting p{margin:0;max-width:46ch;color:oklch(0.76 0.03 262)}
 dialog.connecting>button{margin-top:12px}
@@ -599,7 +599,6 @@ dialog.connecting>button{margin-top:12px}
 .conn-log{max-width:min(72ch,90vw);max-height:30vh;overflow:auto;margin:12px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;white-space:pre-wrap;text-align:left;color:oklch(0.82 0.03 262)}
 #connInstall{min-width:16ch}
 @keyframes conn-turn{to{rotate:360deg}}
-@media (prefers-reduced-motion:reduce){.conn-hole{animation:none}}
 .remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #setRemoteAdd input{flex:1;min-width:0}
 

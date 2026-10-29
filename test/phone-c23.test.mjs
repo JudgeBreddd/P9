@@ -89,7 +89,7 @@ test('P4, P6, P7, P17: boot black hole, refresh turns while it loads, Usage relo
   // are read from the stylesheet.
   const bob = await page.evaluate(() => { const all = (rules) => [...rules].flatMap((r) => [r, ...(r.cssRules ? all(r.cssRules) : [])]);
     const rules = [...document.styleSheets].flatMap((s) => all(s.cssRules));
-    const anim = (part) => rules.find((r) => r.selectorText === '#boot ' + part && r.style?.animationName)?.style.animation ?? '';
+    const anim = (part) => rules.find((r) => r.selectorText === '.bh ' + part && r.style?.animationName)?.style.animation ?? '';
     return { keyframes: ['bob', 'shade', 'spin'].every((name) => rules.some((r) => r.type === CSSRule.KEYFRAMES_RULE && r.name === name)),
       hole: anim('.hole'), shade: anim('.shade'), ring: anim('.ring') }; });
   assert.equal(bob.keyframes, true, 'bob, shade and spin keyframes');

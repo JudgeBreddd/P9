@@ -1,5 +1,9 @@
 import { useEffect } from 'react';
-import markup from './shell.html?raw';
+import shell from './shell.html?raw';
+import hole from './black-hole.html?raw';
+import './styles/black-hole.css';
+
+const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
