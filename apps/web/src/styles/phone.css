@@ -241,6 +241,15 @@ section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-w
 #events [data-kind=think] summary::after,#events [data-kind=group]>details>summary::after{content:"▸";margin-left:2px}
 #events [data-kind=think] details[open]>summary::after,#events [data-kind=group]>details[open]>summary::after{content:"▾"}
 #events [data-kind=think] details>div{padding:0 0 4px;color:var(--dim);font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+/* An agent program's warning (helpers.mjs warnHtml): one grey line above the reply; its "i" opens what it means. */
+#events [data-kind=warn]{color:var(--dim);font-size:13px}
+#events .agent-warn summary{display:flex;align-items:center;gap:8px;min-height:32px;list-style:none;cursor:pointer}
+#events .agent-warn summary::-webkit-details-marker{display:none}
+#events .agent-warn summary>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#events .agent-warn .i{flex:none;display:inline-grid;place-items:center;width:18px;height:18px;border:1px solid currentColor;border-radius:50%;font:italic 600 11px/1 Georgia,serif}
+#events .agent-warn[open] .i{color:var(--text)}
+#events .agent-warn p{margin:2px 0 4px;padding-left:10px;border-left:2px solid var(--line);font-size:14px;line-height:1.5}
+#events .agent-warn code{display:block;padding-left:12px;font-size:12px;overflow-wrap:anywhere}
 #events [data-kind=tool],#events [data-kind=group]{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:0 10px;overflow:hidden}
 #events [data-kind=group] [data-kind=tool]{border-width:0 0 0 0;padding:0}
 #events [data-kind=tool] summary .t,#events [data-kind=group]>details>summary .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px "JetBrains Mono",ui-monospace,monospace;color:var(--text)}

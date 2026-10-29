@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, sprintTimes, md, mdReply, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { artifactView, chipArtifact } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
@@ -333,7 +333,8 @@ function build(picked: string) {
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = (data.content as Json | undefined)?.text ?? '';
       if (update === 'agent_message_chunk' || update === 'agent_thought_chunk') {
-        const type = update === 'agent_message_chunk' ? 'agent' : 'think';
+        const type = update === 'agent_message_chunk' ? 'agent' : 'think', warn = type === 'agent' && agentWarning(text);
+        if (warn) { add('warn', warn); continue; } // the adapter's warning, a notice line above the reply (helpers.mjs)
         if (last?.kind === type) last.text += String(text); else add(type, text);
         // P9: an agent's own image (threat model row 26), checked by the desktop's helper, shows under its text.
         const image = type === 'agent' && imgSrc(data.content); if (image) (blocks.at(-1)!.images ??= []).push(image);
@@ -372,6 +373,7 @@ function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
   if (kind === 'agent') return `<article data-kind="agent" class="msg md">${copyCode(mdReply.parse(block.text) as string)}${agentImgs(block.images, 'the agent')}</article>`;
+  if (kind === 'warn') return '<article data-kind="warn">' + warnHtml(block.text) + '</article>';
   if (kind === 'think') return `<article data-kind="think"><details><summary>Thinking</summary><div>${escape(block.text)}</div></details></article>`;
   if (kind === 'tool') return toolRow(block);
   // P10: an open question is answered here, from the daemon's checked form.
@@ -430,7 +432,7 @@ function digest() {
     if (kind === 'user') { chat.working = true; chat.last = String(data.text ?? ''); chat.tail = false; }
     else if (kind === 'update') {
       const update = String(data.sessionUpdate), text = String((data.content as Json | undefined)?.text ?? '');
-      if (update === 'agent_message_chunk') { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; }
+      if (update === 'agent_message_chunk' && !agentWarning(text)) { chat.last = chat.tail ? chat.last + text : text; chat.tail = true; }
       else if (update === 'tool_call') chat.tail = false;
     }
     else if (kind === 'approval' || kind === 'question') chat.open.add(String(data.request));
