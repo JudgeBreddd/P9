@@ -19,9 +19,10 @@ if [ ${#missing[@]} -gt 0 ]; then
 fi
 # A non-interactive ssh session (a desktop's Install on a remote) can come without XDG_RUNTIME_DIR; systemd's own
 # /run/user/<uid> stands in, as for remote.mjs READ and PROBE, and systemctl --user below finds the user bus through it.
-# No such folder: this user has no user manager running, so P9's service has nothing to run under until linger is on.
+# Only this user's own folder (systemd makes it 0700, owned by the user). None, or not this user's: no user manager
+# runs, so P9's service has nothing to run under until linger is on.
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-  if [ -d "/run/user/$(id -u)" ]; then export XDG_RUNTIME_DIR="/run/user/$(id -u)"; else
+  if [ -d "/run/user/$(id -u)" ] && [ -O "/run/user/$(id -u)" ]; then export XDG_RUNTIME_DIR="/run/user/$(id -u)"; else
     echo "P9 runs as a service of this user, and this user has none running here. Run this on this machine: loginctl enable-linger $(id -un)   (it keeps the service running when nobody is logged in), then Install again."
     exit 1
   fi

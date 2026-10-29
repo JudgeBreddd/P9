@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { installRemote } from '../apps/desktop/remote-install.mjs';
@@ -18,7 +18,8 @@ async function stage(folder) {
   await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true }); await mkdir(bin);
   // An installed service: install.sh takes its update path, which runs node (deps, the editor server) and stops.
   await writeFile(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service'), '');
-  if (folder) await mkdir(run, { recursive: true });
+  // 'theirs': a folder that is there but not this user's (a link to /, owned by root), which install.sh must not use.
+  if (folder === 'theirs') { await mkdir(path.dirname(run), { recursive: true }); await symlink('/', run); } else if (folder) await mkdir(run, { recursive: true });
   const real = await readFile(new URL('../scripts/install.sh', import.meta.url), 'utf8');
   await mkdir(path.join(dir, 'src', 'p9', 'scripts'), { recursive: true });
   await writeFile(path.join(dir, 'src', 'p9', 'scripts', 'install.sh'), real.replaceAll('/run/user/', path.join(dir, 'run', 'user') + '/'));
@@ -46,8 +47,8 @@ test('install.sh with no XDG_RUNTIME_DIR: /run/user/<uid> stands in and reaches 
   assert.match(out, /P9 is already installed/);
 });
 
-test('install.sh with no XDG_RUNTIME_DIR and no /run/user/<uid>: one how-to, non-zero, nothing run', { skip, timeout: 30000 }, async () => {
-  const s = await stage(false), { code, out } = await bash(s);
+for (const [name, folder] of [['no /run/user/<uid>', false], ['a /run/user/<uid> that is not this user\'s', 'theirs']]) test('install.sh with no XDG_RUNTIME_DIR and ' + name + ': one how-to, non-zero, nothing run', { skip: skip || (folder && uid === '0' ? 'root owns /' : false), timeout: 30000 }, async () => {
+  const s = await stage(folder), { code, out } = await bash(s);
   assert.notEqual(code, 0);
   assert.match(out.trim(), /^P9 runs as a service of this user.*loginctl enable-linger \S+ .*Install again\.$/);
   assert.equal(await nodeLog(s), '', 'no step after the check ran');
