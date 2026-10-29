@@ -10,6 +10,8 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { execFileSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { connectServer, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
@@ -159,6 +161,49 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
 
 // D20: while the remote is not answering yet the window shows the connecting layer, not a blank page; once it answers the
 // layer goes and the window is on the remote.
+// P20 on the desktop: over the remote's ssh link a long open chat loads its newest 200 blocks, not its whole history;
+// Show earlier reads the blocks before them, in order, until the first message.
+test('Remote mode: a long chat loads its newest blocks over the ssh link; Show earlier reads the rest in order', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote), id = randomUUID();
+  const db = new DatabaseSync(path.join(remote.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(id, 'claude', 'Long chat', 'idle', Date.now());
+  const add = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
+  add.run(id, 'created', JSON.stringify({ provider: 'claude', title: 'Long chat', folder: '' }), Date.now());
+  for (let i = 1; i <= 300; i++) { // 600 blocks: a message and a reply each
+    add.run(id, 'user', JSON.stringify({ text: `question ${i}.` }), Date.now());
+    add.run(id, 'update', JSON.stringify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `answer ${i}.` } }), Date.now());
+    add.run(id, 'turn-end', JSON.stringify({ stopReason: 'end_turn' }), Date.now());
+  }
+  db.close();
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const hist = page.locator('.hist').filter({ hasText: 'answer 300.' }).first();
+  await hist.waitFor({ timeout: 30000 });
+  const text = () => hist.evaluate((h) => h.textContent);
+  // The newest 200 blocks: question 201 on; nothing before, and Show earlier without a count (the rest is still on the remote).
+  assert.match(await text(), /question 201\./);
+  assert.doesNotMatch(await text(), /question 200\./);
+  assert.equal((await hist.locator('[data-earlier]').textContent()).trim(), 'Show earlier');
+  const png = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString('base64'));
+  if (process.env.CI !== 'true') console.log('P9_SHOT desk-tail ' + png);
+  for (let clicks = 0; await hist.locator('[data-earlier]').count(); clicks++) {
+    assert.ok(clicks < 5, 'Show earlier reaches the first message');
+    const before = (await text()).length;
+    await hist.locator('[data-earlier]').click();
+    await page.waitForFunction(([n]) => [...document.querySelectorAll('.hist')].some((h) => h.textContent.includes('answer 300.') && h.textContent.length > n), [before], { timeout: 15000 });
+  }
+  // Everything once, in order.
+  const all = await text(), at = (n) => all.indexOf(`question ${n}.`);
+  assert.ok(at(1) >= 0 && at(1) < at(2) && at(199) < at(200) && at(200) < at(201) && at(299) < at(300), 'in order');
+  assert.equal(all.split('question 150.').length, 2, 'no block twice');
+});
+
 test('Remote mode connecting: a turning black hole and the reason until the remote answers, then the remote', { skip, timeout: 90000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(null);
   const profile = path.join(s.directory, 'profile');
