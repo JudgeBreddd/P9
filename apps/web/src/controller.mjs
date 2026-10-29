@@ -1046,7 +1046,10 @@ async function loadUsage() {
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
 // ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
-const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+// Not while the window is hidden: each read tells the daemon someone is looking, which keeps its Claude usage poll (and the
+// claude process behind it) going; with no reads it stops after 2 min (claude-usage.mjs). Shown again, it reads at once.
+const pollUsage = () => { if (!document.hidden) loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadUsage().then(renderChats); });
 let usageSoon = 0;
 // Panes are redrawn only when the figures moved, so a turn end in one chat does not rebuild the others (E2).
 const usageNow = () => { clearTimeout(usageSoon); usageSoon = setTimeout(() => { const was = JSON.stringify(usage.limits); loadUsage().then(() => { if (JSON.stringify(usage.limits) !== was) renderChats(); }); }, 300); };
