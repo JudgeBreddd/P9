@@ -15,7 +15,7 @@
 .tab:hover .close{opacity:.7}.tab .close:hover{opacity:1;background:var(--accent)}
 .tab[data-state="stopped"]{opacity:.6}
 .spacer{flex:1}
-html,body{height:100%;overflow:hidden}
+html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a focused off-screen node scroll the body sideways */
 .body{display:grid;grid-template-columns:40px 1fr;min-height:0}
 /* Focus modes: all three stay mounted in one grid cell and only the active one is visible,
    so drafts, scroll and selection survive switching (Builder 2026-10-14) */
@@ -639,3 +639,16 @@ dialog.connecting>button{margin-top:12px}
 .ck-apply{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
 .ck-apply[data-armed]{outline:2px solid var(--primary);outline-offset:2px}
 .ck-note{margin-bottom:6px;color:var(--foreground)}
+/* M4 onboarding card on an empty Mission, and the space picker (onboarding.mjs) */
+.onboard{max-width:760px;margin:24px auto;padding:22px 24px;display:grid;gap:12px;border:1px solid var(--border);border-radius:14px;background:color-mix(in oklch,var(--card) 70%,transparent);color:var(--foreground)}
+.onboard h3{margin:0;font-size:20px;font-weight:600}.onboard h4{margin:8px 0 0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}
+.onboard p{margin:0;line-height:1.5}.onboard .muted{color:var(--muted-foreground)}
+.onboard-protect{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 14px;padding:10px 14px;border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:10px}.onboard-protect p{grid-column:1}.onboard-protect [data-open-protect]{grid-column:2;grid-row:1/3}
+.onboard-go{display:flex;flex-wrap:wrap;gap:10px}
+.onboard-tpls{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
+.onboard-tpl:hover,.onboard-tpl:focus-visible{border-color:var(--primary)}.onboard-tpl span{font-size:12px;color:var(--muted-foreground);line-height:1.4}
+.onboard-tpl[data-armed]{border-color:var(--primary)}
+.space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
+/* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */
+.tiles>.space-pick{grid-column:span 2;align-self:center;padding:0 4px}.tiles>.space-pick select{flex:1;min-width:0}
