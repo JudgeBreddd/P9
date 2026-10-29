@@ -2447,7 +2447,8 @@ function wizRender() {
   W.i = steps.indexOf(key);
   const yes = (ok, good, bad) => `<span class="${ok ? 'ok' : 'warn'}">${ok ? '✓ ' + good : bad}</span>`;
   const btn = (act, label, variant = 'outline') => `<button data-slot="button" data-variant="${variant}" data-act="${act}"${W.busy ? ' disabled' : ''}>${label}</button>`;
-  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${btn('retry', 'Retry')}</div>`; };
+  const PW_ERR = ['wrong-password', 'password-empty']; // fixed by Install again, not Retry
+  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${PW_ERR.includes(error) ? '' : btn('retry', 'Retry')}</div>`; };
   const row = (name, note, status, actions = '') => `<div class="set-row"><span><strong>${name}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span><span class="spacer"></span>${status}${actions}</div>`;
   const note = W.note[key];
   let title, body, next = btn('next', 'Next', 'default');

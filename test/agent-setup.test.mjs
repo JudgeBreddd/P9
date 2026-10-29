@@ -303,8 +303,11 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   await ssh.locator('[data-act="pw:ssh"]').click();
   await body.locator('[data-admin="ssh"] .wiz-fail', { hasText: 'That password did not work.' }).waitFor({ timeout: left() });
   assert.equal(await aptRan(), '', 'nothing ran as admin');
+  assert.equal(await body.locator('[data-admin="ssh"] .wiz-fail [data-act="retry"]').count(), 0, 'a wrong password is fixed by Install, not Retry');
   await body.locator('[data-admin-pw="ssh"]').fill(PASS);
-  await shot('c34-admin-password', page.locator('#welDlg'));
+  await shot('c34-admin-password-event-horizon-prime', page.locator('#welDlg'));
+  await page.evaluate(() => { document.getElementById('themeBtn').click(); document.querySelector('[data-theme-pick="daylight"]').click(); });
+  await shot('c34-admin-password-daylight', page.locator('#welDlg'));
   await body.locator('[data-act="pw:ssh"]').click();
   for (const end = Date.now() + 10000; Date.now() < end && !(await aptRan()); ) await wait(100);
   const calls = (await readFile(sudoLog, 'utf8')).split('---\n').filter((c) => c.includes('p9-admin\n'));

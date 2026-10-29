@@ -438,6 +438,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 #welDlg .settings{display:grid;gap:12px}#welBody p{margin:0}
 #welBody .ok{color:var(--ok)}#welBody .warn{color:var(--warn)}#welBody span:is(.ok,.warn){white-space:nowrap}#welBody .mono{word-break:break-all}
 #welPetdex,#petdexLink{color:var(--primary);text-decoration:underline}
+#welBody .wiz-pw-label{display:block;margin-top:8px}
 #welBody .wiz-fail{display:grid;gap:4px;justify-items:start;border:1px solid var(--warn);border-radius:var(--radius);padding:8px 12px}
 #welCode{flex:1}#welFoot{display:flex;align-items:center;gap:8px}
 /* running chats in the rail (renderBots) */
@@ -623,6 +624,7 @@ dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 @keyframes conn-turn{to{rotate:360deg}}
 @media (prefers-reduced-motion:reduce){.conn-hole{animation:none}}
 .remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.remote-list [data-slot="select"]{width:auto;flex:none}
 #setRemoteAdd input{flex:1;min-width:0}
 
 /* Mission data tiles and links (M3): a script's JSON drawn as text. */

@@ -146,7 +146,7 @@
     <label class="keep-again sm"><input type="checkbox" id="keepRemember"> Do not ask again for this machine</label>
     <p class="muted sm keep-later">Settings &gt; Remote changes this later.</p>
   </div>
-  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no">Only while connected</button><button data-slot="button" value="yes" autofocus>Keep it running</button></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no">Only while connected</button><button data-slot="button" data-variant="default" value="yes" autofocus>Keep it running</button></div>
 </form></dialog>
 <!-- Row I2: the admin password for one admin step on a remote, typed here instead of in a terminal there. What is missing and
      why, the exact command it runs, then the field. The field is cleared when the dialog closes; nothing keeps the password. -->
@@ -161,7 +161,7 @@
     <p id="adminErr" class="admin-err sm" role="alert" hidden></p>
     <p id="adminNote" class="muted sm">Sent once over your ssh connection to sudo there. Never saved, never shown in any log.</p>
   </div>
-  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="cancel" formnovalidate>Cancel</button><button data-slot="button" value="ok" id="adminOk"></button></div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="cancel" formnovalidate>Cancel</button><button data-slot="button" data-variant="default" value="ok" id="adminOk"></button></div>
 </form></dialog>
 <dialog id="moveDlg" aria-labelledby="moveT" aria-describedby="moveP"><form method="dialog">
   <div class="dlg-head"><div><h2 id="moveT"></h2><p id="moveP"></p></div></div>
