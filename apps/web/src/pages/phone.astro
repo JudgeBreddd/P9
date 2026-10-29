@@ -24,8 +24,9 @@ import '../styles/artifact.css';
   </head>
   <body data-view="chat">
     <div class="fx-ambient"><div class="fx-horizon"></div></div>
-    <!-- L2, P4: a small P9 black hole bobbing inside a turning arc from first paint until the chat list has loaded, so the page never looks frozen. -->
-    <div id="boot" role="status" aria-label="Loading"><img src="/p9-icon.png" alt="" width="96" height="96" /></div>
+    <!-- L2, P4: a small P9 black hole bobbing inside a turning broken ring from first paint until the chat list has loaded, so the page never looks
+         frozen. Inline SVG with no image file, so it paints on the first frame with no request. -->
+    <div id="boot" role="status" aria-label="Loading"><svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="bootBlue" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f5bff" /><stop offset="1" stop-color="#1fb4ff" /></linearGradient><linearGradient id="bootDisc" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4b4cff" stop-opacity=".25" /><stop offset=".22" stop-color="#7a5cff" /><stop offset=".55" stop-color="#ece2ff" /><stop offset=".8" stop-color="#fff2e2" /><stop offset="1" stop-color="#ffc79e" stop-opacity=".25" /></linearGradient><radialGradient id="bootGlow"><stop offset=".5" stop-color="#6a4cff" stop-opacity=".32" /><stop offset="1" stop-color="#6a4cff" stop-opacity="0" /></radialGradient></defs><circle class="ring" cx="60" cy="60" r="52" /><ellipse class="shade" cx="60" cy="98" rx="16" ry="3" /><g class="hole"><circle class="halo" cx="60" cy="60" r="40" /><path class="lit glow" d="M14 61C30 60 33 31 60 31S90 60 106 61" /><circle class="lit glow" cx="60" cy="60" r="24" /><path class="lit" d="M14 61C30 60 33 31 60 31S90 60 106 61" /><circle class="lit" cx="60" cy="60" r="24" /><circle class="core" cx="60" cy="60" r="22" /><ellipse class="lit glow" cx="60" cy="60" rx="50" ry="2" /><ellipse class="lit disc" cx="60" cy="60" rx="50" ry="2" /></g></svg></div>
     <div id="app">
     <div id="stale" role="status" hidden>Offline: showing stale data</div>
     <div id="gap" role="alert" hidden>History gap. Tap to reload.</div>
