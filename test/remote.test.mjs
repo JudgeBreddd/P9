@@ -138,6 +138,13 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await status({ status: 'ok', mode: 'server', host: 'test-host' });
   assert.equal(JSON.parse(await readFile(path.join(forward, 'desktop.json'), 'utf8')).cookie, remote.credentials.cookie);
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor();
+  // The files panel has no Send files to remote in Remote mode: the files are the remote's already.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.locator('#rFiles').click({ timeout: 20000 });
+  await page.locator('#tree').waitFor({ state: 'visible', timeout: 20000 });
+  await page.waitForTimeout(1500);
+  if (process.env.CI !== 'true') console.log('P9_SHOT remote-files ' + (await page.screenshot()).toString('base64'));
+  assert.equal(await page.locator('#xferBtn').isVisible(), false, 'no Send files to remote in Remote mode');
   // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
     await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused'))]),
