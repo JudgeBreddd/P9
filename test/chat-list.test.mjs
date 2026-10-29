@@ -54,6 +54,13 @@ test('GET /chat on 36 chats over 200 MB: waiting and preview by the phone\'s rul
   const bytes = db.prepare('SELECT page_count * page_size AS n FROM pragma_page_count(), pragma_page_size()').get().n;
   assert.ok(bytes > 200e6, 'the ledger is over 200 MB: ' + bytes);
 
+  const times = [];
+  for (let i = 0; i < 7; i++) { const start = performance.now(); chat.list(); times.push(performance.now() - start); }
+  times.sort((a, b) => a - b);
+  console.log('P9_TIME chat-list ' + JSON.stringify({ chats: 37, mb: Math.round(bytes / 1e6), events: db.prepare('SELECT count(*) AS n FROM events').get().n,
+    medianMs: Math.round(times[3]), maxMs: Math.round(times[6]) }));
+  assert.ok(times[3] < 250, 'list() median ' + times[3] + ' ms on 36 chats over 200 MB');
+
   const rows = new Map(chat.list().map((row) => [row.id, row]));
   const line = 'The build passed on the second try after the cache was cleared and the test ran again on the server';
   assert.equal(rows.get(id(1)).preview, line);
@@ -64,10 +71,4 @@ test('GET /chat on 36 chats over 200 MB: waiting and preview by the phone\'s rul
   assert.equal(rows.get(id(37)).preview, '');
   assert.deepEqual([4, 5, 6, 8].map((n) => rows.get(id(n)).waiting), [true, false, false, false]);
 
-  const times = [];
-  for (let i = 0; i < 7; i++) { const start = performance.now(); chat.list(); times.push(performance.now() - start); }
-  times.sort((a, b) => a - b);
-  console.log('P9_TIME chat-list ' + JSON.stringify({ chats: 37, mb: Math.round(bytes / 1e6), events: db.prepare('SELECT count(*) AS n FROM events').get().n,
-    medianMs: Math.round(times[3]), maxMs: Math.round(times[6]) }));
-  assert.ok(times[3] < 250, 'list() median ' + times[3] + ' ms on 36 chats over 200 MB');
 });
