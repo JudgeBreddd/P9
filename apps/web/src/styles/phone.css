@@ -314,5 +314,5 @@ section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-w
 .onboard h3{margin:0;font-size:19px}.onboard h4{margin:6px 0 0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}.onboard p{margin:0;line-height:1.45}
 .onboard-go{display:grid;gap:8px}.onboard-go [data-variant=default]{background:var(--cyan);color:var(--bg);border-color:var(--cyan)}
 .onboard-tpls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px;text-align:left;background:var(--raised)}.onboard-tpl span{font-size:13px;color:var(--dim)}
+.onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px;text-align:left;background:var(--raised);color:var(--text)}.onboard-tpl b{font-weight:600}.onboard-tpl span{font-size:13px;color:var(--dim)}
 .space-pick{display:flex;align-items:center;gap:8px;margin:12px 12px 0;color:var(--dim)}.space-pick select{flex:1}

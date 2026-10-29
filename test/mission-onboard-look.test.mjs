@@ -14,8 +14,9 @@ async function setup(paths) {
   await mkdir(path.join(w, 'needs-you'));
   await writeFile(path.join(w, 'AGENTS.md'), '# Workspace\n');
   await writeFile(path.join(w, 'mission/registry.json'), '{}\n');
-  await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' }));
-  return { args: ['--acp-override', fake, '--settings', path.join(paths.directory, 'settings.json')] };
+  await mkdir(path.join(paths.directory, '.config/p9'), { recursive: true });
+  await writeFile(path.join(paths.directory, '.config/p9/settings.json'), JSON.stringify({ primary: 'AGENTS.md', registry: 'mission/registry.json', waiting: 'needs-you' }));
+  return { args: ['--acp-override', fake, '--settings', path.join(paths.directory, '.config/p9/settings.json')] };
 }
 const shot = (name, png) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 const settled = (page) => page.evaluate(() => Promise.allSettled(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)));
@@ -32,13 +33,13 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   const page = await app.firstWindow();
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.click('#rMission');
-  const theme = async (name) => { await page.click('#themeBtn'); await page.click('[data-theme-pick="' + name + '"]'); await page.keyboard.press('Escape'); };
+  // ponytail: a fixed pause after a theme switch, for the shot only: the switch slides the shell, which no finite animation reports.
+  const theme = async (name) => { await page.click('#themeBtn'); await page.click('[data-theme-pick="' + name + '"]'); await page.keyboard.press('Escape'); await page.waitForTimeout(800); };
 
   // Only the card: no waiting list, panels or section tiles.
   await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission .mrow, #fMission .needs, #fMission [data-group]').count(), 0);
   assert.equal(await page.locator('#fMission [data-template]').count(), 4);
-  for (const name of THEMES) { await theme(name); await settled(page); shot('m4a-card-desktop-' + name, await page.screenshot()); }
 
   await page.click('#fMission [data-yourself]');
   await page.locator('#mdlBody[data-kind="guide"] [data-guide] h1').waitFor({ timeout: 10000 });
@@ -54,12 +55,16 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
     await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 });
   }
 
+  // The card's shots after the window has settled at 1440 (the first shot right after launch caught it mid-resize).
+  for (const name of [...THEMES].reverse()) { await theme(name); await settled(page); shot('m4a-card-desktop-' + name, await page.screenshot()); }
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const device = await passkeyDevice(browser, server, 'phone-m4a');
   const session = await enrollDevice(server, device);
   await device.context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
   const phone = device.page;
+  // The test container has no network, so Chromium says offline and the phone sends nothing; the daemon is on loopback all the same.
+  await device.context.addInitScript(() => Object.defineProperty(Navigator.prototype, 'onLine', { get: () => true }));
   await phone.setViewportSize({ width: 390, height: 844 });
   await phone.goto(server.origin + '/phone/');
   await phone.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
@@ -72,7 +77,8 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.locator('#sheet[open] [data-guide] h1').waitFor({ timeout: 10000 });
   await phone.keyboard.press('Escape');
   await phone.click('#mission [data-build="codex"]');
-  await phone.waitForURL(/#chat=/, { timeout: 15000 });
+  await phone.waitForFunction(() => location.hash.startsWith('#chat=') || document.querySelector('[data-onboard-note]')?.textContent, null, { timeout: 15000 });
+  assert.match(await phone.evaluate(() => location.hash), /^#chat=/, await phone.evaluate(() => document.querySelector('[data-onboard-note]')?.textContent ?? ''));
 
   // A scratch space appears: the picker shows on the card; picking it shows that space with the picker above it.
   assert.equal((await server.desk('/mission/template', 'POST', { name: 'homelab', space: 'draft', confirm: true })).status, 201);

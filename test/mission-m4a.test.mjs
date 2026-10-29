@@ -22,8 +22,10 @@ async function start(t, settings = FRESH, space) {
     await writeFile(path.join(workspace, 'AGENTS.md'), '# Workspace\n');
     await writeFile(path.join(workspace, 'mission/registry.json'), '{}\n');
     if (space) await writeFile(path.join(workspace, 'mission/space.json'), JSON.stringify(space, null, 2) + '\n');
-    await writeFile(path.join(directory, 'settings.json'), JSON.stringify(settings));
-    return { args: ['--acp-override', fake, '--settings', path.join(directory, 'settings.json')] };
+    // Settings in their own folder, as installed: the space P9 makes beside them is never in the recovery folder's parent.
+    await mkdir(path.join(directory, '.config/p9'), { recursive: true });
+    await writeFile(path.join(directory, '.config/p9/settings.json'), JSON.stringify(settings));
+    return { args: ['--acp-override', fake, '--settings', path.join(directory, '.config/p9/settings.json')] };
   });
 }
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method, timeout: 30000,
@@ -48,7 +50,7 @@ async function agent(t, instance) {
   t.after(() => client.close());
   return async (name, args = {}) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
 }
-const settingsOf = async (instance) => JSON.parse(await readFile(path.join(instance.directory, 'settings.json'), 'utf8'));
+const settingsOf = async (instance) => JSON.parse(await readFile(path.join(instance.directory, '.config/p9/settings.json'), 'utf8'));
 
 test('M4a templates: four shipped files, sections with text and https links only; each validates and installs into a fresh profile', { timeout: 90000 }, async (t) => {
   assert.deepEqual(TEMPLATES.map((entry) => entry.name), ['icm', 'obsidian', 'homelab', 'blank']);
@@ -73,9 +75,9 @@ test('M4a templates: four shipped files, sections with text and https links only
   assert.deepEqual([(await call(instance, '/mission/template', 'POST', { name: 'icm' })).status], [403]);
   assert.equal((await settingsOf(instance)).space, undefined, 'nothing made before the confirm');
   const made = await call(instance, '/mission/template', 'POST', { name: 'icm', confirm: true });
-  assert.deepEqual([made.status, made.body.action, made.body.template], [201, 'installed', 'icm']);
+  assert.deepEqual([made.status, made.body.action, made.body.template], [201, 'installed', 'icm'], JSON.stringify(made.body));
   const live = (await settingsOf(instance)).space;
-  assert.equal(live, path.join(instance.directory, 'mission-space.json'));
+  assert.equal(live, path.join(instance.directory, '.config/p9/mission-space.json'));
   const overview = (await call(instance, '/mission')).body;
   assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Today', 'Projects', 'Wiki and notes', 'Upkeep'], []]);
 
@@ -102,7 +104,7 @@ test('M4a templates: four shipped files, sections with text and https links only
 test('M4a scratch spaces: a name never becomes a path; a draft write keeps the lock and File protection; switching leaves the live space untouched', { timeout: 90000 }, async (t) => {
   const instance = await start(t, LIVE, { sections: [{ id: 'ops', title: 'Ops' }] });
   const tool = await agent(t, instance);
-  const livePath = path.join(instance.workspace, 'mission/space.json'), drafts = path.join(instance.directory, 'spaces');
+  const livePath = path.join(instance.workspace, 'mission/space.json'), drafts = path.join(instance.directory, '.config/p9/spaces');
   const liveBytes = await readFile(livePath, 'utf8');
   await call(instance, '/file-protection', 'POST', { on: false });
 

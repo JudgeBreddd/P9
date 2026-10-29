@@ -631,4 +631,5 @@ dialog.connecting>button{margin-top:12px}
 .onboard-tpl:hover,.onboard-tpl:focus-visible{border-color:var(--primary)}.onboard-tpl span{font-size:12px;color:var(--muted-foreground);line-height:1.4}
 .onboard-tpl[data-armed]{border-color:var(--primary)}
 .space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
-#fMission>.space-pick{margin:0 0 10px}
+/* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */
+.tiles>.space-pick{grid-column:span 2;align-self:center;padding:0 4px}.tiles>.space-pick select{flex:1;min-width:0}
