@@ -107,7 +107,9 @@ export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P
 
 export function createListener({ workspace, savedWorkspace, recovery, state, ownership, credentials, transport, settings, settingsInvalid = false, settingsFile, ledger = openLedger(':memory:'), adapterOverride, instance = 'test', tmuxSocket = 'p9-' + instance, terminalPlatform, remote, anymouse = createAnymouse(), updateRoot = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, ''), updateArchive, updateTurnMs, claudeUsage }) {
   const lifecycle = createLifecycle();
-  let mission = createMission({ workspace, recovery, settings, instance, lifecycle });
+  // The user's Allow answers for data tiles (threat model row 70): P9's own file beside settings.json, never in the space.
+  const allowed = settingsFile ? path.join(path.dirname(settingsFile), 'mission-allowed.json') : undefined;
+  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed });
   let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
@@ -275,6 +277,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/mission', async (c) => c.json({ ...(await mission.overview()), settingsError, restart: restart(), update: update.brief() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
   api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
+  // Data tiles (row 70): the client asks only while Mission shows the tile; the daemon holds each tile to one run per 30 s.
+  api.get('/mission/data', async (c) => reply(c, await mission.data(c.req.query('id'))));
+  api.post('/mission/data/allow', async (c) => reply(c, await mission.allow(await json(c))));
   // A space log view rides the hub text route, so both clients open it like any other log.
   api.get('/mission/hub/text', async (c) => reply(c, c.req.query('kind') === 'space' ? await mission.spaceLog(c.req.query('name')) : await hub.text(c.req.query())));
   // Fix with Claude: the daemon reads the incident through the hub's own checks and seeds a Claude chat with it; the
@@ -661,7 +666,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (!settings) {
       settings = disk.parsed ?? paths;
       settingsInvalid = false;
-      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle });
+      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed });
       hub = createHub({ workspace, settings });
     }
     return c.json({ created, settings: true }, 201);

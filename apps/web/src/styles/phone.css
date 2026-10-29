@@ -291,3 +291,21 @@ section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-w
 #phoneSettings h2{margin-top:8px}#phoneSettings p{margin:0}
 #phoneSettings label.set{display:flex;align-items:flex-start;gap:4px}#phoneSettings label.set input{margin-top:2px;flex:none}#phoneSettings label.set>span,#phoneSettings label.mission-file{display:grid;gap:4px}#phoneSettings label.set .muted{font-size:13px}#phoneSettings .field-err{color:var(--red)}
 .sign-in h2{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.sign-in h2 small{font-weight:400;color:var(--dim)}.sign-in p+p,.sign-in p+form,.sign-in form+p{margin-top:8px}.sign-in a{font-weight:600}.sign-code code{font-size:1.6em;letter-spacing:.08em}.sign-form{display:flex;gap:8px;margin-top:8px}.sign-form input{flex:1;min-width:0}.sign-acts{display:flex;justify-content:flex-end;margin-top:10px}
+
+/* Mission data tiles and links (M3): a script's JSON drawn as text. */
+.tile-note{margin:0;font-size:13px;color:var(--dim)}
+.tile-stat{margin:0;display:flex;align-items:baseline;gap:6px}.tile-stat b{font-size:30px;font-weight:650;color:var(--text);font-variant-numeric:tabular-nums}.tile-stat span{font-size:13px;color:var(--dim)}
+.tile-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.tile-list li{display:grid;grid-template-columns:1fr auto;gap:0 8px;min-width:0}.tile-list li>:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.tile-list a{color:var(--cyan);text-decoration:none}
+.tile-list em{font-style:normal;font-size:11px;padding:0 7px;border-radius:999px;background:var(--raised);color:var(--text);align-self:center}
+.tile-list small{grid-column:1/-1;font-size:12px;color:var(--dim)}
+.tile-table{overflow:auto}.tile-table table{border-collapse:collapse;width:100%;font-size:13px}
+.tile-table th{text-align:left;font-weight:600;color:var(--dim);border-bottom:1px solid var(--line);padding:2px 10px 4px 0}.tile-table td{padding:4px 10px 4px 0;color:var(--text);font-variant-numeric:tabular-nums}
+.tile-rings{display:flex;flex-wrap:wrap;gap:12px}.tile-rings figure{margin:0;display:grid;justify-items:center;position:relative;width:68px}
+.tile-rings svg{width:60px;height:60px;transform:rotate(-90deg)}.tile-rings circle{fill:none;stroke:var(--line);stroke-width:3.2}.tile-rings circle+circle{stroke:var(--cyan);stroke-linecap:round}
+.tile-rings b{position:absolute;top:21px;font-size:13px;font-variant-numeric:tabular-nums;color:var(--text)}.tile-rings figcaption{font-size:12px;color:var(--dim);text-align:center}
+.tile-printed{margin:6px 0 0;max-height:140px;overflow:auto;padding:6px 8px;border-radius:7px;background:var(--raised);color:var(--text);font-size:12px;white-space:pre-wrap;word-break:break-all}
+.tile-allow{margin-top:8px;min-height:40px;padding:0 18px;border:0;border-radius:999px;background:var(--cyan);color:var(--bg);font:inherit;font-size:14px;font-weight:600}
+.tile-row{margin:0}.tile-link{display:grid;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;color:var(--text);text-decoration:none;font-size:15px}
+.tile-link small{font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}

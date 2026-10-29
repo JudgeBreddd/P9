@@ -7,6 +7,7 @@ import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
+import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
 import { FILE_PROTECTION_RISK } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
@@ -1131,12 +1132,15 @@ async function loadMission(cached = false) {
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string }[]) {
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[] }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id })))]);
-      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title)]);
+      // Data tiles (threat model row 70) run while their row is open; links are http(s) only (the daemon refused the rest).
+      const tiles = (space.data ?? []).map((tile) => row(escape(tile.title), `<div data-tile="${escape(tile.id)}">${tileHtml(null, escape)}</div>`));
+      const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape)}</p>`);
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks]);
+      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title)]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
       ? `<li><a class="link" href="${escape(item.url)}" target="_blank" rel="noopener noreferrer">${escape(item.title)}</a></li>`
@@ -1240,6 +1244,14 @@ one('#mission').addEventListener('click', (event) => {
 // Close button or Escape; a dialog removed by a reload is outside #mission by then, so it never clears this.
 one('#mission').addEventListener('close', () => { openWindow = ''; expanded = new Set(); }, true);
 one('#mission').addEventListener('toggle', async (event) => {
+  const tile = (event.target as HTMLDetailsElement).open && (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-tile]');
+  if (tile && !tile.dataset.timer) {
+    tile.dataset.timer = String(setInterval(() => {
+      if (!tile.isConnected || !tile.closest('details')?.open || !tile.closest('dialog')?.open) { clearInterval(Number(tile.dataset.timer)); delete tile.dataset.timer; return; }
+      if (!document.hidden) void pullTile(tile);
+    }, 30000));
+    void pullTile(tile);
+  }
   const list = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-notes]');
   if (list && !list.dataset.loaded) {
     list.dataset.loaded = '1';
@@ -1255,6 +1267,19 @@ one('#mission').addEventListener('toggle', async (event) => {
   pre.dataset.loaded = '1';
   try { pre.textContent = (await request('/mission/hub/text?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
 }, true);
+// A data tile's answer (threat model row 70), drawn as text by the same code as the desktop's.
+async function pullTile(tile: HTMLElement) {
+  const response = await fetch('/mission/data?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
+  if (response?.status === 401) return toLogin();
+  tile.innerHTML = tileHtml(response ? tileAnswer(response.status, await response.json().catch(() => ({}))) : { error: 'no connection' }, escape);
+}
+one('#mission').addEventListener('click', async (event) => {
+  const allow = (event.target as Element).closest<HTMLButtonElement>('[data-tile-allow]');
+  if (!allow) return;
+  const tile = allow.closest<HTMLElement>('[data-tile]')!;
+  const result = await mutate('/mission/data/allow', { id: tile.dataset.tile });
+  if (result.status === 200) await pullTile(tile); else tile.innerHTML = tileHtml(tileAnswer(result.status, result.body), escape);
+});
 async function follow(run: string, output: HTMLElement) {
   let from = 0;
   for (;;) {

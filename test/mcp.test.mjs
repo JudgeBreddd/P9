@@ -72,7 +72,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 23);
+  assert.equal((await client.listTools()).tools.length, 24);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -339,7 +339,7 @@ test('M1 describe_mission: a tools-only client gets the schema, an example of ev
   const { isError, ...told } = await tool('describe_mission');
   assert.equal(isError, false);
   assert.ok(told.schema.properties.sections.items.properties.buttons);
-  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes', 'folders', 'refs']);
+  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes', 'folders', 'refs', 'data', 'links']);
   for (const entry of told.items) assert.ok(entry.example[entry.item] !== undefined && entry.about, entry.item + ' has an example');
   assert.ok(told.templates.some((template) => template.name === 'blank'));
   // Every example is a section the parser keeps whole.
@@ -425,4 +425,25 @@ test('M1 strict space: unknown fields and duplicates come back named; an old fil
   assert.equal(await file(instance, 'hub/' + copy), old);
   assert.equal((await stat(path.join(instance.workspace, 'hub', copy))).mode & 0o777, 0o600);
   console.log('PASS M1 strict: feed, titel (did you mean title), duplicate title and id named; migration kept Ops and its button, backup ' + copy + ' at 600');
+});
+
+test('M3 set_section_items: data tiles and links go in through the lock and File protection; a javascript: link is refused by name', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  const kinds = (await tool('describe_mission')).items.map((item) => item.item);
+  assert.ok(kinds.includes('data') && kinds.includes('links'), kinds.join());
+  const tiles = { title: 'Ops', kind: 'data', items: [{ id: 'inbox', title: 'Inbox', script: 'count-inbox' }] };
+  assert.equal((await tool('set_section_items', tiles)).error, 'registry-read-only', 'File protection on');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await tool('set_section_items', tiles)).error, 'agent-lock-on');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  const evil = await tool('set_section_items', { title: 'Ops', kind: 'links', items: [{ id: 'evil', title: 'Evil', url: 'javascript:alert(1)' }] });
+  assert.deepEqual([evil.error, evil.index], ['invalid-item', 0]);
+  assert.match(evil.detail, /^url: An http:\/\/ or https:\/\/ address/);
+  assert.equal((await tool('set_section_items', { ...tiles, items: [{ id: 'x', title: 'X', script: 'y', every: 5 }] })).detail, 'every is not a field of this record. Known fields: id, title, script.');
+  assert.equal((await tool('set_section_items', tiles)).isError, false);
+  assert.equal((await tool('set_section_items', { title: 'Ops', kind: 'links', items: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] })).isError, false);
+  const ops = JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.title === 'Ops');
+  assert.deepEqual([ops.data, ops.links], [tiles.items, [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }]]);
 });
