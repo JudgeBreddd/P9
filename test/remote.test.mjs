@@ -149,8 +149,11 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
     await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')), await window.p9.remoteInstall()]),
   [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true, { error: 'remote-install-refused' }]);
-  // The badge switches to Local: the window reloads onto this computer's daemon and the forward closes.
+  // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this
+  // computer's daemon and the forward closes.
   await page.locator('#serverBadge').click();
+  await page.locator('#serverPop [data-server-go="test-host"] .muted', { hasText: 'Connected' }).waitFor({ timeout: 10000 });
+  await page.locator('#serverPop [data-server-go=""]').click();
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
@@ -342,6 +345,7 @@ test('Sprint in the window: the server\'s status file draws the tile and rings, 
   await page.keyboard.press('Escape');
   // Local: no status file on this computer, so no tile.
   await page.locator('#serverBadge').click();
+  await page.locator('#serverPop [data-server-go=""]').click();
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor({ timeout: 20000 });
   await page.locator('#rMission').click();
   await page.locator('#fMission [data-idea]').waitFor({ timeout: 15000 });

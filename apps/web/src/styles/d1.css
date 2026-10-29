@@ -89,6 +89,14 @@ dialog[open]{animation:pop .18s ease}
 .pop .item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 9px;border-radius:calc(var(--radius) - 4px);font-size:13px}
 .pop .item:hover,.pop .item[aria-selected="true"]{background:var(--accent)}
 .pop .item .muted{margin-left:auto;font-size:11px}
+/* The machine menu under the Local/Remote badge: a state dot per machine, a Remove beside the ones added here. */
+#serverBadge svg{width:14px;height:14px;margin-left:2px;fill:none;stroke:currentColor;stroke-width:2}
+.srv-row{display:flex;align-items:center;gap:2px}
+.srv-x{flex:none;width:26px;height:26px;border-radius:calc(var(--radius) - 4px);color:var(--muted-foreground)}
+.srv-x:hover{background:var(--accent);color:var(--foreground)}
+.srv-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--muted-foreground);opacity:.5}
+.srv-dot[data-s="ok"]{background:var(--ok);opacity:1}.srv-dot[data-s="warn"]{background:var(--warn);opacity:1}
+.srv-dot[data-s="wait"]{background:var(--primary);opacity:1}.srv-dot[data-s="bad"]{background:var(--destructive);opacity:1}
 .pop .hd{padding:6px 9px 4px}
 
 /* ---- Agent identity (shared by both apps) ---- */
