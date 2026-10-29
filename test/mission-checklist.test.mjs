@@ -23,7 +23,7 @@ const DECISION = (day) => '---\nreview: pending\n---\n\n# Audit run ' + day + '\
   + '## Findings the script dropped\n\n- [ ] X01 not a change\n';
 
 async function seed({ directory, workspace }) {
-  const runs = path.join(workspace, 'wiki/_private/audit/runs');
+  const runs = path.join(workspace, 'wiki/audit/runs');
   for (const folder of ['projects', 'hub', '_waiting', 'notes', 'inbox/librarian-a', 'inbox/librarian-b', 'inbox/librarian-twice', runs + '/2026-10-21', runs + '/2026-10-28', runs + '/backfill-undated', path.join(directory, 'far')])
     await mkdir(path.resolve(workspace, folder), { recursive: true });
   await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
@@ -36,7 +36,7 @@ async function seed({ directory, workspace }) {
   await writeFile(path.join(workspace, 'inbox/librarian-twice/_decision.md'), 'review: pending\nreview: pending\n');
   await writeFile(path.join(workspace, 'notes/todo.md'), '# To do\r\n\r\n- [ ] Water the plants\r\n- [x] Pay rent\r\n');
   await writeFile(path.join(directory, 'far/list.md'), '- [ ] far\n');
-  await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ ...SETTINGS, notes_roots: { audit: path.join(workspace, 'wiki/_private/audit'), far: path.join(directory, 'far') } }));
+  await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ ...SETTINGS, notes_roots: { audit: path.join(workspace, 'wiki/audit'), far: path.join(directory, 'far') } }));
   return { args: ['--settings', path.join(directory, 'settings.json')] };
 }
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
@@ -71,7 +71,7 @@ test('checklists: Approve one row and Deny another, only those marks change; ref
   assert.deepEqual(audit.body.files.map((file) => [file.path, file.name, file.review]), [['runs/2026-10-28/_decision.md', '2026-10-28', 'pending']]);
   assert.deepEqual(audit.body.files[0].rows.map((row) => row.mark), ['x', 'parked', ' ']);
   assert.match(audit.body.files[0].rows[2].text, /^K03 /);
-  const file = path.join(instance.directory, 'workspace', 'wiki/_private/audit', audit.body.files[0].path);
+  const file = path.join(instance.directory, 'workspace', 'wiki/audit', audit.body.files[0].path);
   const before = await readFile(file, 'utf8');
   const { hash } = audit.body.files[0];
 
