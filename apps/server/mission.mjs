@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, RECORD, PAGE, SECTION, LOG, SETTINGS } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, RECORD, PAGE, SECTION, LOG, SETTINGS } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -73,22 +73,44 @@ export function parseRegistry(text, schemes = []) {
 // The free-form space (settings.space, one JSON file): sections, each with optional text, buttons, log views and notes.
 // A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file;
 // notes names a folder from settings.notes_roots by its key, never by path.
+// Strict (M1): an unknown field is listed by name (kept, so an older or newer file still draws), and a section repeating an
+// earlier one's title or id is dropped. A section with no id gets one from its title here, in memory only (withIds).
 export function parseSpace(text) {
   const space = JSON.parse(stripBom(text));
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
   const result = { sections: [], invalid: [] };
-  space.sections.forEach((section, index) => {
+  for (const detail of unknownFields(space, { sections: true }, 'the space')) result.invalid.push({ kind: 'space', reason: 'unknown-field', detail });
+  const titles = new Set(), ids = new Set();
+  withIds(space.sections).forEach((section, index) => {
     const wrong = problem(section, SECTION);
     if (wrong) return result.invalid.push({ kind: 'space', index, reason: 'malformed-section', detail: wrong });
     const title = section.title.trim(), buttons = [], logs = [];
+    if (titles.has(title) || ids.has(section.id)) return result.invalid.push({ kind: 'space', index, reason: 'duplicate-section',
+      detail: (titles.has(title) ? 'Another section is already titled "' + title + '"' : 'Another section already has the id ' + section.id) + '; titles and ids must be unique. This one is not shown.' });
+    titles.add(title); ids.add(section.id);
+    for (const detail of unknownFields(section, SECTION, 'a section')) result.invalid.push({ kind: 'space', index, reason: 'unknown-field', detail });
     (section.buttons ?? []).forEach((record, button) => { const detail = recordProblem(record, 'scripts');
+      for (const extra of unknownFields(record, RECORD, 'a button')) result.invalid.push({ kind: 'space', index, button, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
+      for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
-    result.sections.push({ title, text: section.text ?? '', buttons, logs, ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
+
+// The sections with an id on each one that has none, made from its title and unique against every id the file already
+// has. Copies: the file's own objects are untouched. The MCP write path saves the same ids, so they never change once seen.
+export function withIds(sections) {
+  const taken = new Set(sections.map((section) => section?.id).filter((id) => typeof id === 'string'));
+  return sections.map((section) => (section && typeof section === 'object' && !Array.isArray(section) && section.id === undefined && typeof section.title === 'string'
+    ? { id: sectionId(section.title.trim(), taken), ...section } : section));
+}
+
+// Where the space file is read and written: a workspace path under the workspace, or the absolute mission-space.json
+// (threat model row 69) under its own folder, through the same no-symlink walk.
+export const spaceAt = (workspace, file) => (path.isAbsolute(file) ? [path.dirname(file), path.basename(file)] : [workspace, file]);
 
 // The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
 // Exported so the P9 MCP server's validate tools merge exactly as Mission Control does.
@@ -190,7 +212,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file))).content, settings.page_schemes);
     let space = { sections: [], invalid: [] };
     if (settings.space) {
-      try { space = parseSpace((await readFile(workspace, settings.space)).content); }
+      try { space = parseSpace((await readFile(...spaceAt(workspace, settings.space))).content); }
       catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
     }
     const combined = combine(reg, space);
@@ -223,8 +245,9 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const reg = await registry();
     const strip = ({ id, title, icon, picture, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
-    return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid,
-      space: reg.space.map(({ title, text, logs, notes, icon, picture }) => ({ title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), ...(notes ? { notes } : {}) })),
+    return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
+     
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), ...(notes ? { notes } : {}) })),
       queue: await queue(), primary: await primary() };
   }
   // ponytail: a log view reads the whole file (packages/files refuses one over MAX_BYTES) and shows the last 200 lines.

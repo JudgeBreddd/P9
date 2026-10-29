@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, access, stat, readdir, unlink } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { pinned, applyCard } from '../apps/web/src/pinned.mjs';
 import { md } from '../apps/web/src/helpers.mjs';
+import { parseSettings } from '../apps/server/mission.mjs';
 // The real MCP SDK client (a dependency of the Claude adapter), so P9's hand-written server is held to what clients send.
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -16,7 +17,8 @@ const hash = (text) => createHash('sha256').update(text).digest('hex');
 const node = process.execPath;
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
 
-async function start(t, bom = '') {
+// folder: where settings.json goes under the test home (an install's is .config/p9, away from the state folder).
+async function start(t, bom = '', settings = SETTINGS, folder = '') {
   return daemon(t, undefined, false, async ({ directory, workspace }) => {
     for (const folder of ['projects', 'hub', '_waiting']) await mkdir(path.join(workspace, folder));
     await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
@@ -28,8 +30,9 @@ async function start(t, bom = '') {
     await writeFile(path.join(workspace, 'p1/plan.md'), '# plan\n');
     await writeFile(path.join(workspace, SETTINGS.space), bom + JSON.stringify({ sections: [{ title: 'Ops', buttons: [{ id: 'ops-up', title: 'Up', cmd: ['true'] }] }] }, null, 2) + '\n');
     await writeFile(path.join(workspace, '_waiting/pick.md'), '# Which one?\n\n**Your answer:** 1 or 2.\nA.\n');
-    await writeFile(path.join(directory, 'settings.json'), JSON.stringify(SETTINGS));
-    return { args: ['--acp-override', fake, '--settings', path.join(directory, 'settings.json')] };
+    await mkdir(path.join(directory, folder), { recursive: true });
+    await writeFile(path.join(directory, folder, 'settings.json'), JSON.stringify(settings));
+    return { args: ['--acp-override', fake, '--settings', path.join(directory, folder, 'settings.json')] };
   });
 }
 const call = (instance, route, method = 'GET', body, headers = authenticated(instance.credentials)) => http({ socketPath: instance.credentials.socketPath,
@@ -69,7 +72,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 21);
+  assert.equal((await client.listTools()).tools.length, 22);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -97,7 +100,8 @@ test('MCP writes: File protection and the agent lock refuse them; the parser, a 
   assert.equal((await tool('add_button', { record })).error, 'registry-read-only');
   await call(instance, '/file-protection', 'POST', { on: false });
   const typo = await tool('add_button', { record: { ...record, comand: ['x'] } });
-  assert.deepEqual([typo.error, typo.detail], ['invalid-record', 'unknown field comand']);
+  assert.equal(typo.error, 'invalid-record');
+  assert.match(typo.detail, /^comand is not a field of this record\. Did you mean cmd\?/);
   assert.match((await tool('add_button', { record: { id: 'build', title: 'Build' } })).detail, /^cmd is required/);
   await call(instance, '/agent-lock', 'POST', { on: true });
   assert.equal((await tool('add_button', { record })).error, 'agent-lock-on');
@@ -323,4 +327,102 @@ test('BL2: a registry and a space saved with a BOM load and take an edit', async
   assert.equal((await tool('remove_button', { id: 'build' })).isError, false);
   assert.equal(JSON.parse(await file(instance, SETTINGS.space)).sections[0].icon, '🛠');
   console.log('PASS BL2: BOM registry and space load, add, update and remove');
+});
+
+// Mission revamp M1 (threat model row 68): an agent whose harness reads no MCP resources learns the space from a tool.
+test('M1 describe_mission: a tools-only client gets the schema, an example of every item type and the templates; nothing of the user\'s', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { client, tool } = await agent(t, instance);
+  const listed = (await client.listTools()).tools.find((entry) => entry.name === 'describe_mission');
+  assert.ok(listed.description.length <= 200, 'a short listing: ' + listed.description.length);
+  const before = await file(instance, SETTINGS.space);
+  const { isError, ...told } = await tool('describe_mission');
+  assert.equal(isError, false);
+  assert.ok(told.schema.properties.sections.items.properties.buttons);
+  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes']);
+  for (const entry of told.items) assert.ok(entry.example[entry.item] !== undefined && entry.about, entry.item + ' has an example');
+  assert.ok(told.templates.some((template) => template.name === 'blank'));
+  // Every example is a section the parser keeps whole.
+  for (const space of [told.file, { sections: told.items.map((entry) => entry.example) }]) assert.deepEqual((await tool('validate_space', { text: JSON.stringify(space) })).invalid, []);
+  const text = JSON.stringify(told);
+  assert.ok(!text.includes(instance.directory) && !text.includes('ops-up'), 'no path or content of the user\'s');
+  assert.equal(await file(instance, SETTINGS.space), before);
+  console.log('PASS M1 describe_mission: ' + text.length + ' characters, listing ' + listed.description.length + ', items ' + told.items.map((entry) => entry.item));
+});
+
+// Threat model row 69: no space in settings, so the first space write makes an owner-only file beside settings.json.
+test('M1 first space write: makes mission-space.json at mode 600 and names it in settings; never under the lock or File protection', { timeout: 60000 }, async (t) => {
+  const { space: ignored, ...bare } = SETTINGS;
+  const instance = await start(t, '', bare, '.config/p9');
+  const { tool } = await agent(t, instance);
+  const made = path.join(instance.directory, '.config/p9/mission-space.json'), settingsFile = path.join(instance.directory, '.config/p9/settings.json');
+  const none = await tool('validate_space');
+  assert.equal(none.error, 'no-space-file');
+  assert.match(none.detail, /^There is no space file yet\. The first add_section creates .*mission-space\.json/);
+  assert.match((await tool('status')).space, /no space file yet/);
+  assert.equal((await tool('add_section', { title: 'Home' })).error, 'registry-read-only');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await tool('add_section', { title: 'Home' })).error, 'agent-lock-on');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  await assert.rejects(access(made), 'nothing made while refused');
+  const added = await tool('add_section', { title: 'Home lab' });
+  assert.equal(added.isError, false, JSON.stringify(added));
+  assert.equal(added.file, made);
+  assert.equal((await stat(made)).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(await readFile(settingsFile, 'utf8')).space, made);
+  assert.equal((await tool('add_section', { title: 'Two' })).isError, false);
+  assert.equal((await stat(made)).mode & 0o777, 0o600, 'a later save keeps 600');
+  assert.deepEqual(JSON.parse(await readFile(made, 'utf8')).sections.map(({ id, title }) => [id, title]), [['home-lab', 'Home lab'], ['two', 'Two']]);
+  assert.ok((await call(instance, '/mission')).body.space.some((section) => section.title === 'Home lab'), 'Mission Control reads it');
+  // An absolute space path is only ever P9's own file name.
+  assert.throws(() => parseSettings(JSON.stringify({ ...bare, space: '/etc/other.json' })), /invalid-settings/);
+  assert.equal(parseSettings(JSON.stringify({ ...bare, space: made })).space, made);
+  console.log('PASS M1 first write: refused under protection and the lock with nothing made, then ' + made.slice(instance.directory.length) + ' at 600, in settings, kept 600');
+});
+
+// Plain words for each broken state of the space file, never a bare parser message.
+test('M1 space errors: a missing, an empty and a broken space file each say what is wrong', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  const where = path.join(instance.workspace, SETTINGS.space);
+  const cases = [['', 'empty-space-file', /^The space file hub\/space\.json is empty\. A space is a JSON object/],
+    ['{"sections": [', 'invalid-json', /^The space file hub\/space\.json is not valid JSON \(/], ['[]', 'invalid-space', /is JSON but not a space/]];
+  for (const [text, error, words] of cases) {
+    await writeFile(where, text);
+    const result = await tool('validate_space');
+    assert.equal(result.error, error, text);
+    assert.match(result.detail, words);
+  }
+  assert.equal((await tool('validate_space', { text: '' })).detail.startsWith('The text is empty'), true);
+  await unlink(where);
+  const gone = await tool('validate_space');
+  assert.equal(gone.error, 'space-file-missing');
+  assert.match(gone.detail, /^Settings name the space file hub\/space\.json, but P9 cannot read it there/);
+  console.log('PASS M1 errors: empty, broken JSON, not a space and missing each named in words');
+});
+
+// Strict validation: unknown fields named (with a guess), a repeated title or id refused; old files get ids, a copy kept first.
+test('M1 strict space: unknown fields and duplicates come back named; an old file gets ids with every section kept and a backup', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  const strict = await tool('validate_space', { text: JSON.stringify({ sections: [{ title: 'Feed', feed: 'x', titel: 'y' }, { title: 'Feed' }, { id: 'same', title: 'One' }, { id: 'same', title: 'Two' }] }) });
+  const details = strict.invalid.map((entry) => entry.detail);
+  assert.equal(strict.ok, false);
+  assert.ok(details.some((detail) => /^feed is not a field of a section\. Known fields: id, title/.test(detail)), details.join(' | '));
+  assert.ok(details.some((detail) => /^titel is not a field of a section\. Did you mean title\?/.test(detail)));
+  assert.ok(details.some((detail) => /^Another section is already titled "Feed"/.test(detail)));
+  assert.ok(details.some((detail) => /^Another section already has the id same/.test(detail)));
+  // Migration (blast radius: every section, button and log kept). The fixture's Ops section has no id.
+  const old = await file(instance, SETTINGS.space);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  assert.equal((await tool('add_section', { title: 'Ops ' })).error, 'duplicate-section');
+  assert.equal(await file(instance, SETTINGS.space), old, 'a refused write migrates nothing');
+  assert.equal((await tool('add_section', { title: 'Two' })).isError, false);
+  const now = JSON.parse(await file(instance, SETTINGS.space)).sections;
+  assert.deepEqual(now, [{ id: 'ops', ...JSON.parse(old).sections[0] }, { id: 'two', title: 'Two' }]);
+  const [copy] = (await readdir(path.join(instance.workspace, 'hub'))).filter((name) => /^space\.json\.\d+\.bak$/.test(name));
+  assert.equal(await file(instance, 'hub/' + copy), old);
+  assert.equal((await stat(path.join(instance.workspace, 'hub', copy))).mode & 0o777, 0o600);
+  console.log('PASS M1 strict: feed, titel (did you mean title), duplicate title and id named; migration kept Ops and its button, backup ' + copy + ' at 600');
 });
