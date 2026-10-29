@@ -7,7 +7,7 @@ const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; install?: RemoteInstall; background?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; install?: RemoteInstall; background?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
@@ -53,9 +53,11 @@ const keepLine = (host: string, background?: boolean, k?: Keeping): [string, str
 };
 // Row I2: the password window for one admin step on host. need: "name: reason" lines; command: exactly what runs as admin.
 // The password goes to main once (p9:remote-admin) and the field is emptied whenever the window closes.
-const askAdmin = (host: string, title: string, lead: string, need: string[], command: string, ok: string, error: string, done: () => void) => {
+// send: where the password goes (Keep it running and the install: p9:remote-admin; row 61 on a remote: p9:remote-deps).
+const askAdmin = (host: string, title: string, lead: string, need: string[], command: string, ok: string, error: string,
+  done: (r?: { ok?: boolean; error?: string }) => void, send = window.p9?.remoteAdmin) => {
   const dialog = document.getElementById('adminDlg') as HTMLDialogElement | null, pw = document.getElementById('adminPw') as HTMLInputElement | null;
-  if (!dialog || !pw || dialog.open || !window.p9?.remoteAdmin) return;
+  if (!dialog || !pw || dialog.open || !send) return;
   document.getElementById('adminT')!.textContent = title;
   document.getElementById('adminP')!.textContent = lead;
   const list = document.getElementById('adminNeed')!;
@@ -77,7 +79,7 @@ const askAdmin = (host: string, title: string, lead: string, need: string[], com
   dialog.onclose = () => {
     const password = pw.value;
     pw.value = '';
-    if (dialog.returnValue === 'ok' && password) void window.p9!.remoteAdmin!(password).finally(done);
+    if (dialog.returnValue === 'ok' && password) void send(password).then(done, () => done({ error: 'admin-failed' }));
   };
   dialog.showModal();
   pw.focus();
@@ -89,7 +91,7 @@ const elapsed = (started?: number) => {
 
 export default function Shell() {
   useEffect(() => {
-    const dispose = mountShell();
+    const dispose = mountShell({ askAdmin });
     let keepAsked = false, adminAsked = '';
     let active = true, waited = false, connected = false, asking = false, starting = false, refused = '', startSaid = '', timer: ReturnType<typeof setTimeout> | undefined;
     // D20: the remote this window has shown.

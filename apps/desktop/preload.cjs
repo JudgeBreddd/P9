@@ -48,6 +48,8 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   remoteInstall: () => ipcRenderer.invoke('p9:remote-install'), // D15a: install P9 on this remote, asked first
   remoteStart: () => ipcRenderer.invoke('p9:remote-start'), // row I1: start P9 on this remote, no terminal
   remoteAdmin: password => ipcRenderer.invoke('p9:remote-admin', password), // row I2: the admin password for this remote's admin step
+  remoteDepsCheck: () => ipcRenderer.invoke('p9:remote-deps-check'), // row 61 on a remote: the command that remote computed for tmux or ssh
+  remoteDeps: password => ipcRenderer.invoke('p9:remote-deps', password), // row 61 on a remote: the admin password for it
   adminInstall: (id, password) => ipcRenderer.invoke('p9:admin-install', id, password), // row 61: tmux or ssh here, with the admin password
   onServerUpdate: (callback) => { ipcRenderer.on('p9:server-update', (_event, update) => callback(update)); },
   pickFolder: (kind) => ipcRenderer.invoke('p9:pick-folder', ...(kind === undefined ? [] : [kind])),
