@@ -1,20 +1,33 @@
 {
   "title": "Obsidian vault",
-  "about": "For notes kept in an Obsidian vault: recent notes, templates, the inbox and a new note.",
+  "about": "For notes kept in an Obsidian vault: recent notes, a quick note into the Inbox, templates and the inbox.",
   "space": {
     "sections": [
       {
         "id": "vault",
         "title": "Vault",
         "icon": "🗃️",
-        "text": "Your newest notes. The links open Obsidian on this computer.",
+        "text": "Your newest notes, and a quick note for the Inbox. Open in Obsidian opens Obsidian on this computer.",
         "folders": [
-          { "id": "recent-notes", "title": "Recent notes", "root": "vault", "pattern": "*.md", "recursive": true }
+          {
+            "id": "recent-notes",
+            "title": "Recent notes",
+            "root": "vault",
+            "pattern": "*.md",
+            "recursive": true
+          }
         ],
         "links": [
-          { "id": "new-note", "title": "New note", "url": "obsidian://new?name=", "ask": "Note title" },
-          { "id": "open-obsidian", "title": "Open in Obsidian", "url": "obsidian://open" }
-        ]
+          {
+            "id": "open-obsidian",
+            "title": "Open in Obsidian",
+            "url": "obsidian://open"
+          }
+        ],
+        "quick_note": {
+          "root": "vault",
+          "path": "Inbox"
+        }
       },
       {
         "id": "templates",
@@ -22,7 +35,13 @@
         "icon": "📄",
         "text": "The notes in the vault's Templates folder.",
         "folders": [
-          { "id": "templates", "title": "Templates", "root": "vault", "path": "Templates", "pattern": "*.md" }
+          {
+            "id": "templates",
+            "title": "Templates",
+            "root": "vault",
+            "path": "Templates",
+            "pattern": "*.md"
+          }
         ]
       },
       {
@@ -31,7 +50,14 @@
         "icon": "📥",
         "text": "Notes waiting to be filed, from the vault's Inbox folder.",
         "folders": [
-          { "id": "inbox", "title": "Inbox", "root": "vault", "path": "Inbox", "pattern": "*.md", "recursive": true }
+          {
+            "id": "inbox",
+            "title": "Inbox",
+            "root": "vault",
+            "path": "Inbox",
+            "pattern": "*.md",
+            "recursive": true
+          }
         ]
       }
     ]

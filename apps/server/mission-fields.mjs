@@ -184,6 +184,10 @@ export const SECTION = {
     example: [{ id: 'backup-log', title: 'Backup log', path: 'logs/backup.log' }] },
   notes: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.', example: 'vault' },
+  // Threat model row 76: a create-only form for one folder; no example, so the build guide's item list leaves it out.
+  quick_note: { type: 'object', check: (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => key === 'root' || key === 'path') && typeof value.root === 'string' && ID.test(value.root) && relativePath(value.path),
+    doc: 'A Quick note form: {root, path}. Save writes one new .md (title as file name, at most 64 KiB) into that folder of the settings.notes_roots key; an existing name is refused, never replaced.' },
   folders: { type: 'array', check: Array.isArray, fields: FOLDER, doc: 'Folder lists: files in a folder, newest first, with a count. Each opens read-only. A folder outside the workspace needs a notes_roots key (allow_folder asks the user).',
     example: [{ id: 'open-handoffs', title: 'Open handoffs', path: 'projects', pattern: 'HANDOFF.md', recursive: true, match: 'Status: open' }] },
   refs: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === 'string' && ID.test(item)),

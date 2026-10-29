@@ -64,7 +64,7 @@ test('M4a templates: four shipped files, sections with text and https links only
   assert.deepEqual(TEMPLATES.map((entry) => entry.name), ['icm', 'obsidian', 'homelab', 'blank']);
   for (const template of TEMPLATES) {
     for (const section of template.space.sections) {
-      assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links', 'widget', 'folders'].includes(key)), [], template.name + ': only text, links and folders');
+      assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links', 'widget', 'folders', 'quick_note'].includes(key)), [], template.name + ': only text, links and folders');
       // Obsidian's links open Obsidian on this computer (rows 74, 75); its folders are read-only lists in the vault root (row 73).
       for (const link of section.links ?? []) assert.match(link.url, template.name === 'obsidian' ? /^obsidian:\/\// : /^https:\/\//);
       // Homelab and ICM list by name pattern across the workspace (no fixed folder that a fresh workspace lacks).

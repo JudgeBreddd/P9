@@ -11,7 +11,7 @@ import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelc
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
 const SPACE = { sections: [
-  { title: 'Plans', refs: ['hello', 'editor', 'dash', 'gone'], folders: [
+  { title: 'Plans', refs: ['hello', 'editor', 'dash', 'gone'], quick_note: { root: 'vault', path: 'plans' }, folders: [
     { id: 'open-plans', title: 'Open plans', root: 'vault', path: 'plans', pattern: '*.md', recursive: true, match: 'Status: open' },
     { id: 'all-plans', title: 'All plans', root: 'vault', path: 'plans', pattern: '*.md' },
     { id: 'run-logs', title: 'Run logs', path: 'logs', pattern: 'run-??.log' },
@@ -159,6 +159,8 @@ test('folder lists and references on the phone at 390x844', { timeout: 90000, sk
   const device = await passkeyDevice(browser, server, 'phone-folders');
   const session = await enrollDevice(server, device);
   const page = device.page;
+  // The dev space has no network, so Chromium says offline and the phone sends no write: say online, as the other phone tests do.
+  await device.context.addInitScript(() => Object.defineProperty(Navigator.prototype, 'onLine', { get: () => true }));
   await device.context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
   await page.goto(server.origin + '/phone/');
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
@@ -191,8 +193,27 @@ test('folder lists and references on the phone at 390x844', { timeout: 90000, sk
   assert.deepEqual(await files.evaluateAll((all) => all.map((n) => n.firstChild.textContent.trim())), ['c.md', 'sub/b.md', 'a.md']);
   await files.nth(1).click();
   await box.locator('[data-folder="open-plans"] pre', { hasText: 'Status: open' }).waitFor({ timeout: 10000 });
-  assert.equal(await box.locator('textarea, [contenteditable="true"]').count(), 0, 'read-only');
+  // Read-only lists: the Quick note form is the one writable field (create-only, row 76).
+  assert.equal(await box.locator(':is(textarea, [contenteditable="true"]):not([data-quicknote] *)').count(), 0, 'read-only');
   await shot(page, 'phone-space-folder');
+  // Quick note from the phone (threat model row 76): one new file in the section's folder, through the phone's own form.
+  await page.keyboard.press('Escape');
+  await tile.click();
+  const quick = box.locator('[data-quicknote]');
+  await quick.locator('[name="title"]').fill('Phone idea');
+  await quick.locator('[name="body"]').fill('from the phone');
+  await quick.locator('button[type="submit"]').click();
+  await quick.locator('[data-qn-status]', { hasText: 'Saved plans/Phone idea.md.' }).waitFor({ timeout: 10000 });
+  await shot(page, 'phone-quick-note');
+  const vaultDir = path.join(server.directory, 'vault');
+  assert.equal(await readFile(path.join(vaultDir, 'plans', 'Phone idea.md'), 'utf8'), 'from the phone\n');
+  const create = (body) => page.evaluate(async ([csrf, body]) => { const r = await fetch('/mission/notes/create', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': crypto.randomUUID() }, body: JSON.stringify(body) });
+    return r.status; }, [session.csrf, body]);
+  assert.equal(await create({ root: 'vault', path: 'plans/Phone idea.md', content: 'replaced?' }), 409, 'an existing name is refused');
+  assert.equal(await readFile(path.join(vaultDir, 'plans', 'Phone idea.md'), 'utf8'), 'from the phone\n');
+  assert.equal(await create({ root: 'vault', path: 'outside.md', content: 'x' }), 404, 'outside the quick note folder');
+  assert.equal(await create({ root: 'vault', path: 'plans/sub/deeper.md', content: 'x' }), 404, 'a subfolder is outside too');
+  assert.equal(await create({ root: 'vault', path: 'plans/big.md', content: 'x'.repeat(70 * 1024) }), 413, 'size cap');
   // Only the desktop main process may set the vault folder (threat model row 73): a phone is refused even with its session.
   const vault = await page.evaluate(async (csrf) => { const r = await fetch('/mission/vault', { method: 'POST', headers: { 'content-type': 'application/json', 'x-p9-csrf': csrf, 'x-p9-op': crypto.randomUUID() }, body: JSON.stringify({ folder: '/tmp' }) });
     return { status: r.status, body: await r.json().catch(() => ({})) }; }, session.csrf);
