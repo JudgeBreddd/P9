@@ -275,6 +275,15 @@ const connection = new acp.AgentSideConnection(() => ({
       await say('edited');
       return { stopReason: 'end_turn' };
     }
+    // "long work": a prompted turn that works on its own until cancelled, a step every 300 ms, as an unattended agent does.
+    if (text === 'long work') {
+      cancelled.delete(sessionId);
+      for (let i = 1; !cancelled.has(sessionId); i++) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'lw-' + i, title: 'Step ' + i, kind: 'execute', status: 'completed' } });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return { stopReason: 'cancelled' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {
       cancelled.delete(sessionId);
