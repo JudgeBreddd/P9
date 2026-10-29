@@ -609,7 +609,7 @@ const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : 
 const TAIL = 200;
 function shown(s) {
   const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), from = Math.max(0, list.length - (s.tail || TAIL));
-  return (from ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier (${from.toLocaleString()} more)</button>` : '')
+  return (from || s.more !== undefined ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier${from ? ` (${from.toLocaleString()} more)` : ''}</button>` : '')
     + list.slice(from).map(e => event(e, s)).join('');
 }
 function pane(s, i, bare) {
@@ -743,7 +743,12 @@ function paint(root, ss, only) {
     p.ondragover = e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); };
     p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
-    const more = p.querySelector('[data-earlier]'); if (more) more.onclick = () => { const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop; s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below; };
+    const more = p.querySelector('[data-earlier]'); if (more) more.onclick = async () => {
+      if (s.fetching) return;
+      const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
+      if (s.more !== undefined && s.events.filter(e => e.t !== 'approval' && e.t !== 'question').length < (s.tail || TAIL) + TAIL) { s.fetching = true; try { await earlier(s); } finally { s.fetching = false; } }
+      s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
+    };
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); renderTabs(); renderChats(); };
     const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => { if (s.live) return liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); renderTabs(); renderChats(); };
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); renderTabs(); renderChats(); };
@@ -2539,22 +2544,41 @@ const liveSession = (id, provider, title, folder, created) => ({ id, agent: prov
 function history(s, until = liveChat.cursor) {
   return s.loading ||= (async () => {
     for (let after = 0; !lifetime.signal.aborted;) {
-      const r = await window.p9.chat('events', { after, only: [s.id], until });
+      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) });
       // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => setTimeout(res, 2000)); continue; }
       for (const ev of r.body.events) try { applyChat(ev); } catch {}
+      if (r.body.more) { tailed(s, r.body); break; }
       after = r.body.cursor;
       if (r.body.events.length < 500) break;
     }
     s.stub = false; renderTabs(); renderChats();
   })();
 }
-// Applies one daemon event to S; returns the session when a turn ended (so queued messages can go).
-function applyChat(ev) {
+// P20 on the desktop: a chat loads with its newest TAIL blocks (the daemon's ledger.tail), not its whole history, which
+// over a remote's ssh link took minutes. s.more is the first cursor loaded when older events were left out; s.early, the
+// older events that came along anyway (cards, the latest mode, plan and commands), so Show earlier does not add them twice.
+// A daemon without tail sends no more, and the chat loads whole, as before.
+// ponytail: those early events show above the loaded blocks, not in their place, as on the phone.
+function tailed(s, body) {
+  const from = body.more?.[s.id];
+  s.more = from;
+  s.early = new Set([...(s.early ?? []), ...(from === undefined ? [] : body.events.filter(e => e.conversation === s.id && e.cursor < from).map(e => e.cursor))]);
+}
+async function earlier(s) {
+  const r = await window.p9.chat('events', { after: 0, only: [s.id], until: s.more - 1, tail: TAIL });
+  if (r.status !== 200) return;
+  const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
+  for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
+  s.events = [...old.events, ...s.events];
+  tailed(s, r.body);
+}
+// Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
+function applyChat(ev, into) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
-  const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
+  if (ev.type === 'created') { if (!into && !S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
+  const s = into ?? S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
@@ -2623,16 +2647,20 @@ async function loadChat() {
   if (!window.p9?.chat) return;
   // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
   // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
-  let replaying = true, scope = null;
+  let replaying = true, scope = null, listed = [];
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
   while (!lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
-    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
+    if (l?.status === 200) { listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    // P20: the first replay reads each open chat's newest blocks only (tailed, above).
+    const tail = replaying && scope?.only && !liveChat.cursor ? { tail: TAIL } : {};
+    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
     if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
     if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
+    // A tail can leave out a chat's created event, so its tab comes from the list.
+    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !S.sessions.some(s => s.id === c.id)) S.sessions.push(liveSession(c.id, c.provider, c.title, c.folder, c.created));
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
@@ -2650,7 +2678,8 @@ async function loadChat() {
       if (closed) { closed.hidden = true; untab(closed.id); }
     }
     liveChat.cursor = r.body.cursor;
-    if (replaying && r.body.events.length < 500) {
+    if (r.body.more) for (const s of S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
+    if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(S.sessions.map(s => [s.id, s]));
