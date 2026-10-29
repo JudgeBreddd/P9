@@ -1255,6 +1255,8 @@ async function loadHub(cached = false) {
   // No hub folder in settings (an answer, not a lost connection): these sections stay hidden, cached or not.
   try { o = cached ? lastHub! : await request('/mission/hub'); } catch (error) { if ((error as { body?: unknown }).body) { lastHub = null; target.innerHTML = ''; try { localStorage.removeItem('p9-mission-hub'); } catch {} } return; }
   if (!cached) { lastHub = o; keep('p9-mission-hub', o); }
+  // + New idea writes to _ideas: an ICM widget, shown only where the desktop shows the ICM widgets (finding 3a).
+  const widgets = ((lastMission?.space ?? []) as { widget?: string }[]).some((s) => s.widget), icm = widgets || (!!lastMission?.icmFiles && !widgets);
   const notices = o.notices === null ? '<div class="empty">Checking scheduled jobs and setup…</div>'
     : o.notices.map((n) => `<article class="card warn"><h2>${n.kind === 'job' ? 'SILENT JOB' : 'SETUP'}</h2><p>${escape(n.text)}</p></article>`).join('') || '<div class="empty">Every scheduled job reported in.</div>';
   const open = o.incidents.filter((i) => !i.resolved);
@@ -1270,8 +1272,8 @@ async function loadHub(cached = false) {
     + win('inbox', 'Wiki review inbox', o.inbox.length, o.inbox.length ? 'batches to review' : 'Nothing to review.', inbox || '<div class="empty">No Wiki batches waiting for review.</div>')
     + win('handoffs', 'Work in flight', o.handoffs.length, o.handoffs[0] ? 'newest: ' + escape(o.handoffs[0].project) : 'No HANDOFF.md files.', handoffs)
     + win('solo', 'Last solo run', solo, escape(o.solo.bluf || ''), row(`${solo}<small>${escape(o.solo.bluf || '')}</small>`, lazy({ kind: 'solo' })))
-    + win('work', 'Workspace', o.ideas, `ideas · ${o.needs_done} punch-list · + New idea`, `<article class="card"><h2>Workspace</h2><p>${o.ideas} ideas not researched · ${o.needs_done} punch-list items</p>${audit}</article>`
-    + row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>'))
+    + win('work', 'Workspace', o.ideas, `ideas · ${o.needs_done} punch-list${icm ? ' · + New idea' : ''}`, `<article class="card"><h2>Workspace</h2><p>${o.ideas} ideas not researched · ${o.needs_done} punch-list items</p>${audit}</article>`
+    + (icm ? row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>') : ''))
     + win('logs', 'Logs', o.logs.length, o.logs[0] ? escape(o.logs[0].name) : 'No logs.', logs); });
   if (!cached) keptMission('idea');
   if (o.notices === null && !cached) setTimeout(() => void loadHub(), 15000);

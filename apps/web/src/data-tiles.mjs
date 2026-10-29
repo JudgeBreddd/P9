@@ -40,7 +40,7 @@ export const quickNoteHtml = (esc, qn, v = {}, desk = false) => `<form class="qu
   + `<label>Title<input name="title" maxlength="100" autocomplete="off" value="${esc(v.title || '')}"${desk ? ' data-slot="input"' : ''}></label>`
   + `<label>Note<textarea name="body" rows="5" maxlength="60000"${desk ? ' data-slot="textarea"' : ''}>${esc(v.body || '')}</textarea></label>`
   + `<p class="tile-note" role="status" data-qn-status>${esc(v.status || 'Saved as a new note in the ' + qn.path + ' folder. A note with the same title is never replaced.')}</p>`
-  + `<button type="submit"${desk ? ' data-slot="button"' : ''}>Save to ${esc(qn.path.split('/').pop())}</button></form>`;
+  + `<button type="submit"${desk ? ' data-slot="button" data-variant="outline" data-size="sm"' : ''}>Save to ${esc(qn.path.split('/').pop())}</button></form>`;
 export const quickNoteWords = (r, file, qn) => r.status === 201 ? 'Saved ' + file + '.'
   : r.body?.error === 'exists' ? 'A note named ' + file.split('/').pop() + ' is already there. Nothing was replaced: change the title.'
     : r.body?.error === 'no-such-folder' ? 'The vault has no ' + qn.path + ' folder. Make it in Obsidian, then save again.'

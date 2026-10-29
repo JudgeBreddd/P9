@@ -1178,7 +1178,7 @@ async function loadHub() {
   // failure is asked again sooner.
   if (r.status !== 200) {
     // A space file turns the built-in layer off for good (row M4-b): no hint, its windows go.
-    const off = ['hub-not-set', 'space-set'].includes(r.body?.error), hint = r.body?.error === 'hub-not-set' ? 'Logs, incidents and work in flight are off: set hub in the Mission settings file.' : '';
+    const off = ['hub-not-set', 'space-set'].includes(r.body?.error), hint = r.body?.error === 'hub-not-set' ? 'Logs, incidents and work in flight are off: P9 found no hub folder in this workspace.' : '';
     if (off) { H.unchecked = r.body.error; H.on = false; }
     if (hint !== H.hint) { H.hint = hint; renderMission(); }
     H.timer = setTimeout(loadHub, off ? 60000 : 15000);
@@ -1351,7 +1351,7 @@ function renderMission() {
   setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}${spacePicker(live.spaces || [], live.spaceName, esc)}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
-    + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
+    + (live.on && H.hint && icmSpace() ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
@@ -1620,9 +1620,10 @@ function missionModal(m, body, row) {
       window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
     body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
     if (sp?.quick_note) {
-      // Row 76: typed text lives on the modal, so a tile answering (renderModal) does not wipe it.
-      const qn = sp.quick_note; m.qn ||= {};
-      body.insertAdjacentHTML('beforeend', quickNoteHtml(esc, qn, m.qn, true));
+      // Row 76: typed text lives on the modal, so a tile answering (renderModal) does not wipe it. It sits under the
+      // section's text, so Save shows without scrolling.
+      const qn = sp.quick_note, lead = body.querySelector(':scope>[data-space-text]'); m.qn ||= {};
+      (lead || body).insertAdjacentHTML(lead ? 'afterend' : 'afterbegin', quickNoteHtml(esc, qn, m.qn, true));
       const form = body.querySelector('[data-quicknote]');
       form.oninput = () => { m.qn.title = form.elements.title.value; m.qn.body = form.elements.body.value; };
       form.onsubmit = async e => {

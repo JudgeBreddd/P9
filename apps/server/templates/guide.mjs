@@ -51,7 +51,7 @@ If the card's own code stops with an error, the card shows only that error, not 
 
 - A button runs only when you click it.
 - A data tile or a card runs its script only after you answer Allow on it.
-- Links open http and https addresses only.
+- Links open http and https addresses. A link to another app (an address whose scheme is in page_schemes, such as obsidian://) shows the address first and opens only when you click Open.
 `;
 
 // The first message of a build chat: a fixed line, then the guide.
