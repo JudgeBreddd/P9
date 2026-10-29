@@ -67,7 +67,17 @@ test('D20: after connecting, slow and failed requests show no layer and no note;
   const toast = page.locator('.toast.bad', { hasText: 'Could not send. P9 on test-host is not answering. Your message is back in the box.' });
   await toast.waitFor({ timeout: 20000 }).catch(async (error) => { console.log('D20 toasts: ' + JSON.stringify(await page.locator('.toast').allTextContents())); throw error; });
   assert.equal(await box.inputValue(), 'A long draft that must survive (slow)');
-  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT d23-send-failed ' + (await page.screenshot()).toString('base64'));
+  const theme = async (name) => { await page.click('#themeBtn'); await page.click('[data-theme-pick="' + name + '"]'); await page.keyboard.press('Escape');
+    await page.waitForFunction((dark) => document.documentElement.classList.contains('dark') === dark, name !== 'daylight', { timeout: 5000 }); };
+  if (!process.env.GITHUB_ACTIONS) {
+    console.log('P9_SHOT d23-send-failed ' + (await page.screenshot()).toString('base64'));
+    await theme('daylight'); await box.click(); await page.keyboard.press('Enter');
+    for (const end = Date.now() + 20000; await box.inputValue() !== 'A long draft that must survive (slow)';) {
+      assert.ok(Date.now() < end, 'light send: the draft did not come back'); await page.waitForTimeout(200); }
+    await toast.last().waitFor({ timeout: 5000 });
+    console.log('P9_SHOT d23-send-failed-light ' + (await page.screenshot()).toString('base64'));
+    await theme('event-horizon-prime');
+  }
   await rename(link + '.away', link);
   // An action waits where it was taken: a send shows the chat's working row at once, even while the remote is slow.
   remote.child.kill('SIGSTOP');
