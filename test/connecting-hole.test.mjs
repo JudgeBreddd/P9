@@ -44,7 +44,14 @@ test('D20: the connecting screen draws the P9 black hole inline, moving, and sti
     assert.notEqual(await pose(), first, 'the hole is not bobbing');
     // The dialog's words and progress row are still there, under the mark.
     assert.deepEqual(await page.evaluate(() => ['#connT', '#connWhy', '#connProgress'].map((s) => document.querySelector(s).getBoundingClientRect().top > document.querySelector('#connecting .bh').getBoundingClientRect().bottom)), [true, true, true]);
+    // An error toast over the dialog's own dark sky stays readable in a light theme: its red is mixed into the popover, not
+    // see-through (Event Horizon Prime has its own glass toast, light text on a dark tint, readable over the sky).
+    const toast = await page.evaluate(() => { const t = document.createElement('div'); t.className = 'toast bad'; t.textContent = 'Chat setup: unavailable';
+      document.querySelector('#toasts').append(t);
+      return getComputedStyle(t).backgroundColor; });
+    if (theme === 'daylight') assert.doesNotMatch(toast, /\/ 0?\.\d|rgba\(.*, 0?\.\d+\)|transparent/, 'the error toast is see-through: ' + toast);
     await shot('d20-connecting-' + theme);
+    await page.evaluate(() => document.querySelector('#toasts .toast.bad:last-child').remove());
     await page.evaluate(() => document.querySelector('#connecting').close());
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
