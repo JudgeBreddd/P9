@@ -334,6 +334,23 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const { error, ...result } = await mcp.install(name, space, confirm);
     return c.json(error ? { error, ...result } : result, !error ? 201 : ({ 'space-not-empty': 409, 'registry-read-only': 403, 'unknown-template': 404 })[error] ?? 400);
   });
+  // Space links (threat model rows 74, 75): the daemon's checks, then the link; the device that asked opens it.
+  api.post('/mission/link', async (c) => reply(c, await mission.link(await json(c))));
+  // The Obsidian vault folder (threat model row 73): only the desktop main process, over its local socket, after its native folder
+  // dialog and confirm. A phone or browser (a device token) is refused, and the page cannot name this route (not in main's
+  // missionRoutes). allow_folder's checks; vault is never replaced; obsidian joins page_schemes in the same write.
+  api.post('/mission/vault', async (c) => {
+    if (c.get('device')) return c.json({ error: 'desktop-only' }, 403);
+    const { folder, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || typeof folder !== 'string' || folder.length > 4096 || !path.isAbsolute(folder)) return c.json({ error: 'request-refused' }, 400);
+    const real = await realpath(folder).catch(() => null);
+    if (!real || !(await stat(real)).isDirectory()) return c.json({ error: 'folder-not-found' }, 404);
+    if (await rootRefused(real, { workspace, recovery, also: [state, ownership && await realpath(ownership).catch(() => ownership)].filter(Boolean) })) return c.json({ error: 'root-refused' }, 403);
+    const done = await changeSettings((disk) => (Object.hasOwn(disk.notes_roots ?? {}, 'vault') ? { error: 'name-taken', folder: disk.notes_roots.vault }
+      : Object.keys(disk.notes_roots ?? {}).length >= 16 ? { error: 'request-refused', reason: 'settings.notes_roots already has 16 folders' }
+        : { ...disk, notes_roots: { ...disk.notes_roots, vault: real }, page_schemes: [...new Set([...(disk.page_schemes ?? []), 'obsidian'])] }));
+    return done.error ? c.json(done, done.error === 'settings-invalid' ? 503 : 409) : c.json({ vault: real }, 201);
+  });
   api.post('/mission/build', async (c) => {
     const { provider, ...rest } = (await json(c)) ?? {};
     if (Object.keys(rest).length || !['claude', 'codex'].includes(provider)) return reply(c, { status: 400, error: 'request-refused' });

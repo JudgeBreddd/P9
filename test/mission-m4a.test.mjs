@@ -64,8 +64,10 @@ test('M4a templates: four shipped files, sections with text and https links only
   assert.deepEqual(TEMPLATES.map((entry) => entry.name), ['icm', 'obsidian', 'homelab', 'blank']);
   for (const template of TEMPLATES) {
     for (const section of template.space.sections) {
-      assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links', 'widget'].includes(key)), [], template.name + ': only text and links');
-      for (const link of section.links ?? []) assert.match(link.url, /^https:\/\//);
+      assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links', 'widget', 'folders'].includes(key)), [], template.name + ': only text, links and folders');
+      // Obsidian's links open Obsidian on this computer (rows 74, 75); its folders are read-only lists in the vault root (row 73).
+      for (const link of section.links ?? []) assert.match(link.url, template.name === 'obsidian' ? /^obsidian:\/\// : /^https:\/\//);
+      for (const folder of section.folders ?? []) assert.equal(template.name + ':' + folder.root, 'obsidian:vault');
     }
     // No home path, host address or user folder in a shipped template (D10).
     assert.doesNotMatch(JSON.stringify(template), /\/home\/|~\/|\/Users\/|\\\\|\b\d{1,3}(\.\d{1,3}){3}\b|\.local\b|\.lan\b|\.ts\.net\b/, template.name);

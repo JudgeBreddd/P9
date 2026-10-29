@@ -549,6 +549,7 @@ export async function createDesktop({ state, open } = {}) {
     run: ({ id: script, ...body }) => id(script) && ['POST', `/scripts/${script}/run`, body],
     output: ({ run, from }) => /^[0-9a-f-]{36}$/.test(run ?? '') && Number.isSafeInteger(from) && from >= 0 && ['GET', `/runs/${run}?from=${from}`],
     launch: ({ kind, id: target, ...body }) => ['apps', 'pages'].includes(kind) && id(target) && ['POST', `/${kind}/${target}/launch`, body],
+    link: body => ['POST', '/mission/link', body], // rows 74, 75: opened below, on this computer
     answer: body => ['POST', '/mission/answer', body],
     hub: () => ['GET', '/mission/hub'],
     // Data tiles (threat model row 70): one tile's last answer, and the user's Allow for it.
@@ -613,6 +614,15 @@ export async function createDesktop({ state, open } = {}) {
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     try {
       const result = await daemonRequest(state, route[0], route[1], route[2], undefined, action === 'fix' ? AGENT_START_MS : undefined);
+      if (action === 'link' && result.status === 200) {
+        // The daemon checked page_schemes; main checks the never list again before another program gets the link.
+        let url = null;
+        try { url = typeof result.body?.open === 'string' && result.body.open.length <= 2400 && !/[\s\p{Cc}\p{Cf}]/u.test(result.body.open) ? new URL(result.body.open) : null; } catch {}
+        if (!url || ['javascript:', 'file:', 'data:', 'vbscript:', 'blob:'].includes(url.protocol) || url.username || url.password) return { status: 502, body: { error: 'request-refused' } };
+        if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url.href], { shell: false, stdio: 'ignore' }).on('error', () => {});
+        else await shell.openExternal(url.href);
+        return { status: 200, body: { opened: true } };
+      }
       if (action === 'icons' && result.status === 200) {
         const { programs = [], ...art } = result.body;
         for (const { id: app_id, program } of programs) {
@@ -1307,6 +1317,22 @@ export async function createDesktop({ state, open } = {}) {
     const real = await realpath(pick.filePaths[0]).catch(() => null);
     if (real === root) return '';
     return real?.startsWith(root + path.sep) ? real.slice(root.length + 1).split(path.sep).join('/') : null;
+  });
+  // The Obsidian vault folder (threat model row 73): no argument, so the page never sends a path. The native folder dialog, then a
+  // native confirm naming what it allows; only then main sends the folder to the daemon over its local socket. Server mode: this
+  // machine's dialog cannot browse the remote.
+  ipcMain.handle('p9:pick-vault', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (serverHost) return { status: 409, body: { error: 'server-mode-local-only' } };
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    const pick = await dialog.showOpenDialog(window, { title: 'Choose your Obsidian vault folder', buttonLabel: 'Use this folder', properties: ['openDirectory'] });
+    if (pick.canceled || !pick.filePaths[0]) return { status: 200, body: { canceled: true } };
+    const folder = pick.filePaths[0];
+    const { response } = await dialog.showMessageBox(window, { type: 'question', title: 'Use this vault?', message: 'Use ' + folder + ' as your Obsidian vault?',
+      detail: 'Mission lists the notes in it, a checklist can change review and mark lines in them, and obsidian: links can open Obsidian on this computer. P9 writes nothing else there.',
+      buttons: ['Cancel', 'Use this folder'], defaultId: 0, cancelId: 0, noLink: true });
+    if (response !== 1) return { status: 200, body: { canceled: true } };
+    try { return await daemonRequest(state, 'POST', '/mission/vault', { folder }); } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
   });
   // Setup's Change the folder (threat model row 32): no argument; the native picker, then a native confirm naming the folder. Main writes
   // no unit: it re-runs the installed copy's own uninstall-service.mjs and install-service.mjs with only the folder, with the unit's own

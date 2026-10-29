@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   remoteDeps: password => ipcRenderer.invoke('p9:remote-deps', password), // row 61 on a remote: the admin password for it
   adminInstall: (id, password) => ipcRenderer.invoke('p9:admin-install', id, password), // row 61: tmux or ssh here, with the admin password
   onServerUpdate: (callback) => { ipcRenderer.on('p9:server-update', (_event, update) => callback(update)); },
+  pickVault: () => ipcRenderer.invoke('p9:pick-vault'), // row 73: the Obsidian vault folder, through the native picker
   pickFolder: (kind) => ipcRenderer.invoke('p9:pick-folder', ...(kind === undefined ? [] : [kind])),
   onFocus: (callback) => { ipcRenderer.on('p9:focus', (_event, focus) => callback(focus)); },
   terminal: (action, payload) => ipcRenderer.invoke('p9:terminal', action, payload),

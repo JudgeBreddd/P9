@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -333,7 +333,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
     return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name, root }) => ({ id, title: name, ...(root ? { root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
         ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
@@ -709,6 +709,26 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!allowed()) return { status: 401, error: 'login-required' };
     return await open(url) ? { status: 200, launched: true, url } : notStarted;
   }
+  // A space link (threat model rows 74, 75): found by ID, the typed text URL-encoded onto its end, and a scheme that is not
+  // http(s) checked against settings.page_schemes and confirmed. It returns the link and opens nothing: the device that asked opens it.
+  async function link(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !['id', 'text', 'confirm'].includes(key))
+      || typeof body.id !== 'string' || !ID.test(body.id)) return { status: 400, error: 'request-refused' };
+    const found = (await registry()).space.flatMap((section) => section.links ?? []).find((item) => item.id === body.id);
+    if (!found) return { status: 404, error: 'unknown-id' };
+    let url = found.url;
+    if (found.ask !== undefined) {
+      const text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!url.endsWith('=') || !text || text.length > 200 || /[\x00-\x1f\x7f]/.test(text)) return { status: 400, error: 'request-refused' };
+      url += encodeURIComponent(text);
+    } else if (body.text !== undefined) return { status: 400, error: 'request-refused' };
+    if (!web(url)) {
+      const scheme = schemeOf(url);
+      if (NEVER_SCHEMES.has(scheme) || !(settings.page_schemes ?? []).includes(scheme)) return { status: 403, error: 'scheme-not-allowed', scheme };
+      if (body.confirm !== true) return { status: 409, error: 'confirm-required', url };
+    }
+    return { status: 200, open: url };
+  }
   async function launch(kind, id, body) {
     const release = lifecycle.begin();
     if (!release) return { status: 503, error: lifecycle.refusal() };
@@ -854,5 +874,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     } finally { release?.(); }
   }
 
-  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, reach, data, allow, card };
+  return { overview, iconSources, run, output, launch, link, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, reach, data, allow, card };
 }

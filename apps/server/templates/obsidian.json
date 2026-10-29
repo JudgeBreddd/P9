@@ -1,32 +1,38 @@
 {
   "title": "Obsidian vault",
-  "about": "For notes kept in an Obsidian vault: the vault, daily notes and an inbox.",
+  "about": "For notes kept in an Obsidian vault: recent notes, templates, the inbox and a new note.",
   "space": {
     "sections": [
       {
         "id": "vault",
         "title": "Vault",
         "icon": "🗃️",
-        "text": "Name the vault folder in settings notes_roots, then show its notes here.",
+        "text": "Your newest notes. The links open Obsidian on this computer.",
+        "folders": [
+          { "id": "recent-notes", "title": "Recent notes", "root": "vault", "pattern": "*.md", "recursive": true }
+        ],
         "links": [
-          {
-            "id": "obsidian-help",
-            "title": "Obsidian help",
-            "url": "https://help.obsidian.md"
-          }
+          { "id": "new-note", "title": "New note", "url": "obsidian://new?name=", "ask": "Note title" },
+          { "id": "open-obsidian", "title": "Open in Obsidian", "url": "obsidian://open" }
         ]
       },
       {
-        "id": "daily",
-        "title": "Daily notes",
-        "icon": "📅",
-        "text": "Today's note and the last few days. A folders item lists the daily notes folder."
+        "id": "templates",
+        "title": "Templates",
+        "icon": "📄",
+        "text": "The notes in the vault's Templates folder.",
+        "folders": [
+          { "id": "templates", "title": "Templates", "root": "vault", "path": "Templates", "pattern": "*.md" }
+        ]
       },
       {
         "id": "inbox",
         "title": "Inbox",
         "icon": "📥",
-        "text": "Notes waiting to be filed. A data tile can count them for you."
+        "text": "Notes waiting to be filed, from the vault's Inbox folder.",
+        "folders": [
+          { "id": "inbox", "title": "Inbox", "root": "vault", "path": "Inbox", "pattern": "*.md", "recursive": true }
+        ]
       }
     ]
   }

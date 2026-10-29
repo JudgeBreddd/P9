@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, stat, writeFile, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'remoteStart', 'remoteAdmin', 'remoteDepsCheck', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'remoteStart', 'remoteAdmin', 'remoteDepsCheck', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -341,6 +341,63 @@ test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless 
   await page.waitForFunction(() => document.querySelector('#fMission [data-space-pick]')?.value === 'homelab', null, { timeout: 15000 });
   assert.deepEqual(await widgets(), { waiting: true, usage: true, apps: true, notifications: true }, 'existing install');
   assert.equal(await readFile(spaceFile, 'utf8'), bytes, 'the space file is unchanged');
+});
+
+// Fresh-install finding 3(b), threat model rows 73-75: the Obsidian template draws real lists once the vault is picked
+// through main's native dialog and confirm; New note asks for a title, shows the encoded link and opens it only on Open.
+test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault and New note opens an encoded obsidian link', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { app, page, shot } = await openFirst(t, instance);
+  const vault = await mkdtemp(path.join(os.tmpdir(), 'p9-vault-'));
+  for (const [file, text] of [['Welcome.md', '# Welcome'], ['Inbox/Idea.md', 'an idea'], ['Templates/Daily.md', '# {{date}}']]) {
+    await mkdir(path.dirname(path.join(vault, file)), { recursive: true }); await writeFile(path.join(vault, file), text);
+  }
+  await app.evaluate(({ dialog, shell }, dir) => {
+    globalThis.asked = []; globalThis.opened = [];
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] });
+    dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.message); return { response: 1 }; };
+    shell.openExternal = async (url) => { globalThis.opened.push(url); };
+  }, vault);
+  // The page cannot name the vault route: only main's picker reaches it.
+  assert.equal(await page.evaluate(() => window.p9.mission('vault', { folder: '/' }).then(() => 'sent', () => 'refused')), 'refused');
+  const made = await page.evaluate(() => window.p9.mission('template', { name: 'obsidian', space: 'obsidian', confirm: true }));
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'obsidian' }))).status, 200);
+  await page.reload();
+  await page.click('#rMission');
+  const tile = page.locator('#fMission [data-group="Vault"]');
+  await tile.waitFor({ timeout: 15000 });
+  // Before a vault is picked: the folder says so, with the button; an obsidian link is refused until then.
+  await tile.click();
+  await page.locator('#mdlBody [data-folder="0"]').click();
+  await page.locator('#mdlBody [data-pick-vault]').waitFor({ timeout: 10000 });
+  await shot('obsidian-no-vault-dark');
+  await page.locator('#mdlBody [data-pick-vault]').click();
+  await page.locator('#mdlBody', { hasText: 'Welcome.md' }).waitFor({ timeout: 10000 });
+  assert.deepEqual(await app.evaluate(() => globalThis.asked), ['Use ' + vault + ' as your Obsidian vault?']);
+  const settings = JSON.parse(await readFile(path.join(instance.directory, '.config', 'p9', 'settings.json'), 'utf8'));
+  assert.equal(settings.notes_roots.vault, await realpath(vault));
+  assert.ok(settings.page_schemes.includes('obsidian'), 'obsidian joins page_schemes');
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.click('#rMission');
+  await tile.click();
+  await shot('obsidian-vault-dark');
+  // New note: the typed title is URL-encoded onto the link, shown before it opens, and opened only on Open.
+  await page.locator('#mdlBody [data-weblink="new-note"]').click();
+  await page.locator('#mdlBody [data-weblink-text]').fill('Plan / week 1 & more');
+  const link = 'obsidian://new?name=' + encodeURIComponent('Plan / week 1 & more');
+  assert.equal(await page.locator('#mdlBody [data-link]').innerText(), link);
+  assert.deepEqual(await app.evaluate(() => globalThis.opened), [], 'nothing opens before Open');
+  await shot('obsidian-new-note-dark');
+  await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+  await shot('obsidian-new-note-light');
+  await page.locator('#mdlFoot [data-open]').click();
+  await page.waitForFunction(() => !document.querySelector('#mdlBody [data-weblink-text]'), null, { timeout: 10000 });
+  assert.deepEqual(await app.evaluate(() => globalThis.opened), [link]);
+  await shot('obsidian-vault-light');
+  // A link that asks for text refuses a missing title at the daemon too.
+  assert.equal((await page.evaluate(() => window.p9.mission('link', { id: 'new-note', confirm: true }))).status, 400);
 });
 
 test('First launch D1: the welcome screen offers a P9 on another machine', { timeout: 60000 }, async (t) => {

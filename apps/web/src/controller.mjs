@@ -1307,8 +1307,22 @@ function bindOnboard(root) {
     if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; b.querySelector('span').textContent = 'File protection is on. Click again to add this template.'; return; }
     toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: templateWords(r.status, r.body), level: r.status === 201 ? 'ok' : 'bad' }, true);
     if (r.status === 201) refreshMission();
+    // ponytail: the one template that needs a folder asks for it as it is added; a template field for this is out of scope.
+    if (r.status === 201 && b.dataset.template === 'obsidian' && window.p9.pickVault) await pickVault();
   });
   bindSpacePick(root);
+}
+// The Obsidian vault folder (threat model row 73): desktop only. Main shows the native picker and a confirm, then tells the daemon.
+async function pickVault() {
+  const r = await window.p9.pickVault();
+  if (r.body?.canceled) return false;
+  const ok = r.status === 201, e = r.body?.error;
+  toast({ kind: ok ? 'saved' : 'not saved', level: ok ? 'ok' : 'bad', txt: ok ? 'Vault folder set: ' + r.body.vault
+    : e === 'server-mode-local-only' ? 'Pick the vault folder in the P9 desktop app on the remote computer.'
+      : e === 'name-taken' ? 'A vault folder is already set: ' + r.body.folder : e === 'root-refused' ? 'Mission does not use this folder: it holds the workspace, the home folder or P9\'s own files.'
+        : 'Vault folder not set (' + (e || r.status) + ').' }, true);
+  if (ok) refreshMission();
+  return ok;
 }
 function renderMission() {
   // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet.
@@ -1590,6 +1604,7 @@ function missionModal(m, body, row) {
     body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
       window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
     body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
+    body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back: m }));
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
     body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
@@ -1614,9 +1629,12 @@ function missionModal(m, body, row) {
     $('#mdlT').textContent = m.f.title;
     if (m.list === undefined) { m.list = null; window.p9.mission('folder', { id: m.f.id }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
     const l = m.list, now = Date.now();
-    body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error ? `<p class="sm muted">Could not list this folder (${esc(l.error)})</p>`
+    body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error === 'unknown-root' && m.f.root === 'vault' ? (window.p9.pickVault
+      ? '<div class="review"><p class="sm">Mission lists this once it knows your vault folder.</p><button data-slot="button" data-variant="outline" data-pick-vault>Pick the vault folder</button></div>'
+      : '<div class="review"><p class="sm">Pick the vault folder in the P9 desktop app.</p></div>') : l.error ? `<p class="sm muted">Could not list this folder (${esc(l.error)})</p>`
       : l.files.length ? `<ul class="mlist">${l.files.map((f, i) => row(i, '<span class="kind">file</span>', esc(f.name), esc(ago(Math.max(0, Math.round((now - f.modified) / 60000)))) + ' ago')).join('')}</ul>` : '<p class="empty">No files match.</p>';
     $('#mdlFoot').innerHTML = l && !l.error ? `<span class="muted sm" data-folder-count>${l.total} file${l.total === 1 ? '' : 's'}${l.files.length < l.total ? ', the newest ' + l.files.length + ' shown' : ''}${l.partial ? ' · a very big folder: not every file was looked at' : ''}</span>` : '';
+    const pv = body.querySelector('[data-pick-vault]'); if (pv) pv.onclick = async () => { if (await pickVault()) { m.list = undefined; renderModal(); } };
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const f = l.files[+b.dataset.i]; openModal({ kind: 'hubtext', title: f.name, req: { id: m.f.id, path: f.path }, call: 'folderFile', back: m }); });
   } else if (m.kind === 'notes') notesModal(m, body, row);
   else if (m.kind === 'note') noteModal(m, body);
@@ -1626,6 +1644,25 @@ function missionModal(m, body, row) {
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open link</button>`;
     $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
     $('#mdlFoot [data-open]').onclick = () => { launchLive(m.page[0], { kind: 'pages', id: m.page[2], confirm: true }); m.back ? openModal(m.back) : closeModal(); };
+  } else if (m.kind === 'weblink') {
+    // Rows 74, 75: the typed text is URL-encoded as the daemon does it, so the link shown is the link that opens.
+    const link = () => m.l.url + (m.l.ask ? encodeURIComponent((m.text || '').trim()) : ''), scheme = m.l.url.split(':')[0];
+    $('#mdlT').textContent = m.l.title;
+    body.innerHTML = `<div class="review">${m.l.ask ? `<label>${esc(m.l.ask)}<input data-slot="input" data-weblink-text maxlength="200" value="${esc(m.text || '')}"></label>` : ''}`
+      + `<p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(link())}</pre>`
+      + (m.error ? `<p class="sm" role="status" data-weblink-error>${esc(m.error)}</p>` : '') + '</div>';
+    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open</button>';
+    const input = body.querySelector('[data-weblink-text]');
+    if (input) { input.oninput = () => { m.text = input.value; body.querySelector('[data-link]').textContent = link(); }; input.focus(); }
+    $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
+    $('#mdlFoot [data-open]').onclick = async () => {
+      if (m.l.ask && !(m.text || '').trim()) { m.error = 'Type the ' + m.l.ask.toLowerCase() + ' first.'; return renderModal(); }
+      const r = await window.p9.mission('link', { id: m.l.id, ...(m.l.ask ? { text: m.text } : {}), confirm: true });
+      if (r.status === 200) return m.back ? openModal(m.back) : closeModal();
+      m.error = r.body?.error === 'scheme-not-allowed' ? `${scheme} links are not allowed yet.${scheme === 'obsidian' ? ' Picking the vault folder allows them.' : ' Add ' + scheme + ' to page_schemes in the Mission settings file.'}`
+        : 'Not opened (' + (r.body?.error || r.status) + ').';
+      renderModal();
+    };
   } else if (m.kind === 'script') {
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
     m.args ||= (x.args || []).map(() => '');

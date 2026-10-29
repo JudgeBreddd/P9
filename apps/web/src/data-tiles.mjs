@@ -20,7 +20,12 @@ export function tileHtml(r, esc, what = 'tile') {
     + `<circle cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="${Math.round(x.percent)} 100"/></svg><b>${Math.round(x.percent)}%</b><figcaption>${esc(x.label)}</figcaption></figure>`).join('')}</div>`;
 }
 
-export const linkHtml = (l, esc) => `<a class="tile-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" data-tile-link><span>${esc(l.title)}</span><small>${esc(host(l.url))}</small></a>`;
+// A space link (threat model rows 74, 75): only a plain http(s) link is an anchor. Another scheme, or a link that asks for text,
+// is a button the desktop sends to the daemon (it checks page_schemes, shows the link and asks); where nothing opens it, words.
+export const linkHtml = (l, esc, open = true) => web(l.url) && !l.ask
+  ? `<a class="tile-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" data-tile-link><span>${esc(l.title)}</span><small>${esc(host(l.url))}</small></a>`
+  : open ? `<button type="button" class="tile-link" data-weblink="${esc(l.id)}"><span>${esc(l.title)}</span><small>${l.url.startsWith('obsidian:') ? 'Opens in Obsidian on this computer' : 'Opens another program on this computer'}</small></button>`
+    : `<span class="tile-link" data-weblink-off><span>${esc(l.title)}</span><small>Open it in the P9 desktop app</small></span>`;
 
 // The daemon's reply to a tile's ask, as tileHtml takes it.
 export const tileAnswer = (status, body) => status === 200 ? body : body?.error === 'allow-required' ? { allow: body.script } : { error: body?.detail || body?.error || String(status) };
