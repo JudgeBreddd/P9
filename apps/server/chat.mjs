@@ -212,6 +212,25 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const listeners = new Set();
   const stops = new Map(); // conversation -> the Stop in progress
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
+  // preview: the list's second line for a chat whose events the phone has not read, by its own rule (digest() in phone.ts):
+  // the newest prompt or reply, the reply being its run of chunks since the prompt or tool call before it, warnings left
+  // out. Each read walks the events_conversation index back from the chat's end, as used does.
+  const said = db.prepare(`SELECT cursor, type, data FROM events WHERE conversation = ? AND (type = 'user' OR (type = 'update'
+    AND json_extract(data, '$.sessionUpdate') = 'agent_message_chunk' AND json_extract(data, '$.content.text') NOT LIKE 'Warning: %'))
+    ORDER BY cursor DESC LIMIT 1`);
+  const runFrom = db.prepare(`SELECT cursor FROM events WHERE conversation = ? AND cursor < ? AND (type = 'user' OR (type = 'update'
+    AND json_extract(data, '$.sessionUpdate') = 'tool_call')) ORDER BY cursor DESC LIMIT 1`);
+  // ponytail: the first 80 chunks of the reply; a first line longer than that is cut anyway.
+  const replyText = db.prepare(`SELECT group_concat(text, '') AS text FROM (SELECT json_extract(data, '$.content.text') AS text FROM events
+    WHERE conversation = ? AND cursor > ? AND cursor <= ? AND type = 'update' AND json_extract(data, '$.sessionUpdate') = 'agent_message_chunk'
+    AND text NOT LIKE 'Warning: %' ORDER BY cursor LIMIT 80)`);
+  const preview = (id) => {
+    const last = said.get(id);
+    if (!last) return '';
+    const text = last.type === 'user' ? JSON.parse(last.data).text : replyText.get(id, runFrom.get(id, last.cursor)?.cursor ?? 0, last.cursor).text;
+    const line = String(text ?? '').trim().split('\n')[0].trim();
+    return line.length > 100 ? line.slice(0, 99) + '…' : line;
+  };
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
   // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
   // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. Chats are never deleted, so nothing else removes them.
@@ -662,8 +681,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
-        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent
-      FROM conversations c ORDER BY used DESC, created DESC`).all().map((c) => ({ ...c, sent: c.sent === 1 })),
+        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
+        EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
+          AND a.cursor > COALESCE((SELECT cursor FROM events WHERE conversation = c.id AND type IN ('turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error') ORDER BY cursor DESC LIMIT 1), 0)
+          AND NOT EXISTS (SELECT 1 FROM events b WHERE b.conversation = c.id AND b.type = 'answered' AND b.cursor > a.cursor
+            AND json_extract(b.data, '$.request') = json_extract(a.data, '$.request'))) AS waiting
+      FROM conversations c ORDER BY used DESC, created DESC`).all()
+      // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
+      // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
+      .map((c) => ({ ...c, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id) })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     async create(body) {
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
