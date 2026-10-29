@@ -137,7 +137,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
     }
     assert.deepEqual(last, want);
   };
-  await status({ status: 'ok', mode: 'server', host: 'test-host' });
+  await status({ status: 'ok', mode: 'server', host: 'test-host', background: false, ask: false });
   assert.equal(JSON.parse(await readFile(path.join(forward, 'desktop.json'), 'utf8')).cookie, remote.credentials.cookie);
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor();
   // The files panel has no Send files to remote in Remote mode: the files are the remote's already.
@@ -159,7 +159,93 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
-  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [] });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {} });
+});
+
+// Rows I1 and I2 in the window: the Keep P9 running question, the status line with Keep it running, the admin password window
+// it opens when the remote needs one, and the Settings choice, in both themes. Main's status, keep and admin answers are
+// replayed here (remote-keep.test.mjs and remote-admin.test.mjs test what they run).
+test('Keep P9 running in the window: the question, the status line, the admin password window, the Settings choice', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host', remotes: ['test-host', 'small-board'], keep: { 'small-board': false } }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor({ timeout: 20000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const shot = async (name, what = page) => { await page.waitForTimeout(300); if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await what.screenshot({ animations: 'disabled' })).toString('base64')); };
+  const command = 'sudo loginctl enable-linger "$(id -un)"';
+  const set = (state) => app.evaluate((_, st) => { globalThis.keepTest.state = { status: 'ok', mode: 'server', host: 'test-host', ...st }; }, state);
+  await app.evaluate(({ ipcMain }) => {
+    const k = globalThis.keepTest = { calls: [], state: { status: 'ok', mode: 'server', host: 'test-host', background: true, ask: true } };
+    ipcMain.removeHandler('p9:get-status'); ipcMain.handle('p9:get-status', () => k.state);
+    ipcMain.removeHandler('p9:remote-keep'); ipcMain.handle('p9:remote-keep', (_, ...a) => { k.calls.push(['keep', ...a]); return {}; });
+    ipcMain.removeHandler('p9:remote-admin'); ipcMain.handle('p9:remote-admin', (_, ...a) => { k.calls.push(['admin', ...a]); return {}; });
+  });
+  const calls = () => app.evaluate(() => globalThis.keepTest.calls);
+  const line = (text) => page.locator('#keepNote:not([hidden]) #keepText', { hasText: text }).waitFor({ timeout: 15000 });
+  // The question, once: Only while connected without Do not ask again stores nothing.
+  await page.locator('#keepDlg[open]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#keepT').textContent(), 'Keep P9 running on test-host?');
+  await shot('c34-keep-modal-event-horizon-prime', page.locator('#keepDlg'));
+  await set({ background: true, ask: true });
+  await page.locator('#keepDlg button[value="no"]').click();
+  for (const end = Date.now() + 5000; Date.now() < end && !(await calls()).length;) await page.waitForTimeout(100);
+  assert.deepEqual(await calls(), [['keep', false, false]]);
+  // Background mode: the line says P9 there stops, with Keep it running; the question is not asked again this run.
+  await line('P9 on test-host stops when you disconnect');
+  assert.equal(await page.locator('#keepBtn').textContent(), 'Keep it running');
+  await shot('c34-keep-line-event-horizon-prime', page.locator('.statusbar'));
+  await set({ background: true, ask: false, keeping: { action: 'keep', phase: 'refused', command } });
+  await page.locator('#keepBtn').click();
+  await line('Keeping P9 running on test-host needs an admin password');
+  assert.equal((await calls()).at(-1).join(), 'keep,true,false');
+  assert.equal(await page.locator('#keepDlg').evaluate((d) => d.open), false, 'asked once per run');
+  // Use admin password: the window names the remote and the exact command; the field is emptied when it closes.
+  await page.locator('#keepBtn', { hasText: 'Use admin password' }).click();
+  await page.locator('#adminDlg[open]').waitFor();
+  assert.equal(await page.locator('#adminCmd').textContent(), command);
+  assert.equal(await page.locator('#adminL').textContent(), 'Admin password for your account on test-host');
+  // The confirming button is the filled one in both windows (a button without a variant draws as plain text).
+  assert.deepEqual([await page.locator('#adminOk').getAttribute('data-variant'), await page.locator('#keepDlg button[value="yes"]').getAttribute('data-variant')], ['default', 'default']);
+  await page.fill('#adminPw', 'typed here');
+  await shot('c34-admin-dlg-event-horizon-prime', page.locator('#adminDlg'));
+  await set({ background: false, ask: false, keeping: { action: 'keep', phase: 'ok' } });
+  await page.locator('#adminOk').click();
+  for (const end = Date.now() + 5000; Date.now() < end && (await calls()).at(-1)[0] !== 'admin';) await page.waitForTimeout(100);
+  assert.deepEqual((await calls()).at(-1), ['admin', 'typed here']);
+  assert.equal(await page.locator('#adminPw').inputValue(), '');
+  await page.locator('#keepNote').waitFor({ state: 'hidden', timeout: 15000 });
+  // Settings > Remote: each remote's choice, Stops for the one answered No with Do not ask again.
+  const settings = async (theme) => {
+    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+    assert.equal(await page.locator('[data-remote-keep="small-board"]').inputValue(), 'stop');
+    assert.equal(await page.locator('[data-remote-keep="test-host"]').inputValue(), '');
+    await page.locator('#setRemote').scrollIntoViewIfNeeded();
+    await shot('c34-settings-keep-' + theme, page.locator('#setRemote'));
+    await page.keyboard.press('Escape');
+  };
+  await settings('event-horizon-prime');
+  // The same pieces in the light theme.
+  await page.click('#themeBtn'); await page.click('[data-theme-pick="daylight"]'); await page.keyboard.press('Escape');
+  await set({ background: true, ask: false });
+  await line('P9 on test-host stops when you disconnect');
+  await shot('c34-keep-line-daylight', page.locator('.statusbar'));
+  await set({ background: true, ask: false, keeping: { action: 'keep', phase: 'wrong-password', command } });
+  await line('That admin password did not work on test-host');
+  await page.locator('#keepBtn').click();
+  await page.locator('#adminDlg[open] #adminErr:not([hidden])', { hasText: 'That password did not work.' }).waitFor();
+  await shot('c34-admin-dlg-daylight', page.locator('#adminDlg'));
+  await page.locator('#adminDlg button[value="cancel"]').click();
+  assert.equal((await calls()).filter((c) => c[0] === 'admin').length, 1, 'Cancel sends nothing');
+  await page.evaluate(() => document.getElementById('keepDlg').showModal());
+  await shot('c34-keep-modal-daylight', page.locator('#keepDlg'));
+  await page.keyboard.press('Escape');
+  await settings('daylight');
 });
 
 // D20: while the remote is not answering yet the window shows the connecting layer, not a blank page; once it answers the
@@ -224,12 +310,12 @@ test('Remote mode connecting: a turning black hole and the reason until the remo
   const layer = page.locator('dialog#connecting[open]');
   await layer.waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
-  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there. Install it there from here/);
+  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there\. If P9 is installed there, start it; if not, install it from here/);
   await page.waitForTimeout(600); // a turn of the ring in the shot
   await evidence(page, 'd20-connecting');
   // D15a: Install P9 there asks first, in place, saying where and what it never does; Not now goes back and installs nothing.
   await page.locator('#connInstall', { hasText: 'Install P9 there' }).click({ timeout: 10000 });
-  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\? Over your ssh login, P9 puts its source in ~\/p9 there.*never uses sudo or a password/);
+  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\? Over your ssh login, P9 puts its source in ~\/p9 there.*only an admin can install, it shows you what and asks for your password first/);
   assert.equal(await page.locator('#connInstall').textContent(), 'Install');
   await page.waitForTimeout(1500); // the status poll does not overwrite the question
   assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\?/);

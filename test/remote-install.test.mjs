@@ -31,7 +31,7 @@ test('D15a: a checkout\'s source lands in ~/p9 there and install.sh runs headles
   const s = await stage(), events = [];
   const result = await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6', tell: (e) => events.push(e) });
   assert.equal(result.phase, 'done', JSON.stringify(result));
-  assert.equal(await readFile(path.join(s.home, 'args.txt'), 'utf8'), 'ARGS --headless\n');
+  assert.equal(await readFile(path.join(s.home, 'args.txt'), 'utf8'), 'ARGS --headless --background\n');
   assert.equal(await readFile(path.join(s.home, 'stdin.txt'), 'utf8'), '', 'install.sh reads no answer, so its admin ask says no');
   assert.ok(await exists(path.join(s.home, 'p9', 'README.md')) && await exists(path.join(s.home, 'p9', '.p9-remote-install')));
   // ssh gets BatchMode, the host as its own argument, and the archive never in the command.

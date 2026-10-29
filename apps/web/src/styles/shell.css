@@ -361,6 +361,27 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 /* ---- Status bar ---- */
 .statusbar{display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted-foreground);background:color-mix(in oklch,var(--card) 60%,transparent)}
 .statusbar .spacer{flex:1}
+.statusbar .keep-note{display:inline-flex;align-items:center;gap:6px}
+.statusbar .keep-note[hidden]{display:none}
+.statusbar .keep-note button{height:20px;padding:0 8px;font-size:11px}
+.statusbar .keep-note::before{content:"";width:6px;height:6px;border-radius:50%;background:color-mix(in oklch,var(--primary) 70%,var(--muted-foreground))}
+/* Row I1's question: the two answers side by side, each with what it means. */
+.keep-dlg .keep-ways{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0}
+.keep-dlg .keep-ways>div{padding:10px 12px;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--card) 70%,transparent)}
+.keep-dlg dt{font-size:13px;font-weight:600;margin-bottom:4px}
+.keep-dlg dd{margin:0;font-size:12px;line-height:1.45;color:var(--muted-foreground)}
+.keep-dlg .keep-again{display:flex;align-items:center;gap:8px;margin-top:14px}
+.keep-dlg .keep-later{margin:4px 0 0 22px}
+@media (max-width:520px){.keep-dlg .keep-ways{grid-template-columns:1fr}}
+/* Row I2's password window. */
+.admin-dlg .admin-need{margin:0 0 12px;padding:0;list-style:none;display:grid;gap:6px}
+.admin-dlg .admin-need li{font-size:13px;line-height:1.4}
+.admin-dlg .admin-need b{font-family:"JetBrains Mono",ui-monospace,monospace;font-weight:600;font-size:12px;margin-right:6px}
+.admin-dlg .admin-what{margin:0 0 6px;color:var(--muted-foreground)}
+.admin-dlg .admin-cmd{margin:0 0 14px;padding:8px 10px;max-height:7.5em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.45;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:var(--muted);color:var(--foreground)}
+.admin-dlg .admin-pw{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.admin-dlg .admin-err{margin:6px 0 0;color:var(--destructive)}
+.admin-dlg #adminNote{margin:8px 0 0}
 /* ---- Palette ---- */
 #palette .dlg-body{padding:0}
 #palette input{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:14px 18px;font-size:15px}
@@ -419,6 +440,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 #welDlg .settings{display:grid;gap:12px}#welBody p{margin:0}
 #welBody .ok{color:var(--ok)}#welBody .warn{color:var(--warn)}#welBody span:is(.ok,.warn){white-space:nowrap}#welBody .mono{word-break:break-all}
 #welPetdex,#petdexLink{color:var(--primary);text-decoration:underline}
+#welBody .wiz-pw-label{display:block;margin-top:8px}
 #welBody .wiz-fail{display:grid;gap:4px;justify-items:start;border:1px solid var(--warn);border-radius:var(--radius);padding:8px 12px}
 #welCode{flex:1}#welFoot{display:flex;align-items:center;gap:8px}
 /* running chats in the rail (renderBots) */
@@ -593,6 +615,7 @@ dialog.connecting::backdrop{background:#000}
 dialog.connecting h2{margin:0;font:500 20px/1.2 "Space Grotesk",sans-serif;letter-spacing:.02em}
 dialog.connecting p{margin:0;max-width:46ch;color:oklch(0.76 0.03 262)}
 dialog.connecting>button{margin-top:12px}
+dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 /* D15a: the install in progress (a spinner, the last line, the time so far) and, if it stopped, its last lines. */
 .conn-progress{display:flex;align-items:center;gap:10px;max-width:46ch;margin-top:12px;font-size:13px;color:oklch(0.86 0.03 262)}
 .conn-progress[hidden],.conn-log[hidden]{display:none}
@@ -602,6 +625,7 @@ dialog.connecting>button{margin-top:12px}
 #connInstall{min-width:16ch}
 @keyframes conn-turn{to{rotate:360deg}}
 .remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.remote-list [data-slot="select"]{width:auto;flex:none}
 #setRemoteAdd input{flex:1;min-width:0}
 
 /* Mission data tiles and links (M3): a script's JSON drawn as text. */

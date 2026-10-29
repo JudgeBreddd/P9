@@ -41,7 +41,7 @@ async function start(t, clis, { without } = {}) {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake, '--tmux-socket', socket], path: PATH, env: { TMUX_TMPDIR: tmpdir } }));
   t.after(() => { try { execFileSync('tmux', ['-L', socket, 'kill-server'], { env, stdio: 'ignore' }); } catch {} });
   const tmux = (...args) => execFileSync('tmux', ['-L', socket, ...args], { env }).toString();
-  return { instance, tmux };
+  return { instance, tmux, PATH };
 }
 // The terminal's line holds the command and the shell has not run it (a run prints "stand-in ... ran" or "not found").
 async function typedNotRun(tmux, terminal, command) {
@@ -219,13 +219,21 @@ test('Item 15 (threat model row 61): /setup/admin-terminal types the table\'s co
 
 // Item 15 on the desktop: the wizard asks Claude, Codex or both with the one line that says why, Install writes the picked
 // one and Next reaches its sign-in; the terminal step, with the SSH client missing, is the admin screen: the reason first,
-// then why it needs the password, then the command, and Run in a terminal types it into the dock, not run.
+// then why it needs the password, then the command. On its own computer the desktop asks for the admin password there and
+// runs that command through sudo (row 61, commit C: stub sudo and apt-get here); the daemon's route still only types it.
 test('Item 15: wizard asks Claude, Codex or both with its why line, installs the pick, reaches sign-in; the admin screen gives the reason first', { skip: !linux, timeout: 60000 }, async (t) => {
   const deadline = Date.now() + 55000, left = () => Math.max(1000, deadline - Date.now());
-  const { instance, tmux } = await start(t, [], { without: ['ssh'] });
+  const { instance, tmux, PATH } = await start(t, [], { without: ['ssh'] });
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c13-'));
   t.after(() => rm(home, { recursive: true }));
-  const env = { ...process.env, HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  // sudo: records its arguments, reads the password line, validates for -v, else runs what follows --. apt-get: records.
+  const stubs = path.join(home, 'stubs'), sudoLog = path.join(home, 'sudo.txt'), aptLog = path.join(home, 'apt.txt'), PASS = "it's p@ss $x";
+  await mkdir(stubs);
+  await writeFile(path.join(stubs, 'sudo'), '#!/bin/sh\nfor a; do printf "%s\\n" "$a"; done >> "' + sudoLog + '"; echo --- >> "' + sudoLog + '"\nIFS= read -r pw || true\n'
+    + '[ "$pw" = "$(printf "%s" ' + "'it'\\''s p@ss $x'" + ')" ] || { echo "Sorry, try again." >&2; exit 1; }\n'
+    + 'while [ $# -gt 0 ] && [ "$1" != -- ]; do [ "$1" = -v ] && exit 0; shift; done\nshift; exec "$@"\n', { mode: 0o755 });
+  await writeFile(path.join(stubs, 'apt-get'), '#!/bin/sh\necho "apt-get $*" >> "' + aptLog + '"; cat >> "' + aptLog + '"\n', { mode: 0o755 });
+  const env = { ...process.env, HOME: home, PATH: stubs + ':' + PATH }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
@@ -284,16 +292,36 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
   assert.ok(said.startsWith('SSH client') && reason > 0 && password > reason && said.indexOf(command) > password, 'reason, then why the password, then the command: ' + said);
   assert.match(command, /^sudo .*\bopenssh/);
   assert.equal(await body.locator('[data-admin="tmux"]').count(), 0, 'tmux is there');
+  assert.equal(await ssh.locator('[data-act="admin:ssh"]').count(), 0, 'no terminal on its own computer');
   await shot('c13-admin-screen', page.locator('#welDlg'));
-  await ssh.locator('[data-act="admin:ssh"]').click();
-  await page.waitForFunction(() => !document.querySelector('#welDlg').open, null, { timeout: left() });
+  // The page names the package only; anything else is refused in main, before sudo.
+  for (const args of [['sandbox', 'x'], ['libatomic1', 'x'], ['ssh', 'a\nb'], ['ssh', ''], ['ssh', 'x'.repeat(1025)], ['ssh']]) {
+    assert.match(await page.evaluate((a) => window.p9.adminInstall(...a).then(() => 'ran', (e) => e.message), args), /ipc-sender-refused/, JSON.stringify(args));
+  }
+  const aptRan = () => readFile(aptLog, 'utf8').catch(() => '');
+  await ssh.locator('[data-admin-pw="ssh"]').fill('not it');
+  await ssh.locator('[data-act="pw:ssh"]').click();
+  await body.locator('[data-admin="ssh"] .wiz-fail', { hasText: 'That password did not work.' }).waitFor({ timeout: left() });
+  assert.equal(await aptRan(), '', 'nothing ran as admin');
+  assert.equal(await body.locator('[data-admin="ssh"] .wiz-fail [data-act="retry"]').count(), 0, 'a wrong password is fixed by Install, not Retry');
+  await body.locator('[data-admin-pw="ssh"]').fill(PASS);
+  await shot('c34-admin-password-event-horizon-prime', page.locator('#welDlg'));
+  await page.evaluate(() => { document.getElementById('themeBtn').click(); document.querySelector('[data-theme-pick="daylight"]').click(); });
+  await shot('c34-admin-password-daylight', page.locator('#welDlg'));
+  await body.locator('[data-act="pw:ssh"]').click();
+  for (const end = Date.now() + 10000; Date.now() < end && !(await aptRan()); ) await wait(100);
+  const calls = (await readFile(sudoLog, 'utf8')).split('---\n').filter((c) => c.includes('p9-admin\n'));
+  assert.equal(calls.at(-1).trimEnd().split('\n').at(-1), command.replace(/(^|; |&& |\| )sudo /g, '$1'), 'sudo ran the command shown, less its sudo');
+  assert.ok(!(await aptRan()).includes('p@ss'), 'the admin command read nothing of the password');
+  assert.equal(await body.locator('[data-admin-pw="ssh"]').inputValue(), '', 'the field is emptied');
+  for (const name of await readdir(home)) if (!(await stat(path.join(home, name))).isDirectory()) assert.ok(!(await readFile(path.join(home, name), 'utf8')).includes('p@ss'), name);
+  // Remote mode keeps the daemon's route: the command typed into a new terminal, never run.
+  assert.equal((await page.evaluate(() => window.p9.chat('adminTerminal', { id: 'ssh' }))).status, 201);
   let made;
   for (const end = Date.now() + 10000; Date.now() < end && !made; await wait(100)) made = (await call(instance, '/terminals')).terminals.find((x) => x.state === 'running');
   await typedNotRun(tmux, made.id, command);
-  await page.locator('#dock:not([hidden])', { hasText: 'openssh' }).waitFor({ timeout: left() });
-  await shot('c13-admin-in-terminal');
   assert.deepEqual(errors, []);
-  console.log('PASS item 15 desktop: why line first, Install waits for a pick, Install writes Claude only, Next reaches its sign-in; admin screen: reason, why the password, command; typed, not run');
+  console.log('PASS item 15 desktop: why line first, Install waits for a pick, Install writes Claude only, Next reaches its sign-in; admin screen: reason, why the password, command; the password runs it, the route types it');
 });
 
 // D17: a login that expired leaves its file, so /setup says signed in. The chat's "not signed in" opens the agents step
