@@ -35,7 +35,7 @@ html,body{height:100%;overflow:hidden}
 .mrow>*{min-height:0}.mrow .needs{display:flex;flex-direction:column}.mrow .needs [data-list]{flex:1;min-height:0;max-height:none}
 .bignum{font:300 40px/1 var(--display,inherit);color:var(--amber,var(--primary));margin:2px 0 8px}.bignum b{font-weight:400}
 [data-card=mprimary]>.win{width:100%}.mcol{display:flex;flex-direction:column;gap:10px;min-height:0}.mcol .wins{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
-.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
+.mpanel[hidden]{display:none}.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
 .mpanel[data-panel=mlogs]{flex:1}.mpanel[data-panel=musage],.mcol>.wins,.mcol>[data-card]{flex-shrink:0}.mpanel[data-panel=mlaunch]{flex:0 1 auto;min-height:120px}.pscroll{overflow:auto;min-height:0}
 .phead{display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11px;cursor:pointer}.phead h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.phead:hover{color:var(--foreground)}
 .uring{display:flex;flex-direction:column-reverse;align-items:center;gap:4px}.uring[data-stale]{opacity:.55}

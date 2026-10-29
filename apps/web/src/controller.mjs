@@ -1152,8 +1152,9 @@ function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'p
 // The old workspace-hub sections, live: notifications, Wiki inbox, logs and incidents, work in flight, audit, last solo run.
 const H = { on: false, notices: [], handoffs: [], timer: 0, hint: '', unchecked: null };
 // Why no job was checked: an empty list then never reads as "every job reported in" (finding 8).
-const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings', 'space-set': 'Mission shows your space now, so they show only through a data tile or button it names' };
-const noticeLine = () => (H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
+const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings' };
+// A space file owns Mission (row M4-b): scheduled-job checks are a built-in item, so there is nothing to report.
+const noticeLine = () => (H.unchecked === 'space-set' ? 'No notifications.' : H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
 // A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
 const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
@@ -1308,7 +1309,7 @@ function missionLive() {
   if (box) {
     setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
     setHTML($('#fMission [data-card="mprimary"]'), wins.mprimary.show() ? winCard('mprimary') : '');
-    for (const id of PANELS) { const p = $(`#fMission [data-panel="${id}"]`); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); }
+    for (const id of PANELS) { const p = $(`#fMission [data-panel="${id}"]`); p.hidden = !!wins[id].show && !wins[id].show(); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); }
     $('#fMission').querySelectorAll('[data-win]').forEach(b => b.onclick = () => openModal({ kind: 'win', id: b.dataset.win }));
   }
   const set = (id, html) => { const b = $(`#mdl #${id} .pbody`); if (!b) return { querySelectorAll: () => [] }; return setHTML(b, html); };

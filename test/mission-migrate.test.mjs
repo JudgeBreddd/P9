@@ -133,6 +133,9 @@ test('migrate_mission: backup first, the space, the setting, every item kept or 
   await page.locator('#fMission [data-group="Wiki"]').waitFor({ timeout: 20000 });
   for (const win of ['minbox', 'mwork']) assert.equal(await page.locator(`#fMission [data-win="${win}"]`).count(), 0, win);
   assert.equal(await page.locator('#fMission [data-hub-hint]').count(), 0);
+  // The built-in Logs and incidents panel goes too, and Notifications no longer talks about scheduled jobs.
+  await page.locator('#fMission [data-panel="mlogs"]').waitFor({ state: 'hidden', timeout: 10000 });
+  assert.doesNotMatch(await page.locator('#fMission [data-win="mnotes"]').textContent(), /Scheduled jobs/);
   for (const name of ['event-horizon-prime', 'daylight']) {
     await theme(name);
     shot('migrate-after-' + name, await page.screenshot({ animations: 'disabled' }));
