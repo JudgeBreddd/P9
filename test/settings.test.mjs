@@ -625,7 +625,16 @@ test('Theme per focus mode: Chat, Dev and Mission each keep their own look, also
     await page.click('#themeBtn'); await page.click(`[data-theme-pick="${id}"]`); await page.keyboard.press('Escape');
     assert.equal(await theme(page), id);
   };
-  await pick('Control+1', chat); await pick('Control+2', dev); await pick('Control+3', mission);
+  await pick('Control+1', chat); await pick('Control+3', mission);
+  // Dev Focus's editor is drawn above the page, so the picker is off there; its look is saved like the others.
+  await page.keyboard.press('Control+2');
+  assert.equal(await page.locator('#themeBtn').isDisabled(), true, 'no theme picker in Dev Focus');
+  // Back in Chat first: a focus switch saves the page's own copy of the looks over storage.
+  await page.keyboard.press('Control+1');
+  await page.evaluate((id) => { const looks = JSON.parse(localStorage.getItem('p9-focus-looks')); looks.dev = { ...looks.chat, theme: id }; localStorage.setItem('p9-focus-looks', JSON.stringify(looks)); }, dev);
+  await app.close();
+  ({ app, page } = await launch());
+  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, chat);
   const tour = async (label) => {
     for (const [key, id] of [['Control+1', chat], ['Control+2', dev], ['Control+3', mission], ['Control+1', chat]]) {
       await page.keyboard.press(key);
@@ -634,7 +643,7 @@ test('Theme per focus mode: Chat, Dev and Mission each keep their own look, also
       if (process.env.P9_EVIDENCE && label === 'after restart') await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, `look-${key.slice(-1)}.png`) });
     }
   };
-  await tour('before restart');
+  await tour('after the Dev look is saved');
   await app.close();
   ({ app, page } = await launch());
   await page.waitForFunction((id) => document.documentElement.dataset.theme === id, chat);

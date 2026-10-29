@@ -1575,9 +1575,12 @@ $('#rTerm').onclick = () => toggleTerm();
 $('#rSearch').onclick = () => { if (!S.files) $('#rFiles').click(); $('#fileSearch').focus(); };
 // One shared shell; each focus remembers whether it shows it and how (Builder 2026-10-14):
 // Dev opens it as a drawer, Chat and Mission as a pop-out. dFloat flips the mode for that focus.
+// Dev Focus docks it only: the editor is a separate view drawn above this page, so a floating terminal went behind it.
 function showTerm() {
-  const f = S.focus, open = S.termOpen[f];
-  dock.hidden = !open; dock.classList.toggle('float', S.termMode[f] === 'float');
+  const f = S.focus, open = S.termOpen[f], float = f !== 'dev' && S.termMode[f] === 'float';
+  if (dock.classList.contains('float') && !float) dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = '';
+  dock.hidden = !open; dock.classList.toggle('float', float);
+  $('#dFloat').hidden = f === 'dev';
   $('#rTerm').setAttribute('aria-pressed', open);
   if (open && dockTerm && !dockTerm.open) openDock();
 }
@@ -1607,6 +1610,10 @@ function setFocus(f, stay = false) {
   document.querySelectorAll('[data-focus-btn]').forEach(b => b.setAttribute('aria-pressed', b.dataset.focusBtn === f));
   renderIndicator(); // each focus has its own pets
   $('#focusTitle').textContent = focusNames[f];
+  // In the desktop the Dev Focus editor is drawn above this page, so the theme picker would open behind it.
+  const behind = f === 'dev' && Boolean(window.p9);
+  $('#themeBtn').disabled = behind;
+  $('#themeBtn').title = behind ? 'Look: not available in Dev Focus, where the editor would cover the picker' : 'Look: the theme of this focus mode';
   showTerm();
   side.focus();
   placeDev();
@@ -2819,7 +2826,7 @@ function moveReloaded() {
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); }, () => {});
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); }, () => {});
 if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });

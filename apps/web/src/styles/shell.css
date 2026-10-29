@@ -184,8 +184,9 @@ html,body{height:100%;overflow:hidden}
 /* Desktop item 1, D1: a toast shows its whole message, never cut to one line (a click opens it in the panel too) */
 .toast .truncate{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 #mdlBody .review .start{margin-top:10px;color:var(--muted-foreground)}#mdlBody .review .start b{color:var(--foreground);font-weight:600}
-/* D7: a popover so a toast shows above an open modal (a modal sits in the top layer, over any z-index) */
-.toasts:popover-open{inset:auto 14px 34px auto;margin:0;padding:0;border:0;background:none;color:inherit;overflow:visible}
+/* D7: a popover so a toast shows above an open modal (a modal sits in the top layer, over any z-index). Open or closed (closed it
+   still shows, display:flex), none of the browser's popover look: closed it drew an empty white bar mid-screen, over the floating Shell */
+.toasts{inset:auto 14px 34px auto;margin:0;padding:0;border:0;background:none;color:inherit;overflow:visible}
 :root{--toast-life:6s}
 .toast{display:grid;grid-template-columns:auto 1fr;gap:2px 9px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--popover) 92%,transparent);backdrop-filter:blur(8px);color:var(--foreground);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;animation:pop .2s ease,toast-out .5s ease var(--toast-life) forwards}
 .toast:hover{animation-play-state:paused}
