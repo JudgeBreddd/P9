@@ -100,6 +100,7 @@ test('Phone open speed on Fast 3G: a reopen keeps the build, the terminal loads 
   assert.equal(await page.locator('#chatList [data-chat]').count(), 6);
   await page.click('[data-chat="00000000-0000-4000-8000-000000000501"]');
   await page.waitForSelector('#events article[data-kind=agent]', { timeout: 60000 });
+  await page.click('[data-back]'); await page.waitForSelector('#chatList [data-chat]', { timeout: 10000 });
   // The terminal loaded after the first screen, while the phone was idle, or loads now on the tap.
   await page.click('[data-nav="terminal"]');
   await page.waitForFunction(() => performance.getEntriesByType('resource').some((e) => /\/_astro\/.*terminal/i.test(e.name)), null, { timeout: 60000 })
