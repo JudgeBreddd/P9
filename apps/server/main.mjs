@@ -17,10 +17,11 @@ import { childEnv } from './child-env.mjs';
 import { AGENTS, placeAgents } from './deps.mjs';
 import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
 import { keepOldPhotos } from './chat.mjs';
+import { createClaudeUsage, openQuery } from './claude-usage.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
-const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
+const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'usage-sdk': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
   'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' },
   // The checkout a server update rebuilds, and where a packaged app's version is downloaded from (update.mjs); tests point them elsewhere.
   'update-root': { type: 'string' }, 'update-archive': { type: 'string' }, 'update-turn-ms': { type: 'string' } } });
@@ -128,6 +129,9 @@ const ledger = openLedger(path.join(ownershipDirectory, 'p9.db'));
 // ponytail: --acp-override swaps the real adapters for a test or recording shim; only the unit's ExecStart can pass it.
 const adapterOverride = values['acp-override'];
 if (adapterOverride !== undefined && !path.isAbsolute(adapterOverride)) throw new Error('absolute-acp-override-required');
+// ponytail: --usage-sdk, with --acp-override only, swaps the SDK the live Claude usage poll loads for a test stand-in.
+const usageSdk = values['usage-sdk'];
+if (usageSdk !== undefined && !path.isAbsolute(usageSdk)) throw new Error('absolute-usage-sdk-required');
 const instance = createHash('sha256').update(ownershipDirectory).digest('hex').slice(0, 8);
 const tmuxSocket = values['tmux-socket'] ?? `p9-${instance}`;
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tmuxSocket)) throw new Error('invalid-tmux-socket');
@@ -153,7 +157,7 @@ delete process.env.P9_GITHUB_TOKEN;
 // ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
-const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
+const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, claudeUsage: adapterOverride === undefined ? createClaudeUsage() : usageSdk && createClaudeUsage({ open: () => openQuery(usageSdk) }), instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
   ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'],
   ...(values['update-turn-ms'] ? { updateTurnMs: Number(values['update-turn-ms']) } : {}) });
 try {
