@@ -600,3 +600,24 @@ dialog.connecting>button{margin-top:12px}
 @media (prefers-reduced-motion:reduce){.conn-hole{animation:none}}
 .remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #setRemoteAdd input{flex:1;min-width:0}
+
+/* Mission data tiles and links (M3): a script's JSON drawn as text. */
+.dtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;padding:0 8px 8px}
+.dtile{border:1px solid var(--border);border-radius:11px;padding:10px 12px;min-width:0}
+.dtile h3{margin:0 0 6px;font-size:11.5px;font-weight:600;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.04em}
+.tile-note{margin:0;font-size:12px;color:var(--muted-foreground)}
+.tile-stat{margin:0;display:flex;align-items:baseline;gap:6px}.tile-stat b{font-size:28px;font-weight:650;color:var(--foreground);font-variant-numeric:tabular-nums}.tile-stat span{font-size:12px;color:var(--muted-foreground)}
+.tile-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.tile-list li{display:grid;grid-template-columns:1fr auto;gap:0 8px;min-width:0}.tile-list li>:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--foreground)}
+.tile-list a{color:var(--primary);text-decoration:none}.tile-list a:hover{text-decoration:underline}
+.tile-list em{font-style:normal;font-size:10.5px;padding:0 6px;border-radius:999px;background:var(--accent);color:var(--foreground);align-self:center}
+.tile-list small{grid-column:1/-1;font-size:11px;color:var(--muted-foreground)}
+.tile-table{overflow:auto}.tile-table table{border-collapse:collapse;width:100%;font-size:12px}
+.tile-table th{text-align:left;font-weight:600;color:var(--muted-foreground);border-bottom:1px solid var(--border);padding:2px 8px 4px 0}.tile-table td{padding:3px 8px 3px 0;color:var(--foreground);font-variant-numeric:tabular-nums}
+.tile-rings{display:flex;flex-wrap:wrap;gap:10px}.tile-rings figure{margin:0;display:grid;justify-items:center;position:relative;width:64px}
+.tile-rings svg{width:56px;height:56px;transform:rotate(-90deg)}.tile-rings circle{fill:none;stroke:var(--border);stroke-width:3.2}.tile-rings circle+circle{stroke:var(--primary);stroke-linecap:round}
+.tile-rings b{position:absolute;top:19px;font-size:12px;font-variant-numeric:tabular-nums;color:var(--foreground)}.tile-rings figcaption{font-size:11px;color:var(--muted-foreground);text-align:center}
+.tile-printed{margin:6px 0 0;max-height:120px;overflow:auto;padding:6px 8px;border-radius:7px;background:var(--accent);color:var(--foreground);font-size:11px;white-space:pre-wrap;word-break:break-all}
+.tile-allow{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.tile-link{display:grid;align-content:center;gap:2px;border:1px solid var(--border);border-radius:11px;padding:10px 12px;color:var(--foreground);text-decoration:none;font-size:13px;min-width:0}
+.tile-link:hover{background:var(--accent)}.tile-link small{font-size:11px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis}

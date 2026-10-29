@@ -40,6 +40,9 @@ const sectionField = { type: 'string', description: 'A space section title. With
 const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty string removes it.' };
 const cardIdField = { type: 'string', description: 'Your name for the card, like status or todo: 1 to 64 of A-Z a-z 0-9 . _ -' };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
+// The section items an agent sets as a whole list: every SECTION list of records with an example except buttons, which
+// have their own tools. A new item type with fields and an example (M2, M3) joins this tool with nothing else to change.
+const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons');
 const TOOLS = [
   ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
@@ -65,6 +68,10 @@ const TOOLS = [
     + 'as name: use name as a space folders item\'s root, or as a section\'s notes. A folder holding the workspace, the home folder or P9\'s own files is refused.',
     input({ name: { type: 'string', description: 'The root\'s name: 1 to 64 of a-z 0-9 -, starting with a letter or digit, not already in settings.notes_roots.' },
       folder: { type: 'string', description: 'The folder, as an absolute path.' } }, ['name', 'folder'])],
+  ['set_section_items', 'Replace one kind of item in a space section with this list ([] removes them): ' + ITEM_KINDS.join(', ')
+    + '. describe_mission gives each kind\'s fields and an example. A data tile runs only after the user answers Allow on it in Mission.',
+    input({ title: { type: 'string', description: 'The section\'s title.' }, kind: { type: 'string', enum: ITEM_KINDS },
+      items: { type: 'array', items: { type: 'object' } }, hash: hashField }, ['title', 'kind', 'items'])],
   ['run_script', 'Run a Mission Control script or space button by ID, after the user allows it in this chat. Waits up to 45 s; follow a longer run with status.',
     input({ id: { type: 'string' }, args: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'The values for the script\'s args, in order.' } }, ['id'])],
   ['list_needs_you', 'The needs-you items waiting for the user, with each one\'s hash and whether it has an empty answer line.', input({})],
@@ -374,6 +381,23 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         const entry = { id: sectionId(record.title.trim(), new Set(sections.map((other) => other?.id))), ...record };
         sections.push(entry);
         return { changed: { action: 'added', kind: 'section', record: entry }, accepted: (all) => all.space.some((entry) => entry.title === title.trim()) };
+      });
+    },
+    set_section_items: ({ title, kind, items, hash }) => {
+      if (!string(title, 200) || !ITEM_KINDS.includes(kind) || !Array.isArray(items) || items.length > 64) {
+        return { error: 'request-refused', reason: 'title: a section title; kind: one of ' + ITEM_KINDS.join(', ') + '; items: a list of at most 64' };
+      }
+      // Each item is checked before anything is written, so a javascript: link or an unknown field is named, not dropped.
+      for (const [index, item] of items.entries()) {
+        const wrong = problem(item, SECTION[kind].fields, true);
+        if (wrong) return { error: 'invalid-item', kind, index, detail: wrong };
+      }
+      return edit('space', hash, (data) => {
+        const found = section(data, title);
+        if (found.error) return found;
+        if (items.length) found.entry[kind] = items; else delete found.entry[kind];
+        return { changed: { action: 'updated', kind, section: found.entry.title, items },
+          accepted: (all) => (all.space.find((entry) => entry.title === found.entry.title.trim())?.[kind]?.length ?? 0) === items.length };
       });
     },
     update_button: ({ id, section, ...rest }) => update('scripts', { key: id, section, ...rest }),

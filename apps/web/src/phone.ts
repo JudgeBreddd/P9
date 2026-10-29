@@ -7,6 +7,7 @@ import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
+import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
 import { FILE_PROTECTION_RISK } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
@@ -1135,10 +1136,13 @@ async function loadMission(cached = false) {
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; folders?: { id: string; title: string }[]; refs?: Ref[] }[]) {
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[] }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
+      // Data tiles (threat model row 70) run while their row is open; links are http(s) only (the daemon refused the rest).
+      const tiles = (space.data ?? []).map((tile) => row(escape(tile.title), `<div data-tile="${escape(tile.id)}">${tileHtml(null, escape)}</div>`));
+      const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape)}</p>`);
       // Folder lists (threat model row M2-a): the count fills when the window opens; each file opens read-only in its row.
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
         `<div data-folder="${escape(list.id)}"><p class="muted">Loading…</p></div>`));
@@ -1153,8 +1157,8 @@ async function loadMission(cached = false) {
           : `<button type="button" class="link" data-open-page="${escape(page.id)}" data-url="${escape(page.url)}">Open on the laptop</button>`, attrs);
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...lists, ...refs]);
-      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title),
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks, ...lists, ...refs]);
+      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
         ...(space.folders ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
@@ -1280,6 +1284,14 @@ async function loadFolders(box: HTMLElement) {
   }));
 }
 one('#mission').addEventListener('toggle', async (event) => {
+  const tile = (event.target as HTMLDetailsElement).open && (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-tile]');
+  if (tile && !tile.dataset.timer) {
+    tile.dataset.timer = String(setInterval(() => {
+      if (!tile.isConnected || !tile.closest('details')?.open || !tile.closest('dialog')?.open) { clearInterval(Number(tile.dataset.timer)); delete tile.dataset.timer; return; }
+      if (!document.hidden) void pullTile(tile);
+    }, 30000));
+    void pullTile(tile);
+  }
   const list = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > div[data-notes]');
   if (list && !list.dataset.loaded) {
     list.dataset.loaded = '1';
@@ -1295,6 +1307,19 @@ one('#mission').addEventListener('toggle', async (event) => {
   pre.dataset.loaded = '1';
   try { pre.textContent = (await request((pre.dataset.src ?? '/mission/hub/text') + '?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
 }, true);
+// A data tile's answer (threat model row 70), drawn as text by the same code as the desktop's.
+async function pullTile(tile: HTMLElement) {
+  const response = await fetch('/mission/data?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
+  if (response?.status === 401) return toLogin();
+  tile.innerHTML = tileHtml(response ? tileAnswer(response.status, await response.json().catch(() => ({}))) : { error: 'no connection' }, escape);
+}
+one('#mission').addEventListener('click', async (event) => {
+  const allow = (event.target as Element).closest<HTMLButtonElement>('[data-tile-allow]');
+  if (!allow) return;
+  const tile = allow.closest<HTMLElement>('[data-tile]')!;
+  const result = await mutate('/mission/data/allow', { id: tile.dataset.tile });
+  if (result.status === 200) await pullTile(tile); else tile.innerHTML = tileHtml(tileAnswer(result.status, result.body), escape);
+});
 async function follow(run: string, output: HTMLElement) {
   let from = 0;
   for (;;) {

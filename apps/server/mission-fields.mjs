@@ -86,6 +86,39 @@ export const FOLDER = {
   match: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n\0]/.test(value),
     doc: 'Only files holding a line that is exactly this text (spaces at either end ignored); the newest 200 files are checked.' },
 };
+// A data tile (M3, threat model row 70): a registry script or space button, by ID, that P9 runs on its own and draws.
+export const DATA_LIMITS = { everyMs: 30_000, timeoutMs: 10_000, bytes: 64 * 1024 };
+export const DATA = {
+  id,
+  title: { type: 'string', required: true, check: text, doc: 'The tile label.' },
+  script: { type: 'string', required: true, check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'The ID of a registry script or space button with no args, confirm, terminal or detach. It runs only after the user answers Allow on the tile, '
+      + 'only while Mission shows the tile, at most every 30 s, stopped at 10 s, 64 KiB of output read. It prints one JSON object: '
+      + '{"type":"stat","value":12,"label":"Inbox","unit":"notes"}, {"type":"list","rows":[{"title":"Note","subtitle":"2 h ago","link":"https://example.com","badge":"new"}]}, '
+      + '{"type":"table","columns":["Name","State"],"rows":[["web","up"]]} or {"type":"rings","rings":[{"label":"Disk","percent":42}]}. Anything else shows what it printed.' },
+};
+// A plain web link (M3): http and https only, so javascript:, file: and data: never open from a section.
+export const WEBLINK = {
+  id,
+  title: { type: 'string', required: true, check: text, doc: 'The link label.' },
+  url: { type: 'string', required: true, check: (value) => web(value) && value.length <= 2000, doc: 'An http:// or https:// address. Nothing else is accepted.' },
+};
+// What a data tile's script printed, checked against the four shapes: null when it fits, else what is wrong in plain words.
+const cell = (value) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
+const listOf = (value, max, check) => Array.isArray(value) && value.length <= max && value.every(check);
+const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+export function dataShape(value) {
+  if (!object(value)) return 'printed JSON that is not an object';
+  if (value.type === 'stat') return cell(value.value) && optional(value, 'label', text) && optional(value, 'unit', text) ? null
+    : 'printed a stat without a value (a number or text), or with a label or unit that is not text';
+  if (value.type === 'list') return listOf(value.rows, 200, (row) => object(row) && text(row.title) && optional(row, 'subtitle', text) && optional(row, 'badge', cell)
+    && optional(row, 'link', web)) ? null : 'printed a list whose rows are not each a title with an optional subtitle, badge and http(s) link (200 at most)';
+  if (value.type === 'table') return listOf(value.columns, 20, text) && listOf(value.rows, 200, (row) => listOf(row, 20, cell)) ? null
+    : 'printed a table without columns (text) and rows (lists of text or numbers)';
+  if (value.type === 'rings') return listOf(value.rings, 12, (ring) => object(ring) && text(ring.label) && typeof ring.percent === 'number' && ring.percent >= 0 && ring.percent <= 100)
+    ? null : 'printed rings that are not each a label with a percent from 0 to 100 (12 at most)';
+  return 'printed JSON whose type is not stat, list, table or rings';
+}
 // A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
 export const SECTION = {
@@ -105,6 +138,10 @@ export const SECTION = {
     example: [{ id: 'open-handoffs', title: 'Open handoffs', path: 'projects', pattern: 'HANDOFF.md', recursive: true, match: 'Status: open' }] },
   refs: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === 'string' && ID.test(item)),
     doc: 'IDs of registry scripts, apps or pages (or space buttons) shown in this section too, at most 64. An ID nothing has shows "not found".', example: ['disk-free', 'dashboard'] },
+  data: { type: 'array', check: Array.isArray, fields: DATA, doc: 'Data tiles: a script\'s JSON drawn as a number, list, table or rings (threat model row 70).',
+    example: [{ id: 'inbox-count', title: 'Inbox', script: 'count-inbox' }] },
+  links: { type: 'array', check: Array.isArray, fields: WEBLINK, doc: 'Web links, http and https only.',
+    example: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] },
 };
 // The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
 export const SPACE_FILE = 'mission-space.json';
@@ -180,7 +217,8 @@ export const SCHEMAS = {
       pages: list(jsonSchema(PAGE), 'Links.') } },
   space: { type: 'object', required: ['sections'], additionalProperties: false, description: 'The space: free-form sections. A malformed section, button or log view, '
     + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field is listed as invalid by name.',
-    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) }, folders: { items: jsonSchema(FOLDER, {}, true) } }, true), 'Sections in order.') } },
+    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) }, folders: { items: jsonSchema(FOLDER, {}, true) },
+      data: { items: jsonSchema(DATA, {}, true) }, links: { items: jsonSchema(WEBLINK, {}, true) } }, true), 'Sections in order.') } },
 };
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
@@ -191,7 +229,7 @@ export function describeMission() {
   return {
     about: 'Mission Control shows the space: one JSON file of sections in order. Each section has a title, optional text and icon, and items of the types below. '
       + 'Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
-      + 'Unknown fields and a second section with the same title or id are refused. A button runs only when the user clicks it.',
+      + 'Unknown fields and a second section with the same title or id are refused. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
     file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
     items, templates: TEMPLATES, schema: SCHEMAS.space,
   };

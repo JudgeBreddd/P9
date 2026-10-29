@@ -3,13 +3,13 @@
 import { spawn } from 'node:child_process';
 import { childEnv } from './child-env.mjs';
 import { stillAuthorized, captureAuthority } from './authority.mjs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { realpath, readdir as fsReaddir } from 'node:fs/promises';
+import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, RECORD, PAGE, SECTION, LOG, FOLDER, SETTINGS } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, DATA, WEBLINK, DATA_LIMITS, SETTINGS } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -95,9 +95,17 @@ export function parseSpace(text) {
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
+    // Data tiles and links (M3): a bad one is dropped and named, the rest of the section stays.
+    const items = { data: [], links: [] };
+    for (const [key, fields, what] of [['data', DATA, 'a data tile'], ['links', WEBLINK, 'a link']]) {
+      (section[key] ?? []).forEach((record, n) => { const detail = problem(record, fields);
+        for (const extra of unknownFields(record, fields, what)) result.invalid.push({ kind: 'space', index, [key]: n, reason: 'unknown-field', detail: extra });
+        if (detail) result.invalid.push({ kind: 'space', index, [key]: n, reason: 'malformed-record', detail });
+        else items[key].push(Object.fromEntries(Object.keys(fields).filter((field) => field in record).map((field) => [field, record[field]]))); });
+    }
     (section.folders ?? []).forEach((record, folder) => { const detail = problem(record, FOLDER, true);
       if (detail) result.invalid.push({ kind: 'space', index, folder, reason: 'malformed-record', detail }); else folders.push({ ...record }); });
-    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
@@ -133,9 +141,10 @@ export const spaceAt = (workspace, file) => (path.isAbsolute(file) ? [path.dirna
 export function combine(reg, space) {
   const invalid = [...reg.invalid, ...space.invalid];
   const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
-  const logs = new Set(unique(space.sections.flatMap((section) => section.logs), 'space', invalid));
+  const logs = new Set(unique(space.sections.flatMap((section) => [...section.logs, ...(section.data ?? [])]), 'space', invalid));
   const folders = new Set(unique(space.sections.flatMap((section) => section.folders), 'space', invalid));
-  const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)), folders: section.folders.filter((folder) => folders.has(folder)) }));
+  const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)), folders: section.folders.filter((folder) => folders.has(folder)),
+    ...(section.data ? { data: section.data.filter((tile) => logs.has(tile)) } : {}) }));
   return { ...reg, scripts, invalid, space: sections };
 }
 
@@ -189,7 +198,8 @@ export async function rootRefused(root, { workspace, recovery, also = [] }) {
   return [workspace, recovery, home, ...also].some((guarded) => inside(root, guarded)) || [recovery, ...also].some((folder) => inside(folder, root));
 }
 
-export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle }) {
+// allowed: the file holding the user's Allow answers for data tiles (threat model row 70), beside settings.json; none keeps them in memory.
+export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed }) {
   // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
   const setSettings = (next) => { settings = next; plansCache.at = 0; };
   const runs = new Map();
@@ -264,7 +274,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}) })),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}) })),
       queue: await queue(), primary: await primary() };
   }
   // A section's reference to a script, app or page by ID (M2): the tile names what it found, or says it is missing.
@@ -600,5 +611,81 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
 
   // What the tile icons are made from (icons.mjs): the links, the apps' programs and the sections, as parsed.
   const iconSources = async () => { const reg = await registry(); return { pages: reg.pages, apps: reg.apps, sections: reg.space }; };
-  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead };
+  // Data tiles (threat model row 70). A tile runs the script it names only after the user's Allow, which is kept with a hash of
+  // the exact argv and folder: a tile pointed somewhere else, or a script whose command changed, asks again.
+  let answers = allowed ? null : {};
+  let answerSaves = Promise.resolve();
+  const answered = async () => (answers ??= await fsReadFile(allowed, 'utf8').then(JSON.parse).catch(() => ({})));
+  async function tile(id) {
+    if (typeof id !== 'string' || !ID.test(id)) return { status: 400, error: 'request-refused' };
+    const reg = await registry();
+    const item = reg.space.flatMap((section) => section.data ?? []).find((record) => record.id === id);
+    if (!item) return { status: 404, error: 'unknown-id' };
+    const script = reg.scripts.find((record) => record.id === item.script);
+    if (!script) return { status: 404, error: 'unknown-script', detail: 'No registry script or space button has the ID ' + item.script + '.' };
+    if (script.args?.length || script.confirm || script.terminal || script.detach) {
+      return { status: 409, error: 'not-a-data-script', detail: script.title + ' takes arguments or is marked confirm, terminal or detach, so a tile never runs it.' };
+    }
+    const target = await resolve('scripts', script.id, {}, []);
+    if (target.error) return target;
+    const key = createHash('sha256').update(JSON.stringify([id, target.argv, target.cwd])).digest('hex');
+    return { ...target, script, key };
+  }
+  async function allow(body) {
+    if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'id') return { status: 400, error: 'request-refused' };
+    const target = await tile(body.id);
+    if (target.error) return target;
+    const turn = answerSaves.then(async () => {
+      const next = { ...(await answered()), [body.id]: target.key };
+      // Owner-only, written whole and renamed into place: a crash leaves the old answers, never half a file.
+      if (allowed) { await fsWriteFile(allowed + '.tmp', JSON.stringify(next, null, 2) + '\n', { mode: 0o600 }); await fsRename(allowed + '.tmp', allowed); }
+      answers = next;
+    });
+    answerSaves = turn.catch(() => {});
+    await turn;
+    return { status: 200, allowed: body.id };
+  }
+  // The last run per tile: a second ask within 30 s, or while it runs, gets the same answer, so a tile never runs more often.
+  const tileRuns = new Map();
+  async function data(id) {
+    const target = await tile(id);
+    if (target.error) return target;
+    if ((await answered())[id] !== target.key) return { status: 409, error: 'allow-required', script: target.script.title };
+    const last = tileRuns.get(id);
+    if (last?.key === target.key && Date.now() - last.at < DATA_LIMITS.everyMs) return { status: 200, ...(await last.result) };
+    const result = runTile(target);
+    tileRuns.set(id, { key: target.key, at: Date.now(), result });
+    return { status: 200, ...(await result) };
+  }
+  // One run: stdout only, 64 KiB at most, the whole tree ended at 10 s. Every outcome is an answer the tile draws as text.
+  async function runTile(target) {
+    const release = lifecycle?.begin();
+    if (lifecycle && !release) return { why: 'did not run: P9 is stopping' };
+    try {
+      let proc;
+      try { proc = launchTree(target.argv, target.cwd, { instance, prefix: 'p9-run', scope: true, stdio: ['ignore', 'pipe', 'ignore'] }); }
+      catch (error) { return { why: 'could not start (' + error.message + ')' }; }
+      const { child } = proc;
+      let out = Buffer.alloc(0), over = false, late = false;
+      const timer = setTimeout(() => { late = true; endTree(proc).catch(() => {}); }, DATA_LIMITS.timeoutMs);
+      child.stdout.on('data', (chunk) => {
+        if (over) return;
+        out = Buffer.concat([out, chunk]);
+        if (out.length > DATA_LIMITS.bytes) { over = true; out = out.subarray(0, DATA_LIMITS.bytes); endTree(proc).catch(() => {}); }
+      });
+      const code = await new Promise((done) => { child.once('error', () => done(127)); child.once('close', (exit, signal) => done(exit ?? signal)); });
+      clearTimeout(timer);
+      const printed = out.toString('utf8');
+      const head = printed.slice(0, 2000);
+      if (late) return { why: 'took longer than 10 s and was stopped', printed: head };
+      if (over) return { why: 'printed more than 64 KiB and was stopped', printed: head };
+      if (code !== 0) return { why: 'ended with code ' + code, printed: head };
+      let value;
+      try { value = JSON.parse(printed); } catch { return { why: 'printed something that is not JSON', printed: head }; }
+      const wrong = dataShape(value);
+      return wrong ? { why: wrong, printed: head } : { shape: value };
+    } finally { release?.(); }
+  }
+
+  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, data, allow };
 }
