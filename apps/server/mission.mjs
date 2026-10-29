@@ -82,9 +82,9 @@ function checklistParse(content, item) {
   const rows = [];
   let under = !item.heading;
   for (let line = 0; item.marks && line < pieces.length; line += 2) {
-    const heading = HEADING.exec(pieces[line]);
+    const heading = pieces[line].match(HEADING);
     if (heading && item.heading) { under = heading[1] === item.heading.trim(); continue; }
-    const row = ROW.exec(pieces[line]);
+    const row = pieces[line].match(ROW);
     if (under && row && MARK.test(row[2])) rows.push({ n: rows.length, mark: row[2], text: row[4], line });
   }
   return { review, rows };
@@ -98,7 +98,7 @@ export function oneLineChange(before, after, kind) {
   if (changed.length !== 1 || changed[0] % 2) return false;
   const [x, y] = [a[changed[0]], b[changed[0]]];
   if (kind === 'review') return REVIEW.test(x) && y.startsWith('review: ') && /^[\w-]{1,32}$/.test(y.slice(8));
-  const m = ROW.exec(x), n = ROW.exec(y);
+  const m = x.match(ROW), n = y.match(ROW);
   return Boolean(kind === 'mark' && m && n && m[1] === n[1] && m[3] === n[3] && m[4] === n[4]);
 }
 
