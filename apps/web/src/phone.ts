@@ -8,6 +8,7 @@ import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
+import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { FILE_PROTECTION_RISK } from '../../../packages/protocol/index.mjs';
 import { DUWOP } from './theme-picker';
 import { onLookChange } from './lib/theme';
@@ -1023,7 +1024,7 @@ type Waiting = { name: string; title: string; project: string; age: string; hash
 type Hub = { notices: { kind: string; text: string }[] | null; incidents: { host: string; check: string; name: string; resolved: boolean; count: number; failed: string[] }[];
   inbox: { branch: string; decision: string; pages: string[] }[]; logs: { host: string; name: string; age_min: number; last: string }[]; handoffs: { project: string; age_days: number }[];
   audit: { run?: string; review?: string; ticked?: number; changes?: number; contradiction_count?: number | null }; solo: { name: string; bluf: string }; ideas: number; needs_done: number };
-let mission: { queue: Waiting[]; scripts: Item[] } = { queue: [], scripts: [] };
+let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean } = { queue: [], scripts: [] };
 const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
 // its in a window i can open"). Callers escape title and line.
@@ -1168,7 +1169,11 @@ async function loadMission(cached = false) {
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
     // Item 14: a laptop is updating this server's P9; it restarts once no chat is mid-turn (apps/server/update.mjs).
-    keepOpen(() => { one('#mission').innerHTML = (data.update ? `<article class="card warn" data-update><h2>P9 is updating to ${escape(data.update.version)}</h2><p>${data.update.phase === 'waiting-turns' ? `It restarts when ${data.update.turns} chat${data.update.turns === 1 ? ' finishes its' : 's finish their'} turn. New messages wait until it is back.` : data.update.phase === 'restarting' ? 'It is restarting now; this page reconnects by itself.' : 'Building the new version beside the running one. Chats keep working.'}</p></article>` : '') + (data.restart?.needed ?`<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
+    // A fresh profile shows only the onboarding card (M4, threat model row 72).
+    if (data.empty) {
+      one('#mission').innerHTML = onboardCard({ templates: guide?.templates ?? [], spaces: data.spaces ?? [], current: data.spaceName ?? null }, escape);
+      if (!guide) void loadGuide();
+    } else keepOpen(() => { one('#mission').innerHTML = spacePicker(data.spaces ?? [], data.spaceName ?? null, escape) + (data.update ? `<article class="card warn" data-update><h2>P9 is updating to ${escape(data.update.version)}</h2><p>${data.update.phase === 'waiting-turns' ? `It restarts when ${data.update.turns} chat${data.update.turns === 1 ? ' finishes its' : 's finish their'} turn. New messages wait until it is back.` : data.update.phase === 'restarting' ? 'It is restarting now; this page reconnects by itself.' : 'Building the new version beside the running one. Chats keep working.'}</p></article>` : '') + (data.restart?.needed ?`<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
       + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
@@ -1313,6 +1318,35 @@ async function pullTile(tile: HTMLElement) {
   if (response?.status === 401) return toLogin();
   tile.innerHTML = tileHtml(response ? tileAnswer(response.status, await response.json().catch(() => ({}))) : { error: 'no connection' }, escape);
 }
+// Onboarding (M4): the shipped guide and templates, fetched once. The phone has no edit form, so Build it yourself is the guide.
+let guide: { guide: string; templates: { name: string; title: string; about: string }[] } | null = null;
+const say = (text: string) => { const note = document.querySelector('#mission [data-onboard-note]'); if (note) note.textContent = text; };
+async function loadGuide() {
+  try { guide = await request('/mission/guide'); } catch { return; }
+  if (mission?.empty) void loadMission(true);
+}
+one('#mission').addEventListener('click', async (event) => {
+  const target = event.target as Element, build = target.closest<HTMLButtonElement>('[data-build]'), template = target.closest<HTMLButtonElement>('[data-template]');
+  if (target.closest('[data-yourself]')) openSheet('Build it yourself', `<div class="notes-md" data-guide>${guide ? md.parse(guide.guide) : 'Loading the guide…'}</div>`);
+  if (build) {
+    build.disabled = true;
+    const result = await mutate('/mission/build', { provider: build.dataset.build });
+    build.disabled = false;
+    if (result.status === 201) openChat(result.body.conversation); else say(build.textContent + ': ' + (result.body?.error ?? result.status));
+  }
+  if (template) {
+    const result = await mutate('/mission/template', { name: template.dataset.template, ...(template.dataset.armed ? { confirm: true } : {}) });
+    if (result.status === 403 && !template.dataset.armed) { template.dataset.armed = '1'; template.querySelector('span')!.textContent = 'File protection is on. Tap again to add this template.'; return; }
+    say(templateWords(result.status, result.body));
+    if (result.status === 201) void loadMission();
+  }
+});
+one('#mission').addEventListener('change', async (event) => {
+  const pick = (event.target as Element).closest<HTMLSelectElement>('[data-space-pick]');
+  if (!pick) return;
+  const result = await mutate('/mission/space', { name: pick.value || null });
+  void loadMission();
+});
 one('#mission').addEventListener('click', async (event) => {
   const allow = (event.target as Element).closest<HTMLButtonElement>('[data-tile-allow]');
   if (!allow) return;

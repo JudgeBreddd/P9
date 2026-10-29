@@ -548,6 +548,11 @@ export async function createDesktop({ state, open } = {}) {
     hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
     hubDecide: body => ['POST', '/mission/hub/decide', body],
     fix: ({ host, name }) => [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
+    // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
+    guide: () => ['GET', '/mission/guide'],
+    template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
+    build: ({ provider }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider }],
+    space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
     // Sprint tracker: the connected machine's status file, and a terminal attached to its sprint tmux session (no body).
     sprint: () => ['GET', '/mission/sprint'],
     sprintTmux: () => ['POST', '/mission/sprint/tmux', {}],

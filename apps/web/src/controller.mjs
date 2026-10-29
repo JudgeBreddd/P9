@@ -10,6 +10,7 @@ import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-fi
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
 import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
+import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
@@ -1111,6 +1112,7 @@ function applyOverview(o) {
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
   M.space = o.space || [];
+  live.empty = Boolean(o.empty); live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null;
   for (const s of M.space) M.scripts[s.title] ||= [];
   applyQueue(o);
 }
@@ -1256,9 +1258,51 @@ const missionIntro = () => '<div class="sm" data-mission-intro role="note"><h4>W
   + '<p class="muted">It reads three things from your workspace: a main project file, a file of buttons, apps and pages, and a folder with one .md file for each item waiting on you. Set up lets you point P9 at the ones you already have, or makes empty ones to start from.</p>'
   + '<div class="set-row">' + (window.p9?.chat ? '<button data-slot="button" data-variant="default" data-mission-setup>Set up Mission Control</button>' : '')
   + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
+// M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
+let guide = null;
+async function loadGuide() {
+  const r = await window.p9.mission('guide', {});
+  if (r.status !== 200) return;
+  guide = r.body;
+  if (live.empty) renderMission();
+  if (mdl.open && S.modal?.kind === 'guide') renderModal();
+}
+function bindSpacePick(root) {
+  const pick = root.querySelector('[data-space-pick]');
+  if (pick) pick.onchange = async () => {
+    const r = await window.p9.mission('space', { name: pick.value || null });
+    if (r.status !== 200) toast({ kind: 'not saved', txt: 'Space: ' + (r.body?.error || r.status), level: 'bad' }, true);
+    refreshMission();
+  };
+}
+function bindOnboard(root) {
+  root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const r = await window.p9.mission('build', { provider: b.dataset.build });
+    b.disabled = false;
+    if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation });
+    else toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  });
+  root.querySelectorAll('[data-yourself]').forEach(b => b.onclick = () => openModal({ kind: 'guide' }));
+  // File protection answers the first click 403 and arms the tile; the second click sends the user's confirmation, as the edit form does.
+  root.querySelectorAll('[data-template]').forEach(b => b.onclick = async () => {
+    const r = await window.p9.mission('template', { name: b.dataset.template, ...(b.dataset.armed ? { confirm: true } : {}) });
+    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; b.querySelector('span').textContent = 'File protection is on. Click again to add this template.'; return; }
+    toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: templateWords(r.status, r.body), level: r.status === 201 ? 'ok' : 'bad' }, true);
+    if (r.status === 201) refreshMission();
+  });
+  bindSpacePick(root);
+}
 function renderMission() {
+  // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet.
+  if (live.empty && !sampleView) {
+    setHTML($('#fMission'), onboardCard({ templates: guide?.templates, spaces: live.spaces, current: live.spaceName }, esc));
+    bindOnboard($('#fMission'));
+    if (!guide) loadGuide();
+    return;
+  }
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}${spacePicker(live.spaces || [], live.spaceName, esc)}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
@@ -1270,6 +1314,7 @@ function renderMission() {
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
+  bindSpacePick($('#fMission'));
   $('#fMission').querySelectorAll('[data-mission-setup]').forEach(b => b.onclick = () => welcome('mission'));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
@@ -1565,6 +1610,13 @@ function missionModal(m, body, row) {
       toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: r.status === 201 ? r.body.path : 'New idea: ' + (r.body?.error || r.status), level: r.status === 201 ? 'ok' : 'bad' }, true);
       if (r.status === 201) { closeModal(); loadHub(); }
     };
+  } else if (m.kind === 'guide') {
+    // "Build it yourself" (M4): the shipped guide, and the way to the edit form.
+    $('#mdlT').textContent = 'Build it yourself';
+    body.innerHTML = `<div class="msg agent notes-md" data-guide>${guide ? md.parse(guide.guide) : '<p class="muted">Loading the guide…</p>'}</div>`;
+    if (!guide) loadGuide();
+    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-guide-edit>Open the edit form</button>';
+    $('#mdlFoot [data-guide-edit]').onclick = () => openModal({ kind: 'medit', items: editItems(M) });
   } else if (m.kind === 'medit') {
     $('#mdlT').textContent = 'Edit names and icons';
     editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => M.art, esc, toast, again: () => S.modal === m && renderModal(),

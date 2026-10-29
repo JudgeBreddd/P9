@@ -621,3 +621,15 @@ dialog.connecting>button{margin-top:12px}
 .tile-allow{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
 .tile-link{display:grid;align-content:center;gap:2px;border:1px solid var(--border);border-radius:11px;padding:10px 12px;color:var(--foreground);text-decoration:none;font-size:13px;min-width:0}
 .tile-link:hover{background:var(--accent)}.tile-link small{font-size:11px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis}
+/* M4 onboarding card on an empty Mission, and the space picker (onboarding.mjs) */
+.onboard{max-width:760px;margin:24px auto;padding:22px 24px;display:grid;gap:12px;border:1px solid var(--border);border-radius:14px;background:color-mix(in oklch,var(--card) 70%,transparent);color:var(--foreground)}
+.onboard h3{margin:0;font-size:20px;font-weight:600}.onboard h4{margin:8px 0 0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}
+.onboard p{margin:0;line-height:1.5}.onboard .muted{color:var(--muted-foreground)}
+.onboard-go{display:flex;flex-wrap:wrap;gap:10px}
+.onboard-tpls{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
+.onboard-tpl:hover,.onboard-tpl:focus-visible{border-color:var(--primary)}.onboard-tpl span{font-size:12px;color:var(--muted-foreground);line-height:1.4}
+.onboard-tpl[data-armed]{border-color:var(--primary)}
+.space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
+/* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */
+.tiles>.space-pick{grid-column:span 2;align-self:center;padding:0 4px}.tiles>.space-pick select{flex:1;min-width:0}

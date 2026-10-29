@@ -1,0 +1,32 @@
+{
+  "title": "ICM workspace",
+  "about": "For a workspace laid out by the Interpretable Context Methodology: today, projects, wiki and upkeep.",
+  "space": {
+    "sections": [
+      {
+        "id": "today",
+        "title": "Today",
+        "icon": "🎯",
+        "text": "What needs you now. Add a button for each daily chore and a data tile for the count you check first."
+      },
+      {
+        "id": "projects",
+        "title": "Projects",
+        "icon": "📁",
+        "text": "Your active projects. A folders item lists the CONTEXT.md and handoff files in a project folder."
+      },
+      {
+        "id": "wiki",
+        "title": "Wiki and notes",
+        "icon": "📚",
+        "text": "Notes you read often. Name the notes folder in settings notes_roots, then show it here."
+      },
+      {
+        "id": "upkeep",
+        "title": "Upkeep",
+        "icon": "🧹",
+        "text": "Workspace chores such as audits, backups and syncs, each a button that runs a registry script."
+      }
+    ]
+  }
+}

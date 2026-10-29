@@ -14,8 +14,9 @@ import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS
 import { readFile as readWorkspaceFile, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
-import { createMission, parseSettings, rootRefused, inside } from './mission.mjs';
-import { SETTINGS } from './mission-fields.mjs';
+import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
+import { SETTINGS, SPACES_DIR, TEMPLATES } from './mission-fields.mjs';
+import { GUIDE, BUILD_PROMPT } from './templates/guide.mjs';
 import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
@@ -109,7 +110,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const lifecycle = createLifecycle();
   // The user's Allow answers for data tiles (threat model row 70): P9's own file beside settings.json, never in the space.
   const allowed = settingsFile ? path.join(path.dirname(settingsFile), 'mission-allowed.json') : undefined;
-  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed });
+  // Scratch spaces (threat model row 71): <settings folder>/spaces/<name>.json.
+  const drafts = settingsFile ? path.join(path.dirname(settingsFile), SPACES_DIR) : undefined;
+  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts });
   let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
@@ -295,6 +298,30 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const sent = await chat.prompt(made.conversation, { text: `This is a doctor incident from ${host}. Find the cause and fix it, then run `
       + `doctor.sh --fix (the workspace's _system/scripts) to confirm it passes.${where}\n\n${incident.text.slice(-90_000)}` });
     return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
+  });
+  // Onboarding (M4, threat model row 72): the shipped guide and templates, a template into an empty space, and a chat whose
+  // first message is the shipped guide. The request names only the provider; nothing from it reaches the chat's text.
+  api.get('/mission/guide', (c) => c.json({ guide: GUIDE, templates: TEMPLATES.map(({ name, title, about }) => ({ name, title, about })) }));
+  api.post('/mission/template', async (c) => {
+    const { name, space, confirm, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || typeof name !== 'string' || (confirm !== undefined && typeof confirm !== 'boolean')) return c.json({ error: 'request-refused' }, 400);
+    const { error, ...result } = await mcp.install(name, space, confirm);
+    return c.json(error ? { error, ...result } : result, !error ? 201 : ({ 'space-not-empty': 409, 'registry-read-only': 403, 'unknown-template': 404 })[error] ?? 400);
+  });
+  api.post('/mission/build', async (c) => {
+    const { provider, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider)) return reply(c, { status: 400, error: 'request-refused' });
+    const made = await chat.create({ provider, title: 'Build Mission Control' });
+    const sent = await chat.prompt(made.conversation, { text: BUILD_PROMPT });
+    return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
+  });
+  // The space picker (threat model row 71): Main (null) or a scratch space that is there, recorded as settings.space_name.
+  api.post('/mission/space', async (c) => {
+    const { name, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || (name !== null && !draftAt(drafts, name))) return reply(c, { status: 400, error: 'request-refused' });
+    if (name !== null && !(await draftNames(drafts)).includes(name)) return reply(c, { status: 404, error: 'unknown-space' });
+    const done = await changeSettings(({ space_name: was, ...now }) => (name === null ? now : { ...now, space_name: name }));
+    return reply(c, done.error ? { status: 409, ...done } : { status: 200, spaceName: name });
   });
   // New idea: one new file in _ideas/ (or _ideas/needs-done/), named as workspace-hub's new_idea names it; never replaces one.
   api.post('/mission/idea', async (c) => {
@@ -666,7 +693,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (!settings) {
       settings = disk.parsed ?? paths;
       settingsInvalid = false;
-      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed });
+      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts });
       hub = createHub({ workspace, settings });
     }
     return c.json({ created, settings: true }, 201);
