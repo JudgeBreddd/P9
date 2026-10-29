@@ -1525,7 +1525,7 @@ function missionModal(m, body, row) {
     m.tiles ||= {}; m.cardHtml ||= {};
     const runs = [...(sp?.data || []), ...(sp?.cards || [])];
     const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
-    if (runs.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
+    if (runs.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
     // ponytail: the modal draws whole, so a card's frame is made again on each draw (a tile's answer, a checklist press) and
     // gets the last JSON again; a card keeps no state of its own across draws.
     for (const c of sp?.cards || []) {

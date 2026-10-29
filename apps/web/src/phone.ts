@@ -1145,7 +1145,7 @@ async function loadMission(cached = false) {
       // Data tiles (threat model row 70) run while their row is open; links are http(s) only (the daemon refused the rest).
       const tiles = (space.data ?? []).map((tile) => row(escape(tile.title), `<div data-tile="${escape(tile.id)}">${tileHtml(null, escape)}</div>`));
       // Cards (threat model row M5): the card's HTML in the artifact frame, its script's JSON posted in as data (feedCard).
-      const cards = (space.cards ?? []).map((card) => row(escape(card.title), `<div data-tile="${escape(card.id)}" data-card="${escape(card.title)}"><div class="card-frame"></div><div class="card-note">${tileHtml(null, escape)}</div></div>`));
+      const cards = (space.cards ?? []).map((card) => row(escape(card.title), `<div data-tile="${escape(card.id)}" data-card="${escape(card.title)}"><div class="card-frame"></div><div class="card-note" role="status">${tileHtml(null, escape)}</div></div>`));
       const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape)}</p>`);
       // Folder lists (threat model row M2-a): the count fills when the window opens; each file opens read-only in its row.
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,

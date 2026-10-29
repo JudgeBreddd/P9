@@ -339,7 +339,7 @@ test('M1 describe_mission: a tools-only client gets the schema, an example of ev
   const { isError, ...told } = await tool('describe_mission');
   assert.equal(isError, false);
   assert.ok(told.schema.properties.sections.items.properties.buttons);
-  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes', 'folders', 'refs', 'data', 'checklists', 'links']);
+  assert.deepEqual(told.items.map((entry) => entry.item), ['buttons', 'logs', 'notes', 'folders', 'refs', 'data', 'cards', 'checklists', 'links']);
   for (const entry of told.items) assert.ok(entry.example[entry.item] !== undefined && entry.about, entry.item + ' has an example');
   assert.ok(told.templates.some((template) => template.name === 'blank'));
   // Every example is a section the parser keeps whole.
