@@ -66,12 +66,15 @@ test('live Claude usage: a hidden desktop window stops reading /usage, so the da
   await app.evaluate(({ ipcMain }) => { globalThis.usageReads = 0; ipcMain.removeHandler('p9:usage');
     ipcMain.handle('p9:usage', () => { globalThis.usageReads++; return { status: 503, body: { state: 'unavailable' } }; }); });
   const reads = () => app.evaluate(() => globalThis.usageReads);
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
-  await until(() => page.evaluate(() => document.hidden), 'the page knows it is hidden', 5000);
+  // The container's window manager never tells a hidden Electron window it is hidden, so the page is told directly: what
+  // Chromium reports when the window is minimized or hidden on a real desktop.
+  const hidden = (yes) => page.evaluate((h) => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+    document.dispatchEvent(new Event('visibilitychange')); }, yes);
+  await hidden(true);
   const before = await reads();
   await new Promise((resolve) => setTimeout(resolve, 65000)); // longer than one 60 s poll
   assert.equal(await reads(), before, 'no usage read while the window is hidden');
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
+  await hidden(false);
   await until(async () => await reads() > before, 'a usage read once the window is shown', 5000);
 });
 
