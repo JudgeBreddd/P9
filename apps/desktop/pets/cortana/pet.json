@@ -1,0 +1,6 @@
+{
+  "id": "cortana",
+  "displayName": "Cortana",
+  "description": "Your chibi AI companion. Types on a floating holographic keyboard while working.",
+  "spritesheetPath": "spritesheet.webp"
+}

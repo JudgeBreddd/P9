@@ -43,9 +43,9 @@ const ICON = { folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a
   stop: svg('<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>'), down: svg('<path d="M12 5v14M5 12l7 7 7-7"/>') };
 type BarAction = { id?: string; label: string; icon: string; attrs?: string };
 type BarOptions = { title: string; sub?: string; subId?: string; back?: { label: string; to: string }; acts?: BarAction[] };
-// One top bar for every screen: 44 px (plus the safe area), the title left, the sync dot, at most a few icon actions.
-// Callers pass trusted strings; text from the daemon goes through escape() first.
-const topBar = (o: BarOptions) => (o.back ? `<button type="button" class="back" data-back="${o.back.to}" aria-label="Back to ${o.back.label}">${ICON.back}${o.back.label}</button>` : '')
+// One top bar for every screen: 44 px (plus the safe area), the P9 mark (Back takes its place), the title, the sync dot,
+// at most a few icon actions. Callers pass trusted strings; text from the daemon goes through escape() first.
+const topBar = (o: BarOptions) => (o.back ? `<button type="button" class="back" data-back="${o.back.to}" aria-label="Back to ${o.back.label}">${ICON.back}${o.back.label}</button>` : '<img class="mark" src="/p9-mark.png" alt="" width="20" height="20">')
   + `<div class="title"><h1>${o.title}</h1>${o.sub !== undefined || o.subId ? `<small${o.subId ? ` id="${o.subId}"` : ''}>${o.sub ?? ''}</small>` : ''}</div><span class="sync" role="img" aria-label="Live"></span>`
   + (o.acts ?? []).map((a) => `<button type="button"${a.id ? ` id="${a.id}"` : ''} aria-label="${a.label}"${a.attrs ? ' ' + a.attrs : ''}>${a.icon}</button>`).join('');
 const mountBar = (name: string, o: BarOptions) => { one(`[data-bar="${name}"]`).innerHTML = topBar(o); };
