@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, DATA, WEBLINK, DATA_LIMITS, SETTINGS } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, DATA, WEBLINK, DATA_LIMITS, SETTINGS, spaceName } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -135,6 +135,20 @@ export function withIds(sections) {
 // Where the space file is read and written: a workspace path under the workspace, or the absolute mission-space.json
 // (threat model row 69) under its own folder, through the same no-symlink walk.
 export const spaceAt = (workspace, file) => (path.isAbsolute(file) ? [path.dirname(file), path.basename(file)] : [workspace, file]);
+// A scratch space's file (threat model row 71): drafts is <settings folder>/spaces. The name is checked before the join, and the
+// file must sit directly in drafts; read and saved through spaceAt, whose walk refuses a link at the folder or the file. null: refused.
+export function draftAt(drafts, name) {
+  if (!drafts || !spaceName(name)) return null;
+  const file = path.join(drafts, name + '.json');
+  return path.dirname(file) === drafts ? file : null;
+}
+// The scratch spaces there are, by name; a file whose name fails the rule is not one.
+export async function draftNames(drafts) {
+  if (!drafts) return [];
+  try { return (await fsReaddir(drafts, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith('.json') && spaceName(entry.name.slice(0, -5)))
+    .map((entry) => entry.name.slice(0, -5)).sort(); }
+  catch { return []; }
+}
 
 // The registry plus the space: a space button joins the registry's scripts, so run() finds it by ID like any script.
 // Exported so the P9 MCP server's validate tools merge exactly as Mission Control does.
@@ -199,7 +213,7 @@ export async function rootRefused(root, { workspace, recovery, also = [] }) {
 }
 
 // allowed: the file holding the user's Allow answers for data tiles (threat model row 70), beside settings.json; none keeps them in memory.
-export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed }) {
+export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed, drafts }) {
   // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
   const setSettings = (next) => { settings = next; plansCache.at = 0; };
   const runs = new Map();
@@ -238,8 +252,10 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!settings) throw new Error('settings-missing');
     const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file))).content, settings.page_schemes);
     let space = { sections: [], invalid: [] };
-    if (settings.space) {
-      try { space = parseSpace((await readFile(...spaceAt(workspace, settings.space))).content); }
+    // The space picker's scratch space (settings.space_name) is shown instead of the main one; the main file is not read then.
+    const file = settings.space_name ? draftAt(drafts, settings.space_name) : settings.space;
+    if (file || settings.space_name) {
+      try { space = parseSpace((await readFile(...spaceAt(workspace, file))).content); }
       catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
     }
     const combined = combine(reg, space);
@@ -269,14 +285,16 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     return { name: match[1].trim(), path: directory, status: status.slice(0, 240) };
   }
   async function overview() {
-    const reg = await registry();
+    const reg = await registry(), waiting = await queue();
     const strip = ({ id, title, icon, picture, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     return { waiting: settings.waiting, scripts: reg.scripts.map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
       space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
         ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}) })),
-      queue: await queue(), primary: await primary() };
+      queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
+      // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
+      empty: !settings.space_name && !settings.hub && !reg.space.length && !reg.scripts.length && !reg.apps.length && !reg.pages.length && !waiting.length };
   }
   // A section's reference to a script, app or page by ID (M2): the tile names what it found, or says it is missing.
   function reference(reg, id) {

@@ -1,0 +1,33 @@
+{
+  "title": "Obsidian vault",
+  "about": "For notes kept in an Obsidian vault: the vault, daily notes and an inbox.",
+  "space": {
+    "sections": [
+      {
+        "id": "vault",
+        "title": "Vault",
+        "icon": "🗃️",
+        "text": "Name the vault folder in settings notes_roots, then show its notes here.",
+        "links": [
+          {
+            "id": "obsidian-help",
+            "title": "Obsidian help",
+            "url": "https://help.obsidian.md"
+          }
+        ]
+      },
+      {
+        "id": "daily",
+        "title": "Daily notes",
+        "icon": "📅",
+        "text": "Today's note and the last few days. A folders item lists the daily notes folder."
+      },
+      {
+        "id": "inbox",
+        "title": "Inbox",
+        "icon": "📥",
+        "text": "Notes waiting to be filed. A data tile can count them for you."
+      }
+    ]
+  }
+}

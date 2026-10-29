@@ -1,0 +1,13 @@
+{
+  "title": "Blank",
+  "about": "One empty section to start from.",
+  "space": {
+    "sections": [
+      {
+        "id": "start",
+        "title": "Start here",
+        "text": "Rename this section with Edit, then add buttons, tiles and links, or ask an agent to."
+      }
+    ]
+  }
+}

@@ -1,6 +1,10 @@
 // What Mission Control's files may hold, field by field. mission.mjs's parsers check every record against these tables,
 // and the P9 MCP server publishes them as JSON Schema with the docs, so what an agent reads is what the parser accepts.
 import path from 'node:path';
+import icm from './templates/icm.json' with { type: 'json' };
+import obsidian from './templates/obsidian.json' with { type: 'json' };
+import homelab from './templates/homelab.json' with { type: 'json' };
+import blank from './templates/blank.json' with { type: 'json' };
 
 export const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export function relativePath(value) {
@@ -145,6 +149,11 @@ export const SECTION = {
 };
 // The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
 export const SPACE_FILE = 'mission-space.json';
+// A scratch space's name (threat model row 71) becomes <settings folder>/spaces/<name>.json, so it is checked before any
+// path is built: 1 to 32 of a-z 0-9 -, starting with a letter or digit, and never a Windows device name.
+export const SPACES_DIR = 'spaces';
+export const spaceName = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(value) && !/^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/.test(value);
+export const SPACE_NAME_RULE = 'a scratch space name: 1 to 32 of a-z 0-9 -, starting with a letter or digit';
 export const SETTINGS = {
   primary: { ...relative('The workspace file naming the main project ("**Main project: Name** (`folder/`").'), required: true },
   registry: { ...relative('The registry JSON file (scripts, apps, pages).'), required: true },
@@ -154,6 +163,8 @@ export const SETTINGS = {
   hub: relative('The workspace-hub folder.'),
   space: { type: 'string', check: (value) => relativePath(value) || (typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0') && path.basename(value) === SPACE_FILE),
     doc: 'The space JSON file (free-form sections with buttons and log views): a relative workspace path, or the absolute path of a file named ' + SPACE_FILE + ' (P9 makes one beside settings.json on the first space write). A relative workspace path has / separators and no empty, . or .. parts.' },
+  space_name: { type: 'string', check: spaceName,
+    doc: 'The scratch space Mission shows instead of the main space, set by the space picker: ' + SPACE_NAME_RULE + '. Absent: the main space.' },
   page_schemes: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length >= 1 && value.length <= 16 && value.every((scheme) => typeof scheme === 'string' && SCHEME.test(scheme)),
     doc: 'Extra link schemes pages may use (e.g. obsidian), 1 to 16 lowercase schemes of 2 to 32 characters. javascript, file, data, vbscript and blob never open.' },
   server_host: { type: 'string', check: (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value), doc: 'The server\'s host name, letters, digits, _ . and -, at most 64.' },
@@ -208,8 +219,8 @@ export function jsonSchema(fields, extra = {}, closed = false) {
 }
 
 const list = (items, description) => ({ type: 'array', items, description });
-// The space templates. M1 ships the blank one; more come as files shipped with the app (M4).
-export const TEMPLATES = [{ name: 'blank', about: 'An empty space to build up section by section.', space: { sections: [] } }];
+// The space templates (M4, threat model row 72): files shipped with the app, sections with text and https links only.
+export const TEMPLATES = Object.entries({ icm, obsidian, homelab, blank }).map(([name, template]) => ({ name, ...template }));
 export const SCHEMAS = {
   settings: { description: 'P9 settings.json. Unknown fields make the whole file invalid (Mission Control then answers settings-invalid).', ...jsonSchema(SETTINGS, {}, true) },
   registry: { type: 'object', description: 'The registry. Each list is optional; a malformed record or a duplicated ID is dropped and listed as invalid, never run.',

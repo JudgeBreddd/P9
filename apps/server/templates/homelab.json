@@ -1,0 +1,32 @@
+{
+  "title": "Homelab",
+  "about": "For machines and services you run yourself: services, health, backups and logs.",
+  "space": {
+    "sections": [
+      {
+        "id": "services",
+        "title": "Services",
+        "icon": "🧩",
+        "text": "A link to each service's dashboard (http or https)."
+      },
+      {
+        "id": "health",
+        "title": "Health",
+        "icon": "🩺",
+        "text": "Data tiles for disk free, uptime and failed services. Each one runs a registry script after you answer Allow."
+      },
+      {
+        "id": "backups",
+        "title": "Backups",
+        "icon": "💾",
+        "text": "A button to start each backup, and a log view of the last run."
+      },
+      {
+        "id": "logs",
+        "title": "Logs",
+        "icon": "📜",
+        "text": "Log views of the files you read first when something breaks."
+      }
+    ]
+  }
+}
