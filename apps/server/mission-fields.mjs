@@ -98,7 +98,7 @@ export const CHECKLIST = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The checklist label.' },
   root: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
-    doc: 'A key of settings.notes_roots whose folder is inside the workspace (allow_folder asks the user): the path is in that root. Without it, in the workspace. Never a path.' },
+    doc: 'A key of settings.notes_roots (allow_folder asks the user, naming these writes): the path is in that root. Without it, in the workspace. Never a path.' },
   path: relative('A .md file; with file, a folder whose subfolders each hold that file. Without it, the root itself.'),
   file: { type: 'string', check: (value) => typeof value === 'string' && /^[^/\\\0.][^/\\\0]{0,119}$/.test(value) && /\.md$/i.test(value),
     doc: 'The .md file each subfolder of path holds, e.g. _decision.md: one entry per subfolder, by name.' },

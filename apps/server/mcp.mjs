@@ -69,7 +69,7 @@ const TOOLS = [
   ['remove_app', 'Remove an app by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
   ['remove_page', 'Remove a link by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
   ['remove_section', 'Remove a space section, its buttons and log views, by title.', input({ title: { type: 'string' }, space: spaceField, hash: hashField }, ['title'])],
-  ['allow_folder', 'Ask the user, in this chat, to let Mission Control list a folder outside the workspace, read-only. On yes it is added to settings.notes_roots '
+  ['allow_folder', 'Ask the user, in this chat, to let Mission Control list a folder outside the workspace: read-only, except that a space checklist can change review and mark lines in it. On yes it is added to settings.notes_roots '
     + 'as name: use name as a space folders item\'s root, or as a section\'s notes. A folder holding the workspace, the home folder or P9\'s own files is refused.',
     input({ name: { type: 'string', description: 'The root\'s name: 1 to 64 of a-z 0-9 -, starting with a letter or digit, not already in settings.notes_roots.' },
       folder: { type: 'string', description: 'The folder, as an absolute path.' } }, ['name', 'folder'])],
@@ -443,7 +443,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     catch (error) { return { ...unparsable(error), error: 'settings-invalid' }; }
     if (Object.hasOwn(roots, name)) return { error: 'name-taken', name, folder: roots[name] };
     if (Object.keys(roots).length >= 16) return { error: 'request-refused', reason: 'settings.notes_roots already has 16 folders' };
-    const title = 'P9 Mission Control: let Mission list the folder ' + real + ' (read-only), named ' + name;
+    // Threat model row M4-a: a checklist can write review and mark lines in a notes root, so the question says so.
+    const title = 'P9 Mission Control: let Mission list the folder ' + real + ', named ' + name + '. Mission reads it, and a checklist in your space can change the review and mark lines of files in it, nothing else.';
     if (title.length > 5000) return { error: 'request-refused', reason: 'the folder is too long to show the user in full' };
     if (!await chat.approve(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'edit' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     if (await realpath(folder).catch(() => null) !== real) return { error: 'changed-since-allowed', detail: 'The folder changed after the user allowed it; nothing was added.' };
