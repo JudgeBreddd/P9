@@ -122,6 +122,8 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     assert.match(await card('broken').locator('.card-note').innerText(), /oops, not JSON/, 'a bad script shows its error on the card');
     await card('throws').locator('.card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
     assert.equal(await page.locator('#mdlT').innerText(), 'Home · 4 items', 'the title counts cards');
+    const left = async (sel) => (await page.locator(sel).first().boundingBox()).x;
+    assert.ok(Math.abs(await left('#mdlBody [data-space-text]') - await left('#mdlBody [data-card] h3')) <= 2, 'the section text lines up with the cards, not on the window edge');
 
     let r = null;
     const pr = card('probe').frameLocator('iframe');
@@ -161,11 +163,12 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.reload();
   await phone.click('[data-nav="mission"]');
   await phone.click('#mission [data-open]:has-text("Home")', { timeout: 15000 });
-  for (const title of ['Inbox', 'Broken script']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
+  for (const title of ['Inbox', 'Probe', 'Broken script', 'Throws']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
   await pinbox.frameLocator('iframe').locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
   await phone.locator('#mission dialog[open] [data-tile="broken"] .card-note', { hasText: 'not JSON' }).waitFor({ timeout: 15000 });
-  await pinbox.scrollIntoViewIfNeeded();
+  await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
+  await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note').scrollIntoViewIfNeeded();
   shot('m5-phone', await phone.screenshot());
   assert.equal(hits, 0, 'nothing reached the network server from the phone either');
 });
