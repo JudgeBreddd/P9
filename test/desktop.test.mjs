@@ -401,6 +401,10 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
   await shot('obsidian-vault-dark');
   const light = async (name) => { await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
     await shot(name); await page.evaluate(() => { const h = document.documentElement; h.classList.add('dark'); delete h.dataset.theme; }); };
+  // The form sits under the section text with the cards' inset, and Save shows without scrolling at 1280x900.
+  const fit = await page.evaluate(() => { const box = document.querySelector('#mdlBody'), r = box.getBoundingClientRect(), f = box.querySelector('[data-quicknote]');
+    return { left: Math.round(f.getBoundingClientRect().left - r.left), shown: box.scrollTop === 0 && f.querySelector('button[type="submit"]').getBoundingClientRect().bottom <= r.bottom }; });
+  assert.ok(fit.left >= 16 && fit.shown, JSON.stringify(fit));
   // Quick note (threat model row 76): the title is the file name, one new .md in Inbox; the same title again is refused, never replaced.
   const form = page.locator('#mdlBody [data-quicknote]'), saved = path.join(vault, 'Inbox', 'Plan week 1 & more.md');
   await form.locator('[name="title"]').fill('Plan / week 1 & more');
@@ -424,6 +428,11 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
     assert.deepEqual((await page.locator('#mdlBody [data-i] .truncate:not(.sub)').allInnerTexts()).map((s) => s.trim()).sort(), files, group);
     await shot(name + '-dark'); await light(name + '-light');
   }
+  // The hub is ICM's: no hub hint on the Obsidian space (finding 3a), and no settings file to edit.
+  await page.reload(); await page.click('#rMission'); await tile.waitFor({ timeout: 15000 });
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('#fMission [data-hub-hint]').count(), 0, 'no hub hint on the Obsidian space');
+  await shot('obsidian-space-dark'); await light('obsidian-space-light');
   // A space's own link that asks for text (row 75) still works: added by hand, as a user's space would.
   const spaceFile = path.join(instance.directory, '.config', 'p9', 'spaces', 'obsidian.json'), space = JSON.parse(await readFile(spaceFile, 'utf8'));
   space.sections[0].links.push({ id: 'new-note', title: 'New note', url: 'obsidian://new?name=', ask: 'Note title' });
