@@ -44,4 +44,26 @@ test('Floating Shell dock: nothing light drawn over the terminal', { skip: proce
     return [...out];
   });
   assert.deepEqual(over, []);
+  // The shell's text starts on the terminal's first row, floating and docked, also after the dock is hidden and opened again
+  // (reattaching the same shell), not in the middle or the lower half.
+  const shows = (want) => page.waitForFunction((w) => document.querySelector('#termView .xterm-rows')?.textContent.includes(w), want, { timeout: 10000 });
+  const type = async (line) => { await page.click('#termView'); await page.keyboard.type(line); await page.keyboard.press('Enter'); };
+  const layout = () => page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#termView .xterm-rows > div')], box = document.querySelector('#termView').getBoundingClientRect();
+    const screen = document.querySelector('#termView .xterm-screen')?.getBoundingClientRect();
+    return { first: rows.findIndex((row) => row.textContent.trim()), rows: rows.length, screenTop: Math.round((screen?.top ?? 0) - box.top), fits: Math.round(box.height) };
+  });
+  const reopen = async (name) => {
+    await page.click('#dHide'); await page.click('#rTerm');
+    await page.locator('#dState', { hasText: /^Connected$/ }).waitFor({ timeout: 15000 });
+    await page.waitForTimeout(800);
+    await evidence(page, name);
+    return layout();
+  };
+  for (const n of [1, 2, 3]) { await type('echo LINE""' + n); await shows('LINE' + n); }
+  const floated = await reopen('dock-float-reopen');
+  await page.click('#dFloat'); await page.waitForTimeout(500);
+  const docked = await reopen('dock-drawer-reopen');
+  assert.deepEqual({ floated: floated.first, docked: docked.first }, { floated: 0, docked: 0 },
+    JSON.stringify({ floated, docked }));
 });
