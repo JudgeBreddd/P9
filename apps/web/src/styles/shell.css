@@ -84,7 +84,9 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 /* Review round 1 (Builder, 2026-10-14) */
 [data-slot="button"].done,[data-slot="button"].done:hover{background:color-mix(in oklch,var(--ok) 26%,transparent);border-color:var(--ok);color:var(--ok);transition:background .2s,color .2s}
 .tile.bad{background:color-mix(in oklab,var(--destructive) 34%,transparent)}
-.plist button.bad,.toast.bad{background:color-mix(in oklab,var(--destructive) 24%,transparent)}
+.plist button.bad{background:color-mix(in oklab,var(--destructive) 24%,transparent)}
+/* Mixed into the popover, not see-through: over the connecting dialog's dark sky a light theme's dark text stays readable. */
+.toast.bad{background:color-mix(in oklab,var(--destructive) 24%,var(--popover))}
 .plist button.bad:hover{background:color-mix(in oklab,var(--destructive) 34%,transparent)}
 .plist li.bad{color:#ff5757;border-radius:17px}
 /* dropdowns: dark picker, and one click on another dropdown opens it (popover light-dismiss lets the click through) */
