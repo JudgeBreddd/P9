@@ -7,6 +7,8 @@ import { mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { health } from '../../scripts/teh.mjs';
+// The admin password's shape (row I2): one line, at most 1024 characters. Also remote-install.mjs's.
+export const PASSWORD = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\0\r\n]/.test(value);
 
 // A Host alias or host name: no leading dash (ssh would read it as an option), no spaces, no shell characters.
 export const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
@@ -53,14 +55,22 @@ function readServer(host, ssh) {
 
 // remoteMode(host, action): Keep P9 running there, Yes ('keep': linger for the user's own account, then the service) or No
 // ('release': the service off, then the background daemon); start's own steps (scripts/background.sh). Fixed argv, BatchMode.
-// -> 'ok' | 'refused' (linger needs an admin there) | 'no-start' (a P9 installed before this, update it first) | 'failed'.
-export function remoteMode(host, action, ssh = 'ssh') {
-  if (!HOST.test(host) || !['keep', 'release'].includes(action)) return Promise.resolve('failed');
-  const command = 'b=' + RUN + '; [ -f "$b/start" ] || { echo P9_MODE no-start; exit 0; }; sh "$b/start" ' + action;
-  return new Promise(resolve => execFile(ssh, [...SSH_OPTIONS, host, command], { timeout: 180000 }, (error, out) => {
-    const said = /^P9_(?:KEEP|RELEASE|MODE) (ok|refused|no-start)$/m.exec(out ?? '')?.[1];
-    resolve(said ?? 'failed');
-  }));
+// password: keep only, the admin password the person typed (row I2), for loginctl enable-linger <user> where linger needs an
+// admin: stdin's first line, never the command. -> { phase, command? }: phase 'ok' | 'refused' (linger needs an admin there;
+// command: the one the password would run) | 'wrong-password' | 'not-allowed' | 'no-start' (a P9 installed before this) | 'failed'.
+export function remoteMode(host, action, ssh = 'ssh', password = null) {
+  if (!HOST.test(host) || !['keep', 'release'].includes(action) || (password !== null && (action !== 'keep' || !PASSWORD(password)))) return Promise.resolve({ phase: 'failed' });
+  const command = 'b=' + RUN + '; [ -f "$b/start" ] || { echo P9_MODE no-start; exit 0; }; sh "$b/start" ' + action + (password !== null ? ' admin' : '');
+  return new Promise(resolve => {
+    const child = execFile(ssh, [...SSH_OPTIONS, host, command], { timeout: 180000 }, (error, out) => {
+      const admin = /^P9_ADMIN (wrong-password|not-allowed)$/m.exec(out ?? '')?.[1];
+      const phase = admin ?? /^P9_(?:KEEP|RELEASE|MODE) (ok|refused|no-start)$/m.exec(out ?? '')?.[1] ?? 'failed';
+      const shown = /^P9_ADMIN command (loginctl enable-linger [\w.-]+)$/m.exec(out ?? '')?.[1];
+      resolve({ phase, ...(phase === 'refused' && shown && { command: shown }) });
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(password !== null ? password + '\n' : '');
+  });
 }
 
 // startServer(host): Start P9 there, for a remote that answered without a running P9 (never a terminal command, row I1).

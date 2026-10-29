@@ -32,7 +32,7 @@ async function background(t, linger = 'refused') {
 // The choice: Yes, No, remembered, changed in Settings.
 function keeper(saved) {
   const runs = [], saves = [];
-  const k = createKeeper({ saved, named: (h) => /^[\w.-]+$/.test(h), run: async (host, action) => { runs.push(host + ' ' + action); return 'ok'; }, save: async () => { saves.push({ ...k.keep }); } });
+  const k = createKeeper({ saved, named: (h) => /^[\w.-]+$/.test(h), run: async (host, action) => { runs.push(host + ' ' + action); return { phase: 'ok' }; }, save: async () => { saves.push({ ...k.keep }); } });
   return { k, runs, saves };
 }
 const settle = () => new Promise((r) => setImmediate(r));
@@ -109,14 +109,14 @@ test('READ at a connect starts a background daemon that stopped when idle, and r
 
 test('Keep it running where linger is allowed: linger, the old daemon stopped, the service installed, background mode off', { skip, timeout: 60000 }, async (t) => {
   const s = await background(t, 'allowed');
-  assert.equal(await remoteMode('test-host', 'keep', path.join(s.bin, 'ssh')), 'ok');
+  assert.equal((await remoteMode('test-host', 'keep', path.join(s.bin, 'ssh'))).phase, 'ok');
   assert.equal(await read(s.lingerLog), '--no-ask-password enable-linger\n');
   assert.match(await nodeLog(s), /XDG=\S+ scripts\/install-service\.mjs /);
   assert.ok(!existsSync(path.join(s.runDir, 'background')) && existsSync(path.join(s.runDir, 'lingered')));
   assert.ok(!existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json')), 'the background daemon stopped');
   // No: the service off, linger off (P9 turned it on), the background daemon again.
   await writeFile(path.join(s.home, '.config', 'systemd', 'user', 'p9-foundation.service'), '');
-  assert.equal(await remoteMode('test-host', 'release', path.join(s.bin, 'ssh')), 'ok');
+  assert.equal((await remoteMode('test-host', 'release', path.join(s.bin, 'ssh'))).phase, 'ok');
   assert.match(await read(s.systemctlLog), /--user disable --now p9-foundation\.service/);
   assert.match(await read(s.lingerLog), /--no-ask-password disable-linger\n$/);
   assert.ok(!existsSync(path.join(s.home, '.config', 'systemd', 'user', 'p9-foundation.service')));
@@ -126,14 +126,14 @@ test('Keep it running where linger is allowed: linger, the old daemon stopped, t
 
 test('Keep it running where linger needs an admin: refused, P9 stays in background mode, still running', { skip, timeout: 40000 }, async (t) => {
   const s = await background(t, 'refused');
-  assert.equal(await remoteMode('test-host', 'keep', path.join(s.bin, 'ssh')), 'refused');
+  assert.equal((await remoteMode('test-host', 'keep', path.join(s.bin, 'ssh'))).phase, 'refused');
   assert.ok(existsSync(path.join(s.runDir, 'background')) && existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json')));
   assert.ok(!(await nodeLog(s)).includes('install-service.mjs'));
 });
 
 test('A remote installed before this choice has no start script: no-start, nothing run', { skip, timeout: 20000 }, async () => {
   const s = await stage(true);
-  assert.equal(await remoteMode('test-host', 'release', path.join(s.bin, 'ssh')), 'no-start');
+  assert.equal((await remoteMode('test-host', 'release', path.join(s.bin, 'ssh'))).phase, 'no-start');
   assert.equal(await read(s.systemctlLog), '');
 });
 

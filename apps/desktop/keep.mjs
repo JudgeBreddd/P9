@@ -3,7 +3,8 @@
 // secret. The choice is applied on the remote at each connect: Yes there in background mode moves P9 to its service, No there
 // on its service moves it to the background daemon (remote.mjs remoteMode). Either one stops the daemon the window uses, so the
 // tunnel drops and connects again on its own.
-// run(host, action) -> Promise<'ok' | 'refused' | 'no-start' | 'failed'>; save(): writes keep (p9-server.json, 0600).
+// run(host, action, password) -> Promise<{ phase, command? }> (remote.mjs remoteMode); save(): writes keep (p9-server.json, 0600).
+// password: row I2's admin password for linger, passed through once and never kept here.
 // ponytail: 50 hosts kept, the oldest go.
 export function createKeeper({ saved, run, save, named }) {
   let keep = Object.fromEntries(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([h, v]) => named(h) && typeof v === 'boolean').slice(-50));
@@ -15,11 +16,13 @@ export function createKeeper({ saved, run, save, named }) {
     await save();
   };
   // force: the person asked just now; otherwise one that did not work is not tried again this run.
-  const apply = (host, background, choice, force = false) => {
+  const apply = (host, background, choice, force = false, password = null) => {
     const action = choice === true && background ? 'keep' : choice === false && !background ? 'release' : null;
-    if (!action || keeping?.phase === 'running' || (!force && keeping?.host === host && keeping.action === action)) return;
+    if (!action || keeping?.phase === 'running' || (!force && keeping?.host === host && keeping.action === action)) return false;
     const mine = keeping = { host, action, phase: 'running' };
-    run(host, action).then((phase) => { if (keeping === mine) keeping = { host, action, phase }; }, () => { if (keeping === mine) keeping = { host, action, phase: 'failed' }; });
+    run(host, action, password).then(({ phase, command }) => { if (keeping === mine) keeping = { host, action, phase, ...(command && { command }) }; },
+      () => { if (keeping === mine) keeping = { host, action, phase: 'failed' }; });
+    return true;
   };
   return {
     get keep() { return keep; },
@@ -36,6 +39,8 @@ export function createKeeper({ saved, run, save, named }) {
       await store(host, choice);
       if (background !== null && choice !== null) apply(host, background, choice, true);
     },
+    // Keep it running with the admin password, after linger was refused there (row I2).
+    admin(host, background, password) { return apply(host, background, true, true, password); },
     // For the status poll. ask: the question is due (background mode there, no stored choice, not answered this run).
     status(host, background) {
       return { background, ask: background && keep[host] === undefined && !asked.has(host), ...(keeping?.host === host && { keeping }) };

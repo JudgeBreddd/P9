@@ -5,21 +5,40 @@
 # --headless: a server with no screen. The daemon only, no Electron download; desktops and phones connect to it.
 # --background: the desktop's "No" to Keep P9 running there (threat model row I1): no linger and no service; P9 runs as a
 # background process while a desktop is connected, the way VS Code's server runs. Without it, a server keeps P9 running.
+# --admin-stdin (row I2): the admin password the person typed into the desktop's install window is stdin's first line.
+# Without it, --headless stops where an admin is needed: P9_ADMIN need and P9_ADMIN command lines, exit 5.
 set -euo pipefail
-headless= background=
-while case "${1:-}" in --headless) headless=1 ;; --background) background=1 ;; *) false ;; esac; do shift; done
-[ -z "$background" ] || [ -n "$headless" ] || { echo "--background goes with --headless."; exit 1; }
+headless= background= admin_stdin= p9_pw=
+while case "${1:-}" in --headless) headless=1 ;; --background) background=1 ;; --admin-stdin) admin_stdin=1 ;; *) false ;; esac; do shift; done
+[ -z "$background$admin_stdin" ] || [ -n "$headless" ] || { echo "--background and --admin-stdin go with --headless."; exit 1; }
+# Before anything else can read stdin; never echoed (no set -x anywhere here).
+if [ -n "$admin_stdin" ]; then IFS= read -r p9_pw || true; exec </dev/null; fi
+# Shared with the desktop's remote install script and the start script: p9_tools, p9_install_command, p9_admin.
+. "$(dirname -- "$0")/../apps/desktop/tools.sh"
+q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
+# need "name: reason": one thing P9 needs here. The desktop reads P9_ADMIN need; a person at a terminal reads "- ".
+need() { if [ -n "$headless" ]; then echo "P9_ADMIN need $1"; else echo "- $1"; fi; }
+# admin_run COMMAND (no sudo in it; empty: no package manager P9 knows): as admin, after the reasons are on the screen.
+# The desktop's password (--admin-stdin), or for the desktop with none yet, stop and ask it (exit 5); at a terminal, ask.
+admin_run() {
+  [ -n "$1" ] || return 1
+  if [ -n "$admin_stdin" ]; then p9_admin "$1"
+  elif [ -n "$headless" ]; then echo "P9_ADMIN command $1"; exit 5
+  else admin_install "sudo sh -c $(q "$1")"
+  fi
+}
 run_dir="$HOME/.local/share/p9/run"
 workspace=$(realpath -m -- "${1:-$HOME/work}")
 cd "$(dirname -- "$0")/.."
 
-missing=()
-for t in git systemctl systemd-run sha256sum tar flock setsid; do command -v "$t" >/dev/null || missing+=("$t"); done
-# The Node download needs one of the two; Ubuntu Desktop ships wget and not curl (bare-machine.sh, v0.1.6).
-command -v curl >/dev/null || command -v wget >/dev/null || missing+=(curl)
-if [ ${#missing[@]} -gt 0 ]; then
-  echo "MISSING: ${missing[*]}. Install them with your package manager (for example: sudo apt install ${missing[*]}), then run this again."
-  exit 1
+# The tools from before Node exists (apps/desktop/tools.sh), each with its reason; then the one command for all of them.
+p9_tools
+if [ -n "$P9_TOOLS_NEED" ]; then
+  echo "P9 needs these on this machine:"
+  printf '%s' "$P9_TOOLS_NEED" | while IFS= read -r line; do need "$line"; done
+  admin_run "$(p9_install_command "$P9_TOOLS_PACKAGES")" || true
+  p9_tools
+  [ -z "$P9_TOOLS_NEED" ] || { echo "P9 cannot install without them. Install them with this machine's package manager, then run this again."; exit 1; }
 fi
 # A non-interactive ssh session (a desktop's Install on a remote) can come without XDG_RUNTIME_DIR; systemd's own
 # /run/user/<uid> stands in, as for remote.mjs READ and PROBE, and systemctl --user below finds the user bus through it.
@@ -56,7 +75,6 @@ fi
 # scripts/background.sh. Written for every server install, so the desktop can switch modes later; the file background
 # marks background mode (remote.mjs READ starts the daemon only then), lingered marks linger P9 turned on.
 # Each value single-quoted (a ' as '\''), so sh, dash too, reads a path with spaces or quotes as it was.
-q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 write_start() {
   (umask 077 && mkdir -p -- "$run_dir")
   chmod 700 -- "$run_dir"
@@ -67,7 +85,7 @@ write_start() {
     echo "r=$(q "$run_dir") node=$(q "$node") checkout=$(q "$PWD")"
     echo "workspace=$(q "$workspace") recovery=$(q "$HOME/.local/state/p9-foundation/conflicts")"
     echo "PATH=$(q "$PATH"); export PATH"
-    cat scripts/background.sh
+    cat apps/desktop/tools.sh scripts/background.sh
   } > "$run_dir/start.new"
   chmod 700 -- "$run_dir/start.new"
   mv -f -- "$run_dir/start.new" "$run_dir/start"
@@ -94,9 +112,10 @@ system_deps() {
   case $status in 0 | 3) ;; *) echo "P9's dependency check failed (the error is above)."; return 1 ;; esac
   [ -n "$reasons" ] || return 0
   echo "P9 needs these on this machine:"
-  echo "$reasons"
-  command=$("$node" scripts/deps.mjs "$@" --command) || { echo "P9's dependency check failed (the error is above)."; return 1; }
-  [ -z "$command" ] || admin_install "$command" || true
+  printf '%s\n' "$reasons" | while IFS= read -r line; do need "${line#- }"; done
+  # --root: the command with no sudo in it, as admin_run runs it.
+  command=$("$node" scripts/deps.mjs "$@" --command --root) || { echo "P9's dependency check failed (the error is above)."; return 1; }
+  admin_run "$command" || true
   "$node" scripts/deps.mjs "$@" >/dev/null && return 0
   echo "P9 cannot run without the ones above. Install them, then run this again."
   return 1
@@ -135,12 +154,9 @@ if ! node_error=$(node --version 2>&1 >/dev/null); then
   case "$node_error" in
     *libatomic.so.1*)
       echo "P9 needs this on this machine:"
-      echo "- libatomic1: Node, which P9 runs on, cannot start without this system library."
-      if command -v apt-get >/dev/null; then command="sudo apt-get update; sudo apt-get install -y libatomic1"
-      elif command -v dnf >/dev/null; then command="sudo dnf install -y libatomic"
-      elif command -v zypper >/dev/null; then command="sudo zypper install -y libatomic1"
-      else command=; fi
-      if [ -z "$command" ] || ! admin_install "$command" || ! node --version >/dev/null 2>&1; then
+      need "libatomic1: Node, which P9 runs on, cannot start without this system library."
+      if command -v dnf >/dev/null && ! command -v apt-get >/dev/null; then command=$(p9_install_command " libatomic"); else command=$(p9_install_command " libatomic1"); fi
+      if ! admin_run "$command" || ! node --version >/dev/null 2>&1; then
         echo "P9 cannot run without it. Install libatomic with your package manager, then run this again."; exit 1
       fi ;;
     *) echo "Node does not start: $node_error"; exit 1 ;;

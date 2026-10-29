@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   serverUpdate: () => ipcRenderer.invoke('p9:server-update'),
   remoteInstall: () => ipcRenderer.invoke('p9:remote-install'), // D15a: install P9 on this remote, asked first
   remoteStart: () => ipcRenderer.invoke('p9:remote-start'), // row I1: start P9 on this remote, no terminal
+  remoteAdmin: password => ipcRenderer.invoke('p9:remote-admin', password), // row I2: the admin password for this remote's admin step
   onServerUpdate: (callback) => { ipcRenderer.on('p9:server-update', (_event, update) => callback(update)); },
   pickFolder: (kind) => ipcRenderer.invoke('p9:pick-folder', ...(kind === undefined ? [] : [kind])),
   onFocus: (callback) => { ipcRenderer.on('p9:focus', (_event, focus) => callback(focus)); },

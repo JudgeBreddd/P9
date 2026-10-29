@@ -35,6 +35,9 @@ export async function stage(folder, linger = 'refused', { installed = true, home
   await mkdir(path.join(checkout, 'scripts'), { recursive: true });
   await writeFile(path.join(checkout, 'scripts', 'install.sh'), real.replaceAll('/run/user/', path.join(dir, 'run', 'user') + '/'));
   await writeFile(path.join(checkout, 'scripts', 'background.sh'), (await readFile(new URL('../scripts/background.sh', import.meta.url), 'utf8')).replaceAll('/run/user/', path.join(dir, 'run', 'user') + '/'));
+  // install.sh sources apps/desktop/tools.sh (row I2), as a checkout has it.
+  await mkdir(path.join(checkout, 'apps', 'desktop'), { recursive: true });
+  await writeFile(path.join(checkout, 'apps', 'desktop', 'tools.sh'), await readFile(new URL('../apps/desktop/tools.sh', import.meta.url), 'utf8'));
   for (const t of ['git', 'systemd-run', 'sha256sum', 'curl', 'pnpm']) await writeFile(path.join(bin, t), '#!/bin/sh\nexit 0\n');
   await writeFile(path.join(bin, 'systemctl'), '#!/bin/sh\necho "$*" >> "' + systemctlLog + '"\n');
   await writeFile(path.join(bin, 'node'), '#!/bin/sh\n[ "$1" = --version ] && { echo v26.10.0; exit 0; }\necho "XDG=$XDG_RUNTIME_DIR $*" >> "' + log + '"\n' + STUB_DAEMON);

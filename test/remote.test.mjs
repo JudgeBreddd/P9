@@ -137,7 +137,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
     }
     assert.deepEqual(last, want);
   };
-  await status({ status: 'ok', mode: 'server', host: 'test-host' });
+  await status({ status: 'ok', mode: 'server', host: 'test-host', background: false, ask: false });
   assert.equal(JSON.parse(await readFile(path.join(forward, 'desktop.json'), 'utf8')).cookie, remote.credentials.cookie);
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor();
   // The files panel has no Send files to remote in Remote mode: the files are the remote's already.
@@ -159,7 +159,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
-  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [] });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {} });
 });
 
 // D20: while the remote is not answering yet the window shows the connecting layer, not a blank page; once it answers the
@@ -224,12 +224,12 @@ test('Remote mode connecting: a turning black hole and the reason until the remo
   const layer = page.locator('dialog#connecting[open]');
   await layer.waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
-  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there. Install it there from here/);
+  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there\. If P9 is installed there, start it; if not, install it from here/);
   await page.waitForTimeout(600); // a turn of the ring in the shot
   await evidence(page, 'd20-connecting');
   // D15a: Install P9 there asks first, in place, saying where and what it never does; Not now goes back and installs nothing.
   await page.locator('#connInstall', { hasText: 'Install P9 there' }).click({ timeout: 10000 });
-  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\? Over your ssh login, P9 puts its source in ~\/p9 there.*never uses sudo or a password/);
+  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\? Over your ssh login, P9 puts its source in ~\/p9 there.*only an admin can install, it shows you what and asks for your password first/);
   assert.equal(await page.locator('#connInstall').textContent(), 'Install');
   await page.waitForTimeout(1500); // the status poll does not overwrite the question
   assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\?/);

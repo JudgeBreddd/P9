@@ -4,9 +4,11 @@
 # refused, no systemd user session), P9's daemon runs as a plain background process of this user, as VS Code's server does.
 #   sh start up       start the daemon unless one runs, then wait for it to answer (the desktop runs this at each connect)
 #   sh start keep     turn on linger for this user's own account, then move P9 to its user service (Keep P9 running: Yes)
+#   sh start keep admin   the same, with the admin password the person typed into the app as stdin's first line (row I2)
 #   sh start release  P9's service off, and linger if P9 turned it on, then the background daemon (Keep P9 running: No)
 # The file background marks background mode: remote.mjs READ runs "up" at each connect only while it is there.
-# POSIX sh, as the desktop runs it with sh. It runs as this user only and never asks for a password.
+# POSIX sh, as the desktop runs it with sh. It runs as this user only and never asks for a password; the functions of
+# apps/desktop/tools.sh come before it in the start file.
 set -eu
 umask 077
 # Only this user's own owner-only folder (row I1 (b)).
@@ -36,11 +38,16 @@ up() {
 
 unit="$HOME/.config/systemd/user/p9-foundation.service"
 keep() {
+  p9_pw=
+  if [ "${1:-}" = admin ]; then IFS= read -r p9_pw || true; fi
   if [ ! -e "$r/background" ] && [ -e "$unit" ]; then echo "P9_KEEP ok"; return 0; fi
   # Linger for this user's own account: systemd's default (set-self-linger) needs no password; where a rule asks for
-  # one, --no-ask-password fails at once and the app offers the admin password instead.
+  # one, --no-ask-password fails at once and the app offers the admin password for this one command instead.
   if [ "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null)" != yes ]; then
-    loginctl --no-ask-password enable-linger 2>/dev/null || { echo "P9_KEEP refused"; return 0; }
+    if loginctl --no-ask-password enable-linger 2>/dev/null; then :
+    elif [ -n "$p9_pw" ]; then p9_admin "loginctl enable-linger $(id -un)" || { echo "P9_KEEP refused"; return 0; }
+    else echo "P9_KEEP refused"; echo "P9_ADMIN command loginctl enable-linger $(id -un)"; return 0
+    fi
     : > "$r/lingered"
   fi
   u="/run/user/$(id -u)"
@@ -80,7 +87,7 @@ release() {
 
 case "${1:-up}" in
   up) up ;;
-  keep) keep ;;
+  keep) keep "${2:-}" ;;
   release) release ;;
   *) exit 2 ;;
 esac

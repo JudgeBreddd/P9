@@ -30,7 +30,9 @@ if (import.meta.main) {
     const packages = missing.filter((dependency) => dependency.package).map((dependency) => dependency.package);
     const commands = [...packages.length ? [manager.command + ' ' + packages.join(' ')] : [],
       ...missing.filter((dependency) => !dependency.package && dependency.command).map((dependency) => dependency.command)];
-    if (commands.length) console.log(commands.join(' && '));
+    // --root: the same command with no sudo in it, for install.sh's admin step, which runs it as admin (threat model row I2).
+    // ponytail: drops "sudo " only where a command starts; MANAGERS and the sandbox line put it nowhere else.
+    if (commands.length) console.log(process.argv.includes('--root') ? commands.join(' && ').replace(/(^|; |&& |\| )sudo /g, '$1') : commands.join(' && '));
   } else {
     for (const dependency of missing) {
       console.log(`- ${dependency.id}: ${dependency.why}` + (dependency.command ? '' : ' Install it with your package manager.'));

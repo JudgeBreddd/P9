@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, HOST } from './remote.mjs';
+import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, HOST, PASSWORD } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive } from './remote-install.mjs';
 import { createKeeper } from './keep.mjs';
@@ -266,7 +266,7 @@ export async function createDesktop({ state, open } = {}) {
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
   // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
-  const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action) => remoteMode(h, action, sshCommand), save: () => keepServer() });
+  const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action, password) => remoteMode(h, action, sshCommand, password), save: () => keepServer() });
   const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep }), { mode: 0o600 });
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
@@ -729,19 +729,33 @@ export async function createDesktop({ state, open } = {}) {
   // D15a: the connecting screen's Install P9 there, after the person said yes. Only this window's remote, only while it
   // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
   // download its version. started: when it began, for the window's elapsed time; a throw ends it failed, never stuck running.
-  ipcMain.handle('p9:remote-install', async (event, ...args) => {
-    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
-    const host = serverHost, started = Date.now();
+  // admin: row I2's password, after the install stopped at an admin step; passed to installRemote once, kept nowhere.
+  const runInstall = (admin = null) => {
+    const host = serverHost, started = Date.now(), asked = remoteInstall;
     remoteInstall = { phase: 'running', line: '', started };
     try {
       const archive = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null;
-      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, keep: keeper.keep[host] === true, tell: e => { if (serverHost === host) remoteInstall = { ...e, started }; } })
+      // A wrong password keeps what the window showed: the same list and command, asked again.
+      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, keep: keeper.keep[host] === true, admin,
+        tell: e => { if (serverHost === host) remoteInstall = { ...(/^(wrong-password|not-allowed)$/.test(e.error ?? '') && { need: asked?.need, command: asked?.command }), ...e, started }; } })
         .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
     } catch (error) {
       remoteInstall = { phase: 'failed', error: error.message, started };
     }
     return { ok: true };
+  };
+  ipcMain.handle('p9:remote-install', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
+    return runInstall();
+  });
+  // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's
+  // (what it showed: P9_ADMIN need and command) or Keep it running's linger. One string, one line; never stored or logged.
+  ipcMain.handle('p9:remote-admin', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !PASSWORD(args[0])) throw new Error('ipc-sender-refused');
+    if (serverHost && serverError === 'server-no-p9' && remoteInstall?.phase === 'admin' && remoteInstall.command) return runInstall(args[0]);
+    if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
+    return { error: 'remote-admin-refused' };
   });
   // Start P9 there: this window's remote answered without a running P9 (row I1: never a terminal command). ok connects now.
   ipcMain.handle('p9:remote-start', async (event, ...args) => {
