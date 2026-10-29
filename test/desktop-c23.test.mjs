@@ -1,7 +1,7 @@
 // v0.1.6 c23: the desktop polish items (D1, D14, D2, D11, D12, D6), in the real Electron shell with sample data.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,8 +9,9 @@ import { _electron, chromium } from '@playwright/test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-async function launch(t) {
+async function launch(t, files = {}) {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-c23-'));
+  for (const [name, text] of Object.entries(files)) await writeFile(path.join(profile, name), text);
   const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
   t.after(() => app.close());
@@ -198,4 +199,40 @@ test('K11: the Mission page makes room for the cards; no card covers a Mission p
     await shot('c23-k11-mission-' + theme);
   }
   console.log('PASS K11');
+});
+
+test('Machine menu: the Local/Remote badge lists This computer and the saved remotes; pick, Remove, Add a machine', { timeout: 120000 }, async (t) => {
+  const { page, shot } = await launch(t, { 'p9-server.json': JSON.stringify({ host: null, last: null, remotes: ['build-box', 'gpu-rig'] }) });
+  const badge = page.locator('#serverBadge'), pop = page.locator('#serverPop');
+  await badge.filter({ hasText: 'Local' }).waitFor({ timeout: 15000 });
+  const rows = () => pop.locator('[data-server-go]').evaluateAll((els) => els.map((el) => [el.dataset.serverGo, el.querySelector('.muted').textContent]));
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await badge.click();
+    await pop.locator('#serverAdd').waitFor({ timeout: 5000 });
+    await shot('c23-machine-menu-' + theme);
+    await page.keyboard.press('Escape');
+  }
+  await badge.click();
+  // Saved remotes are probed as the menu opens (remote.test.mjs covers each state); no such machines here, so Unreachable.
+  for (const h of ['build-box', 'gpu-rig']) await pop.locator('[data-server-go="' + h + '"] .muted', { hasText: 'Unreachable' }).waitFor({ timeout: 15000 });
+  const listed = await rows();
+  assert.deepEqual(listed.slice(0, 3), [['', 'In use'], ['build-box', 'Unreachable'], ['gpu-rig', 'Unreachable']]);
+  // Remove beside a saved remote: gone from the menu and from the list Settings shows.
+  await pop.locator('[data-server-rm="gpu-rig"]').click();
+  await pop.locator('[data-server-go="gpu-rig"]').waitFor({ state: 'detached', timeout: 5000 });
+  assert.deepEqual((await page.evaluate(() => window.p9.server())).remotes, ['build-box']);
+  // Add a machine opens Settings at the Remote group, its name box focused.
+  await pop.locator('#serverAdd').click();
+  await page.locator('#setRemoteName:focus').waitFor({ timeout: 5000 });
+  assert.equal(await pop.isHidden(), true);
+  await page.keyboard.press('Escape');
+  // A pick connects at once, through the same call as Settings' Connect: the window now works on that remote.
+  await badge.click();
+  await pop.locator('[data-server-go="build-box"]').click();
+  const deadline = Date.now() + 15000;
+  let host = null;
+  while (Date.now() < deadline && host !== 'build-box') { host = await page.evaluate(() => window.p9.server().then((r) => r.host)).catch(() => null); await page.waitForTimeout(250); }
+  assert.equal(host, 'build-box');
+  console.log('PASS machine menu');
 });

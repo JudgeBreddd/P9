@@ -2003,7 +2003,7 @@ function renderSettings() {
   if (missionFiles?.settings) wireMission();
   // Main reloads the window onto the chosen daemon, so nothing here re-renders.
   $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
-  const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); };
+  const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); serverMenu(); };
   $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
   if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
     e.preventDefault();
@@ -2866,7 +2866,41 @@ function moveReloaded() {
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); }, () => {});
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); }, () => {});
+// The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
+// each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
+// the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
+// probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
+// ~/.ssh/config hosts never saved or used are not asked.
+const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
+const PROBE_STATE = { p9: ['ok', 'P9 running'], 'no-p9': ['warn', 'P9 not running'], unreachable: ['bad', 'Unreachable'] };
+// The remote in use and the last one used come first, even when neither list holds them (the old badge's one click went to last).
+const machines = () => { const { host = null, last = null, hosts = [], remotes = [] } = serverInfo ?? {}; return { host, last, remotes, all: [...new Set([host, last, ...remotes, ...hosts])].filter(Boolean) }; };
+let serverPop = null;
+function serverMenu() {
+  const badge = $('#serverBadge'), { host, all } = machines();
+  if (!badge || !all.length) return;
+  badge.hidden = false; badge.setAttribute('aria-haspopup', 'menu');
+  badge.innerHTML = esc(host ? 'Remote · ' + host : 'Local') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  badge.title = 'This window works on ' + (host || 'this computer') + '. Click to pick another machine.';
+  serverPop ??= popover(badge, $('#serverPop'), () => { const pop = $('#serverPop'); pop.style.left = Math.max(8, Math.min(badge.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; renderServerMenu(); });
+}
+async function renderServerMenu() {
+  const pop = $('#serverPop'), { host, last, remotes, all } = machines(), probed = h => h !== host && (remotes.includes(h) || h === last), s = host ? await window.p9.getStatus().catch(() => ({})) : {};
+  const row = (h, [dot, say], current) => '<div class="srv-row"><button class="item" role="menuitem" data-server-go="' + esc(h ?? '') + '"' + (current ? ' aria-current="true"' : '')
+    + '><span class="srv-dot" data-s="' + dot + '"></span>' + esc(h ?? 'This computer') + '<span class="muted">' + say + '</span></button>'
+    + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
+  pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
+    + all.map(h => row(h, h === host ? SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable'] : probed(h) ? ['wait', 'Checking…'] : ['off', 'Not connected'], h === host)).join('')
+    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
+  pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
+  pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
+  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => {
+    const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
+    if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
+  }, () => {}));
+  $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); $('#setRemote')?.scrollIntoView({ block: 'center' }); $('#setRemoteName')?.focus(); };
+}
 if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });

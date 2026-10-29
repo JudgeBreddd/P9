@@ -16,6 +16,12 @@ export const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-
 // exit 0: a server that answers always succeeds, so an ssh failure is server-unreachable and a missing file is server-no-p9.
 export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; printf "%s\\n" "$r"; cat "$r/p9-foundation/desktop.json" 2>/dev/null; exit 0';
 
+// The machine menu's state for a saved remote that is not in use: is a P9 running there? It checks desktop.json exists, never
+// reads it (the cookie stays there). Fixed argv, no shell here, BatchMode, 4 s to connect, 8 s in all; only three words come back.
+export const PROBE = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; test -e "$r/p9-foundation/desktop.json" && echo p9; exit 0';
+export const probeServer = (host, ssh = 'ssh') => new Promise(resolve => execFile(ssh, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', host, PROBE], { timeout: 8000 },
+  (error, out) => resolve(error ? 'unreachable' : out.trim() === 'p9' ? 'p9' : 'no-p9')));
+
 // Host aliases from ~/.ssh/config (no wildcards, no negations), for the Settings list. Include files are not followed.
 // ponytail: Include lines are skipped; a host only in an included file can still be typed in.
 export async function sshHosts(file = path.join(os.homedir(), '.ssh', 'config')) {

@@ -41,15 +41,7 @@ export default function Shell() {
   useEffect(() => {
     const dispose = mountShell();
     let active = true, waited = false, connected = false, asking = false, starting = false, refused = '', timer: ReturnType<typeof setTimeout> | undefined;
-    // The title-bar badge: Remote · host while on a remote; Local once a server was used, so one click goes back to it.
-    void window.p9?.server?.().then(({ host, last }) => {
-      const badge = document.getElementById('serverBadge');
-      if (!active || !badge || !(host || last)) return;
-      badge.hidden = false;
-      badge.textContent = host ? 'Remote · ' + host : 'Local';
-      badge.title = host ? 'This window works on ' + host + '. Click to switch to this computer.' : 'This window works on this computer. Click to switch to ' + last + '.';
-      badge.onclick = () => void window.p9?.server?.(host ? null : last ?? null);
-    }, () => {});
+    // The title-bar badge (Remote · host or Local) and its machine menu: controller.mjs, serverMenu.
     // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
     const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
       .catch(() => ({ status: 'unavailable' as const }))

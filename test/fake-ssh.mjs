@@ -16,7 +16,7 @@ for (; i < argv.length && argv[i].startsWith('-'); i++) {
   else if (argv[i] === '-N') tunnel = true;
 }
 const [host, ...command] = argv.slice(i);
-if (!host) process.exit(255);
+if (!host || host.startsWith('unreachable')) process.exit(255); // a host named unreachable* is one ssh cannot reach
 // D15a's install (its script says P9_INSTALL) never runs here: FAKE_INSTALL, a sh script the test wrote, plays it, reading
 // the source archive on stdin. Without one it fails, so no test installs into this machine's home.
 if (!tunnel && command.join(' ').includes('P9_INSTALL')) {
@@ -24,7 +24,8 @@ if (!tunnel && command.join(' ').includes('P9_INSTALL')) {
   process.exit(run.status ?? 255);
 }
 if (!tunnel) {
-  const run = spawnSync('sh', ['-c', command.join(' ')], { env: { ...process.env, XDG_RUNTIME_DIR: process.env.FAKE_RUNTIME }, stdio: ['ignore', 'inherit', 'inherit'] });
+  // A host named no-p9* is a machine with no P9: an empty runtime folder.
+  const run = spawnSync('sh', ['-c', command.join(' ')], { env: { ...process.env, XDG_RUNTIME_DIR: host.startsWith('no-p9') ? '/nonexistent' : process.env.FAKE_RUNTIME }, stdio: ['ignore', 'inherit', 'inherit'] });
   process.exit(run.status ?? 255);
 }
 process.umask(0o177);

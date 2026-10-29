@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
+import { connectServer, restartServer, sshHosts, serverFolder, probeServer, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive } from './remote-install.mjs';
 import { sendToServer } from './move.mjs';
@@ -721,6 +721,18 @@ export async function createDesktop({ state, open } = {}) {
       remoteInstall = { phase: 'failed', error: error.message, started };
     }
     return { ok: true };
+  });
+  // The machine menu's live state (threat model row 50, c23 adds): only a remote saved here or used last, one probe per host
+  // per 30 s, shared by calls in flight. ponytail: the cache is never pruned; at most 51 hosts can be in it.
+  const probes = new Map();
+  ipcMain.handle('p9:remote-state', async (event, ...args) => {
+    const [host] = args;
+    if (!fromApp(event) || args.length !== 1 || typeof host !== 'string' || !HOST.test(host) || !(remotes.includes(host) || host === serverLast)) throw new Error('ipc-sender-refused');
+    const hit = probes.get(host);
+    if (hit && Date.now() - hit.at < 30000) return hit.state;
+    const state = probeServer(host, sshCommand);
+    probes.set(host, { at: Date.now(), state });
+    return state;
   });
   // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
   ipcMain.handle('p9:remotes', async (event, ...args) => {
