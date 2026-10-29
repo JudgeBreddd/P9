@@ -542,6 +542,9 @@ export async function createDesktop({ state, open } = {}) {
     launch: ({ kind, id: target, ...body }) => ['apps', 'pages'].includes(kind) && id(target) && ['POST', `/${kind}/${target}/launch`, body],
     answer: body => ['POST', '/mission/answer', body],
     hub: () => ['GET', '/mission/hub'],
+    // Data tiles (threat model row 70): one tile's last answer, and the user's Allow for it.
+    data: ({ id: tile }) => id(tile) && ['GET', '/mission/data?' + new URLSearchParams({ id: tile })],
+    dataAllow: ({ id: tile }) => id(tile) && ['POST', '/mission/data/allow', { id: tile }],
     hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
     hubDecide: body => ['POST', '/mission/hub/decide', body],
     fix: ({ host, name }) => [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],

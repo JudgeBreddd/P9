@@ -9,6 +9,7 @@ import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
+import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
 import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
@@ -1462,6 +1463,14 @@ function missionModal(m, body, row) {
     const l = M.scripts[m.g], tools = m.g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === m.g);
     $('#mdlT').textContent = `${m.g} · ${l.length} script${l.length === 1 ? '' : 's'}`;
     body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
+    // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is open on screen, every 30 s.
+    m.tiles ||= {};
+    if (sp?.data?.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="tiles">${(sp.data || []).map(d => `<section class="tile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
+    const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (S.modal === m) renderModal(); });
+    if (sp?.data?.length && !m.pulling) { sp.data.forEach(pull); m.pulling = setInterval(() => { if (S.modal !== m) return clearInterval(m.pulling); if (!document.hidden) sp.data.forEach(pull); }, 30000); }
+    body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = sp.data.find(x => x.id === b.closest('[data-tile]').dataset.tile);
+      window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
+    body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
     body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
