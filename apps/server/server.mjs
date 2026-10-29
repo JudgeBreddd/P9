@@ -228,7 +228,11 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/files/image', async (c) => {
     const target = await readTarget(c); if (target.error) return reply(c, target);
     try { return c.json(await readWorkspaceImage(target.root, c.req.query('path'))); }
-    catch (error) { if (error.message === 'not-an-image') return c.json({ error: 'not-an-image' }, 415); throw error; }
+    catch (error) {
+      if (error.message === 'not-an-image') return c.json({ error: 'not-an-image' }, 415);
+      if (error.code === 'ENOENT') return c.json({ error: 'not-found' }, 404);
+      throw error;
+    }
   });
   // The file tree never shows the folders P9 does not crawl (HEAVY: node_modules, .venv and the like).
   api.get('/files/list', async (c) => {

@@ -338,3 +338,9 @@ dialog.window [data-folder] details.row summary small{font-size:12px}
 .onboard-tpls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px;text-align:left;background:var(--raised);color:var(--text)}.onboard-tpl b{font-weight:600}.onboard-tpl span{font-size:13px;color:var(--dim)}
 .space-pick{display:flex;align-items:center;gap:8px;margin:12px 12px 0;color:var(--dim)}.space-pick select{flex:1}
+/* A workspace image: whole and centred on a quiet surface, so a transparent PNG still reads; read-only, so no Save or file menu. */
+section[data-view=files]:has(#fileView[data-image]:not([hidden])) :is(#save,#moreFile){display:none}
+#imageView{flex:1;min-height:0;display:grid;place-items:center;padding:16px;overflow:auto;background:color-mix(in oklab,var(--raised) 60%,transparent)}
+#imageView[hidden]{display:none}
+#imageView img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
+#imageView .note{max-width:32ch;text-align:center;color:var(--dim);font-size:14px;line-height:1.45}

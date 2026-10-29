@@ -148,3 +148,11 @@ export const limitLine = (name, limits, now = Date.now(), signedOut = false) => 
   const old = age < 15 * 60000 ? 'just now' : hours < 1 ? Math.round(age / 60000) + ' min old' : hours < 48 ? Math.round(hours) + ' h old' : Math.round(hours / 24) + ' d old';
   return { name, text: part('5 h', limits.fiveHour) + ' · ' + part('week', limits.sevenDay) + ' · ' + old, stale: hours >= 1 };
 };
+
+// A workspace image from the Files pane, desktop and phone (rows 23/26/27 adds): read-only, through GET /files/image, which names
+// the type from the bytes. fileImageSrc lets only that type and plain base64 into an img tag; anything else is null.
+export const FILE_IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+export const fileImageError = { 'not-an-image': 'Not a PNG, JPEG, GIF or WebP image. P9 checks the file\'s first bytes, not its name.',
+  'request-refused': 'P9 does not show this file: it is over 6 MB, a link, or a locked name.', 'not-found': 'This file is no longer on disk.' };
+export const fileImageSrc = body => /^image\/(png|jpeg|gif|webp)$/.test(body?.mimeType) && typeof body.data === 'string' && /^[A-Za-z0-9+/]+=*$/.test(body.data)
+  ? 'data:' + body.mimeType + ';base64,' + body.data : null;
