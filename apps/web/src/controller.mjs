@@ -490,9 +490,18 @@ function toast(a, done) {
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
   $('#toasts').append(el); raiseToasts(); renderCards();
 }
-// D7: a modal sits in the top layer over any z-index, so the toast list is a popover put back on top after each toast or modal.
+// D7: a modal sits in the top layer over any z-index and makes the page outside it inert, so the toast list (a popover) lives
+// in the topmost open modal, or the page when none is open, and is put back on top after each toast and each modal opened or
+// closed anywhere (Settings, the connecting screen, a confirm): above it and clickable.
 if (sampleView) window.__toast = toast; // ponytail: the UI test's door, as window.__side
-const raiseToasts = () => { const box = $('#toasts'); if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); } };
+const raiseToasts = () => {
+  const box = $('#toasts'), into = modals.filter(d => d.matches(':modal')).pop() ?? document.body;
+  if (box.parentElement !== into) into.append(box);
+  if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); }
+};
+const showModal = HTMLDialogElement.prototype.showModal, modals = []; // in the order opened: the top layer's, not the page's
+HTMLDialogElement.prototype.showModal = function () { showModal.call(this); modals.splice(modals.indexOf(this) >>> 0, 1); modals.push(this); raiseToasts(); };
+document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElement) raiseToasts(); }, true);
 function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
@@ -2186,6 +2195,9 @@ async function landPets() {
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
 async function loadSetup(paths) {
   if (!window.p9?.chat) return null;
+  // D15a: a remote that is not answering (no P9 there yet) has no setup to read: none is asked, and no toast.
+  const st = await window.p9.getStatus?.().catch(() => null);
+  if (st?.mode === 'server' && st.status !== 'ok') return null;
   const r = await liveChat.call('setup', paths || {}).catch(() => null);
   return r?.status === 200 ? r.body : null;
 }
@@ -2479,7 +2491,8 @@ liveChat.call = async (action, payload = {}) => {
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
-  if (r.status >= 400 && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
+  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {
