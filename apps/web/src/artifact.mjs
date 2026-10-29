@@ -62,7 +62,8 @@ const runtime = (base, name) => {
     .catch(error => { runtimes.delete(name); throw error; }));
   return runtimes.get(name);
 };
-export function mountFrame(box, a, { page: src, base, onSelection, onState }) {
+// what: the word in the navigation message (a Mission card, row M5, says "card").
+export function mountFrame(box, a, { page: src, base, onSelection, onState, what = 'artifact' }) {
   const frame = document.createElement('iframe'), { html, runtimes: need } = frameDoc(a);
   frame.setAttribute('sandbox', 'allow-scripts'); // no allow-same-origin, allow-forms, allow-popups or allow-top-navigation
   frame.className = 'art-frame'; frame.title = a.title; frame.src = src;
@@ -71,7 +72,7 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState }) {
   frame.addEventListener('load', () => {
     if (++loads < 2 || left) return;
     left = true; frame.src = src;
-    onState?.('error', 'The artifact tried to open another page in its frame. P9 stopped it.');
+    onState?.('error', `The ${what} tried to open another page in its frame. P9 stopped it.`);
   });
   const hear = event => {
     if (!frame.isConnected) return removeEventListener('message', hear);
