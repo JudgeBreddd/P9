@@ -9,16 +9,16 @@ import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
 // Mission M4 (threat model row M4-b): with a space file the built-in layer draws and runs nothing, and migrate_mission moves
-// an install shaped like the owner's (an ICM folder in the workspace, logs and the Wiki vault outside it) to a space:
+// an install shaped like the owner's (a kit folder in the workspace, logs and the Wiki vault outside it) to a space:
 // backup first, then the space, then the setting, then the before and after list. Screenshots: the two side by side.
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const shot = (name, png) => { if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
-const SETTINGS = { primary: 'ICM/personal-projects/AGENTS.md', registry: 'ICM/personal-projects/workspace-hub/registry.json', waiting: 'ICM/_waiting', hub: 'ICM/personal-projects/workspace-hub' };
+const SETTINGS = { primary: 'kit/personal-projects/AGENTS.md', registry: 'kit/personal-projects/workspace-hub/registry.json', waiting: 'kit/_waiting', hub: 'kit/personal-projects/workspace-hub' };
 const tile = (id, title) => ({ id, title, script: id });
 const OWNER = { sections: [
-  { title: 'Needs you', text: 'Questions waiting on you, newest first.', folders: [{ id: 'needs-you', title: 'Waiting on you', path: 'ICM/_waiting', pattern: '*-*.md' }] },
-  { title: 'Ideas', folders: [{ id: 'needs-done', title: 'Needs done', path: 'ICM/_ideas/needs-done', pattern: '*.md' }, { id: 'ideas', title: 'Ideas', path: 'ICM/_ideas', pattern: '*-*.md' }] },
-  { title: 'Handoffs', folders: [{ id: 'handoffs', title: 'Project handoffs', path: 'ICM/personal-projects', pattern: 'HANDOFF.md', recursive: true }] },
+  { title: 'Needs you', text: 'Questions waiting on you, newest first.', folders: [{ id: 'needs-you', title: 'Waiting on you', path: 'kit/_waiting', pattern: '*-*.md' }] },
+  { title: 'Ideas', folders: [{ id: 'needs-done', title: 'Needs done', path: 'kit/_ideas/needs-done', pattern: '*.md' }, { id: 'ideas', title: 'Ideas', path: 'kit/_ideas', pattern: '*-*.md' }] },
+  { title: 'Handoffs', folders: [{ id: 'handoffs', title: 'Project handoffs', path: 'kit/personal-projects', pattern: 'HANDOFF.md', recursive: true }] },
   { title: 'Wiki', checklists: [
     { id: 'wiki-audit-review', title: 'Weekly Wiki audit', root: 'audit', path: 'runs', file: '_decision.md', newest: true, heading: 'Proposed register changes', marks: { x: 'Approve', parked: 'Park', ' ': 'Deny' } },
     { id: 'wiki-inbox', title: 'Wiki review inbox', root: 'wiki-inbox', file: '_decision.md', review: ['merge', 'reject', 'pending'] }] },
@@ -28,7 +28,7 @@ const OWNER = { sections: [
   { title: 'Solo runs', folders: [{ id: 'solo', title: 'Last solo run', root: 'solo', pattern: '*.md' }] }] };
 
 async function seed({ directory, workspace }) {
-  const icm = path.join(workspace, 'ICM'), hub = path.join(icm, 'personal-projects/workspace-hub');
+  const icm = path.join(workspace, 'kit'), hub = path.join(icm, 'personal-projects/workspace-hub');
   for (const folder of [hub, path.join(icm, 'personal-projects/alpha'), path.join(icm, 'personal-projects/beta'), path.join(icm, '_waiting'), path.join(icm, '_ideas/needs-done'),
     path.join(directory, 'icm-logs/incidents'), path.join(directory, 'vault/Review/Inbox/librarian-batch-1')]) await mkdir(folder, { recursive: true });
   const files = { 'personal-projects/AGENTS.md': '# Projects\n', 'personal-projects/alpha/HANDOFF.md': '# Alpha\nStatus: open\n', 'personal-projects/beta/HANDOFF.md': '# Beta\nStatus: open\n',
@@ -72,7 +72,7 @@ test('migrate_mission: backup first, the space, the setting, every item kept or 
   const settingsFile = path.join(instance.directory, 'settings.json'), oldSettings = await readFile(settingsFile, 'utf8');
   const before = await call(instance, '/mission/hub');
   assert.equal(before.status, 200);
-  assert.deepEqual(before.body.handoffs.map((row) => row.project), ['ICM/personal-projects/alpha', 'ICM/personal-projects/beta']);
+  assert.deepEqual(before.body.handoffs.map((row) => row.project), ['kit/personal-projects/alpha', 'kit/personal-projects/beta']);
 
   // The desktop before: the built-in layer's cards.
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-migrate-')), 'profile');
@@ -108,7 +108,7 @@ test('migrate_mission: backup first, the space, the setting, every item kept or 
   // (b) the list: kept with the item that shows it, lost in plain words, roots not allowed yet named, every kind of loss named.
   const list = await readFile(done.list, 'utf8');
   assert.match(list, /Roll back: copy .*settings\.json\.pre-space-\d+\.bak over .*settings\.json/);
-  assert.match(list, /^- Work in flight: ICM\/personal-projects\/alpha\/HANDOFF\.md: kept in Handoffs › Project handoffs$/m);
+  assert.match(list, /^- Work in flight: kit\/personal-projects\/alpha\/HANDOFF\.md: kept in Handoffs › Project handoffs$/m);
   assert.match(list, /^- Logs on this machine: backup\.log: lost/m);
   assert.match(list, /^- Incidents: 2026-10-28-disk\.md: lost/m);
   assert.match(list, /^- Wiki review inbox: librarian-batch-1: lost/m);
