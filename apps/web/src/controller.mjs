@@ -1122,7 +1122,7 @@ function applyOverview(o) {
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
-  M.space = o.space || [];
+  M.space = o.space || []; M.icmFiles = !!o.icmFiles;
   live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null;
   for (const s of M.space) if (!s.widget) M.scripts[s.title] ||= []; // a widget section is its panel, not a tile
   applyQueue(o);
@@ -1229,9 +1229,10 @@ async function runLive(m, id) {
 // section in the modal window (Builder, 2026-10-17: "hard to navigate because its so long ... group everything so
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
-// Fresh-install finding 3a: with no space (the registry-only layout) the four built-in panels show; on a space, only those a
-// section names (the ICM template adds all four).
-const widgetOn = w => sampleView || !M.space.length || M.space.some(s => s.widget === w);
+// Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
+// names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
+// written. A fresh install has neither, so it gets none.
+const widgetOn = w => sampleView || M.space.some(s => s.widget === w) || (M.icmFiles && !M.space.some(s => s.widget));
 const allNotes = () => [...(H.notices || []), ...S.alerts];
 const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
@@ -1332,7 +1333,8 @@ function renderMission() {
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   bindSpacePick($('#fMission'));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
-  const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
+  const sort = $('#fMission [data-sort]'); // only where Waiting on you is drawn (finding 3a)
+  if (sort) { sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); }; }
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));

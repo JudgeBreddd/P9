@@ -328,6 +328,19 @@ test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless 
     await shot('template-' + name + '-light');
     await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, theme);
   }
+  // An existing install (settings name a registry) on a space with sections but no widget section keeps all four, and
+  // no file is written for it.
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  await writeFile(path.join(instance.workspace, 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+  await writeFile(settingsFile, JSON.stringify({ ...JSON.parse(await readFile(settingsFile, 'utf8')), registry: 'registry.json' }));
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'homelab' }))).status, 200, 'homelab: space');
+  const spaceFile = path.join(instance.directory, '.config', 'p9', 'spaces', 'homelab.json');
+  const bytes = await readFile(spaceFile, 'utf8');
+  await page.reload();
+  await page.click('#rMission');
+  await page.waitForFunction(() => document.querySelector('#fMission [data-space-pick]')?.value === 'homelab', null, { timeout: 15000 });
+  assert.deepEqual(await widgets(), { waiting: true, usage: true, apps: true, notifications: true }, 'existing install');
+  assert.equal(await readFile(spaceFile, 'utf8'), bytes, 'the space file is unchanged');
 });
 
 test('First launch D1: the welcome screen offers a P9 on another machine', { timeout: 60000 }, async (t) => {
