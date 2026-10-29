@@ -41,8 +41,8 @@ export default function Shell() {
   useEffect(() => {
     const dispose = mountShell();
     let active = true, waited = false, connected = false, asking = false, starting = false, refused = '', timer: ReturnType<typeof setTimeout> | undefined;
-    // D20: the remote this window has shown, and since when the poll has failed (0: it answers).
-    let shown = '', downSince = 0;
+    // D20: the remote this window has shown.
+    let shown = '';
     // The title-bar badge (Remote · host or Local) and its machine menu: controller.mjs, serverMenu.
     // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
     const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
@@ -53,12 +53,10 @@ export default function Shell() {
         // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
         if (result.mode === 'server') {
           // D20: the full connecting layer only while this window has never shown this remote. A window that loaded before it
-          // answered loads once more, so its chats and Mission Control come from the remote. A drop later (the tunnel is rebuilt,
-          // a blip) never covers the page: after 3 s without an answer the title bar shows Reconnecting, and drafts stay usable.
+          // answered loads once more, so its chats and Mission Control come from the remote. After that a slow or failed poll
+          // (a slow network, the tunnel rebuilt) shows nothing: main reconnects on its own, and only what the user does waits
+          // where they did it (a send's working row, a page's Loading).
           const layer = document.getElementById('connecting') as HTMLDialogElement | null, ok = result.status === 'ok', known = shown === result.host;
-          downSince = ok ? 0 : downSince || Date.now();
-          const badge = document.getElementById('reconnecting');
-          if (badge) badge.hidden = ok || !known || Date.now() - downSince < 3000;
           if (layer && !ok && !known) {
             document.getElementById('connT')!.textContent = 'Connecting to ' + result.host;
             const why = document.getElementById('connWhy')!, install = document.getElementById('connInstall') as HTMLButtonElement, no = document.getElementById('connNo')!;
@@ -97,7 +95,7 @@ export default function Shell() {
           }
           if (ok && waited && !connected) return location.reload();
           if (ok) { connected = true; shown = result.host ?? ''; if (layer?.open) layer.close(); } else waited = true;
-          if (label) {
+          if (label && (ok || !known)) {
             label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
             label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Settings > Remote switches back to this computer.';
           }
