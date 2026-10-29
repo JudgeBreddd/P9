@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
@@ -1613,7 +1613,7 @@ one('#mission').addEventListener('click', (event) => {
     if (opened) { button.closest('dialog')?.close(); show('files'); } else button.lastElementChild!.textContent = one('#fileState').textContent;
   });
 });
-one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
+one<HTMLButtonElement>('#closeFile').onclick = () => { const back = state.file?.root; state.file = null; showImage(false); one<HTMLElement>('#fileView').hidden = true; one<HTMLElement>('#browser').hidden = false; online(); if (back) show('mission'); else void loadFolder(); };
 // A .md file can be read rendered: md shows raw HTML as text and links and images as plain text (threat model row 18).
 const preview = (on: boolean) => {
   one<HTMLElement>('#rendered').hidden = !on; one<HTMLElement>('#editor').hidden = on;
@@ -1628,7 +1628,28 @@ one('#sheetBody').addEventListener('click', (event) => {
   else if (button.dataset.file === 'preview') preview(!!one<HTMLElement>('#rendered').hidden); else discard();
   sheet.close();
 });
+// A workspace image (rows 23/26/27 adds; the owner, 2026-10-29: as on the desktop): read-only, through GET /files/image under the
+// phone's own root, with the desktop's words and check (helpers.mjs). No editor, no Save, no file menu.
+function showImage(on: boolean) {
+  const view = one<HTMLElement>('#imageView'), file = one<HTMLElement>('#fileView');
+  view.hidden = !on; one<HTMLElement>('#editor').hidden = on; if (on) one<HTMLElement>('#rendered').hidden = true;
+  if (on) file.dataset.image = ''; else { delete file.dataset.image; view.replaceChildren(); }
+}
+async function openImage(path: string) {
+  const view = one<HTMLElement>('#imageView'), name = path.split('/').pop()!, note = (text: string) => { view.innerHTML = '<p class="note">' + esc(text) + '</p>'; };
+  state.file = null; showImage(true); note('Loading…');
+  one('#openPath').textContent = name; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
+  one('#fileState').textContent = 'Read-only'; one<HTMLElement>('#conflict').hidden = true;
+  try {
+    const src = fileImageSrc(await request('/files/image?' + at(path)));
+    if (src) view.innerHTML = '<img src="' + src + '" alt="' + esc(name) + '">'; else note(fileImageError['not-an-image']);
+    online();
+  } catch (error) { const code = (error as Error).message; note((fileImageError as Record<string, string>)[code] ?? 'Not readable: ' + code); }
+  return true;
+}
 async function openFile(path: string, root?: string) {
+  if (!root && FILE_IMAGE.test(path)) return openImage(path);
+  showImage(false);
   try {
     const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }) };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
