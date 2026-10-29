@@ -563,6 +563,7 @@ export async function createDesktop({ state, open } = {}) {
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
+    image: ({ path: file }) => typeof file === 'string' && ['GET', '/files/image?' + new URLSearchParams({ path: file })],
     // The Chat Focus file window's Save (row 23): exactly the guarded PUT /files, which re-checks the path, locked names and the hash.
     save: ({ path: file, hash, content, ...rest }) => !Object.keys(rest).length && typeof file === 'string' && file.length <= 1000 && typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash)
       && typeof content === 'string' && Buffer.byteLength(content) <= 2 * 1024 * 1024 && ['PUT', '/files', { path: file, hash, content }],

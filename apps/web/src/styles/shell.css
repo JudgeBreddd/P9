@@ -656,3 +656,7 @@ dialog.connecting>button{margin-top:12px}
 .space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
 /* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */
 .tiles>.space-pick{grid-column:span 2;align-self:center;padding:0 4px}.tiles>.space-pick select{flex:1;min-width:0}
+/* A workspace image in the Chat Focus file window: whole, centred, on a quiet surface so a transparent PNG still reads. */
+#mdlBody .file-image{display:grid;place-items:center;padding:16px 20px;background:color-mix(in oklab,var(--muted) 45%,transparent)}
+#mdlBody .file-image img{display:block;max-width:100%;max-height:70vh;object-fit:contain;border-radius:var(--radius-sm,6px)}
+#mdlBody .file-image-note{margin:16px 20px}
