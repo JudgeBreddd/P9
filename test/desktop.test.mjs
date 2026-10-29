@@ -400,6 +400,40 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
   assert.equal((await page.evaluate(() => window.p9.mission('link', { id: 'new-note', confirm: true }))).status, 400);
 });
 
+// Fresh-install finding 3(b): Homelab and ICM sections are read-only lists of matching workspace files, not text-only stubs.
+test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list the matching workspace files', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'CLAUDE.md']) {
+    await mkdir(path.dirname(path.join(instance.workspace, file)), { recursive: true }); await writeFile(path.join(instance.workspace, file), '# ' + file);
+  }
+  const lists = { homelab: [['Services', ['stack/docker-compose.yml']], ['Logs', ['stack/logs/app.log', 'stack/nightly-backup.log']], ['Backups', ['stack/nightly-backup.log']]],
+    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Workspace rules', ['CLAUDE.md']]] };
+  for (const [name, sections] of Object.entries(lists)) {
+    const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
+    assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));
+    assert.equal((await page.evaluate((name) => window.p9.mission('space', { name }), name)).status, 200, name + ': space');
+    await page.reload();
+    await page.click('#rMission');
+    await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
+    for (const [title, files] of sections) {
+      await page.locator(`#fMission [data-group="${title}"]`).click();
+      await page.locator('#mdlBody [data-folder="0"]').click();
+      await page.locator('#mdlBody [data-i]').first().waitFor({ timeout: 10000 });
+      assert.deepEqual((await page.locator('#mdlBody [data-i] .truncate:not(.sub)').allInnerTexts()).map((s) => s.trim()).sort(), files, name + ': ' + title);
+      if (title === sections[0][0]) {
+        await shot('template-' + name + '-list-dark');
+        await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+        await shot('template-' + name + '-list-light');
+        await page.evaluate(() => { const h = document.documentElement; h.classList.add('dark'); delete h.dataset.theme; });
+      }
+      await page.reload();
+      await page.click('#rMission');
+      await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
+    }
+  }
+});
+
 test('First launch D1: the welcome screen offers a P9 on another machine', { timeout: 60000 }, async (t) => {
   const { page, shot } = await emptyFirst(t);
   await openWelcome(page);
