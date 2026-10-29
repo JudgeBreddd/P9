@@ -4,11 +4,12 @@ const web = (url) => typeof url === 'string' && /^https?:\/\/[^\s]+$/.test(url);
 const host = (url) => { try { return new URL(url).host; } catch { return ''; } };
 
 // r: the daemon's answer ({ shape } or { why, printed }), { allow: script title } before the user's Allow, { error }, or nothing yet.
-export function tileHtml(r, esc) {
+// what: the word for it in the text ('card' for a Mission card, row M5).
+export function tileHtml(r, esc, what = 'tile') {
   if (!r) return '<p class="tile-note">Loading…</p>';
-  if (r.allow) return `<p class="tile-note">Runs ${esc(r.allow)} every 30 s while Mission shows this tile.</p><button type="button" class="tile-allow" data-tile-allow>Allow</button>`;
+  if (r.allow) return `<p class="tile-note">Runs ${esc(r.allow)} every 30 s while Mission shows this ${what}.</p><button type="button" class="tile-allow" data-tile-allow>Allow</button>`;
   if (r.error) return `<p class="tile-note">Could not run it: ${esc(r.error)}</p>`;
-  if (r.why) return `<p class="tile-note">This tile's script ${esc(r.why)}${r.printed ? ':' : '.'}</p>${r.printed ? `<pre class="tile-printed">${esc(r.printed)}</pre>` : ''}`;
+  if (r.why) return `<p class="tile-note">This ${what}'s script ${esc(r.why)}${r.printed ? ':' : '.'}</p>${r.printed ? `<pre class="tile-printed">${esc(r.printed)}</pre>` : ''}`;
   const s = r.shape;
   if (s.type === 'stat') return `<p class="tile-stat"><b>${esc(s.value)}</b>${s.unit ? `<span>${esc(s.unit)}</span>` : ''}</p>${s.label ? `<p class="tile-note">${esc(s.label)}</p>` : ''}`;
   if (s.type === 'list') return s.rows.length ? `<ul class="tile-list">${s.rows.map(x => `<li>${web(x.link) ? `<a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer" data-tile-link>${esc(x.title)}</a>` : `<span>${esc(x.title)}</span>`}`

@@ -139,7 +139,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     assert.match(o.top, /^blocked:/, 'top.location =');
     assert.match(o.fetchLocal, /^blocked:TypeError/, 'fetch');
     assert.equal(o.img, 'blocked:error', 'an <img> from the network');
-    assert.ok(['connect-src', 'img-src', 'style-src'].every((d) => r.v.includes(d)), 'the frame CSP refused fetch, images and CSS: ' + r.v.join(', '));
+    assert.ok(['connect-src', 'img-src', 'style-src-elem'].every((d) => r.v.includes(d)), 'the frame CSP refused fetch, images and CSS: ' + r.v.join(', '));
     assert.equal(hits, 0, 'nothing reached the network server');
     assert.equal(page.url(), 'p9://app/', 'the shell is still P9');
     await card('inbox').scrollIntoViewIfNeeded();

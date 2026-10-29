@@ -1,7 +1,7 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
-import { artifactView, chipArtifact, mountFrame } from './artifact.mjs';
+import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
@@ -1355,13 +1355,13 @@ const cardJson = new WeakMap<HTMLElement, unknown>();
 async function feedCard(tile: HTMLElement, answer: Json) {
   const note = tile.querySelector<HTMLElement>('.card-note')!, box = tile.querySelector<HTMLElement>('.card-frame')!;
   const send = () => { const frame = box.querySelector('iframe'); if (cardJson.has(tile) && tile.dataset.rendered === 'rendered') frame?.contentWindow?.postMessage({ p9: 'data', json: cardJson.get(tile) }, '*'); };
-  if (answer.json !== undefined) { cardJson.set(tile, answer.json); note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape);
+  if (answer.json !== undefined) { cardJson.set(tile, answer.json); note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape, 'card');
   if (box.dataset.read) return send();
   box.dataset.read = '1';
   const response = await fetch('/mission/card?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
   const body = await response?.json().catch(() => ({}));
   if (response?.status !== 200 || typeof body?.html !== 'string') { note.innerHTML = `<p class="tile-note">Could not read the card: ${escape(body?.detail || body?.error || 'no connection')}</p>`; return; }
-  mountFrame(box, { kind: 'html', title: tile.dataset.card, src: body.html }, { page: '/frame/', base: '/frame/', what: 'card', onState: (kind: string, text: string) => {
+  mountCard(box, tile.dataset.card, body.html, { page: '/frame/', base: '/frame/', onState: (kind: string, text: string) => {
     tile.dataset.rendered = kind;
     if (kind === 'rendered') send();
     if (kind === 'error') note.textContent = 'The card stopped with an error: ' + text;

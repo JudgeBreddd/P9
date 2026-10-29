@@ -191,11 +191,11 @@ export async function draftNames(drafts) {
 export function combine(reg, space) {
   const invalid = [...reg.invalid, ...space.invalid];
   const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
-  const logs = new Set(unique(space.sections.flatMap((section) => [...section.logs, ...(section.data ?? [])]), 'space', invalid));
+  const logs = new Set(unique(space.sections.flatMap((section) => [...section.logs, ...(section.data ?? []), ...(section.cards ?? [])]), 'space', invalid));
   const folders = new Set(unique(space.sections.flatMap((section) => [...section.folders, ...(section.checklists ?? [])]), 'space', invalid));
   const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)), folders: section.folders.filter((folder) => folders.has(folder)),
     ...(section.checklists ? { checklists: section.checklists.filter((item) => folders.has(item)) } : {}),
-    ...(section.data ? { data: section.data.filter((tile) => logs.has(tile)) } : {}) }));
+    ...(section.data ? { data: section.data.filter((tile) => logs.has(tile)) } : {}), ...(section.cards ? { cards: section.cards.filter((card) => logs.has(card)) } : {}) }));
   return { ...reg, scripts, invalid, space: sections };
 }
 
@@ -329,8 +329,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
     return { waiting: settings.waiting, scripts: reg.scripts.filter((script) => !applies.has(script.id)).map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links, checklists }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
-        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.

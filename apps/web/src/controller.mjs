@@ -16,7 +16,7 @@ import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
-import { artifactView, artifactsIn, chipArtifact, mountFrame } from './artifact.mjs';
+import { artifactView, artifactsIn, chipArtifact, mountCard } from './artifact.mjs';
 
 export function mountShell() {
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
@@ -1524,14 +1524,14 @@ function missionModal(m, body, row) {
     // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
     m.tiles ||= {}; m.cardHtml ||= {};
     const runs = [...(sp?.data || []), ...(sp?.cards || [])];
-    const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc);
+    const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
     if (runs.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
     // ponytail: the modal draws whole, so a card's frame is made again on each draw (a tile's answer, a checklist press) and
     // gets the last JSON again; a card keeps no state of its own across draws.
     for (const c of sp?.cards || []) {
       const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html;
       if (typeof html !== 'string') continue;
-      const frame = mountFrame(box.querySelector('.card-frame'), { kind: 'html', title: c.title, src: html }, { ...FRAME, what: 'card', onState: (kind, text) => {
+      const frame = mountCard(box.querySelector('.card-frame'), c.title, html, { ...FRAME, onState: (kind, text) => {
         box.dataset.rendered = kind;
         if (kind === 'rendered' && m.tiles[c.id]?.json !== undefined) frame.contentWindow?.postMessage({ p9: 'data', json: m.tiles[c.id].json }, '*');
         if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
