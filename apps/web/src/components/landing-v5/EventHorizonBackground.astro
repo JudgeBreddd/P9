@@ -1,0 +1,20 @@
+---
+import poster from './black-hole.webp';
+import loop from './rendered/horizon-loop.mp4?url';
+import './background.css';
+---
+<div class="p9-cosmos" aria-hidden="true">
+  <div class="p9-cosmos__scene">
+    <img class="p9-cosmos__poster" src={poster.src} width="1536" height="1024" alt="" decoding="async" />
+    <video class="p9-cosmos__video" muted loop playsinline preload="metadata" poster={poster.src}>
+      <source src={loop} type="video/mp4" />
+    </video>
+  </div>
+</div>
+<script>
+  import { mountLandingVideo } from './playback.mjs';
+  document.querySelectorAll('.p9-cosmos').forEach(element => {
+    const playback = mountLandingVideo(element);
+    document.addEventListener('astro:before-swap', playback.destroy, { once: true });
+  });
+</script>
