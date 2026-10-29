@@ -53,6 +53,8 @@ test('M3 look: tile shapes, a bad shape, Allow and a link on desktop (dark, ligh
     await page.click('#fMission [data-group="Home"]');
     await page.locator('#mdlBody .tile-rings figure').first().waitFor({ timeout: 15000 });
     await page.locator('#mdlBody .tile-printed').waitFor({ timeout: 15000 });
+    // The title counts tiles and links too (it said "Home · 0 scripts" for a section of only tiles).
+    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 7 items');
     const body = await page.locator('#mdlBody').innerText();
     assert.match(body, /12[\s\S]*notes[\s\S]*Plan[\s\S]*web[\s\S]*down[\s\S]*Root[\s\S]*Allow[\s\S]*Docs/);
     await settled(page);
