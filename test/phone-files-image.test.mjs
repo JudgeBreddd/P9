@@ -26,6 +26,7 @@ test('Phone Files pane: a workspace image shows read-only through GET /files/ima
     await mkdir(path.join(paths.workspace, 'pics'), { recursive: true });
     await writeFile(path.join(paths.workspace, 'pics', 'dot.png'), png);
     await writeFile(path.join(paths.workspace, 'pics', 'notes.png'), 'secret text named like an image\n');
+    return {};
   } });
   const outside = path.join(server.directory, 'outside');
   await mkdir(outside); await writeFile(path.join(outside, 'away.png'), png);
