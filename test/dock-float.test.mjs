@@ -74,7 +74,7 @@ test('Floating Shell dock: nothing light drawn over the terminal', { skip: proce
     theme: document.querySelector('#themeBtn').disabled, title: document.querySelector('#themeBtn').title }));
   await page.click('[data-focus-btn="dev"]'); await page.waitForTimeout(800);
   await evidence(page, 'dev-focus-docked');
-  assert.deepEqual(await dev(), { float: false, floatButton: false, theme: true, title: 'Look: not available in Dev Focus, where the editor would cover the picker' });
+  assert.deepEqual(await dev(), { float: false, floatButton: false, theme: true, title: 'Look: pick it in Chat or Mission Control, where it applies to Dev Focus too (the editor here would cover the picker)' });
   await page.click('[data-focus-btn="chat"]'); await page.waitForTimeout(500);
-  assert.deepEqual(await dev(), { float: true, floatButton: true, theme: false, title: 'Look: the theme of this focus mode' });
+  assert.deepEqual(await dev(), { float: true, floatButton: true, theme: false, title: 'Look: the theme of every focus mode' });
 });
