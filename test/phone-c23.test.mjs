@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
 import os from 'node:os';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
@@ -89,6 +90,15 @@ test('P4, P6, P7, P17: boot black hole, refresh turns while it loads, Usage relo
     const rules = [...document.styleSheets].flatMap((s) => all(s.cssRules));
     return { keyframes: rules.some((r) => r.type === CSSRule.KEYFRAMES_RULE && r.name === 'bob'), hole: rules.some((r) => r.selectorText?.includes('.hole') && /\bbob\b/.test(r.style?.animation ?? '')) }; });
   assert.deepEqual(bob, { keyframes: true, hole: true });
+  // The real P9 logo top left (docs/brand/icon-simplified-256.png at 64 px), loaded, not the old D-in-a-ring placeholder.
+  await page.locator('[data-bar="chat"] img.mark').evaluate((el) => el.decode());
+  const mark = await page.locator('[data-bar="chat"] img.mark').evaluate((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width), new URL(el.src).pathname, el.naturalWidth]; });
+  assert.deepEqual(mark, [16, 20, '/p9-mark.png', 64]);
+  await shot(page, 'c23-phone-mark', { clip: { x: 0, y: 0, width: 390, height: 60 } });
+  // The home-screen icon: the manifest and the apple-touch icon name only the brand PNG (docs/brand/icon-dark-512.png).
+  const home = await page.evaluate(async () => ({ manifest: (await (await fetch('/manifest.webmanifest')).json()).icons.map((i) => i.src),
+    touch: document.querySelector('link[rel="apple-touch-icon"]').getAttribute('href'), bytes: (await (await fetch('/p9-icon.png')).arrayBuffer()).byteLength }));
+  assert.deepEqual(home, { manifest: ['/p9-icon.png'], touch: '/p9-icon.png', bytes: fs.statSync(new URL('../docs/brand/icon-dark-512.png', import.meta.url)).size });
   // P6: Refresh says it is loading, then when it last loaded.
   let loads = 0; page.on('request', (request) => { if (new URL(request.url()).pathname === '/usage') loads++; });
   await page.click('[data-nav="usage"]');

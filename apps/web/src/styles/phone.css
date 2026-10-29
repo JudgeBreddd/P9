@@ -62,6 +62,7 @@ section[data-view=chat]:not([hidden]){display:flex;flex-direction:column;overflo
 #stale,#gap{flex:none;min-height:32px;display:flex;align-items:center;margin:0;padding:4px 16px;font-size:13px;font-weight:650;background:#4a3512;color:#ffe4a4}
 .bar{position:sticky;top:0;z-index:4;flex:none;display:flex;align-items:center;gap:4px;min-height:calc(44px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 8px 0 16px;background:color-mix(in oklch,var(--bg) 85%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
 .bar.ruled{box-shadow:0 1px 0 rgba(255,255,255,.08)}
+.bar .mark{flex:none;width:20px;height:20px;margin-right:8px;border-radius:5px}
 .bar .title{flex:1;min-width:0;display:grid}
 .bar h1{font-size:17px;font-weight:600;line-height:1.2;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar small{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

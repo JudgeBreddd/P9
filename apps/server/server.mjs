@@ -864,6 +864,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // The theme's boot script (DuwopBoot): puts the phone's saved look on the page before it paints.
     remoteApp.get('/duwop-boot.js', async (c) => c.body(await readAsset(path.join(webRoot, 'duwop-boot.js')), 200,
       { 'content-type': types['.js'] }));
+    remoteApp.get('/p9-mark.png', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-mark.png')), 200,
+      { 'content-type': 'image/png' }));
     remoteApp.get('/p9-icon.png', async (c) => c.body(await readAsset(path.join(webRoot, 'p9-icon.png')), 200,
       { 'content-type': 'image/png' }));
     // Item 19 (row 65): the artifact frame's page, and the runtimes the phone page fetches and hands to it (Mermaid, React, TypeScript).
