@@ -2330,10 +2330,13 @@ async function landPets() {
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
+// The last status's mode: the wizard's in-app admin password is for this computer only (row 61).
+let setupMode = '';
 async function loadSetup(paths) {
   if (!window.p9?.chat) return null;
   // D15a: a remote that is not answering (no P9 there yet) has no setup to read: none is asked, and no toast.
   const st = await window.p9.getStatus?.().catch(() => null);
+  setupMode = st?.mode ?? '';
   if (st?.mode === 'server' && st.status !== 'ok') return null;
   const r = await liveChat.call('setup', paths || {}).catch(() => null);
   return r?.status === 200 ? r.body : null;
@@ -2411,6 +2414,10 @@ const WIZ_ERR = {
   'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
   'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Continue without it goes on: chats still work, they use the agent P9 ships.'],
   'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
+  'wrong-password': ['That password did not work.', 'Check it and press Install again.'],
+  'not-allowed': ['Your account cannot install software on this computer.', 'Someone who administers it must install it, then Retry.'],
+  'admin-failed': ['The install did not finish.', 'Retry. If it stops again, your package manager may be busy or offline.'],
+  'password-empty': ['Type your admin password first.', 'It is the one you use to sign in to this computer.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
   'no-sign-in-page': ['The sign-in has not shown its page yet.', 'Wait a few seconds, then try again.'],
@@ -2517,12 +2524,17 @@ function wizRender() {
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
   } else if (key === 'terminal') {
     // Item 15 (threat model row 61): what P9 cannot carry. The reason comes first, then why it needs the admin password,
-    // then the command; Run in a terminal types it into a P9 terminal and sudo asks there. tmux cannot: P9's terminals are tmux.
-    const admin = (s.dependencies || []).filter(x => x.admin);
+    // then the command. In the desktop app on its own computer, the admin password field and Install run it (desktop main,
+    // p9:admin-install); elsewhere Run in a terminal types it into a P9 terminal and sudo asks there (tmux: Copy, since P9's terminals are tmux).
+    const admin = (s.dependencies || []).filter(x => x.admin), here = !!window.p9?.adminInstall && setupMode !== 'server';
     title = admin.length ? 'This needs your admin password' : 'Terminal';
     body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(ADMIN_NAMES[x.id] || esc(x.id), esc(x.why), yes(false, '', 'Not installed'))}`
         + '<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This one goes into the system itself, and only an admin can change that, so your computer asks for your password.</p>'
-        + (x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
+        + (x.command && here && ['tmux', 'ssh'].includes(x.id) ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code></div>`
+          + `<label class="sm wiz-pw-label" for="wizPw-${esc(x.id)}">Admin password for your account on this computer</label>`
+          + `<div class="set-row"><input data-slot="input" type="password" id="wizPw-${esc(x.id)}" data-admin-pw="${esc(x.id)}" autocomplete="off" spellcheck="false" maxlength="1024">${btn('pw:' + x.id, 'Install', 'default')}</div>`
+          + '<p class="muted sm">P9 runs the command above as admin with it. It goes once to sudo on this computer; never saved, never shown in any log.</p>'
+        : x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
           + (x.id === 'tmux' ? btn('copy:' + x.id, 'Copy') + '</div><p class="muted sm">P9\'s terminals need tmux, so run it in your own terminal app, then Retry.</p>'
             : btn('admin:' + x.id, 'Run in a terminal') + '</div><p class="muted sm">Types it into a P9 terminal. Read it, press Enter, then type your password there.</p>')
           : '<p class="muted sm">Install it with your system\'s package manager, then Retry.</p>')
@@ -2594,6 +2606,13 @@ $('#welDlg').addEventListener('click', async e => {
     W.picked = on;
     W.note.pick = r.status === 200 ? null : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 200) W.i += 1;
+  }
+  // Row 61: the password goes to desktop main once; the field is emptied first.
+  if (act === 'pw') {
+    const field = $('#welDlg').querySelector(`[data-admin-pw="${agent}"]`), password = field?.value ?? '';
+    if (field) field.value = '';
+    const r = password ? await run(() => window.p9.adminInstall(agent, password).catch(() => ({ error: 'admin-failed' }))) : { error: 'password-empty' };
+    W.note[agent] = r?.ok ? null : { error: r?.error || 'admin-failed' };
   }
   if (act === 'copy') { const x = W.s?.dependencies?.find(d => d.id === agent); if (x?.command) copy(x.command, b); return; }
   if (act === 'admin') {

@@ -10,7 +10,8 @@ import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, HOST, PASSWORD } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
-import { installRemote, sourceArchive } from './remote-install.mjs';
+import { installRemote, sourceArchive, adminLocal, adminArgs } from './remote-install.mjs';
+import { adminCommand } from '../server/deps.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
@@ -756,6 +757,14 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost && serverError === 'server-no-p9' && remoteInstall?.phase === 'admin' && remoteInstall.command) return runInstall(args[0]);
     if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
     return { error: 'remote-admin-refused' };
+  });
+  // Row 61 (commit C): the wizard's Install for tmux or ssh on this computer, with the admin password typed there. The page
+  // names the package only; the command is deps.mjs's own for a package missing now. Not in remote mode: that list is the remote's.
+  ipcMain.handle('p9:admin-install', async (event, ...args) => {
+    if (!fromApp(event) || !adminArgs(args)) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'admin-remote' };
+    const command = await adminCommand(args[0]);
+    return command ? adminLocal(command, args[1]) : { error: 'nothing-to-install' };
   });
   // Start P9 there: this window's remote answered without a running P9 (row I1: never a terminal command). ok connects now.
   ipcMain.handle('p9:remote-start', async (event, ...args) => {

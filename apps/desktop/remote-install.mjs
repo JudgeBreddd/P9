@@ -3,13 +3,30 @@
 // One fixed script over the user's own ssh (BatchMode: keys or an agent, never a password prompt): it unpacks P9's source
 // into ~/p9 there and runs install.sh --headless. Where an admin is needed it stops with what is missing, why, and the one
 // command (P9_ADMIN lines); the window asks for the admin password and runs it again with that (threat model row I2).
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { names } from './server-update.mjs';
 // PASSWORD: one line, so the remote's read takes exactly it and the archive after it is untouched.
 import { HOST, SSH_OPTIONS, PASSWORD } from './remote.mjs';
 export { PASSWORD };
+// Row 61 (commit C): a system package missing on this computer, installed with the admin password typed into the wizard.
+// command: deps.mjs's own (adminCommand), run as admin without its leading sudo; the password is stdin's first line,
+// as row I2's. -> { ok } | { error: 'wrong-password' | 'not-allowed' | 'admin-failed' | 'admin-refused' }.
+// p9:admin-install's arguments: the package (tmux or ssh) and the password, nothing else.
+export const adminArgs = (args) => Array.isArray(args) && args.length === 2 && ['tmux', 'ssh'].includes(args[0]) && PASSWORD(args[1]);
+export function adminLocal(command, password, sh = 'sh') {
+  if (typeof command !== 'string' || !command.startsWith('sudo ') || !PASSWORD(password)) return Promise.resolve({ error: 'admin-refused' });
+  const root = command.replace(/(^|; |&& |\| )sudo /g, '$1');
+  return new Promise((resolve) => {
+    const child = execFile(sh, ['-c', TOOLS + '\nIFS= read -r p9_pw || true\nexec </dev/null\np9_admin "$1"', 'p9', root], { timeout: 600000 }, (error, out) => {
+      const said = /^P9_ADMIN (wrong-password|not-allowed)$/m.exec(out ?? '')?.[1];
+      resolve(error ? { error: said ?? 'admin-failed' } : { ok: true });
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(password + '\n');
+  });
+}
 
 // The same release archives a packaged app's update downloads (apps/server/update.mjs ARCHIVE).
 const ARCHIVE = 'https://github.com/JudgeBreddd/P9/archive/refs/tags/';

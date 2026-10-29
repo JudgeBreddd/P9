@@ -9,7 +9,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } f
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installRemote, PASSWORD } from '../apps/desktop/remote-install.mjs';
+import { installRemote, PASSWORD, adminLocal, adminArgs } from '../apps/desktop/remote-install.mjs';
 import { remoteMode } from '../apps/desktop/remote.mjs';
 import { stage, bash, nodeLog, stopDaemon } from './install-runtime.test.mjs';
 
@@ -137,4 +137,32 @@ test('I2: Keep it running where linger needs an admin: refused with the command,
   const calls = (await read(path.join(s.dir, 'sudo-argv.txt'))).split('---\n').filter((c) => c.includes('p9-admin\n'));
   assert.equal(calls.at(-1).trimEnd().split('\n').at(-1), 'loginctl enable-linger ' + me);
   await noPassword(s.dir, []);
+});
+
+// Row 61 (commit C): the wizard's Install on this computer. adminLocal runs deps.mjs's command less its sudo, through the same
+// p9_admin; sh is a wrapper that puts the stub sudo and apt-get first on PATH.
+async function local() {
+  const s = await bare(), sh = path.join(s.dir, 'sh-here');
+  await writeFile(sh, '#!/bin/sh\nPATH="' + s.bin + '"; export PATH\nexec ' + real('sh') + ' "$@"\n');
+  await chmod(sh, 0o755);
+  return { ...s, sh };
+}
+test('Row 61: the wizard password installs the package: the command shown less sudo, the password nowhere', { skip, timeout: 30000 }, async () => {
+  const s = await local();
+  assert.deepEqual(await adminLocal('sudo apt-get install -y tmux', PW, s.sh), { ok: true });
+  assert.match(await read(path.join(s.dir, 'apt.txt')), /^install -y tmux$/m);
+  const ran = (await read(path.join(s.dir, 'sudo-argv.txt'))).split('---\n').filter((c) => c.includes('p9-admin\n'));
+  assert.equal(ran.at(-1).trimEnd().split('\n').at(-1), 'apt-get install -y tmux');
+  assert.equal(await read(path.join(s.dir, 'apt-stdin.txt')), '');
+  await noPassword(s.dir, []);
+});
+test('Row 61: a wrong password or an account without sudo runs nothing; only tmux or ssh and one password string pass', { skip, timeout: 30000 }, async () => {
+  const s = await local();
+  assert.deepEqual(await adminLocal('sudo apt-get install -y tmux', 'not it', s.sh), { error: 'wrong-password' });
+  await writeFile(path.join(s.dir, 'not-allowed'), '');
+  assert.deepEqual(await adminLocal('sudo apt-get install -y tmux', PW, s.sh), { error: 'not-allowed' });
+  assert.equal(await read(path.join(s.dir, 'apt.txt')), '');
+  assert.deepEqual(await adminLocal('apt-get install -y tmux', PW, s.sh), { error: 'admin-refused' }, 'deps.mjs commands start with sudo');
+  for (const bad of [['sandbox', 'x'], ['libatomic1', 'x'], ['ssh', 'a\nb'], ['ssh', ''], ['ssh', 'x', 'id'], ['tmux'], 'tmux', null]) assert.equal(adminArgs(bad), false, JSON.stringify(bad));
+  assert.equal(adminArgs(['ssh', PW]), true);
 });
