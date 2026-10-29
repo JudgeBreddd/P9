@@ -81,10 +81,19 @@ test('P3, P5, P16, P19, K8: running chat bar, named and capped context, a readab
   console.log('PASS P3 P5 P16 P19 K8');
 });
 
-test('P4, P6, P7, P17: boot P9 logo, refresh turns while it loads, Usage reloads itself, iPhone focus zoom off', { timeout: 120000 }, async (t) => {
+test('P4, P6, P7, P17: boot black hole, refresh turns while it loads, Usage reloads itself, iPhone focus zoom off', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, {});
   const { page } = await phone(t, server);
-  // The loading mark is the real P9 logo, breathing (phone-loading.test.mjs watches it on a held first load).
+  // P4: the loading mark is a drawn black hole that bobs with the old squash and shadow timing (the broken ring around it
+  // turns; phone-loading.test.mjs watches it on a held first load). The boot screen is gone once the page loads, so its rules
+  // are read from the stylesheet.
+  const bob = await page.evaluate(() => { const all = (rules) => [...rules].flatMap((r) => [r, ...(r.cssRules ? all(r.cssRules) : [])]);
+    const rules = [...document.styleSheets].flatMap((s) => all(s.cssRules));
+    const anim = (part) => rules.find((r) => r.selectorText === '#boot ' + part && r.style?.animationName)?.style.animation ?? '';
+    return { keyframes: ['bob', 'shade', 'spin'].every((name) => rules.some((r) => r.type === CSSRule.KEYFRAMES_RULE && r.name === name)),
+      hole: anim('.hole'), shade: anim('.shade'), ring: anim('.ring') }; });
+  assert.equal(bob.keyframes, true, 'bob, shade and spin keyframes');
+  assert.match(bob.hole, /0\.9s.*bob/); assert.match(bob.shade, /0\.9s.*shade/); assert.match(bob.ring, /1\.1s.*spin/);
   // The real P9 logo top left (docs/brand/icon-simplified-256.png at 64 px), loaded, not the old D-in-a-ring placeholder.
   await page.locator('[data-bar="chat"] img.mark').evaluate((el) => el.decode());
   const mark = await page.locator('[data-bar="chat"] img.mark').evaluate((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width), new URL(el.src).pathname, el.naturalWidth]; });
