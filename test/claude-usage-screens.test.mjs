@@ -52,6 +52,32 @@ test('live Claude usage: every desktop Claude chat and Mission Control show the 
   await shot(mission, 'live-usage-mission');
 });
 
+test('live Claude usage: a hidden desktop window stops reading /usage, so the daemon\'s poll can stop; shown again it reads at once', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-usage-hidden-')), 'profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#tabs').waitFor({ state: 'attached', timeout: 15000 });
+  // Count the page's usage reads in main: the real handler is swapped for one that counts and answers as it would.
+  await app.evaluate(({ ipcMain }) => { globalThis.usageReads = 0; ipcMain.removeHandler('p9:usage');
+    ipcMain.handle('p9:usage', () => { globalThis.usageReads++; return { status: 503, body: { state: 'unavailable' } }; }); });
+  const reads = () => app.evaluate(() => globalThis.usageReads);
+  // The container's window manager never tells a hidden Electron window it is hidden, so the page is told directly: what
+  // Chromium reports when the window is minimized or hidden on a real desktop.
+  const hidden = (yes) => page.evaluate((h) => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+    document.dispatchEvent(new Event('visibilitychange')); }, yes);
+  await hidden(true);
+  const before = await reads();
+  await new Promise((resolve) => setTimeout(resolve, 65000)); // longer than one 60 s poll
+  assert.equal(await reads(), before, 'no usage read while the window is hidden');
+  await hidden(false);
+  await until(async () => await reads() > before, 'a usage read once the window is shown', 5000);
+});
+
 test('live Claude usage: the phone\'s Usage tab shows the polled figures', { timeout: 120000 }, async (t) => {
   const server = await remoteDaemon(t, { args });
   const { page } = await phone(t, server);
