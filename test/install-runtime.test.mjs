@@ -12,9 +12,10 @@ import { installRemote } from '../apps/desktop/remote-install.mjs';
 const skip = process.platform === 'win32' ? 'sh' : false;
 const uid = String(process.getuid?.());
 
-async function stage(folder) {
+// linger: 'allowed' (systemd's default for a user's own account: the folder appears) or 'refused' (a polkit rule asks for a password).
+async function stage(folder, linger = 'refused') {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-xdg-')), home = path.join(dir, 'home'), bin = path.join(dir, 'bin');
-  const run = path.join(dir, 'run', 'user', uid), log = path.join(dir, 'node.log');
+  const run = path.join(dir, 'run', 'user', uid), log = path.join(dir, 'node.log'), lingerLog = path.join(dir, 'loginctl.log');
   await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true }); await mkdir(bin);
   // An installed service: install.sh takes its update path, which runs node (deps, the editor server) and stops.
   await writeFile(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service'), '');
@@ -27,10 +28,12 @@ async function stage(folder) {
   await writeFile(path.join(bin, 'node'), '#!/bin/sh\n[ "$1" = --version ] && { echo v26.10.0; exit 0; }\necho "XDG=$XDG_RUNTIME_DIR $*" >> "' + log + '"\n');
   // ssh: runs the command as the remote's non-interactive login would, with no XDG_RUNTIME_DIR.
   await writeFile(path.join(bin, 'ssh'), '#!/bin/sh\nfor last; do :; done\nunset XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS\nexport HOME="' + home + '" PATH="' + bin + ':$PATH"\nexec sh -c "$last"\n');
-  for (const t of ['git', 'systemctl', 'systemd-run', 'sha256sum', 'curl', 'node', 'ssh']) await chmod(path.join(bin, t), 0o755);
+  await writeFile(path.join(bin, 'loginctl'), '#!/bin/sh\n[ "$1" = show-user ] && exit 1\necho "$*" >> "' + lingerLog + '"\n'
+    + (linger === 'allowed' ? 'mkdir -p "' + run + '"\n' : 'echo "Interactive authentication required." >&2; exit 1\n'));
+  for (const t of ['git', 'systemctl', 'systemd-run', 'sha256sum', 'curl', 'node', 'ssh', 'loginctl']) await chmod(path.join(bin, t), 0o755);
   const env = { ...process.env, HOME: home, PATH: bin + ':' + process.env.PATH };
   delete env.XDG_RUNTIME_DIR; delete env.DBUS_SESSION_BUS_ADDRESS;
-  return { dir, home, bin, run, log, env, script: path.join(dir, 'src', 'p9', 'scripts', 'install.sh') };
+  return { dir, home, bin, run, log, lingerLog, env, script: path.join(dir, 'src', 'p9', 'scripts', 'install.sh') };
 }
 const bash = (s) => new Promise((resolve) => {
   const child = spawn('bash', [s.script, '--headless'], { env: s.env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -63,4 +66,19 @@ test('Install on a remote with no user session: the window gets the how-to line,
   assert.equal(shown.length, 1, result.tail);
   assert.match(shown[0], /loginctl enable-linger \S+ .*Install again\.$/);
   console.log('PASS install without XDG_RUNTIME_DIR: the window shows: ' + shown[0]);
+});
+
+test('install.sh --headless with no XDG_RUNTIME_DIR and no folder: linger for the own account, no password ask, then the folder is used', { skip, timeout: 30000 }, async () => {
+  const s = await stage(false, 'allowed'), { code, out } = await bash(s);
+  assert.equal(code, 0, out);
+  assert.equal(await readFile(s.lingerLog, 'utf8'), '--no-ask-password enable-linger\n', 'its own account (no name), never a password prompt');
+  const calls = (await nodeLog(s)).trim().split('\n');
+  assert.ok(calls.every((line) => line.startsWith('XDG=' + s.run + ' ')), calls.join('\n'));
+});
+
+test('install.sh --headless with linger refused asks for no password and does not wait', { skip, timeout: 30000 }, async () => {
+  const s = await stage(false, 'refused'), started = Date.now(), { code } = await bash(s);
+  assert.notEqual(code, 0);
+  assert.equal(await readFile(s.lingerLog, 'utf8'), '--no-ask-password enable-linger\n');
+  assert.ok(Date.now() - started < 5000, 'no 10 s wait for a folder that cannot come');
 });

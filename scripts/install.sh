@@ -21,7 +21,16 @@ fi
 # /run/user/<uid> stands in, as for remote.mjs READ and PROBE, and systemctl --user below finds the user bus through it.
 # Only this user's own folder (systemd makes it 0700, owned by the user). None, or not this user's: no user manager
 # runs, so P9's service has nothing to run under until linger is on.
+# A server (--headless, which a desktop's Install on a remote runs) keeps P9 running when nobody is logged in: linger for
+# this user's own account. systemd's polkit default for that (set-self-linger) needs no password; where a rule asks for
+# one, --no-ask-password fails at once instead of waiting for an answer nobody can give.
+lingered=
+if [ -n "$headless" ] && command -v loginctl >/dev/null && [ "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null)" != yes ]; then
+  if loginctl --no-ask-password enable-linger 2>/dev/null; then lingered=1; echo "P9 keeps running on this machine when nobody is logged in (linger is on for this user)."; fi
+fi
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+  # Linger starts the user manager, which makes the folder a moment later.
+  if [ -n "$lingered" ]; then for _ in $(seq 20); do [ -d "/run/user/$(id -u)" ] && break; sleep 0.5; done; fi
   if [ -d "/run/user/$(id -u)" ] && [ -O "/run/user/$(id -u)" ]; then export XDG_RUNTIME_DIR="/run/user/$(id -u)"; else
     echo "P9 runs as a service of this user, and this user has none running here. Run this on this machine: loginctl enable-linger $(id -un)   (it keeps the service running when nobody is logged in), then Install again."
     exit 1
