@@ -2,7 +2,6 @@ import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
-import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
@@ -227,12 +226,14 @@ async function pull(extra: string, wait = 0) {
 }
 // A saved cursor whose next events were pruned is a gap; a first visit (nothing saved) is not.
 const gapAfter = (next?: Json) => { if (state.seen > 0 && next && Number(next.cursor) > state.seen + 1) one<HTMLElement>('#gap').hidden = false; };
-// PH3: the first read replays only the chats that are not stopped, as the desktop does (E2); a stopped chat's history
-// loads when it is shown. Before this the phone read the whole ledger, stopped chats included, on every launch.
-// ponytail: over 100 such chats it replays everything, as the desktop does (their IDs go in the URL).
+// PH3, then phone open speed (item 3): the first read takes the newest events of one chat only, the one last shown (or
+// the most recently used open chat). Every other chat is a stub whose events load when it is opened (history()); the
+// list shows its state from GET /chat (state, waiting). Before, every open chat's newest events came first (300 KB on
+// six chats, two seconds on 3G). The long poll still reads every chat's new events after this, so the list keeps up.
 async function replay() {
-  const ids = state.conversations.filter(isOpen).map((item) => String(item.id));
-  let scoped = ids.length <= 100;
+  const open = state.conversations.filter(isOpen).map((item) => String(item.id)), last = localStorage.getItem('p9-last-chat') ?? '';
+  const ids = open.includes(last) ? [last] : open.slice(0, 1);
+  let scoped = true;
   for (;;) {
     // P20: a chat that is not stopped starts with its newest blocks only; Load earlier reads the ones before.
     try { if (!scoped) await pull(''); else { const result = await request('/chat/events?after=0&tail=' + TAIL + '&only=' + ids.map(encodeURIComponent).join(',')); take(result, ids); state.cursor = Math.max(state.cursor, Number(result.cursor)); } break; }
@@ -246,9 +247,6 @@ async function replay() {
   state.base = state.cursor;
   state.conversations = (await request('/chat')).conversations ?? [];
   state.stubs = new Set(state.conversations.map((item) => String(item.id)).filter((id) => !ids.includes(id)));
-  // A chat made during the read is open, not history: the list reads its state from its events (P7), so they load now.
-  // Left a stub, a chat started while the phone loads showed idle until it was opened.
-  await Promise.all(state.conversations.filter((item) => isOpen(item) && state.stubs.has(String(item.id))).map((item) => history(String(item.id))));
 }
 async function fetchEvents(wait = 0) {
   if (!state.replayed) { await replay(); state.replayed = true; }
@@ -450,7 +448,8 @@ const clock = (ms: unknown) => { const date = new Date(Number(ms)); return date.
 let listSig = '';
 function renderList() {
   const found = digest(), row = (item: Json) => {
-    const id = String(item.id), info = found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
+    // A stub's events are not read yet: its state is the daemon's (a turn running, a question open), from GET /chat.
+    const id = String(item.id), info = state.stubs.has(id) ? { run: item.waiting ? 'needs' : item.state === 'turn' ? 'working' : 'idle', last: String(item.preview ?? '') } : found.get(id), run = info?.run ?? 'idle', second = run === 'working' ? 'Working…' : run === 'needs' ? 'Needs you' : (info?.last ?? '');
     return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
@@ -473,6 +472,7 @@ let pushed = false, stuck = true, windowSize = 60, hiddenBlocks = 0, anchored = 
 const body = one<HTMLElement>('#chatBody');
 function route(id: string) {
   const changed = id !== openId; openId = id;
+  if (id) localStorage.setItem('p9-last-chat', id); // item 3: the next open reads this chat's events first
   const select = one<HTMLSelectElement>('#conversation'); if (id) select.value = id;
   one<HTMLElement>('#chatList').hidden = !!id; one<HTMLElement>('#chatArea').hidden = !id; one<HTMLElement>('#composerSlot').hidden = !id;
   document.body.classList.toggle('inchat', !!id && document.body.dataset.view === 'chat');
@@ -612,7 +612,8 @@ async function listen() {
       await fetchEvents(8000);
       if (state.events.length === held) continue;
       // A chat made, used, stopped or closed anywhere moves in the picker.
-      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; fillPicker(); }
+      // A stub's row reads its state from the list, so a turn's end or a question asked or answered lists again too.
+      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; fillPicker(); }
       render();
     }
     catch { await pause(3000); }
@@ -909,15 +910,25 @@ one<HTMLSelectElement>('#mode').onchange = async (event) => {
 };
 // Phase 17 rows 4-5: the phone's terminal; terminal.mjs holds the part the desktop dock shares (leases, size, output).
 const KEYS: Record<string, string> = { esc: '\x1b', tab: '\t', ctrlc: '\x03', up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C' };
-const term = createTerminal({ screen: one('#screen'), connect: (id: string) => new WebSocket(location.origin.replace(/^http/, 'ws') + '/terminals/' + encodeURIComponent(id) + '/socket'),
-  state(text: string, live: boolean) {
-    one('#termState').textContent = text;
-    // P14: not connected is red in the bar and written across the screen, so a tap that cannot open a keyboard is not a mystery.
-    one<HTMLElement>('section[data-view="terminal"]').dataset.live = live ? 'yes' : text === 'Connecting' ? 'wait' : 'no';
-    one<HTMLElement>('#screen').dataset.off = live ? '' : text === 'Connecting' ? 'Connecting…' : 'Not connected\n' + text;
-    document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.disabled = !live; });
-  } });
-const termState = term.show;
+function termView(text: string, live: boolean) {
+  const waiting = text === 'Connecting' || text === LOADING_TERMINAL;
+  one('#termState').textContent = text;
+  // P14: not connected is red in the bar and written across the screen, so a tap that cannot open a keyboard is not a mystery.
+  one<HTMLElement>('section[data-view="terminal"]').dataset.live = live ? 'yes' : waiting ? 'wait' : 'no';
+  one<HTMLElement>('#screen').dataset.off = live ? '' : text === 'Connecting' ? 'Connecting…' : waiting ? text : 'Not connected\n' + text;
+  document.querySelectorAll<HTMLButtonElement>('#keys button').forEach((button) => { button.disabled = !live; });
+}
+// Phone open speed (item 2): terminal.mjs (the terminal and its renderer, about a third of the app) is not in the first
+// load. It loads when the phone is idle after the first chat screen, or on a Terminal tap before that, which shows
+// Loading terminal… Until then term is a closed stand-in, so the handlers below need no checks.
+type Term = ReturnType<typeof import('./terminal.mjs').createTerminal>;
+const LOADING_TERMINAL = 'Loading terminal…';
+let term = { open: false, show: (text: string) => termView(text, false), close: () => false, attach() {}, sendKeys() {}, paste() {}, focus() {}, text: () => '', fit() {} } as unknown as Term;
+let termLoad: Promise<Term> | undefined;
+const loadTerm = () => termLoad ??= import('./terminal.mjs').then(({ createTerminal }) => term = createTerminal({ screen: one('#screen'),
+  connect: (id: string) => new WebSocket(location.origin.replace(/^http/, 'ws') + '/terminals/' + encodeURIComponent(id) + '/socket'), state: termView }),
+  (error) => { termLoad = undefined; throw error; }); // a failed load (offline) is tried again on the next tap
+const termState = (text: string, live?: boolean) => term.show(text, live);
 function attach() {
   const picked = one<HTMLSelectElement>('#terminal'), id = picked.value;
   // Spec §6: "Terminal · 11:39" in the bar (the full date was cut at 390 wide); the sheet keeps the date.
@@ -927,6 +938,9 @@ function attach() {
   term.attach(id);
 }
 async function loadTerminals() {
+  if (!termLoad) termState(LOADING_TERMINAL);
+  try { await loadTerm(); } catch { return termState('Terminal did not load. Tap Terminal to try again'); }
+  const { TMUX_MISSING, unavailableText } = await import('./terminal.mjs');
   try {
     const list = ((await request('/terminals')).terminals ?? []) as Json[];
     const select = one<HTMLSelectElement>('#terminal'), was = select.value;
@@ -948,6 +962,7 @@ one<HTMLElement>('#pickTerminal').onclick = () => {
 };
 one<HTMLButtonElement>('#refreshTerminal').onclick = (event) => void refreshing(event.currentTarget as HTMLButtonElement, loadTerminals);
 one<HTMLButtonElement>('#newTerminal').onclick = async () => {
+  const { TMUX_MISSING, unavailableText } = await import('./terminal.mjs'); await loadTerm();
   const result = await mutate('/terminals', {});
   if (result.status !== 201) return termState(result.body.error === 'tmux-not-found' ? TMUX_MISSING
     : result.body.error === 'terminal-unavailable' ? unavailableText(result.body.reason) : 'Not started: ' + String(result.body.error ?? result.status));
@@ -1005,7 +1020,7 @@ one('#screen').addEventListener('touchend', (event) => {
   }
   tapFrom = null;
 }, { passive: true });
-addEventListener('resize', term.fit); window.visualViewport?.addEventListener('resize', term.fit); // the screen fills the column, which follows a keyboard
+addEventListener('resize', () => term.fit()); window.visualViewport?.addEventListener('resize', () => term.fit()); // the screen fills the column, which follows a keyboard
 addEventListener('offline', () => { if (term.close()) termState('Offline: terminal closed'); });
 termState('No terminal open');
 // P19: a code block's Copy, as on the desktop.
@@ -1785,7 +1800,13 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
 addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
 // L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
-online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+// Load timing: 'p9-chat-painted' is the first chat screen drawn, from the page's start; each request is in the browser's
+// own resource timing (performance.getEntriesByType('resource')). phone-speed.test.mjs reads both.
+online(); const first = loadChat(); void first.finally(() => {
+  performance.mark('p9-chat-painted'); document.getElementById('boot')?.remove();
+  const idle = (window as { requestIdleCallback?: (run: () => void) => void }).requestIdleCallback ?? ((run: () => void) => setTimeout(run, 1500));
+  idle(() => void loadTerm().catch(() => {}));
+});
 // P2: coming back to the app asks the daemon at once, so a session that ended meanwhile goes to the login now (request()),
 // with the drafts kept, not on the next Save, Send or Stop.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && navigator.onLine) void request('/agent-lock').catch(() => {}); });
@@ -1805,7 +1826,7 @@ void (async function keptFile() {
 if (localStorage.getItem('p9-mission-draft')) show('mission'); // P2: put back by keptMission() when Mission draws
 
 void first.then(listen); void loadUsage();
-if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js');
+if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(new URL(import.meta.url).pathname.split('/').pop()!));
 // Item 19 (threat model row 65): on the phone an artifact opens in the full-screen sheet, the side panel's phone form
 // (specs/side-panel.md). A chip in an agent reply opens it; so does Open on the plan (the Plan chip's sheet) or on Claude's
 // plan-mode plan. The frame page is the server's /frame/ (its own CSP); comments go through the composer's send above.
