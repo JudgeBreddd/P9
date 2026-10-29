@@ -598,6 +598,10 @@ dialog.connecting>button{margin-top:12px}
 #connTime{flex:none;font-variant-numeric:tabular-nums;color:oklch(0.7 0.03 262)}
 .conn-log{max-width:min(72ch,90vw);max-height:30vh;overflow:auto;margin:12px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;white-space:pre-wrap;text-align:left;color:oklch(0.82 0.03 262)}
 #connInstall{min-width:16ch}
+/* D20: a drop after this window has connected: a quiet title-bar note, never a cover over the page. */
+.reconn{display:inline-flex;align-items:center;gap:6px;padding:0 4px;font-size:12px;color:var(--muted-foreground);white-space:nowrap}.reconn[hidden]{display:none}
+.reconn .conn-spin{width:10px;height:10px;border-width:1.5px;border-color:color-mix(in oklch,currentColor 30%,transparent);border-top-color:currentColor}
+@media (prefers-reduced-motion:reduce){.reconn .conn-spin{animation:none}}
 @keyframes conn-turn{to{rotate:360deg}}
 @media (prefers-reduced-motion:reduce){.conn-hole{animation:none}}
 .remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
