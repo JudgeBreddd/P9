@@ -61,7 +61,7 @@ test('live Claude usage: a hidden desktop window stops reading /usage, so the da
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
-  await page.locator('#tabs').waitFor({ timeout: 15000 });
+  await page.locator('#tabs').waitFor({ state: 'attached', timeout: 15000 });
   // Count the page's usage reads in main: the real handler is swapped for one that counts and answers as it would.
   await app.evaluate(({ ipcMain }) => { globalThis.usageReads = 0; ipcMain.removeHandler('p9:usage');
     ipcMain.handle('p9:usage', () => { globalThis.usageReads++; return { status: 503, body: { state: 'unavailable' } }; }); });
