@@ -578,7 +578,14 @@ dialog.connecting::backdrop{background:#000}
 .conn-hole{width:112px;height:112px;border-radius:50%;margin-bottom:10px;background:radial-gradient(closest-side,#000 70%,transparent 72%),conic-gradient(from 0deg,oklch(0.9 0.09 80/.95),oklch(0.6 0.15 280/.5) 40%,transparent 60%,oklch(0.9 0.09 80/.95));filter:drop-shadow(0 0 18px oklch(0.7 0.14 265/.45));animation:conn-turn 1.6s linear infinite}
 dialog.connecting h2{margin:0;font:500 20px/1.2 "Space Grotesk",sans-serif;letter-spacing:.02em}
 dialog.connecting p{margin:0;max-width:46ch;color:oklch(0.76 0.03 262)}
-dialog.connecting button{margin-top:12px}
+dialog.connecting>button{margin-top:12px}
+/* D15a: the install in progress (a spinner, the last line, the time so far) and, if it stopped, its last lines. */
+.conn-progress{display:flex;align-items:center;gap:10px;max-width:46ch;margin-top:12px;font-size:13px;color:oklch(0.86 0.03 262)}
+.conn-progress[hidden],.conn-log[hidden]{display:none}
+.conn-spin{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid oklch(0.9 0.09 80/.25);border-top-color:oklch(0.9 0.09 80);animation:conn-turn .8s linear infinite}
+#connTime{flex:none;font-variant-numeric:tabular-nums;color:oklch(0.7 0.03 262)}
+.conn-log{max-width:min(72ch,90vw);max-height:30vh;overflow:auto;margin:12px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;white-space:pre-wrap;text-align:left;color:oklch(0.82 0.03 262)}
+#connInstall{min-width:16ch}
 @keyframes conn-turn{to{rotate:360deg}}
 @media (prefers-reduced-motion:reduce){.conn-hole{animation:none}}
 .remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile, access } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { installRemote, script } from '../apps/desktop/remote-install.mjs';
+import { installRemote, script, sourceArchive } from '../apps/desktop/remote-install.mjs';
 
 const skip = process.platform === 'win32' ? 'sh' : false;
 
@@ -68,4 +68,22 @@ test('D15a: a host ssh would read as an option, or a version that is not one, is
   assert.throws(() => installRemote({ host: '-oProxyCommand=x', ssh: s.ssh, version: '0.1.6' }), /server-host-refused/);
   assert.throws(() => installRemote({ host: 'test-host', ssh: s.ssh, version: "0.1.6'; touch x; '" }), /remote-install-version/);
   assert.equal(await exists(path.join(s.dir, 'ssh-args.txt')), false);
+});
+
+// D15a: an unpackaged app that is not a git checkout (a synced copy) sends its own files, one top folder for the script to
+// strip, without node_modules, .git or dist. Before this it ran git archive there and sent nothing. Nothing its .gitignore
+// excludes goes either (threat model row 67): private notes and agent files sit beside the source in such a copy.
+test('D15a source: a copy without .git sends its files under one folder, without node_modules, dist, .env or what .gitignore excludes', { skip, timeout: 20000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-rsource-')), app = path.join(dir, 'app');
+  for (const f of ['scripts/install.sh', 'node_modules/x/index.js', 'apps/web/dist/a.js', 'apps/web/src/b.mjs', 'private-notes/notes.md', 'CLAUDE.md', 'AGENTS.md', '.env', '.cursor/rules.md', 'apps/web/src/c.log']) {
+    await mkdir(path.dirname(path.join(app, f)), { recursive: true }); await writeFile(path.join(app, f), 'x\n');
+  }
+  await writeFile(path.join(app, '.gitignore'), '# private\nprivate-notes/\n/CLAUDE.md\nAGENTS.md\n*.log\n!keep.log\n');
+  const list = spawn('tar', ['-tzf', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
+  sourceArchive(app).pipe(list.stdin);
+  let out = ''; list.stdout.setEncoding('utf8').on('data', (c) => { out += c; });
+  await new Promise((resolve) => list.once('close', resolve));
+  const files = out.split('\n').filter((f) => f && !f.endsWith('/')).sort();
+  assert.deepEqual(files, ['app/.gitignore', 'app/apps/web/src/b.mjs', 'app/scripts/install.sh']);
+  console.log('PASS D15a source: a copy sends ' + files.length + ' files, nothing .gitignore excludes');
 });

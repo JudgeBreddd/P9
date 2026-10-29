@@ -209,7 +209,11 @@ test('Remote mode connecting: a turning black hole and the reason until the remo
   const profile = path.join(s.directory, 'profile');
   await mkdir(profile);
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
-  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  // D15a: the stand-in install reads the source sent, prints two steps, waits, then fails the first time and finishes the next.
+  const fakeInstall = path.join(s.directory, 'install.sh'), tries = path.join(s.directory, 'tries');
+  await writeFile(fakeInstall, 'cat > ' + JSON.stringify(path.join(s.directory, 'sent.tgz')) + '\nn=$(cat ' + JSON.stringify(tries) + ' 2>/dev/null || echo 0); echo $((n+1)) > ' + JSON.stringify(tries)
+    + '\necho "P9_INSTALL unpacked"; echo "Installing the web app\'s packages"; sleep 9\nif [ "$n" = 0 ]; then echo "npm ERR! code ENOSPC"; echo "npm ERR! no space left on device"; exit 1; fi\necho "Building P9"; sleep 3; echo "P9_INSTALL done"\n');
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_INSTALL: fakeInstall }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -231,6 +235,32 @@ test('Remote mode connecting: a turning black hole and the reason until the remo
   assert.equal(await page.locator('#connNo').isVisible(), false);
   assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there/);
   assert.equal(await page.evaluate(() => window.p9.getStatus().then((r) => r.install ?? null)), null, 'Not now ran nothing');
+  // D15a progress: Install is a primary button; once pressed it stays off while a spinner shows the last line and the time,
+  // in a reloaded window too. A failed install shows its last lines and Try again; the next try ends installed, connecting.
+  assert.equal(await page.locator('#connInstall').getAttribute('data-variant'), 'default', 'Install P9 there is the primary button');
+  const install = page.locator('#connInstall'), progress = page.locator('#connProgress:not([hidden])');
+  const go = async () => { await install.click({ timeout: 10000 }); await page.locator('#connInstall', { hasText: /^Install$/ }).click({ timeout: 10000 }); };
+  await go();
+  await page.locator('#connStep', { hasText: "Installing the web app's packages" }).waitFor({ timeout: 15000 });
+  assert.equal(await install.isDisabled(), true); assert.equal(await install.textContent(), 'Installing…');
+  await page.waitForTimeout(1200);
+  assert.match(await page.locator('#connTime').textContent(), /^0:0[1-9]$/);
+  await evidence(page, 'd15a-running');
+  await page.reload();
+  await progress.waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#connInstall').isDisabled(), true, 'a reloaded window still shows it running');
+  await page.locator('#connLog:not([hidden])', { hasText: 'no space left on device' }).waitFor({ timeout: 20000 });
+  assert.equal(await install.textContent(), 'Try again'); assert.equal(await install.isDisabled(), false);
+  assert.equal(await progress.count(), 0);
+  assert.match(await page.locator('#connWhy').textContent(), /^The install on test-host stopped\. Its last lines are below\./);
+  assert.equal(await page.locator('#toasts .toast').count(), 0, 'no chat setup toast under the connecting screen');
+  await evidence(page, 'd15a-failed');
+  await go();
+  await page.locator('#connInstall', { hasText: 'Connecting…' }).waitFor({ timeout: 30000 });
+  assert.equal(await install.isDisabled(), true);
+  assert.match(await page.locator('#connWhy').textContent(), /^P9 is installed on test-host\. Connecting/);
+  await evidence(page, 'd15a-done');
+  assert.ok((await stat(path.join(s.directory, 'sent.tgz'))).size > 1000, 'the source went over ssh');
   // P9 starts on the remote: the next try connects, the layer goes, the window is on the remote.
   await symlink(remote.state, path.join(s.server, 'p9-foundation'));
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 45000 });

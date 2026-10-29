@@ -3,6 +3,8 @@
 // One fixed script over the user's own ssh (BatchMode: keys or an agent, never a password prompt): it unpacks P9's source
 // into ~/p9 there and runs install.sh --headless with no input, so install.sh's admin ask stops and lists what is missing.
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { names } from './server-update.mjs';
 import { HOST, SSH_OPTIONS } from './remote.mjs';
 
@@ -26,6 +28,25 @@ export function script(version) {
     'bash "$d/scripts/install.sh" --headless </dev/null',
     'echo "P9_INSTALL done"',
   ].join('\n');
+}
+
+// This app's source as tar.gz for the script's stdin, one top folder (the script strips it). A git checkout sends its
+// committed HEAD; a copy without .git (a synced folder) sends only what its .gitignore does not exclude (threat model row 67):
+// private notes and agent files sit beside the source there and never go to a remote.
+// ponytail: each .gitignore line becomes a plain tar --exclude, matched at any depth (a leading / is dropped, so an anchored
+// line excludes more, never less); ! lines are skipped, so a re-included file stays out. Only the folder's top .gitignore.
+export function sourceArchive(folder) {
+  folder = path.resolve(folder);
+  if (existsSync(path.join(folder, '.git'))) return run('git', ['-C', folder, 'archive', '--format=tar.gz', '--prefix=p9/', 'HEAD']);
+  let ignored = [];
+  try { ignored = readFileSync(path.join(folder, '.gitignore'), 'utf8').split('\n').map(l => l.trim().replace(/^\/+|\/+$/g, '')).filter(l => l && !l.startsWith('#') && !l.startsWith('!')); } catch {}
+  const excludes = [...new Set(['node_modules', '.git', 'dist', '.env', '.env.*', '.cursor', ...ignored])].map(p => '--exclude=' + p);
+  return run('tar', ['-czf', '-', ...excludes, '-C', path.dirname(folder), path.basename(folder)]);
+}
+function run(command, args) {
+  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+  child.on('error', (error) => child.stdout.destroy(error)); // no git or tar: installRemote stops ssh and the install fails
+  return child.stdout;
 }
 
 // tell(event): { phase: 'running' | 'done' | 'failed' | 'already-there', line?, tail? } for the window. archive: a readable

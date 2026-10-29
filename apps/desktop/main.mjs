@@ -10,7 +10,7 @@ import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { connectServer, restartServer, sshHosts, serverFolder, HOST } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
-import { installRemote } from './remote-install.mjs';
+import { installRemote, sourceArchive } from './remote-install.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
@@ -293,7 +293,8 @@ export async function createDesktop({ state, open } = {}) {
   };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
-    serverUpdate = null; if (remoteInstall?.phase !== 'running') remoteInstall = null;
+    // A finished install stays for its own remote while it reconnects, so the window says installed, not Install again.
+    serverUpdate = null; if (remoteInstall?.phase !== 'running' && !(remoteInstall?.phase === 'done' && host === serverHost)) remoteInstall = null;
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
     await old?.close().catch(() => {});
@@ -705,15 +706,20 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   // D15a: the connecting screen's Install P9 there, after the person said yes. Only this window's remote, only while it
-  // answered without P9, one at a time. A source checkout sends its committed HEAD; a packaged app has the remote download its version.
+  // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
+  // download its version. started: when it began, for the window's elapsed time; a throw ends it failed, never stuck running.
   ipcMain.handle('p9:remote-install', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
     if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
-    const host = serverHost, checkout = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? fileURLToPath(new URL('../../', import.meta.url)) : null;
-    const archive = checkout ? spawn('git', ['-C', checkout, 'archive', '--format=tar.gz', '--prefix=p9/', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] }).stdout : null;
-    remoteInstall = { phase: 'running', line: '' };
-    installRemote({ host, ssh: sshCommand, version: ownVersion, archive, tell: e => { if (serverHost === host) remoteInstall = e; } })
-      .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
+    const host = serverHost, started = Date.now();
+    remoteInstall = { phase: 'running', line: '', started };
+    try {
+      const archive = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null;
+      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, tell: e => { if (serverHost === host) remoteInstall = { ...e, started }; } })
+        .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
+    } catch (error) {
+      remoteInstall = { phase: 'failed', error: error.message, started };
+    }
     return { ok: true };
   });
   // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
