@@ -320,6 +320,7 @@ dialog.window [data-folder] details.row summary small{font-size:12px}
 /* M4 onboarding card on an empty Mission, and the space picker (onboarding.mjs) */
 .onboard{margin:12px;padding:16px;display:grid;gap:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
 .onboard h3{margin:0;font-size:19px}.onboard h4{margin:6px 0 0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}.onboard p{margin:0;line-height:1.45}
+.onboard-protect{display:grid;gap:8px;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:10px}.onboard-protect p{margin:0}
 .onboard-go{display:grid;gap:8px}.onboard-go [data-variant=default]{background:var(--cyan);color:var(--bg);border-color:var(--cyan)}
 .onboard-tpls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px;text-align:left;background:var(--raised);color:var(--text)}.onboard-tpl b{font-weight:600}.onboard-tpl span{font-size:13px;color:var(--dim)}

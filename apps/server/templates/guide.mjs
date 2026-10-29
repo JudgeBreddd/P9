@@ -23,7 +23,7 @@ In a P9 chat, Claude and Codex have P9's Mission tools. The agent should:
 
 To try changes without touching the space you use, the agent passes a scratch space name, such as "draft", to each write tool. Pick that name in Mission's space picker to see it, and pick Main to go back.
 
-An agent can write the space only while File protection is off and the agent lock is off. Both are switches on the desktop.
+An agent can write your space only while File protection is off and the agent lock is off. Both are switches in Settings. Turn File protection back on once the build is done.
 
 ## Build it yourself
 

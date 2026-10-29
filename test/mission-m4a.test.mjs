@@ -157,7 +157,10 @@ test('M4a scratch spaces: a name never becomes a path; a draft write keeps the l
 test('M4a onboarding (server): a fresh profile is empty; the guide and templates come from P9; a build chat starts with the shipped guide only', { timeout: 90000 }, async (t) => {
   const instance = await start(t);
   const fresh = (await call(instance, '/mission')).body;
-  assert.deepEqual([fresh.empty, fresh.spaces, fresh.spaceName], [true, [], null]);
+  assert.deepEqual([fresh.empty, fresh.spaces, fresh.spaceName, fresh.fileProtection], [true, [], null, true]);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  assert.equal((await call(instance, '/mission')).body.fileProtection, false, 'the card drops its File protection line');
+  await call(instance, '/file-protection', 'POST', { on: true });
   const guide = (await call(instance, '/mission/guide')).body;
   assert.equal(guide.guide, GUIDE);
   assert.deepEqual(guide.templates.map((entry) => entry.name), ['icm', 'obsidian', 'homelab', 'blank']);
