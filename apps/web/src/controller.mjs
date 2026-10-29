@@ -13,6 +13,10 @@ import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
+import { mountLandingVideo } from './components/landing-v5/playback.mjs';
+import landPoster from './components/landing-v5/black-hole.webp?url';
+import landLoop from './components/landing-v5/rendered/horizon-loop.mp4?url';
+import './components/landing-v5/background.css';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
@@ -647,7 +651,7 @@ function pane(s, i, bare) {
         ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your remote (Settings > Remote)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
-    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
+    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${working ? names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
@@ -2195,7 +2199,22 @@ setTimeout(landingStart, 3000); // settings never answered: open anyway rather t
 // focus. Settings' "Start in my last focus mode" skips it, and so does a reload of the same window (hot reload).
 // The test runs turn it off (P9_LANDING=off, scripts/with-tmp.mjs): it covers the shell they click.
 const land = $('#land'), landOn = window.p9?.landing !== false, still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const sky = createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
+// The one rollback switch (landing v5, approved 2026-10-29): 'video' plays the rendered loop over its poster; 'original'
+// brings back the WebGL sky below. P9_LANDING=original sets it for a run; the default is the video. Send-to-server keeps
+// its own createSky (#moveSky) either way. The phone has its own page and never loads this.
+const LAND_BG = window.p9?.landingBg === 'original' ? 'original' : 'video';
+const NO_SKY = { ok: false, set() {}, frame() {}, size() {} };
+let landVideo = null;
+if (LAND_BG === 'video') {
+  const cosmos = land.querySelector('.p9-cosmos');
+  cosmos.querySelector('img').src = landPoster;
+  Object.assign(cosmos.querySelector('video'), { poster: landPoster, src: landLoop });
+  cosmos.hidden = false; $('#landSky').hidden = true;
+  // Plays only while the landing is open (its dialog is shown) and the window is not hidden; reduced motion, a blocked
+  // play or a failed load leave the poster (playback.mjs).
+  landVideo = mountLandingVideo(cosmos);
+}
+const sky = LAND_BG === 'video' ? NO_SKY : createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
 const LAND = { started: false, raf: 0, v: { ...SKY_MAIN }, from: null, to: null, t0: 0, ms: 0, drawn: 0, spin: 0 };
 if (!landOn) land.removeAttribute('data-pending');
 const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return settings.focus[f] ? f : Object.keys(focusNames).find(k => settings.focus[k]); };
@@ -2632,7 +2651,9 @@ liveChat.create = async (agent, folder = '') => {
 };
 // Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
 // 2026-10-24: one refused because a turn runs is queued instead, and shown and kept as queued.
-liveChat.prompt = async (s, text, images = [], when) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status === 202) return; s.images = [...images, ...(s.images || [])].slice(0, 4);
+// D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
+// nothing else). Cleared on any answer.
+liveChat.prompt = async (s, text, images = [], when) => { s.working = true; s.done = false; s.sending = true; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }).finally(() => { s.sending = false; }); if (r.status === 202) return renderChats(); s.images = [...images, ...(s.images || [])].slice(0, 4);
   // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
   // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
   if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift(text); keepQueue(s); setTimeout(() => { if (!s.prompted && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
@@ -3076,5 +3097,5 @@ const amSendNote = async (browser) => {
 $('#amForm').onsubmit = (e) => { e.preventDefault(); amSendNote(false); };
 amWeb.onclick = () => amSendNote(true);
 
-return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };
+return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); landVideo?.destroy(); };
 }
