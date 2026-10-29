@@ -10,6 +10,8 @@
 // (mountFrame in artifact.mjs). It takes one message from its parent, { p9: 'render', html, scripts },
 // runs the runtimes in scripts (Mermaid, React, TypeScript, sent by the page as text), then puts html in as its document,
 // running its inline scripts in order. It tells its parent only: ready, rendered, an error's text and the selected text.
+// A Mission card (row M5) then gets { p9: 'data', json } after each run of its script: data, never markup. It is kept as
+// window.p9data and handed to the card as a p9data event (event.detail).
 (() => {
   let done = false;
   const tell = message => parent.postMessage({ p9: 'frame', ...message }, '*'); // the parent's origin is not known here: nothing secret goes out
@@ -18,6 +20,7 @@
   document.addEventListener('selectionchange', () => tell({ kind: 'selection', text: String(getSelection()).slice(0, 4000) }));
   addEventListener('message', event => {
     const m = event.data;
+    if (event.source === parent && done && m?.p9 === 'data') { window.p9data = m.json; dispatchEvent(new CustomEvent('p9data', { detail: m.json })); return; }
     if (event.source !== parent || done || !m || m.p9 !== 'render' || typeof m.html !== 'string' || !Array.isArray(m.scripts) || !m.scripts.every(s => typeof s === 'string')) return;
     done = true; // one artifact per frame: a later message is ignored
     for (const text of m.scripts) { const s = document.createElement('script'); s.textContent = text; document.head.append(s); }

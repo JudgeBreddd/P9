@@ -1,7 +1,7 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
-import { artifactView, chipArtifact } from './artifact.mjs';
+import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { createTerminal, TMUX_MISSING, unavailableText } from './terminal.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
@@ -1138,12 +1138,14 @@ async function loadMission(cached = false) {
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>();
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
-    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
+    for (const space of (data.space ?? []) as { title: string; text: string; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
       if (space.text) notes.set(space.title, `<p class="muted" data-space-text>${escape(space.text)}</p>`);
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
       // Data tiles (threat model row 70) run while their row is open; links are http(s) only (the daemon refused the rest).
       const tiles = (space.data ?? []).map((tile) => row(escape(tile.title), `<div data-tile="${escape(tile.id)}">${tileHtml(null, escape)}</div>`));
+      // Cards (threat model row M5): the card's HTML in the artifact frame, its script's JSON posted in as data (feedCard).
+      const cards = (space.cards ?? []).map((card) => row(escape(card.title), `<div data-tile="${escape(card.id)}" data-card="${escape(card.title)}"><div class="card-frame"></div><div class="card-note" role="status">${tileHtml(null, escape)}</div></div>`));
       const webLinks = (space.links ?? []).map((link) => `<p class="tile-row">${linkHtml(link, escape)}</p>`);
       // Folder lists (threat model row M2-a): the count fills when the window opens; each file opens read-only in its row.
       const lists = (space.folders ?? []).map((list) => row(`${escape(list.title)}<small><span data-folder-count="${escape(list.id)}">…</span><span data-folder-unit></span></small>`,
@@ -1161,7 +1163,7 @@ async function loadMission(cached = false) {
           : `<button type="button" class="link" data-open-page="${escape(page.id)}" data-url="${escape(page.url)}">Open on the laptop</button>`, attrs);
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...webLinks, ...lists, ...checks, ...refs]);
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs]);
       names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
         ...(space.folders ?? []).map((list) => list.title), ...(space.checklists ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
@@ -1344,7 +1346,26 @@ one('#mission').addEventListener('toggle', async (event) => {
 async function pullTile(tile: HTMLElement) {
   const response = await fetch('/mission/data?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
   if (response?.status === 401) return toLogin();
-  tile.innerHTML = tileHtml(response ? tileAnswer(response.status, await response.json().catch(() => ({}))) : { error: 'no connection' }, escape);
+  drawTile(tile, response ? tileAnswer(response.status, await response.json().catch(() => ({}))) : { error: 'no connection' });
+}
+const drawTile = (tile: HTMLElement, answer: Json) => tile.dataset.card === undefined ? void (tile.innerHTML = tileHtml(answer, escape)) : void feedCard(tile, answer);
+// A card (M5, threat model row M5): its HTML is read once into the artifact frame; each answer's JSON goes in as data,
+// anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
+const cardJson = new WeakMap<HTMLElement, unknown>();
+async function feedCard(tile: HTMLElement, answer: Json) {
+  const note = tile.querySelector<HTMLElement>('.card-note')!, box = tile.querySelector<HTMLElement>('.card-frame')!;
+  const send = () => { const frame = box.querySelector('iframe'); if (cardJson.has(tile) && tile.dataset.rendered === 'rendered') frame?.contentWindow?.postMessage({ p9: 'data', json: cardJson.get(tile) }, '*'); };
+  if (answer.json !== undefined) { cardJson.set(tile, answer.json); note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape, 'card');
+  if (box.dataset.read) return send();
+  box.dataset.read = '1';
+  const response = await fetch('/mission/card?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
+  const body = await response?.json().catch(() => ({}));
+  if (response?.status !== 200 || typeof body?.html !== 'string') { note.innerHTML = `<p class="tile-note">Could not read the card: ${escape(body?.detail || body?.error || 'no connection')}</p>`; return; }
+  mountCard(box, tile.dataset.card, body.html, { page: '/frame/', base: '/frame/', onState: (kind: string, text: string) => {
+    tile.dataset.rendered = kind;
+    if (kind === 'rendered') send();
+    if (kind === 'error') note.textContent = 'The card stopped with an error: ' + text;
+  } });
 }
 // Onboarding (M4): the shipped guide and templates, fetched once. The phone has no edit form, so Build it yourself is the guide.
 let guide: { guide: string; templates: { name: string; title: string; about: string }[] } | null = null;
@@ -1381,7 +1402,7 @@ one('#mission').addEventListener('click', async (event) => {
   if (!allow) return;
   const tile = allow.closest<HTMLElement>('[data-tile]')!;
   const result = await mutate('/mission/data/allow', { id: tile.dataset.tile });
-  if (result.status === 200) await pullTile(tile); else tile.innerHTML = tileHtml(tileAnswer(result.status, result.body), escape);
+  if (result.status === 200) await pullTile(tile); else drawTile(tile, tileAnswer(result.status, result.body));
 });
 async function follow(run: string, output: HTMLElement) {
   let from = 0;

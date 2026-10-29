@@ -282,6 +282,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
   // Data tiles (row 70): the client asks only while Mission shows the tile; the daemon holds each tile to one run per 30 s.
   api.get('/mission/data', async (c) => reply(c, await mission.data(c.req.query('id'))));
+  api.get('/mission/card', async (c) => reply(c, await mission.card(c.req.query('id'))));
   api.post('/mission/data/allow', async (c) => reply(c, await mission.allow(await json(c))));
   // A space log view rides the hub text route, so both clients open it like any other log.
   api.get('/mission/hub/text', async (c) => reply(c, c.req.query('kind') === 'space' ? await mission.spaceLog(c.req.query('name')) : await hub.text(c.req.query())));

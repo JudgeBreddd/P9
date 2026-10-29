@@ -126,6 +126,17 @@ export const DATA = {
       + '{"type":"stat","value":12,"label":"Inbox","unit":"notes"}, {"type":"list","rows":[{"title":"Note","subtitle":"2 h ago","link":"https://example.com","badge":"new"}]}, '
       + '{"type":"table","columns":["Name","State"],"rows":[["web","up"]]} or {"type":"rings","rings":[{"label":"Disk","percent":42}]}. Anything else shows what it printed.' },
 };
+// A custom card (M5, threat model row M5): a workspace .html file drawn in the chat-artifact frame (no network, no P9,
+// no navigation), fed one data script's JSON as data. The script runs under the data tile rules above.
+export const CARD_BYTES = 256 * 1024;
+export const CARD = {
+  id,
+  title: { type: 'string', required: true, check: text, doc: 'The card label.' },
+  html: { ...relative('The workspace .html file the card draws (256 KiB at most).'), required: true, check: (value) => relativePath(value) && /\.html$/i.test(value) },
+  script: { ...DATA.script, doc: 'The ID of a registry script or space button with no args, confirm, terminal or detach, run under the data tile rules: only after the user answers Allow on the card, '
+    + 'only while Mission shows it, at most every 30 s, stopped at 10 s, 64 KiB read. It prints any JSON. The card reads it as window.p9data, and gets a p9data event (event.detail) on each run. '
+    + 'The card runs with no network (no fetch, no images or CSS from the web), no access to P9 and no navigation, like a chat artifact: put styles and scripts inline.' },
+};
 // A plain web link (M3): http and https only, so javascript:, file: and data: never open from a section.
 export const WEBLINK = {
   id,
@@ -169,6 +180,8 @@ export const SECTION = {
     doc: 'IDs of registry scripts, apps or pages (or space buttons) shown in this section too, at most 64. An ID nothing has shows "not found".', example: ['disk-free', 'dashboard'] },
   data: { type: 'array', check: Array.isArray, fields: DATA, doc: 'Data tiles: a script\'s JSON drawn as a number, list, table or rings (threat model row 70).',
     example: [{ id: 'inbox-count', title: 'Inbox', script: 'count-inbox' }] },
+  cards: { type: 'array', check: Array.isArray, fields: CARD, doc: 'Custom cards: your own HTML file, drawn in a sandbox with no network, showing one script\'s JSON (threat model row M5).',
+    example: [{ id: 'inbox-card', title: 'Inbox', html: 'cards/inbox.html', script: 'count-inbox' }] },
   checklists: { type: 'array', check: Array.isArray, fields: CHECKLIST, doc: 'Checklists: the user sets each row\'s mark, or the file\'s review line, one at a time (threat model row M4-a). Each needs a .md path or a file.',
     example: [{ id: 'wiki-audit', title: 'Weekly Wiki audit', root: 'audit', path: 'runs', file: '_decision.md', newest: true, heading: 'Proposed register changes',
       marks: { x: 'Approve', parked: 'Park', ' ': 'Deny' }, apply: 'audit-apply' }] },
@@ -257,7 +270,7 @@ export const SCHEMAS = {
   space: { type: 'object', required: ['sections'], additionalProperties: false, description: 'The space: free-form sections. A malformed section, button or log view, '
     + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field is listed as invalid by name.',
     properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) }, folders: { items: jsonSchema(FOLDER, {}, true) },
-      data: { items: jsonSchema(DATA, {}, true) }, links: { items: jsonSchema(WEBLINK, {}, true) } }, true), 'Sections in order.') } },
+      data: { items: jsonSchema(DATA, {}, true) }, cards: { items: jsonSchema(CARD, {}, true) }, links: { items: jsonSchema(WEBLINK, {}, true) } }, true), 'Sections in order.') } },
 };
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.

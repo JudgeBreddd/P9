@@ -31,10 +31,25 @@ An agent can write your space only while File protection is off and the agent lo
 - Rename a section or change its icon with Edit on the Mission page.
 - For buttons, data tiles and log views, edit the space file (JSON) in any editor. describe_mission shows every field with an example.
 
+## Your own card
+
+A card is your own HTML file in the workspace, shown in a section with one script's JSON. It runs in a sandbox with no
+network and no access to P9, so put its styles and scripts inline. Add it to a section as
+{ "id": "inbox-card", "title": "Inbox", "html": "cards/inbox.html", "script": "count-inbox" }. A small card:
+
+    <!doctype html>
+    <style>body { font: 14px system-ui; margin: 0; color: CanvasText } b { font-size: 28px }</style>
+    <p><b id="count">…</b> notes in the inbox</p>
+    <script>
+      addEventListener('p9data', (event) => { document.getElementById('count').textContent = event.detail.count; });
+    </script>
+
+Here the script count-inbox prints {"count": 12}.
+
 ## What runs, and when
 
 - A button runs only when you click it.
-- A data tile runs its script only after you answer Allow on it.
+- A data tile or a card runs its script only after you answer Allow on it.
 - Links open http and https addresses only.
 `;
 

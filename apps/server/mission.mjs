@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, WEBLINK, DATA_LIMITS, SETTINGS, spaceName } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -128,8 +128,8 @@ export function parseSpace(text) {
       for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
     // Data tiles and links (M3): a bad one is dropped and named, the rest of the section stays.
-    const items = { data: [], links: [] };
-    for (const [key, fields, what] of [['data', DATA, 'a data tile'], ['links', WEBLINK, 'a link']]) {
+    const items = { data: [], cards: [], links: [] };
+    for (const [key, fields, what] of [['data', DATA, 'a data tile'], ['cards', CARD, 'a card'], ['links', WEBLINK, 'a link']]) {
       (section[key] ?? []).forEach((record, n) => { const detail = problem(record, fields);
         for (const extra of unknownFields(record, fields, what)) result.invalid.push({ kind: 'space', index, [key]: n, reason: 'unknown-field', detail: extra });
         if (detail) result.invalid.push({ kind: 'space', index, [key]: n, reason: 'malformed-record', detail });
@@ -141,7 +141,7 @@ export function parseSpace(text) {
     (section.checklists ?? []).forEach((record, checklist) => {
       const detail = problem(record, CHECKLIST, true) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
       if (detail) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'malformed-record', detail }); else checklists.push({ ...record }); });
-    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
@@ -191,11 +191,11 @@ export async function draftNames(drafts) {
 export function combine(reg, space) {
   const invalid = [...reg.invalid, ...space.invalid];
   const scripts = unique([...reg.scripts, ...space.sections.flatMap((section) => section.buttons)], 'scripts', invalid);
-  const logs = new Set(unique(space.sections.flatMap((section) => [...section.logs, ...(section.data ?? [])]), 'space', invalid));
+  const logs = new Set(unique(space.sections.flatMap((section) => [...section.logs, ...(section.data ?? []), ...(section.cards ?? [])]), 'space', invalid));
   const folders = new Set(unique(space.sections.flatMap((section) => [...section.folders, ...(section.checklists ?? [])]), 'space', invalid));
   const sections = space.sections.map((section) => ({ ...section, logs: section.logs.filter((log) => logs.has(log)), folders: section.folders.filter((folder) => folders.has(folder)),
     ...(section.checklists ? { checklists: section.checklists.filter((item) => folders.has(item)) } : {}),
-    ...(section.data ? { data: section.data.filter((tile) => logs.has(tile)) } : {}) }));
+    ...(section.data ? { data: section.data.filter((tile) => logs.has(tile)) } : {}), ...(section.cards ? { cards: section.cards.filter((card) => logs.has(card)) } : {}) }));
   return { ...reg, scripts, invalid, space: sections };
 }
 
@@ -329,8 +329,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
     return { waiting: settings.waiting, scripts: reg.scripts.filter((script) => !applies.has(script.id)).map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, links, checklists }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
-        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists }) => ({ id, title, text, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name }) => ({ id, title: name })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
@@ -768,7 +768,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   async function tile(id) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 400, error: 'request-refused' };
     const reg = await registry();
-    const item = reg.space.flatMap((section) => section.data ?? []).find((record) => record.id === id);
+    // A card (M5) runs its script by the same rules; its answer is any JSON. A tile and a card share one ID space.
+    const item = reg.space.flatMap((section) => [...(section.data ?? []), ...(section.cards ?? [])]).find((record) => record.id === id);
     if (!item) return { status: 404, error: 'unknown-id' };
     const script = reg.scripts.find((record) => record.id === item.script);
     if (!script) return { status: 404, error: 'unknown-script', detail: 'No registry script or space button has the ID ' + item.script + '.' };
@@ -778,7 +779,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const target = await resolve('scripts', script.id, {}, []);
     if (target.error) return target;
     const key = createHash('sha256').update(JSON.stringify([id, target.argv, target.cwd])).digest('hex');
-    return { ...target, script, key };
+    return { ...target, script, key, card: 'html' in item };
   }
   async function allow(body) {
     if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'id') return { status: 400, error: 'request-refused' };
@@ -793,6 +794,17 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     answerSaves = turn.catch(() => {});
     await turn;
     return { status: 200, allowed: body.id };
+  }
+  // A card's HTML (threat model row M5): read through packages/files (inside the workspace, symlinks resolved), sent as text.
+  // It runs only in the artifact frame on the page, so reading it needs no Allow; its script still does.
+  async function card(id) {
+    if (typeof id !== 'string' || !ID.test(id)) return { status: 400, error: 'request-refused' };
+    const item = (await registry()).space.flatMap((section) => section.cards ?? []).find((record) => record.id === id);
+    if (!item) return { status: 404, error: 'unknown-id' };
+    let file;
+    try { file = await readFile(workspace, item.html); } catch { return { status: 404, error: 'not-found', detail: 'The card file ' + item.html + ' was not found in the workspace.' }; }
+    if (Buffer.byteLength(file.content) > CARD_BYTES) return { status: 413, error: 'too-big', detail: 'The card file ' + item.html + ' is over 256 KiB.' };
+    return { status: 200, html: file.content };
   }
   // The last run per tile: a second ask within 30 s, or while it runs, gets the same answer, so a tile never runs more often.
   const tileRuns = new Map();
@@ -831,10 +843,11 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       if (code !== 0) return { why: 'ended with code ' + code, printed: head };
       let value;
       try { value = JSON.parse(printed); } catch { return { why: 'printed something that is not JSON', printed: head }; }
+      if (target.card) return { json: value };
       const wrong = dataShape(value);
       return wrong ? { why: wrong, printed: head } : { shape: value };
     } finally { release?.(); }
   }
 
-  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, reach, data, allow };
+  return { overview, iconSources, run, output, launch, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, reach, data, allow, card };
 }

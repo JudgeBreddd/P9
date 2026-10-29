@@ -301,6 +301,8 @@ dialog.window [data-folder] details.row summary{min-height:44px;padding:6px 0;fo
 dialog.window [data-folder] details.row summary small{font-size:12px}
 
 /* Mission data tiles and links (M3): a script's JSON drawn as text. */
+.card-frame iframe{display:block;width:100%;height:200px;border:0;background:transparent;color-scheme:light}
+.dark .card-frame iframe{color-scheme:dark}
 .tile-note{margin:0;font-size:13px;color:var(--dim)}
 .tile-stat{margin:0;display:flex;align-items:baseline;gap:6px}.tile-stat b{font-size:30px;font-weight:650;color:var(--text);font-variant-numeric:tabular-nums}.tile-stat span{font-size:13px;color:var(--dim)}
 .tile-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}

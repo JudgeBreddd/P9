@@ -544,6 +544,7 @@ export async function createDesktop({ state, open } = {}) {
     hub: () => ['GET', '/mission/hub'],
     // Data tiles (threat model row 70): one tile's last answer, and the user's Allow for it.
     data: ({ id: tile }) => id(tile) && ['GET', '/mission/data?' + new URLSearchParams({ id: tile })],
+    card: ({ id: card }) => id(card) && ['GET', '/mission/card?' + new URLSearchParams({ id: card })], // a card's HTML (row M5)
     dataAllow: ({ id: tile }) => id(tile) && ['POST', '/mission/data/allow', { id: tile }],
     hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
     hubDecide: body => ['POST', '/mission/hub/decide', body],

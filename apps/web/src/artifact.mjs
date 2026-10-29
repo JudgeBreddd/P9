@@ -62,7 +62,8 @@ const runtime = (base, name) => {
     .catch(error => { runtimes.delete(name); throw error; }));
   return runtimes.get(name);
 };
-export function mountFrame(box, a, { page: src, base, onSelection, onState }) {
+// what: the word in the navigation message (a Mission card, row M5, says "card").
+export function mountFrame(box, a, { page: src, base, onSelection, onState, what = 'artifact' }) {
   const frame = document.createElement('iframe'), { html, runtimes: need } = frameDoc(a);
   frame.setAttribute('sandbox', 'allow-scripts'); // no allow-same-origin, allow-forms, allow-popups or allow-top-navigation
   frame.className = 'art-frame'; frame.title = a.title; frame.src = src;
@@ -71,7 +72,7 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState }) {
   frame.addEventListener('load', () => {
     if (++loads < 2 || left) return;
     left = true; frame.src = src;
-    onState?.('error', 'The artifact tried to open another page in its frame. P9 stopped it.');
+    onState?.('error', `The ${what} tried to open another page in its frame. P9 stopped it.`);
   });
   const hear = event => {
     if (!frame.isConnected) return removeEventListener('message', hear);
@@ -86,6 +87,11 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState }) {
   box.append(frame);
   return frame;
 }
+// A Mission card (threat model row M5): a space file's HTML in this same frame. The appended rule gives it P9's light or
+// dark theme (html.dark; the host's CSS sets the same color-scheme on the frame, so it stays see-through); :where keeps
+// any color-scheme of the card's own ahead. A theme change shows on the card's next draw.
+export const mountCard = (box, title, html, opts) => mountFrame(box, { kind: 'html', title,
+  src: html + `<style>:where(:root){color-scheme:${document.documentElement.classList.contains('dark') ? 'dark' : 'light'}}</style>` }, { ...opts, what: 'card' });
 
 // modes (desktop): [{ label, on, go }], the panel's Pin and Full screen toggles.
 // Highlight and comment: select text in the frame, write a comment, Add; collect several; Send comments sends them as

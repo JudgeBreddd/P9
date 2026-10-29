@@ -16,7 +16,7 @@ import { createSky } from './landing-sky.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
-import { artifactView, artifactsIn, chipArtifact } from './artifact.mjs';
+import { artifactView, artifactsIn, chipArtifact, mountCard } from './artifact.mjs';
 
 export function mountShell() {
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
@@ -1158,7 +1158,7 @@ const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'n
 // A space file owns Mission (row M4-b): scheduled-job checks are a built-in item, so there is nothing to report.
 const noticeLine = () => (H.unchecked === 'space-set' ? 'No notifications.' : H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
 // A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
-const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
+const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function loadHub() {
   clearTimeout(H.timer);
@@ -1520,8 +1520,25 @@ function missionModal(m, body, row) {
       ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
       : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
     // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is open on screen, every 30 s.
-    m.tiles ||= {};
-    if (sp?.data?.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
+    // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
+    // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
+    m.tiles ||= {}; m.cardHtml ||= {};
+    const runs = [...(sp?.data || []), ...(sp?.cards || [])];
+    const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
+    if (runs.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
+    // ponytail: the modal draws whole, so a card's frame is made again on each draw (a tile's answer, a checklist press) and
+    // gets the last JSON again; a card keeps no state of its own across draws.
+    for (const c of sp?.cards || []) {
+      const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html;
+      if (typeof html !== 'string') continue;
+      const frame = mountCard(box.querySelector('.card-frame'), c.title, html, { ...FRAME, onState: (kind, text) => {
+        box.dataset.rendered = kind;
+        if (kind === 'rendered' && m.tiles[c.id]?.json !== undefined) frame.contentWindow?.postMessage({ p9: 'data', json: m.tiles[c.id].json }, '*');
+        if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
+      } });
+    }
+    if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
+      m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => S.modal === m && renderModal()); }
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
     m.ck ||= {};
     if (sp?.checklists?.length) body.insertAdjacentHTML('beforeend', `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>`);
@@ -1539,8 +1556,8 @@ function missionModal(m, body, row) {
       if (S.modal === m) renderModal();
     });
     const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (S.modal === m) renderModal(); });
-    if (sp?.data?.length && !m.pulling) { sp.data.forEach(pull); m.pulling = setInterval(() => { if (S.modal !== m) return clearInterval(m.pulling); if (!document.hidden) sp.data.forEach(pull); }, 30000); }
-    body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = sp.data.find(x => x.id === b.closest('[data-tile]').dataset.tile);
+    if (runs.length && !m.pulling) { runs.forEach(pull); m.pulling = setInterval(() => { if (S.modal !== m) return clearInterval(m.pulling); if (!document.hidden) runs.forEach(pull); }, 30000); }
+    body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
       window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
     body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
