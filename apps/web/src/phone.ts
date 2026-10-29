@@ -1785,7 +1785,9 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
 addEventListener('offline', online);
 addEventListener('online', () => { online(); void loadChat().then(drain); });
 // L2: the loading mark (phone.astro #boot) goes when the first load has answered, or failed (offline: the stale banner says so).
-online(); const first = loadChat(); void first.finally(() => document.getElementById('boot')?.remove());
+// Load timing: 'p9-chat-painted' is the first chat screen drawn, from the page's start; each request is in the browser's
+// own resource timing (performance.getEntriesByType('resource')). phone-speed.test.mjs reads both.
+online(); const first = loadChat(); void first.finally(() => { performance.mark('p9-chat-painted'); document.getElementById('boot')?.remove(); });
 // P2: coming back to the app asks the daemon at once, so a session that ended meanwhile goes to the login now (request()),
 // with the drafts kept, not on the next Save, Send or Stop.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && navigator.onLine) void request('/agent-lock').catch(() => {}); });
