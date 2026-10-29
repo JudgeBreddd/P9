@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -280,12 +280,21 @@ test('First launch D13.5: the main window is maximised when it is made', { timeo
   assert.match(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'), /new BrowserWindow\([\s\S]{0,900}?\n  window\.removeMenu\(\);[^\n]*\n(?:  \/\/[^\n]*\n)*  window\.maximize\(\);/);
 });
 
-test('First launch D9: an empty Mission says what Mission Control is and offers Set up', { timeout: 60000 }, async (t) => {
-  const { page, shot } = await emptyFirst(t);
+test('First launch D9 (fresh-install finding 2): a fresh Mission opens at its onboarding card, writes its own settings and no ICM files', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  const { page, shot } = await openFirst(t, instance);
   await page.click('#rMission');
-  const intro = page.locator('#fMission [data-mission-intro]');
-  await intro.waitFor({ timeout: 15000 });
-  assert.match(await intro.innerText(), /What is Mission Control\?[\s\S]*buttons[\s\S]*apps and pages[\s\S]*waiting on you[\s\S]*Set up Mission Control/);
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-mission-intro]').count(), 0, 'not the old settings-missing state');
+  assert.doesNotMatch(await page.locator('#fMission').innerText(), /not set up yet|settings-missing/);
+  // None of the ICM widgets: Waiting on you, and the Usage, Apps and pages and Notifications panels.
+  assert.equal(await page.locator('#fMission .needs').isVisible(), false, 'no Waiting on you');
+  assert.deepEqual(await page.locator('#fMission [data-panel]').evaluateAll((all) => all.filter((p) => p.checkVisibility()).map((p) => p.dataset.panel)), [], 'no ICM panels');
+  // P9 wrote its own settings file ({}), owner-only, and nothing in the workspace.
+  assert.equal(await readFile(settingsFile, 'utf8'), '{}\n');
+  if (process.platform !== 'win32') assert.equal((await stat(settingsFile)).mode & 0o777, 0o600);
+  for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
   await shot('mission-empty');
 });
 
@@ -303,18 +312,20 @@ test('First launch D1: the welcome screen offers a P9 on another machine', { tim
   assert.equal(await page.locator('#welBody [data-wiz-remote]').count(), 0, 'Hide closes the choice');
 });
 
-test('First launch D3: the Mission step says what is created, what is not, and what the button does', { timeout: 60000 }, async (t) => {
-  // Signed in, so the Set up card opens at the first thing not done: Mission Control's files (Next stays off until an agent is signed in).
-  const { page, shot } = await openFirst(t, await daemon(t, undefined, false, async (where) => { await signedIn(where); return { args: ['--acp-override', fake] }; }));
+test('First launch D3: an older setup\'s waiting folder opens the Mission step with it filled in; Next stays the main button', { timeout: 60000 }, async (t) => {
+  // Signed in, and the workspace has a needs-you folder: Mission is the first thing not done (a bare workspace has nothing to do).
+  const { page, shot } = await openFirst(t, await daemon(t, undefined, false, async (where) => {
+    await mkdir(path.join(where.workspace, 'needs-you'), { recursive: true }); await signedIn(where); return { args: ['--acp-override', fake] }; }));
   await page.locator('#cards [data-key="welcome"] .open').click();
   await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
   await page.locator('#welT', { hasText: 'Mission Control' }).waitFor({ timeout: 10000 });
   const step = await page.locator('#welBody').innerText();
-  assert.match(step, /control room[\s\S]*buttons for your scripts[\s\S]*A file that is already there is never changed or replaced/);
-  assert.match(step, /Create the starter files adds only this \(nothing that exists changes\)/);
-  assert.match(step, /Makes the files listed above, empty, and points P9 at them\./);
-  assert.match(step, /Mission Control files[\s\S]*Not there yet/);
-  assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Create the starter files');
+  assert.match(step, /Mission starts empty\. After setup, open it and build it there/);
+  assert.match(step, /I already have Mission files[\s\S]*Every path is optional/);
+  assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), true, 'open: something was found');
+  assert.equal(await page.locator('#welBody [data-path="waiting"]').inputValue(), 'needs-you');
+  assert.equal(await page.locator('#welFoot [data-act="next"]').getAttribute('data-variant'), 'default');
+  assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
   await shot('wizard-mission-step', page.locator('#welDlg'));
 });
 
@@ -335,11 +346,10 @@ test('First launch D6: the wizard finds the workspace\'s own layout and attaches
   await card.waitFor({ timeout: 15000 });
   await card.locator('.open').click();
   await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
-  await page.locator('#welBody [data-path]').first().waitFor({ timeout: 10000 });
+  await page.locator('#welBody [data-have][open] [data-path]').first().waitFor({ timeout: 10000 });
   // The nested main file, the registry and the _waiting folder are proposed, not the empty starter paths.
   assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
   assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
-  assert.match(await page.locator('#welBody [data-creates]').innerText(), /^[^,]*settings\.json$/, 'only the settings file is written, no project files');
   await shot('wizard-mission-existing', page.locator('#welDlg'));
   await page.click('#welBody [data-act="starter"]');
   await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 }).catch(() => {});

@@ -409,6 +409,10 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
    Settings); a refused value's reason under its box. */
 #setMission{grid-template-columns:15rem minmax(0,1fr) auto auto}
 .wiz-paths{display:grid;gap:8px;grid-template-columns:13rem minmax(0,1fr) auto}
+/* Wizard step 5: an older setup's files, folded away until asked for. */
+.wiz-have{display:grid;gap:8px;border-top:1px solid var(--border);padding-top:10px}
+.wiz-have>summary{cursor:pointer;width:fit-content;font-weight:500;color:var(--muted-foreground)}
+.wiz-have>summary:hover,.wiz-have[open]>summary{color:var(--foreground)}
 #setMission>*,.wiz-paths>*{grid-column:1/-1}
 :is(#setMission,.wiz-paths) .set-row{display:grid;grid-template-columns:subgrid}
 :is(#setMission,.wiz-paths) .set-row>.spacer{display:none}

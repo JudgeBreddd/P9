@@ -135,7 +135,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     return combine(parseRegistry(registryText, current()?.page_schemes), space);
   }
   async function files(settings = need(), draft) {
-    const registry = await readFile(workspace, settings.registry), file = draft !== undefined ? draftAt(drafts, draft) : settings.space;
+    const registry = settings.registry === undefined ? { content: '{}' } : await readFile(workspace, settings.registry), file = draft !== undefined ? draftAt(drafts, draft) : settings.space;
     const space = file ? await readFile(...spaceAt(workspace, file)).catch(() => null) : null;
     return { registry, space };
   }
@@ -187,6 +187,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     // A tool's space argument, else (the desktop form only) the scratch space Mission shows.
     const draft = drafting.getStore() ?? (by.user ? current()?.space_name : undefined);
     let settings = need(), file = which === 'registry' ? settings.registry : draft !== undefined ? draftAt(drafts, draft) : settings.space;
+    if (which === 'registry' && settings.registry === undefined) return { error: 'request-refused', detail: 'No registry file is set in settings.json.' };
     if (draft !== undefined && which === 'registry') return { error: 'request-refused', detail: 'A scratch space holds sections only. Buttons outside a section, apps and pages go to the registry: leave space out.' };
     if (draft !== undefined) {
       // A draft is written under the same rules as the live space: the lock (above), then File protection on every write.

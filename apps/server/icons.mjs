@@ -183,7 +183,7 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
 
   // The icons folder under the workspace; null when the registry's folder is not really inside the workspace.
   const folder = async (make) => {
-    const root = await realpath(workspace), beside = path.join(root, path.dirname(registry()));
+    const root = await realpath(workspace), beside = path.join(root, path.dirname(registry() ?? 'registry.json')); // no registry set: icons/ at the workspace root
     const real = await realpath(beside).catch(() => null);
     if (!real || (real !== root && !real.startsWith(root + path.sep))) return null;
     const icons = path.join(real, 'icons');

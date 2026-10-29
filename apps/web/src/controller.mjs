@@ -1116,7 +1116,7 @@ async function loadArt() {
 }
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
-  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
+  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting?.split('/').pop() ?? null; // no waiting folder on a fresh install
   M.scripts = {}; M.tools = [];
   for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
@@ -1268,9 +1268,8 @@ const missionEmpty = () => window.p9?.mission && !sampleView && !Object.keys(M.s
   && (live.on || /not set up/.test(live.note));
 const missionIntro = () => '<div class="sm" data-mission-intro role="note"><h4>What is Mission Control?</h4>'
   + '<p>Your control room: one place for the buttons that run your scripts, shortcuts to your apps and pages, and a list of what is waiting on you.</p>'
-  + '<p class="muted">It reads three things from your workspace: a main project file, a file of buttons, apps and pages, and a folder with one .md file for each item waiting on you. Set up lets you point P9 at the ones you already have, or makes empty ones to start from.</p>'
-  + '<div class="set-row">' + (window.p9?.chat ? '<button data-slot="button" data-variant="default" data-mission-setup>Set up Mission Control</button>' : '')
-  + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
+  + '<p class="muted">It reads three things from your workspace: a main project file, a file of buttons, apps and pages, and a folder with one .md file for each item waiting on you. Settings → Mission Control files points P9 at the ones you already have.</p>'
+  + '<div class="set-row">' + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
 // M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
 let guide = null;
 async function loadGuide() {
@@ -1329,7 +1328,6 @@ function renderMission() {
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   bindSpacePick($('#fMission'));
-  $('#fMission').querySelectorAll('[data-mission-setup]').forEach(b => b.onclick = () => welcome('mission'));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
   const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
@@ -2386,7 +2384,7 @@ async function loadSetup(paths) {
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
 // pick (item 15): an agent installed or signed in; while it is false the wizard asks Claude, Codex or both first. The
 // card leaves it out: a missing pick is a missing sign-in too.
-function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: s.settings && s.agentsFile && s.registryFile, terminal: s.tmux !== false }; }
+function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: (!s.settingsPresent && !s.found?.registry && !s.found?.waiting) || s.settings && s.agentsFile !== false && s.registryFile !== false && !(s.agentsFile === null && s.registryFile === null && (s.found?.registry || s.found?.waiting)), terminal: s.tmux !== false }; }
 function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
 // Item 15: the agents the wizard offers, each with the one line that says what it needs.
 const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
@@ -2409,17 +2407,17 @@ async function firstRun() {
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
   W.then = tour; welcome(0);
 }
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null, have: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out; hub is optional.
-const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
-const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
+const wizPaths = () => Object.fromEntries(Object.entries(W.paths || (W.s?.conflict ? W.s.proposed : W.s?.found) || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
+const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict || (s.settings && s.agentsFile === null && s.registryFile === null));
 const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
 // D17: stale = the chat said this agent is not signed in. Its login file can outlive the login, so /setup still says
 // signed in; the step believes the chat until a sign-in started here ends well.
 async function welcome(at, agent, stale) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, have: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
   W.s = await loadSetup();
   if (agent) W.picked = [...new Set([...wizPicked(), agent])];
   const d = W.s && setupDone(W.s);
@@ -2545,26 +2543,24 @@ function wizRender() {
     if (!d.agents) next = '<span class="muted sm">Sign in to one to go on, or Skip.</span>' + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
     title = 'Mission Control';
-    // A folder with things in it keeps them (needs-done p9-wizard-respects-existing-workspace): the paths are what P9 found
-    // there, shown and editable, and the list says exactly what Create adds. Nothing that is there is replaced.
-    const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
-    const starters = d.mission ? [] : (s.creates || []).filter(Boolean), creates = [...starters, ...(d.mission || s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
-    // RH2 (the owner, 2026-10-24: B, and how to set them up when there are none yet).
-    const none = choosing && !found && !s.settingsPresent;
-    body = `<p class="muted sm">Mission Control is P9's control room: buttons for your scripts, shortcuts to your apps and pages, and a list of what is waiting on you. Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} A file that is already there is never changed or replaced.</p>`
-      + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create the starter files makes an empty set you can change any time:</p><ul>'
-        + '<li><strong>Main project file</strong>: names your main project, in plain words. Your agents read it; Mission Control shows it as the Main Project card.</li>'
-        + '<li><strong>Buttons, apps and pages file</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
-        + '<li><strong>Folder of items waiting on you</strong>: one .md file for each thing waiting on you.</li></ul>'
-        + (window.p9.openDocs ? `<div class="set-row">${btn('docs', 'How to add buttons')}</div>` : '') + '</div>' : '')
-      + (choosing ? '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
-        + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
-      + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
-      + row('Mission Control files', 'Your main project file and your buttons, apps and pages file', yes(s.agentsFile && s.registryFile, 'There', 'Not there yet'))
-      + (creates.length ? `<p class="sm">${starters.length ? 'Create the starter files' : 'Use these files'} adds only this (nothing that exists changes): <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
-      + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then press Use these files. Your old settings file is kept as settings.json.bak.</p>` : '')
-      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', starters.length ? 'Create the starter files' : 'Use these files', 'default')}<span class="muted sm">${starters.length ? 'Makes the files listed above, empty, and points P9 at them.' : 'Makes no project files; it only saves the settings so P9 uses the files named above.'}</span></div>`)
-      + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
+    // Fresh-install findings 1 and 2: Mission starts empty and is built there; the daemon writes its own empty settings file
+    // (a finished step, unless the workspace already has a registry or a waiting folder: then this step opens with them filled in), from its onboarding card (with an agent or a
+    // template). Files from an older setup sit under "I already have Mission files", every path optional. A folder with
+    // things in it keeps them (needs-done p9-wizard-respects-existing-workspace): Use these files writes only settings.json,
+    // plus any path typed here that is not there yet, listed first.
+    const choosing = wizChoosing(s), paths = wizPaths(), open = W.have ?? Boolean(s.found?.registry || s.found?.waiting || (s.conflict && (s.agentsFile !== null || s.registryFile !== null)));
+    body = '<p data-mission-empty>Mission starts empty. After setup, open it and build it there: ask an agent to add buttons, apps and pages, or start from a template.</p>'
+      + (s.settings && !(s.agentsFile === null && s.registryFile === null) ? `<p class="muted sm">Mission already uses your settings file, <span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>.</p>` : '')
+      + (choosing ? `<details class="wiz-have" data-have${open ? ' open' : ''}><summary>I already have Mission files</summary>`
+        + `<div class="set-row"><span class="muted sm">Point P9 at the files you already have. Every path is optional: leave out any you do not use.</span>${btn('docs', 'How these files work')}</div>`
+        + '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
+        + (s.pathsInvalid ? fail('paths-invalid') : '')
+        + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then press Use these files. Your old settings file is kept as settings.json.bak.</p>` : '')
+        + (W.paths && s.creates?.length ? `<p class="sm">These are not there yet, and Use these files makes them empty: <span class="mono" data-creates>${s.creates.map(esc).join(', ')}</span></p>` : '')
+        + (Object.keys(paths).length && !s.pathsInvalid ? `<div class="set-row">${btn('starter', 'Use these files')}<span class="muted sm">Saves these paths in your settings file.</span></div>` : '')
+        + '</details>' : '')
+      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : '')
+      + (note?.created ? `<p class="ok sm">Saved.${note.created.length ? ' Created: ' + note.created.map(esc).join(', ') : ''}</p>` : '')
       + (note?.error ? fail(note.error, note.detail) : '')
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
   } else if (key === 'terminal') {
@@ -2609,6 +2605,7 @@ function wizRender() {
 $('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value;
   if (e.target.dataset.path) W.paths = { ...wizPaths(), [e.target.dataset.path]: e.target.value.trim() }; });
 $('#welDlg').addEventListener('change', e => { if (e.target.dataset.path) wizRefresh(); });
+$('#welDlg').addEventListener('toggle', e => { if (e.target.matches?.('[data-have]')) W.have = e.target.open; }, true);
 $('#welDlg').addEventListener('change', e => { if (e.target.id === 'welName') saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) }); });
 $('#welDlg').addEventListener('click', async e => {
   if (e.target.id === 'welPetdex' && window.p9?.openPetdex) { e.preventDefault(); return window.p9.openPetdex(); }

@@ -196,9 +196,10 @@ export const SPACES_DIR = 'spaces';
 export const spaceName = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(value) && !/^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/.test(value);
 export const SPACE_NAME_RULE = 'a scratch space name: 1 to 32 of a-z 0-9 -, starting with a letter or digit';
 export const SETTINGS = {
-  primary: { ...relative('The workspace file naming the main project ("**Main project: Name** (`folder/`").'), required: true },
-  registry: { ...relative('The registry JSON file (scripts, apps, pages).'), required: true },
-  waiting: { ...relative('The folder of needs-you .md items.'), required: true },
+  // Fresh-install finding 1: all three are optional; a new Mission starts empty and is built from its onboarding card.
+  primary: relative('The main project: its folder, or a workspace file naming it ("**Main project: Name** (`folder/`"). Optional.'),
+  registry: relative('The registry JSON file (scripts, apps, pages). Optional: without it Mission has no registry buttons, apps or pages.'),
+  waiting: relative('The folder of needs-you .md items. Optional: without it the Waiting on you list is empty.'),
   scripts_root: { type: 'string', check: (value) => typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0'),
     doc: 'An absolute folder where registry commands run and ~/workspace expands to. Default: the workspace.' },
   hub: relative('The workspace-hub folder.'),

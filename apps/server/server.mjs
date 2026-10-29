@@ -179,7 +179,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const readOnly = (path, name = path.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
     // ponytail: Builder edits registry.json outside P9; a reviewed registry editor would need its own confirm step.
-    (settings && name === settings.registry.toLowerCase())
+    (settings?.registry !== undefined && name === settings.registry.toLowerCase())
     // The space holds button commands too, so it is read-only to P9 for the same reason.
     || (settings?.space && name === settings.space.toLowerCase())
     // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
@@ -269,11 +269,25 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // M2: the settings file is read again on every Mission request and swapped in when its text changed, so an edit shows
   // in the next refresh with no restart. A file that no longer parses keeps the last good settings (the overview says so).
   // ponytail: one small file read per Mission request; a watcher if that ever shows up in a profile.
-  let settingsText, settingsError = null;
-  const reloadSettings = async () => {
+  let settingsText, settingsError = null, firstWrite;
+  const reloadSettings = async (firstRun = false) => {
     if (!settingsFile) return;
     let text;
     try { text = await readAsset(settingsFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') return; }
+    // Fresh-install finding 2 (threat model row 17): Mission's first request with no settings file writes {} once, create-only and
+    // owner-only, so Mission starts empty at its onboarding card. No workspace file is made. A file deleted after settings
+    // loaded is not written again (the last good settings stay, as below), and an existing file is never opened for writing.
+    // One write for the daemon's life: Mission's first requests arrive together, and one that read the new file before
+    // its {} was in it would see an empty, invalid file.
+    if (firstRun && text === undefined && !settings && settingsText === undefined) {
+      firstWrite ??= (async () => {
+        await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 }).catch(() => {});
+        const file = await open(settingsFile, 'wx', 0o600).catch(() => null);
+        if (file) { try { await file.writeFile('{}\n'); await file.sync(); } finally { await file.close(); } }
+      })().catch(() => {});
+      await firstWrite;
+      text = await readAsset(settingsFile, 'utf8').catch(() => undefined);
+    }
     if (text === settingsText) return;
     settingsText = text;
     if (text === undefined) { settingsError = null; return; } // deleted: the last good settings stay until a valid file returns
@@ -286,7 +300,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // saved workspace folder that was missing at start (main.mjs); the desktop button restarts the service once it is back.
   const restart = () => (savedWorkspace ? { needed: true, reason: 'workspace-folder-missing', folder: savedWorkspace } : { needed: false });
   for (const route of ['/mission', '/mission/*', '/scripts/*', '/runs/*', '/apps/*', '/pages/*']) {
-    api.use(route, async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); });
+    api.use(route, async (c, next) => { await reloadSettings(true); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); });
   }
   api.get('/mission', async (c) => c.json({ ...(await mission.overview()), fileProtection: protection(), settingsError, restart: restart(), update: update.brief() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
@@ -621,9 +635,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // AGENTS.md; an existing one is left as it is), and _ideas/ only in an empty workspace.
   const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'hub', 'scripts_root'];
   const planFor = async (paths, empty) => [
-    ...(await present(path.join(workspace, paths.primary)) ? [] : [paths.primary]),
-    ...(await present(path.join(workspace, paths.registry)) ? [] : [paths.registry]),
-    ...(await isFolder(paths.waiting) ? [] : [paths.waiting + '/AGENTS.md']),
+    ...(paths.primary === undefined || await present(path.join(workspace, paths.primary)) ? [] : [paths.primary]),
+    ...(paths.registry === undefined || await present(path.join(workspace, paths.registry)) ? [] : [paths.registry]),
+    ...(paths.waiting === undefined || await isFolder(paths.waiting) ? [] : [paths.waiting + '/AGENTS.md']),
     ...(empty && !(await isFolder('_ideas')) ? ['_ideas/'] : [])];
   // The wizard's own paths, checked as settings.json would be: only the four keys, each workspace-relative.
   const wizardPaths = (input) => {
@@ -632,8 +646,10 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   };
   // Settings are per machine, not per workspace: after "Change workspace" they can name starter paths this folder lacks while
   // the folder has its own layout. What it has that the settings do not name; non-empty means Create must not lay a starter.
+  // Settings that name none of Mission's three files (the first-run {}): the wizard finds and offers what is there, as with none.
+  const names = (loaded) => ['primary', 'registry', 'waiting'].some((key) => loaded?.[key] !== undefined);
   const differing = async (loaded, empty) => {
-    if (!loaded) return empty ? {} : existing();
+    if (!names(loaded)) return empty ? {} : existing();
     if (empty || !(await planFor(loaded, false)).length) return {};
     const own = await existing();
     return Object.fromEntries(Object.entries(own).filter(([key, value]) => loaded[key] !== value));
@@ -648,14 +664,16 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const loaded = settings ?? disk.parsed;
     const found = (settings || disk.text !== undefined || empty) && !loaded ? {} : await differing(loaded, empty);
     const query = c.req.query(), asked = Object.keys(query).length ? wizardPaths(query) : null;
-    const proposed = loaded && Object.keys(found).length ? asked ?? { ...loaded, ...found } : settings ?? disk.parsed ?? asked ?? { ...STARTER_SETTINGS, ...found };
+    const proposed = loaded && (Object.keys(found).length || !names(loaded)) ? asked ?? { ...loaded, ...found } : settings ?? disk.parsed ?? asked ?? { ...STARTER_SETTINGS, ...found };
     const paths = settings ?? disk.parsed ?? STARTER_SETTINGS;
     return c.json({ workspace, settingsFile: settingsFile ?? null, settings: Boolean(settings), settingsPresent: disk.text !== undefined,
       settingsInvalid: Boolean(disk.error), settingsError: disk.error ?? null,
       writable: await access(workspace, fsConstants.W_OK).then(() => true, () => false), workspaceEmpty: empty,
       found, conflict: Boolean(loaded && Object.keys(found).length), proposed,
       creates: disk.error ? [] : await planFor(proposed, empty), ...(Object.keys(query).length && !asked ? { pathsInvalid: true } : {}),
-      agentsFile: await present(path.join(workspace, paths.primary)), registryFile: await present(path.join(workspace, paths.registry)),
+      // null: settings.json leaves that key out (all three are optional).
+      agentsFile: paths.primary === undefined ? null : await stat(path.join(workspace, paths.primary)).then(() => true, () => false), // a file or a folder
+      registryFile: paths.registry === undefined ? null : await present(path.join(workspace, paths.registry)),
       // null off Linux: only the tmux backend has a socket, and only it needs a binary installed.
       tmux: terminals.socket ? await terminals.list().then(() => true, (error) => error.message !== 'tmux-not-found') : null,
       ...await signedIn(),
@@ -680,7 +698,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const old = disk.parsed ?? settings, empty = !(await readdir(workspace)).length;
     // Settings are replaced only when the owner confirms other paths for a folder whose own layout they do not name.
     const repoint = Boolean(chosen && old);
-    if (repoint && !Object.keys(await differing(old, empty)).length) return c.json({ error: 'settings-exist' }, 409);
+    if (repoint && names(old) && !Object.keys(await differing(old, empty)).length) return c.json({ error: 'settings-exist' }, 409);
     if (!chosen && !settings && disk.text === undefined && !empty) return c.json({ error: 'paths-required' }, 409);
     // The wizard's keys are the chosen ones; every other key of the old file (space, notes_roots, server_host ...) carries over.
     const paths = repoint ? parseSettings(JSON.stringify({ ...Object.fromEntries(Object.entries(old).filter(([key]) => !WIZARD_KEYS.includes(key))), ...chosen }))
@@ -816,7 +834,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // The Mission edit form (mission-editor.mjs), desktop only: names and icons of apps, links and sections, through the
   // MCP tools' own update() with its guards. File protection asks first: the form sends confirm once the user agreed.
-  const editing = async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); };
+  const editing = async (c, next) => { await reloadSettings(true); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); };
   app.get('/mission/edit', editing, async (c) => c.json(await mcp.editState()));
   // Tile art (apps/server/icons.mjs): site icons fetched from the sites themselves, program icons, and the user's pictures,
   // all as data: URIs for <img>. Desktop only; the phone lists links and shows no tiles.
