@@ -1,31 +1,34 @@
 {
   "title": "Homelab",
-  "about": "For machines and services you run yourself: services, health, backups and logs.",
+  "about": "For machines and services you run yourself: compose files, logs and backups in your workspace.",
   "space": {
     "sections": [
       {
         "id": "services",
         "title": "Services",
         "icon": "🧩",
-        "text": "A link to each service's dashboard (http or https)."
-      },
-      {
-        "id": "health",
-        "title": "Health",
-        "icon": "🩺",
-        "text": "Data tiles for disk free, uptime and failed services. Each one runs a registry script after you answer Allow."
-      },
-      {
-        "id": "backups",
-        "title": "Backups",
-        "icon": "💾",
-        "text": "A button to start each backup, and a log view of the last run."
+        "text": "The compose files in your workspace, newest first. Open one to read it.",
+        "folders": [
+          { "id": "compose-files", "title": "Compose files", "pattern": "*compose*.y*ml", "recursive": true }
+        ]
       },
       {
         "id": "logs",
         "title": "Logs",
         "icon": "📜",
-        "text": "Log views of the files you read first when something breaks."
+        "text": "The .log files in your workspace, newest first: read these first when something breaks.",
+        "folders": [
+          { "id": "log-files", "title": "Log files", "pattern": "*.log", "recursive": true }
+        ]
+      },
+      {
+        "id": "backups",
+        "title": "Backups",
+        "icon": "💾",
+        "text": "Files in your workspace with backup in the name, newest first: the newest one is your last backup.",
+        "folders": [
+          { "id": "backup-files", "title": "Backup files", "pattern": "*backup*", "recursive": true }
+        ]
       }
     ]
   }

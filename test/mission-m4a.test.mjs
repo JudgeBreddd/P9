@@ -67,7 +67,8 @@ test('M4a templates: four shipped files, sections with text and https links only
       assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links', 'widget', 'folders'].includes(key)), [], template.name + ': only text, links and folders');
       // Obsidian's links open Obsidian on this computer (rows 74, 75); its folders are read-only lists in the vault root (row 73).
       for (const link of section.links ?? []) assert.match(link.url, template.name === 'obsidian' ? /^obsidian:\/\// : /^https:\/\//);
-      for (const folder of section.folders ?? []) assert.equal(template.name + ':' + folder.root, 'obsidian:vault');
+      // Homelab and ICM list by name pattern across the workspace (no fixed folder that a fresh workspace lacks).
+      for (const folder of section.folders ?? []) assert.ok(template.name === 'obsidian' ? folder.root === 'vault' : !folder.root && !folder.path && folder.recursive, template.name + ':' + folder.id);
     }
     // No home path, host address or user folder in a shipped template (D10).
     assert.doesNotMatch(JSON.stringify(template), /\/home\/|~\/|\/Users\/|\\\\|\b\d{1,3}(\.\d{1,3}){3}\b|\.local\b|\.lan\b|\.ts\.net\b/, template.name);
@@ -89,9 +90,9 @@ test('M4a templates: four shipped files, sections with text and https links only
   const live = (await settingsOf(instance)).space;
   assert.equal(live, path.join(instance.directory, '.config/p9/mission-space.json'));
   const overview = (await call(instance, '/mission')).body;
-  assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Waiting on you', 'Usage', 'Apps and pages', 'Notifications', 'Today', 'Projects', 'Wiki and notes', 'Upkeep'], []]);
+  assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Waiting on you', 'Usage', 'Apps and pages', 'Notifications', 'Projects', 'Handoffs', 'Workspace rules'], []]);
   // Fresh-install finding 3a: the ICM template's four sections name P9's built-in panels.
-  assert.deepEqual(overview.space.map((s) => s.widget ?? null), ['waiting', 'usage', 'apps', 'notifications', null, null, null, null]);
+  assert.deepEqual(overview.space.map((s) => s.widget ?? null), ['waiting', 'usage', 'apps', 'notifications', null, null, null]);
 
   // Never over a space with sections: 409 and the same bytes.
   const before = await readFile(live, 'utf8');

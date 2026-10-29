@@ -1,6 +1,6 @@
 {
   "title": "ICM workspace",
-  "about": "For a workspace laid out by the Interpretable Context Methodology: today, projects, wiki and upkeep.",
+  "about": "For a workspace laid out by the Interpretable Context Methodology: what waits on you, each folder's CONTEXT.md and the handoffs.",
   "space": {
     "sections": [
       {
@@ -24,28 +24,46 @@
         "widget": "notifications"
       },
       {
-        "id": "today",
-        "title": "Today",
-        "icon": "🎯",
-        "text": "What needs you now. Add a button for each daily chore and a data tile for the count you check first."
-      },
-      {
         "id": "projects",
         "title": "Projects",
         "icon": "📁",
-        "text": "Your active projects. A folders item lists the CONTEXT.md and handoff files in a project folder."
+        "text": "Each folder's CONTEXT.md, newest first: the map of what that folder holds and does.",
+        "folders": [
+          {
+            "id": "context-files",
+            "title": "CONTEXT.md files",
+            "pattern": "CONTEXT.md",
+            "recursive": true
+          }
+        ]
       },
       {
-        "id": "wiki",
-        "title": "Wiki and notes",
-        "icon": "📚",
-        "text": "Notes you read often. Name the notes folder in settings notes_roots, then show it here."
+        "id": "handoffs",
+        "title": "Handoffs",
+        "icon": "🤝",
+        "text": "Handoff notes in your workspace, newest first: where the last session stopped.",
+        "folders": [
+          {
+            "id": "handoff-files",
+            "title": "Handoff notes",
+            "pattern": "*handoff*.md",
+            "recursive": true
+          }
+        ]
       },
       {
-        "id": "upkeep",
-        "title": "Upkeep",
-        "icon": "🧹",
-        "text": "Workspace chores such as audits, backups and syncs, each a button that runs a registry script."
+        "id": "rules",
+        "title": "Workspace rules",
+        "icon": "📏",
+        "text": "The CLAUDE.md files an agent reads first in each folder.",
+        "folders": [
+          {
+            "id": "claude-files",
+            "title": "CLAUDE.md files",
+            "pattern": "CLAUDE.md",
+            "recursive": true
+          }
+        ]
       }
     ]
   }
