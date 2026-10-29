@@ -144,5 +144,19 @@ test('migrate_mission: backup first, the space, the setting, every item kept or 
     shot('migrate-wiki-' + name, await page.screenshot({ animations: 'disabled' }));
     await page.keyboard.press('Escape');
   }
+  // Apps and pages with none in the registry says so instead of drawing a blank box.
+  assert.equal(await page.locator('#fMission [data-panel="mlaunch"] [data-launch-empty]').textContent(), 'No apps or pages added yet.');
+  // No empty column (M4 follow-up): every column in the row shows something, and the row has a track for each column only.
+  const columns = () => page.evaluate(() => { const row = document.querySelector('#fMission .mrow'), cols = [...row.children].filter((c) => c.offsetWidth);
+    return { tracks: getComputedStyle(row).gridTemplateColumns.split(' ').length, empty: cols.filter((c) => ![...c.children].some((k) => k.offsetHeight > 0)).length, cols: cols.length }; });
+  for (const [width, names] of [[1280, ['event-horizon-prime', 'daylight']], [1920, ['daylight']]]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const name of names) {
+      await theme(name);
+      const got = await columns();
+      assert.deepEqual([got.empty, got.tracks], [0, got.cols], width + ' ' + name + ': ' + JSON.stringify(got));
+      shot('columns-' + width + '-' + name, await page.screenshot({ animations: 'disabled' }));
+    }
+  }
   console.log('PASS migrate: bad space refused unchanged; backup = old settings; space + setting; list 2 kept 4 lost, roots not allowed named; hub space-set; second refused; desktop before/after both themes');
 });
