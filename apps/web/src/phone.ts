@@ -912,7 +912,8 @@ one<HTMLSelectElement>('#mode').onchange = async (event) => {
 const KEYS: Record<string, string> = { esc: '\x1b', tab: '\t', ctrlc: '\x03', up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C' };
 function termView(text: string, live: boolean) {
   const waiting = text === 'Connecting' || text === LOADING_TERMINAL;
-  one('#termState').textContent = text;
+  // The bar is one short line; the full words (where to install tmux) are across the screen below.
+  one('#termState').textContent = text.startsWith('Terminals need tmux') ? 'tmux not installed' : text;
   // P14: not connected is red in the bar and written across the screen, so a tap that cannot open a keyboard is not a mystery.
   one<HTMLElement>('section[data-view="terminal"]').dataset.live = live ? 'yes' : waiting ? 'wait' : 'no';
   one<HTMLElement>('#screen').dataset.off = live ? '' : text === 'Connecting' ? 'Connecting…' : waiting ? text : 'Not connected\n' + text;

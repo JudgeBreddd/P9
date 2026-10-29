@@ -22,7 +22,10 @@ for (const type of ['compositionend', 'keydown']) addEventListener(type, (event)
 // screen: the box xterm draws in. state(text, live): the page shows the state and turns its own key buttons on or off.
 // connect(id): a WebSocket to that terminal, or anything with the same readyState, send, close and on* handlers.
 // What the dock and the phone say when the daemon reports no tmux binary.
-export const TMUX_MISSING = 'tmux not found. Install it (Debian/Ubuntu: sudo apt install tmux · Fedora: sudo dnf install tmux · Arch: sudo pacman -S tmux), then press Refresh.';
+// tmux missing where P9 runs. Never a command to type (installing it needs the admin password, which only the desktop app
+// asks for): the phone and a browser say to finish it in the desktop app; the desktop's dock says where in the app.
+export const TMUX_MISSING = 'Terminals need tmux, and the computer P9 runs on does not have it. Installing it needs an admin password, so finish this step in the P9 desktop app on a computer: Settings → Setup → Terminal. Then press Refresh.';
+export const TMUX_MISSING_HERE = 'Terminals need tmux, and it is not installed. Open Settings → Setup → Terminal to install it with your admin password, then press Refresh.';
 // What they say when this computer has no terminal backend, or the Windows one could not start (issue #11).
 export const unavailableText = (reason) => "Terminal isn't available on this computer yet" + (reason ? ': ' + reason : '.');
 export function createTerminal({ screen, state, connect, open }) {
