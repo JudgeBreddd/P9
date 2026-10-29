@@ -84,6 +84,11 @@
 <!-- Landing page (Builder, plan.md "Landing page"): the black hole intro, then a greeting, the focus modes and the pets. -->
 <dialog id="land" class="land" tabindex="-1" aria-labelledby="landHi" data-stage="intro" data-pending>
   <canvas id="landSky" aria-hidden="true"></canvas>
+  <!-- Landing v5 (components/landing-v5): the rendered loop over its still poster. The controller sets the sources and
+       picks this or the canvas above (LAND_BG). -->
+  <div class="p9-cosmos" aria-hidden="true" hidden><div class="p9-cosmos__scene">
+    <img class="p9-cosmos__poster" width="1536" height="1024" alt="" decoding="async">
+    <video class="p9-cosmos__video" muted loop playsinline preload="metadata"></video></div></div>
   <div class="land-brand" aria-hidden="true">
     <svg class="land-mark" viewBox="0 0 320 150">
       <defs>

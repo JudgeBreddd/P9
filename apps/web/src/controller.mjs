@@ -13,6 +13,10 @@ import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
+import { mountLandingVideo } from './components/landing-v5/playback.mjs';
+import landPoster from './components/landing-v5/black-hole.webp?url';
+import landLoop from './components/landing-v5/rendered/horizon-loop.mp4?url';
+import './components/landing-v5/background.css';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
@@ -2195,7 +2199,22 @@ setTimeout(landingStart, 3000); // settings never answered: open anyway rather t
 // focus. Settings' "Start in my last focus mode" skips it, and so does a reload of the same window (hot reload).
 // The test runs turn it off (P9_LANDING=off, scripts/with-tmp.mjs): it covers the shell they click.
 const land = $('#land'), landOn = window.p9?.landing !== false, still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const sky = createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
+// The one rollback switch (landing v5, approved 2026-10-29): 'video' plays the rendered loop over its poster; 'original'
+// brings back the WebGL sky below. P9_LANDING=original sets it for a run; the default is the video. Send-to-server keeps
+// its own createSky (#moveSky) either way. The phone has its own page and never loads this.
+const LAND_BG = window.p9?.landingBg === 'original' ? 'original' : 'video';
+const NO_SKY = { ok: false, set() {}, frame() {}, size() {} };
+let landVideo = null;
+if (LAND_BG === 'video') {
+  const cosmos = land.querySelector('.p9-cosmos');
+  cosmos.querySelector('img').src = landPoster;
+  Object.assign(cosmos.querySelector('video'), { poster: landPoster, src: landLoop });
+  cosmos.hidden = false; $('#landSky').hidden = true;
+  // Plays only while the landing is open (its dialog is shown) and the window is not hidden; reduced motion, a blocked
+  // play or a failed load leave the poster (playback.mjs).
+  landVideo = mountLandingVideo(cosmos);
+}
+const sky = LAND_BG === 'video' ? NO_SKY : createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
 const LAND = { started: false, raf: 0, v: { ...SKY_MAIN }, from: null, to: null, t0: 0, ms: 0, drawn: 0, spin: 0 };
 if (!landOn) land.removeAttribute('data-pending');
 const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return settings.focus[f] ? f : Object.keys(focusNames).find(k => settings.focus[k]); };
@@ -3076,5 +3095,5 @@ const amSendNote = async (browser) => {
 $('#amForm').onsubmit = (e) => { e.preventDefault(); amSendNote(false); };
 amWeb.onclick = () => amSendNote(true);
 
-return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };
+return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); landVideo?.destroy(); };
 }
