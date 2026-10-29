@@ -40,6 +40,12 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission .mrow, #fMission .needs, #fMission [data-group]').count(), 0);
   assert.equal(await page.locator('#fMission [data-template]').count(), 4);
+  assert.match(await page.locator('#fMission [data-onboard-protect]').innerText(), /File protection is on\. Claude or Codex can write your space only while it is off\.[\s\S]*Turn File protection back on once the build is done\./);
+  await page.click('#fMission [data-open-protect]');
+  await page.locator('#setDlg[open] #setProtect').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#setProtect').isChecked(), true);
+  await page.keyboard.press('Escape');
+  await page.locator('#setDlg[open]').waitFor({ state: 'detached', timeout: 5000 });
 
   await page.click('#fMission [data-yourself]');
   await page.locator('#mdlBody[data-kind="guide"] [data-guide] h1').waitFor({ timeout: 10000 });
@@ -73,6 +79,11 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.locator('#mission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
   assert.equal(await phone.locator('#mission [data-open]').count(), 0);
   await settled(phone); shot('m4a-card-phone', await phone.screenshot());
+  assert.match(await phone.locator('#mission [data-onboard-protect]').innerText(), /only while it is off[\s\S]*back on once the build is done/);
+  await phone.click('#mission [data-open-protect]');
+  await phone.locator('#sheet[open] #setProtect').waitFor({ timeout: 10000 });
+  await phone.keyboard.press('Escape');
+  await phone.locator('#sheet[open]').waitFor({ state: 'detached', timeout: 5000 });
   await phone.click('#mission [data-yourself]');
   await phone.locator('#sheet[open] [data-guide] h1').waitFor({ timeout: 10000 });
   await phone.keyboard.press('Escape');
@@ -80,6 +91,15 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.waitForFunction(() => location.hash.startsWith('#chat=') || document.querySelector('[data-onboard-note]')?.textContent, null, { timeout: 15000 });
   assert.match(await phone.evaluate(() => location.hash), /^#chat=/, await phone.evaluate(() => document.querySelector('[data-onboard-note]')?.textContent ?? ''));
 
+  assert.equal((await server.desk('/file-protection', 'POST', { on: false })).status, 200);
+  await page.locator('#fMission [data-onboard-protect]').waitFor({ state: 'detached', timeout: 20000 });
+  assert.equal(await page.locator('#fMission [data-onboard] [data-build="claude"]').count(), 1);
+  await phone.goto(server.origin + '/phone/');
+  await phone.click('[data-nav="mission"]');
+  await phone.locator('#mission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.equal(await phone.locator('#mission [data-onboard-protect]').count(), 0);
+  assert.equal((await server.desk('/file-protection', 'POST', { on: true })).status, 200);
+  await page.locator('#fMission [data-onboard-protect]').waitFor({ timeout: 20000 });
   // A scratch space appears: the picker shows on the card; picking it shows that space with the picker above it.
   assert.equal((await server.desk('/mission/template', 'POST', { name: 'homelab', space: 'draft', confirm: true })).status, 201);
   await page.locator('#fMission [data-onboard] [data-space-pick]').waitFor({ timeout: 20000 });

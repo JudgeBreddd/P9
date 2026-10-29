@@ -1112,7 +1112,7 @@ function applyOverview(o) {
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
   M.space = o.space || [];
-  live.empty = Boolean(o.empty); live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null;
+  live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null;
   for (const s of M.space) M.scripts[s.title] ||= [];
   applyQueue(o);
 }
@@ -1284,6 +1284,7 @@ function bindOnboard(root) {
     else toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   });
   root.querySelectorAll('[data-yourself]').forEach(b => b.onclick = () => openModal({ kind: 'guide' }));
+  root.querySelectorAll('[data-open-protect]').forEach(b => b.onclick = async () => { await $('#setBtn').onclick(); const input = $('#setProtect'); input?.scrollIntoView({ block: 'center' }); input?.focus(); });
   // File protection answers the first click 403 and arms the tile; the second click sends the user's confirmation, as the edit form does.
   root.querySelectorAll('[data-template]').forEach(b => b.onclick = async () => {
     const r = await window.p9.mission('template', { name: b.dataset.template, ...(b.dataset.armed ? { confirm: true } : {}) });
@@ -1296,7 +1297,7 @@ function bindOnboard(root) {
 function renderMission() {
   // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet.
   if (live.empty && !sampleView) {
-    setHTML($('#fMission'), onboardCard({ templates: guide?.templates, spaces: live.spaces, current: live.spaceName }, esc));
+    setHTML($('#fMission'), onboardCard({ templates: guide?.templates, spaces: live.spaces, current: live.spaceName, protect: live.fileProtection }, esc));
     bindOnboard($('#fMission'));
     if (!guide) loadGuide();
     return;

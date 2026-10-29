@@ -277,7 +277,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   for (const route of ['/mission', '/mission/*', '/scripts/*', '/runs/*', '/apps/*', '/pages/*']) {
     api.use(route, async (c, next) => { await reloadSettings(); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); });
   }
-  api.get('/mission', async (c) => c.json({ ...(await mission.overview()), settingsError, restart: restart(), update: update.brief() }));
+  api.get('/mission', async (c) => c.json({ ...(await mission.overview()), fileProtection: protection(), settingsError, restart: restart(), update: update.brief() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
   api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
   // Data tiles (row 70): the client asks only while Mission shows the tile; the daemon holds each tile to one run per 30 s.

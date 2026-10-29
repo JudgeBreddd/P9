@@ -1171,7 +1171,7 @@ async function loadMission(cached = false) {
     // Item 14: a laptop is updating this server's P9; it restarts once no chat is mid-turn (apps/server/update.mjs).
     // A fresh profile shows only the onboarding card (M4, threat model row 72).
     if (data.empty) {
-      one('#mission').innerHTML = onboardCard({ templates: guide?.templates ?? [], spaces: data.spaces ?? [], current: data.spaceName ?? null }, escape);
+      one('#mission').innerHTML = onboardCard({ templates: guide?.templates ?? [], spaces: data.spaces ?? [], current: data.spaceName ?? null, protect: data.fileProtection === true }, escape);
       if (!guide) void loadGuide();
     } else keepOpen(() => { one('#mission').innerHTML = spacePicker(data.spaces ?? [], data.spaceName ?? null, escape) + (data.update ? `<article class="card warn" data-update><h2>P9 is updating to ${escape(data.update.version)}</h2><p>${data.update.phase === 'waiting-turns' ? `It restarts when ${data.update.turns} chat${data.update.turns === 1 ? ' finishes its' : 's finish their'} turn. New messages wait until it is back.` : data.update.phase === 'restarting' ? 'It is restarting now; this page reconnects by itself.' : 'Building the new version beside the running one. Chats keep working.'}</p></article>` : '') + (data.restart?.needed ?`<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
       + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
@@ -1327,6 +1327,7 @@ async function loadGuide() {
 }
 one('#mission').addEventListener('click', async (event) => {
   const target = event.target as Element, build = target.closest<HTMLButtonElement>('[data-build]'), template = target.closest<HTMLButtonElement>('[data-template]');
+  if (target.closest('[data-open-protect]')) { await openSettings(); const input = document.getElementById('setProtect'); input?.scrollIntoView({ block: 'center' }); input?.focus(); }
   if (target.closest('[data-yourself]')) openSheet('Build it yourself', `<div class="notes-md" data-guide>${guide ? md.parse(guide.guide) : 'Loading the guide…'}</div>`);
   if (build) {
     build.disabled = true;
