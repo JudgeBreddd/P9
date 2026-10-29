@@ -100,10 +100,10 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   assert.equal(await phone.locator('#mission [data-onboard-protect]').count(), 0);
   assert.equal((await server.desk('/file-protection', 'POST', { on: true })).status, 200);
   await page.locator('#fMission [data-onboard-protect]').waitFor({ timeout: 20000 });
-  // A scratch space appears: the picker shows on the card; picking it shows that space with the picker above it.
+  // A scratch space appears in the top bar's Space menu (finding 4); picking it shows that space.
   assert.equal((await server.desk('/mission/template', 'POST', { name: 'homelab', space: 'draft', confirm: true })).status, 201);
-  await page.locator('#fMission [data-onboard] [data-space-pick]').waitFor({ timeout: 20000 });
-  await page.selectOption('#fMission [data-space-pick]', 'draft');
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space="draft"]').click({ timeout: 20000 });
   await page.locator('#fMission [data-group="Services"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-onboard]').count(), 0);
   for (const name of THEMES) { await theme(name); await settled(page); shot('m4a-picker-desktop-' + name, await page.screenshot()); }
@@ -114,12 +114,15 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   assert.equal(await phone.locator('#mission [data-space-pick]').inputValue(), 'draft');
   await settled(phone); shot('m4a-picker-phone', await phone.screenshot());
 
-  // Back to Main: the card again; a template (File protection asks with a second click) fills the space and the card goes.
-  await page.selectOption('#fMission [data-space-pick]', '');
+  // Back to Main: the card again; a template click previews it, and Choose (File protection asks with a second click) makes
+  // a new space from it and shows it, so the card goes (finding 4).
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space=""]').click();
   await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
   await page.click('#fMission [data-template="blank"]');
-  await page.locator('#fMission [data-template="blank"][data-armed]').waitFor({ timeout: 10000 });
-  await page.click('#fMission [data-template="blank"]');
+  await page.click('#fMission [data-choose="blank"]');
+  await page.locator('#fMission [data-choose="blank"][data-armed]').waitFor({ timeout: 10000 });
+  await page.click('#fMission [data-choose="blank"]');
   await page.locator('#fMission [data-group="Start here"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-onboard]').count(), 0);
 });

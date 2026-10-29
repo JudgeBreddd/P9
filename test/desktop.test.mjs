@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, stat, writeFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, stat, writeFile, realpath, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -318,7 +318,7 @@ test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless 
     await page.reload();
     await page.click('#rMission');
     await page.locator('#fMission .tiles').waitFor({ timeout: 15000 });
-    await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
+    await page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
     const on = name === 'icm';
     assert.deepEqual(await widgets(), { waiting: on, usage: on, apps: on, notifications: on }, name);
     // + New idea writes to the workspace's _ideas folder: an ICM widget too (finding 3b follow-up).
@@ -340,7 +340,7 @@ test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless 
   const bytes = await readFile(spaceFile, 'utf8');
   await page.reload();
   await page.click('#rMission');
-  await page.waitForFunction(() => document.querySelector('#fMission [data-space-pick]')?.value === 'homelab', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab', null, { timeout: 15000 });
   assert.deepEqual(await widgets(), { waiting: true, usage: true, apps: true, notifications: true }, 'existing install');
   assert.equal(await readFile(spaceFile, 'utf8'), bytes, 'the space file is unchanged');
 });
@@ -471,7 +471,7 @@ test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list th
     assert.equal((await page.evaluate((name) => window.p9.mission('space', { name }), name)).status, 200, name + ': space');
     await page.reload();
     await page.click('#rMission');
-    await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
+    await page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
     for (const [title, files] of sections) {
       await page.locator(`#fMission [data-group="${title}"]`).click();
       await page.locator('#mdlBody [data-folder="0"]').click();
@@ -485,7 +485,7 @@ test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list th
       }
       await page.reload();
       await page.click('#rMission');
-      await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
+      await page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
     }
   }
 });
@@ -550,6 +550,53 @@ test('First launch D6: the wizard finds the workspace\'s own layout and attaches
   await page.locator('#fMission .needs [data-list] li .kind').first().waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#fMission [data-mission-intro]').count(), 0, 'a filled Mission has no intro');
   await shot('mission-filled');
+});
+
+// Finding 4: the Space menu in the top bar (Mission focus only); + Add shows the onboarding card; a template click is a
+// preview that writes nothing, Back to wizard writes nothing, Choose template writes one new space file and shows it.
+test('Mission D13 (finding 4): Switch mission control, + Add, template preview and Choose', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  const spaces = path.join(instance.directory, '.config', 'p9', 'spaces'), files = () => readdir(spaces).then((list) => list.sort(), () => []);
+  const light = async (name) => { const was = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await shot(name); await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, was); };
+  // File protection may answer the first Choose with a request to click again (the user's confirmation).
+  const choose = async (name, want) => { const b = page.locator('#fMission [data-choose="' + name + '"]'); await b.click();
+    await page.waitForFunction((want) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === want || /File protection/.test(document.querySelector('#fMission [data-onboard-note]')?.textContent || ''), want, { timeout: 15000 });
+    if (await b.count()) await b.click(); };
+  assert.equal(await page.locator('#spaceBtn').isVisible(), false, 'not in Chat focus');
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 15000 });
+  await page.locator('#spaceBtn', { hasText: 'Main' }).waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-space-pick]').count(), 0, 'no Space select in the page');
+  await shot('space-switch-1-dark'); await light('space-switch-1-light');
+  // Preview: the template's sections and two buttons, and no file.
+  await page.locator('#fMission [data-template="homelab"]').click();
+  await page.locator('#fMission [data-preview] [data-choose="homelab"]').waitFor({ timeout: 10000 });
+  await page.locator('#fMission [data-preview] [data-preview-back]').waitFor();
+  await shot('space-preview-dark'); await light('space-preview-light');
+  assert.deepEqual(await files(), [], 'a preview writes no file');
+  await page.locator('#fMission [data-preview-back]').click();
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await files(), [], 'Back to wizard writes no file');
+  // Choose: one new space file, shown at once.
+  await page.locator('#fMission [data-template="homelab"]').click();
+  await choose('homelab', 'homelab');
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab', null, { timeout: 15000 });
+  assert.deepEqual(await files(), ['homelab.json'], 'Choose writes one');
+  // + Add from a space with sections: the card, then Choose under a free name; nothing is replaced or removed.
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space-add]').click();
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').click();
+  await choose('homelab', 'homelab-2');
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab-2', null, { timeout: 15000 });
+  assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json']);
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space="homelab"]').waitFor({ timeout: 10000 });
+  await shot('space-switch-2-open-dark'); await light('space-switch-2-open-light');
+  await page.locator('#spacePop [data-space=""]').click();
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === '', null, { timeout: 15000 });
+  assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json'], 'switching deletes no space file');
 });
 
 test('First launch D4: a waiting item says who it waits on, from the owner\'s own name', { timeout: 90000 }, async (t) => {

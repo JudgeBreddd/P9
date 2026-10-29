@@ -327,7 +327,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // Onboarding (M4, threat model row 72): the shipped guide and templates, a template into an empty space, and a chat whose
   // first message is the shipped guide. The request names only the provider; nothing from it reaches the chat's text.
-  api.get('/mission/guide', (c) => c.json({ guide: GUIDE, templates: TEMPLATES.map(({ name, title, about }) => ({ name, title, about })) }));
+  api.get('/mission/guide', (c) => c.json({ guide: GUIDE, templates: TEMPLATES.map(({ name, title, about, space }) => ({ name, title, about, sections: space.sections.map(({ title, icon, text }) => ({ title, icon, text })) })) }));
   api.post('/mission/template', async (c) => {
     const { name, space, confirm, ...rest } = (await json(c)) ?? {};
     if (Object.keys(rest).length || typeof name !== 'string' || (confirm !== undefined && typeof confirm !== 'boolean')) return c.json({ error: 'request-refused' }, 400);
