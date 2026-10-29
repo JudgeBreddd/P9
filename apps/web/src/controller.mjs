@@ -22,7 +22,10 @@ import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard } from './artifact.mjs';
 
-export function mountShell() {
+// The admin password window (Shell.tsx, row I2), for row 61 on a remote.
+let adminAsk = null;
+export function mountShell({ askAdmin } = {}) {
+  adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
 // empty and fill from the daemon (GitHub issue #4: a fresh Windows install showed the sample items, and so did a dead daemon).
@@ -2455,6 +2458,8 @@ const WIZ_ERR = {
   'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
   'wrong-password': ['That password did not work.', 'Check it and press Install again.'],
   'not-allowed': ['Your account cannot install software on this computer.', 'Someone who administers it must install it, then Retry.'],
+  'remote-deps-failed': ['P9 on this remote could not check what it needs.', 'Update P9 there, then Retry.'],
+  'remote-not-allowed': ['Your account on this remote cannot install software.', 'Someone who administers it must install it, then Retry.'],
   'admin-failed': ['The install did not finish.', 'Retry. If it stops again, your package manager may be busy or offline.'],
   'password-empty': ['Type your admin password first.', 'It is the one you use to sign in to this computer.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
@@ -2566,19 +2571,25 @@ function wizRender() {
     // Item 15 (threat model row 61): what P9 cannot carry. The reason comes first, then why it needs the admin password,
     // then the command. In the desktop app on its own computer, the admin password field and Install run it (desktop main,
     // p9:admin-install); elsewhere Run in a terminal types it into a P9 terminal and sudo asks there (tmux: Copy, since P9's terminals are tmux).
-    const admin = (s.dependencies || []).filter(x => x.admin), here = !!window.p9?.adminInstall && setupMode !== 'server';
+    const admin = (s.dependencies || []).filter(x => x.admin), here = !!window.p9?.adminInstall && setupMode !== 'server',
+      there = !!window.p9?.remoteDeps && !!adminAsk && setupMode === 'server', fixable = admin.some(x => ['tmux', 'ssh'].includes(x.id));
     title = admin.length ? 'This needs your admin password' : 'Terminal';
     body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(ADMIN_NAMES[x.id] || esc(x.id), esc(x.why), yes(false, '', 'Not installed'))}`
-        + '<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This one goes into the system itself, and only an admin can change that, so your computer asks for your password.</p>'
+        + `<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This one goes into the system itself, and only an admin can change that, so ${there ? 'the remote asks for your admin password there' : 'your computer asks for your password'}.</p>`
         + (x.command && here && ['tmux', 'ssh'].includes(x.id) ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code></div>`
           + `<label class="sm wiz-pw-label" for="wizPw-${esc(x.id)}">Admin password for your account on this computer</label>`
           + `<div class="set-row"><input data-slot="input" type="password" id="wizPw-${esc(x.id)}" data-admin-pw="${esc(x.id)}" autocomplete="off" spellcheck="false" maxlength="1024">${btn('pw:' + x.id, 'Install', 'default')}</div>`
           + '<p class="muted sm">P9 runs the command above as admin with it. It goes once to sudo on this computer; never saved, never shown in any log.</p>'
-        : x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
+        : there && ['tmux', 'ssh'].includes(x.id) ? '' : x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
           + (x.id === 'tmux' ? btn('copy:' + x.id, 'Copy') + '</div><p class="muted sm">P9\'s terminals need tmux, so run it in your own terminal app, then Retry.</p>'
             : btn('admin:' + x.id, 'Run in a terminal') + '</div><p class="muted sm">Types it into a P9 terminal. Read it, press Enter, then type your password there.</p>')
           : '<p class="muted sm">Install it with your system\'s package manager, then Retry.</p>')
-        + (W.note[x.id]?.error ? fail(W.note[x.id].error, W.note[x.id].detail) : '') + '</div>').join('') + `<div class="set-row">${btn('retry', 'Retry')}</div>`
+        + (W.note[x.id]?.error ? fail(W.note[x.id].error, W.note[x.id].detail) : '') + '</div>').join('')
+        // Row 61 on a remote: one button for all of it; the remote computes the command and the admin window shows it.
+        + (there && fixable ? `<div class="set-row">${btn('rdeps', 'Install with admin password', 'default')}</div>`
+          + '<p class="muted sm">P9 asks for your admin password on this remote and shows the command it runs there. Never saved, never shown in any log.</p>'
+          + (W.note.rdeps?.error ? fail(W.note.rdeps.error) : '') : '')
+        + `<div class="set-row">${btn('retry', 'Retry')}</div>`
       : row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found')) + (s.tmux ? '' : fail('tmux-not-found'));
   } else if (key === 'you') {
     title = 'You';
@@ -2653,6 +2664,18 @@ $('#welDlg').addEventListener('click', async e => {
     if (field) field.value = '';
     const r = password ? await run(() => window.p9.adminInstall(agent, password).catch(() => ({ error: 'admin-failed' }))) : { error: 'password-empty' };
     W.note[agent] = r?.ok ? null : { error: r?.error || 'admin-failed' };
+  }
+  if (act === 'rdeps') {
+    // Row 61 on a remote: the remote computes the command (its start script's deps); the admin window shows it and takes only the password.
+    const host = serverInfo?.host || 'this remote', need = (W.s?.dependencies || []).filter(x => x.admin && ['tmux', 'ssh'].includes(x.id)).map(x => (ADMIN_NAMES[x.id] || x.id) + ': ' + x.why);
+    const ask = async (error = '') => {
+      const r = await run(() => window.p9.remoteDepsCheck().catch(() => ({ error: 'remote-deps-failed' })));
+      if (!r?.command) { W.note.rdeps = { error: r?.error || 'remote-deps-failed' }; return wizRefresh(); }
+      adminAsk(host, 'Install what P9 needs on ' + host, host + ' is missing what P9 needs, and only an admin can add it:', need, r.command, 'Install', error,
+        res => { if (res?.error === 'wrong-password') return void ask('That password did not work. Check it and try again.'); W.note.rdeps = res?.ok ? null : { error: res?.error || 'admin-failed' }; void wizRefresh(); }, window.p9.remoteDeps);
+    };
+    W.note.rdeps = null;
+    await ask();
   }
   if (act === 'copy') { const x = W.s?.dependencies?.find(d => d.id === agent); if (x?.command) copy(x.command, b); return; }
   if (act === 'admin') {

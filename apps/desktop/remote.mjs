@@ -73,6 +73,23 @@ export function remoteMode(host, action, ssh = 'ssh', password = null) {
   });
 }
 
+// remoteDeps(host): tmux or ssh missing on a remote that runs P9 (row 61 on a remote). The remote's start script computes
+// the command (deps.mjs there). No password: { phase: 'admin', command } to show, or 'none'; with one, that command run
+// through p9_admin there: 'ok', 'wrong-password', 'not-allowed' or 'failed'. Fixed argv, BatchMode, the password on stdin.
+export function remoteDeps(host, ssh = 'ssh', password = null) {
+  if (!HOST.test(host) || (password !== null && !PASSWORD(password))) return Promise.resolve({ phase: 'failed' });
+  const command = 'b=' + RUN + '; [ -f "$b/start" ] || { echo P9_DEPS no-start; exit 0; }; sh "$b/start" deps' + (password !== null ? ' admin' : '');
+  return new Promise(resolve => {
+    const child = execFile(ssh, [...SSH_OPTIONS, host, command], { timeout: password !== null ? 600000 : 60000 }, (error, out) => {
+      const admin = /^P9_ADMIN (wrong-password|not-allowed)$/m.exec(out ?? '')?.[1];
+      const shown = password === null && /^P9_ADMIN command (.+)$/m.exec(out ?? '')?.[1];
+      resolve(admin ? { phase: admin } : shown ? { phase: 'admin', command: shown } : { phase: /^P9_DEPS (ok|none)$/m.exec(out ?? '')?.[1] ?? 'failed' });
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(password !== null ? password + '\n' : '');
+  });
+}
+
 // startServer(host): Start P9 there, for a remote that answered without a running P9 (never a terminal command, row I1).
 // Its user service if one is installed and P9 is not in background mode, else the background start script. Fixed argv, BatchMode.
 // -> 'ok' | 'none' (nothing to start there: Install P9 there) | 'failed'.

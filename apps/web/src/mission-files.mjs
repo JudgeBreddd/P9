@@ -9,7 +9,7 @@ const MISSION_TIPS = { primary: 'File that names your main project (for the Miss
   scripts_root: 'Full path of the folder your buttons and apps run in, and the one ~/workspace stands for (for the Mission Control buttons). Empty: the workspace' };
 export const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
   ['space', 'Extra sections file (optional)', 'setup-file', 'JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page)'],
-  ['server_host', 'Server host name (optional)', '', "Network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
+  ['server_host', 'Remote host name (optional)', '', "Network name of your remote, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that remote's logs over ssh)"],
   ['page_schemes', 'Extra link types for pages (optional, comma-separated)', '', 'Link types besides http and https that a Mission Control page may open, for example obsidian (a page link of that type asks before it opens)'],
   ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Named folders of .md notes (for the notes an extra Mission Control section shows, by that name)']];
 export const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;

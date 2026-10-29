@@ -81,7 +81,7 @@ write_start() {
   [ -O "$run_dir" ] || { echo "P9 cannot use $run_dir: that folder is not this user's."; exit 1; }
   {
     echo '#!/bin/sh'
-    echo "# Written by P9's install.sh: sh start [up | keep | release] (scripts/background.sh)."
+    echo "# Written by P9's install.sh: sh start [up | keep | release | deps] (scripts/background.sh)."
     echo "r=$(q "$run_dir") node=$(q "$node") checkout=$(q "$PWD")"
     echo "workspace=$(q "$workspace") recovery=$(q "$HOME/.local/state/p9-foundation/conflicts")"
     echo "PATH=$(q "$PATH"); export PATH"

@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, HOST, PASSWORD } from './remote.mjs';
+import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
@@ -762,6 +762,23 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost && serverError === 'server-no-p9' && remoteInstall?.phase === 'admin' && remoteInstall.command) return runInstall(args[0]);
     if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
     return { error: 'remote-admin-refused' };
+  });
+  // Row 61 on a remote: tmux or ssh missing on this window's remote. The check asks the remote for its own command (the
+  // admin window shows it); the password then runs that remote's command, computed there again. One check, one password.
+  let depsChecked = null;
+  ipcMain.handle('p9:remote-deps-check', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || !server) return { error: 'not-connected' };
+    const host = serverHost, r = await remoteDeps(host, sshCommand);
+    depsChecked = r.phase === 'admin' && serverHost === host ? host : null;
+    return depsChecked ? { command: r.command } : { error: r.phase === 'none' ? 'nothing-to-install' : 'remote-deps-failed' };
+  });
+  ipcMain.handle('p9:remote-deps', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !PASSWORD(args[0])) throw new Error('ipc-sender-refused');
+    if (!serverHost || !server || depsChecked !== serverHost) return { error: 'remote-deps-refused' };
+    depsChecked = null;
+    const { phase } = await remoteDeps(serverHost, sshCommand, args[0]);
+    return phase === 'ok' ? { ok: true } : { error: phase === 'wrong-password' ? phase : phase === 'not-allowed' ? 'remote-not-allowed' : 'admin-failed' };
   });
   // Row 61 (commit C): the wizard's Install for tmux or ssh on this computer, with the admin password typed there. The page
   // names the package only; the command is deps.mjs's own for a package missing now. Not in remote mode: that list is the remote's.

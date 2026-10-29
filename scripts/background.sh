@@ -5,6 +5,8 @@
 #   sh start up       start the daemon unless one runs, then wait for it to answer (the desktop runs this at each connect)
 #   sh start keep     turn on linger for this user's own account, then move P9 to its user service (Keep P9 running: Yes)
 #   sh start keep admin   the same, with the admin password the person typed into the app as stdin's first line (row I2)
+#   sh start deps [admin]  what deps.mjs says this machine lacks (tmux, ssh): its command, or with admin (the password as
+#                     stdin's first line, as keep admin) that command run as admin (row 61 on a remote)
 #   sh start release  P9's service off, and linger if P9 turned it on, then the background daemon (Keep P9 running: No)
 # The file background marks background mode: remote.mjs READ runs "up" at each connect only while it is there.
 # POSIX sh, as the desktop runs it with sh. It runs as this user only and never asks for a password; the functions of
@@ -85,8 +87,20 @@ release() {
   echo "P9_RELEASE ok"
 }
 
+# Row 61 on a remote: the command is this machine's own, computed here by deps.mjs and printed before it runs as admin.
+deps() {
+  p9_pw=
+  if [ "${1:-}" = admin ]; then IFS= read -r p9_pw || true; fi
+  c=$("$node" "$checkout/scripts/deps.mjs" --headless --command --root </dev/null) || { echo "P9_DEPS failed"; return 0; }
+  if [ -z "$c" ]; then echo "P9_DEPS none"
+  elif [ -z "$p9_pw" ]; then echo "P9_ADMIN command $c"
+  else p9_admin "$c"; echo "P9_DEPS ok"
+  fi
+}
+
 case "${1:-up}" in
   up) up ;;
+  deps) deps "${2:-}" ;;
   keep) keep "${2:-}" ;;
   release) release ;;
   *) exit 2 ;;

@@ -42,10 +42,11 @@ test('picking the theme already in use leaves the desktop where it was (dark, li
   const pick = async (name) => { await page.click('#themeBtn'); await page.click('[data-theme-pick="' + name + '"]'); await page.keyboard.press('Escape'); await page.waitForTimeout(800); await settled(page); };
   for (const name of ['daylight', 'event-horizon-prime']) {
     await pick(name);
+    assert.deepEqual(await page.evaluate(() => [document.body.scrollWidth, innerWidth]), [1440, 1440], name + ': nothing makes the page wider than the window');
     const before = await place(page);
     await pick(name);
     assert.deepEqual(await place(page), before, name + ': picked again, the shell stays put');
-    shot('look-repick-desktop-' + name, await page.screenshot());
+    shot('c36-look-repick-desktop-' + name, await page.screenshot());
   }
 });
 
