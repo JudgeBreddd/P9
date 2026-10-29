@@ -47,7 +47,7 @@ const input = (properties, required = []) => ({ type: 'object', properties, requ
 const spaceField = { type: 'string', description: 'Optional. Write this scratch space instead of the space Mission shows (' + SPACE_NAME_RULE
   + '), made on the first write. The user picks it in Mission\'s space picker; the live space is untouched.' };
 const SPACE_TOOLS = new Set(['add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items']);
-const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons');
+const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons' && key !== 'widget');
 const TOOLS = [
   ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',

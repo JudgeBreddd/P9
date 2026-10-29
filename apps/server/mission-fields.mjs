@@ -161,6 +161,7 @@ export function dataShape(value) {
 }
 // A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
+export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications'];
 export const SECTION = {
   id: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'The section\'s id: lowercase letters, digits and dashes, unique among sections. Optional: P9 makes one from the title.' },
@@ -187,6 +188,10 @@ export const SECTION = {
       marks: { x: 'Approve', parked: 'Park', ' ': 'Deny' }, apply: 'audit-apply' }] },
   links: { type: 'array', check: Array.isArray, fields: WEBLINK, doc: 'Web links, http and https only.',
     example: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] },
+  // Fresh-install finding 3a (threat model row 72): P9's built-in panels draw on a space only where a section names them.
+  widget: { type: 'string', check: (value) => WIDGETS.includes(value),
+    doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage), apps (Apps and pages) or notifications (Notifications)'
+      + '. Without a space all four show; on a space only the ones a section names.', example: 'waiting' },
 };
 // The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
 export const SPACE_FILE = 'mission-space.json';
@@ -276,7 +281,7 @@ export const SCHEMAS = {
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
 export function describeMission() {
-  const items = Object.entries(SECTION).filter(([, field]) => field.example !== undefined).map(([key, field]) => ({
+  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget').map(([key, field]) => ({
     item: key, about: field.doc, ...(field.fields ? { fields: jsonSchema(field.fields).properties } : {}),
     example: { id: 'example-' + key, title: 'Example ' + key, [key]: field.example } }));
   return {

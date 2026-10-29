@@ -64,7 +64,7 @@ test('M4a templates: four shipped files, sections with text and https links only
   assert.deepEqual(TEMPLATES.map((entry) => entry.name), ['icm', 'obsidian', 'homelab', 'blank']);
   for (const template of TEMPLATES) {
     for (const section of template.space.sections) {
-      assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links'].includes(key)), [], template.name + ': only text and links');
+      assert.deepEqual(Object.keys(section).filter((key) => !['id', 'title', 'icon', 'text', 'links', 'widget'].includes(key)), [], template.name + ': only text and links');
       for (const link of section.links ?? []) assert.match(link.url, /^https:\/\//);
     }
     // No home path, host address or user folder in a shipped template (D10).
@@ -87,7 +87,9 @@ test('M4a templates: four shipped files, sections with text and https links only
   const live = (await settingsOf(instance)).space;
   assert.equal(live, path.join(instance.directory, '.config/p9/mission-space.json'));
   const overview = (await call(instance, '/mission')).body;
-  assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Today', 'Projects', 'Wiki and notes', 'Upkeep'], []]);
+  assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Waiting on you', 'Usage', 'Apps and pages', 'Notifications', 'Today', 'Projects', 'Wiki and notes', 'Upkeep'], []]);
+  // Fresh-install finding 3a: the ICM template's four sections name P9's built-in panels.
+  assert.deepEqual(overview.space.map((s) => s.widget ?? null), ['waiting', 'usage', 'apps', 'notifications', null, null, null, null]);
 
   // Never over a space with sections: 409 and the same bytes.
   const before = await readFile(live, 'utf8');

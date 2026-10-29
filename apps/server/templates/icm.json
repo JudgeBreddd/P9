@@ -4,6 +4,26 @@
   "space": {
     "sections": [
       {
+        "id": "waiting",
+        "title": "Waiting on you",
+        "widget": "waiting"
+      },
+      {
+        "id": "usage",
+        "title": "Usage",
+        "widget": "usage"
+      },
+      {
+        "id": "apps-and-pages",
+        "title": "Apps and pages",
+        "widget": "apps"
+      },
+      {
+        "id": "notifications",
+        "title": "Notifications",
+        "widget": "notifications"
+      },
+      {
         "id": "today",
         "title": "Today",
         "icon": "🎯",
