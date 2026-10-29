@@ -45,6 +45,7 @@ network and no access to P9, so put its styles and scripts inline. Add it to a s
     </script>
 
 Here the script count-inbox prints {"count": 12}.
+If the card's own code stops with an error, the card shows only that error, not what it drew before it.
 
 ## What runs, and when
 
