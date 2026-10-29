@@ -2,7 +2,6 @@ import { popover as createPopover, dragBar, svg, esc, sprintTimes, limitLine, md
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
-import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
 import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
@@ -1594,9 +1593,9 @@ function toggleTerm() { S.termOpen[S.focus] = !S.termOpen[S.focus]; showTerm(); 
 $('#dHide').onclick = toggleTerm;
 
 /* ---------- focus modes ---------- */
-// Theme per focus mode (phase 18): each focus keeps the look last picked while it showed; a focus with none keeps the current look.
-const focusLooks = (() => { try { return JSON.parse(localStorage.getItem('p9-focus-looks')) ?? {}; } catch { return {}; } })();
-onLookChange(look => { focusLooks[S.focus] = look; try { localStorage.setItem('p9-focus-looks', JSON.stringify(focusLooks)); } catch {} });
+// One look for every focus mode (v0.1.6): the picker in Chat or Mission Control also sets Dev Focus. The per-focus looks
+// an older version saved are dropped; the look itself is saved on its own, so it still loads.
+try { localStorage.removeItem('p9-focus-looks'); } catch {}
 // All three focus panes stay in the DOM; switching only flips visibility, so nothing re-renders.
 // A pick (rail, keys, CLI, landing) leaves the landing page and is kept as the last focus; `stay` is the app's own switching.
 function setFocus(f, stay = false) {
@@ -1604,7 +1603,6 @@ function setFocus(f, stay = false) {
   S.focus = f;
   if (f === 'mission') refreshMission();
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
-  if (focusLooks[f]?.theme) { applyLook(focusLooks[f]); DUWOP.init(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
   document.querySelectorAll('[data-focus-btn]').forEach(b => b.setAttribute('aria-pressed', b.dataset.focusBtn === f));
@@ -1613,7 +1611,7 @@ function setFocus(f, stay = false) {
   // In the desktop the Dev Focus editor is drawn above this page, so the theme picker would open behind it.
   const behind = f === 'dev' && Boolean(window.p9);
   $('#themeBtn').disabled = behind;
-  $('#themeBtn').title = behind ? 'Look: not available in Dev Focus, where the editor would cover the picker' : 'Look: the theme of this focus mode';
+  $('#themeBtn').title = behind ? 'Look: pick it in Chat or Mission Control, where it applies to Dev Focus too (the editor here would cover the picker)' : 'Look: the theme of every focus mode';
   showTerm();
   side.focus();
   placeDev();

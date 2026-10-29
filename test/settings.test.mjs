@@ -604,7 +604,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   console.log('PASS pets: 8 crafted folders refused, markup name kept as text, old file read into every focus, spinner for an agent without a pet, each active agent its own 52 px pet in the top bar (waving while it waits, running while it works, not draggable), each chat its own agent\'s pet, its dragged spot kept across a restart, a hostile Markdown reply with no script/img/iframe/a, meters in a live chat, stopped and closed chats off the tabs after a restart and back from History, Dev off by default and Chat off shows the spinner, Add copied 1 of 5 folders (2 files only), Remove asks, clears the pet and refuses links and bad names');
 });
 
-test('Theme per focus mode: Chat, Dev and Mission each keep their own look, also after a restart', { timeout: 120000 }, async (t) => {
+test('One look for every focus mode: a pick in Chat or Mission sets Dev Focus too; old per-focus looks still load', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-looks-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -619,36 +619,37 @@ test('Theme per focus mode: Chat, Dev and Mission each keep their own look, also
   const theme = (page) => page.evaluate(() => document.documentElement.dataset.theme);
   let { app, page } = await launch();
   const ids = await page.locator('[data-theme-pick]').evaluateAll((buttons) => buttons.map((b) => b.dataset.themePick));
-  const before = await theme(page), [chat, dev, mission] = ids.filter((id) => id !== before).slice(0, 3);
+  const before = await theme(page), [first, second, old] = ids.filter((id) => id !== before).slice(0, 3);
   const pick = async (key, id) => {
     await page.keyboard.press(key);
     await page.click('#themeBtn'); await page.click(`[data-theme-pick="${id}"]`); await page.keyboard.press('Escape');
     assert.equal(await theme(page), id);
   };
-  await pick('Control+1', chat); await pick('Control+3', mission);
-  // Dev Focus's editor is drawn above the page, so the picker is off there; its look is saved like the others.
-  await page.keyboard.press('Control+2');
-  assert.equal(await page.locator('#themeBtn').isDisabled(), true, 'no theme picker in Dev Focus');
-  // Back in Chat first: a focus switch saves the page's own copy of the looks over storage.
-  await page.keyboard.press('Control+1');
-  await page.evaluate((id) => { const looks = JSON.parse(localStorage.getItem('p9-focus-looks')); looks.dev = { ...looks.chat, theme: id }; localStorage.setItem('p9-focus-looks', JSON.stringify(looks)); }, dev);
-  await app.close();
-  ({ app, page } = await launch());
-  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, chat);
-  const tour = async (label) => {
-    for (const [key, id] of [['Control+1', chat], ['Control+2', dev], ['Control+3', mission], ['Control+1', chat]]) {
+  const tour = async (id, label) => {
+    for (const key of ['Control+1', 'Control+2', 'Control+3', 'Control+1']) {
       await page.keyboard.press(key);
       assert.equal(await theme(page), id, `${label} ${key}`);
       assert.equal(await page.locator(`[data-theme-pick="${id}"]`).getAttribute('aria-pressed'), 'true', `${label} picker ${key}`);
-      if (process.env.P9_EVIDENCE && label === 'after restart') await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, `look-${key.slice(-1)}.png`) });
     }
   };
-  await tour('after the Dev look is saved');
+  await pick('Control+1', first);
+  await tour(first, 'picked in Chat');
+  await pick('Control+3', second);
+  await tour(second, 'picked in Mission');
+  // Dev Focus's editor is drawn above the page, so the picker is off there; it shows the look picked elsewhere.
+  await page.keyboard.press('Control+2');
+  assert.equal(await page.locator('#themeBtn').isDisabled(), true, 'no theme picker in Dev Focus');
+  assert.equal(await theme(page), second);
+  const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString('base64'));
+  if (process.env.CI !== 'true') console.log('P9_SHOT one-look-dev ' + shot);
+  // A profile from an older version holds a different look per focus: it still loads, with the one look everywhere.
+  await page.evaluate((id) => localStorage.setItem('p9-focus-looks', JSON.stringify({ dev: { theme: id }, mission: { theme: id } })), old);
   await app.close();
   ({ app, page } = await launch());
-  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, chat);
-  await tour('after restart');
-  console.log(`PASS looks: Chat ${chat}, Dev ${dev}, Mission ${mission}, each restored on switch and after a restart`);
+  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, second);
+  await tour(second, 'after restart with old per-focus looks');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-focus-looks')), null, 'the old per-focus looks are dropped');
+  console.log(`PASS looks: ${first} then ${second} in every focus, Dev Focus included; an old per-focus profile loads with the one look`);
 });
 
 test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offered, each repaints the page, its fonts load from P9 itself', { timeout: 120000 }, async (t) => {
