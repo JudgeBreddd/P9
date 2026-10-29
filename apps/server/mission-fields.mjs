@@ -73,6 +73,19 @@ export const LOG = {
   title: { type: 'string', required: true, check: text, doc: 'The log view label.' },
   path: { ...relative('The workspace file whose last 200 lines it shows.'), required: true },
 };
+// A folder list (threat model row 68): file names and times only, read through packages/files, never written.
+export const FOLDER = {
+  id,
+  title: { type: 'string', required: true, check: text, doc: 'The list label.' },
+  root: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'A key of settings.notes_roots: the folder is in that root. Without it, the folder is in the workspace. Never a path.' },
+  path: relative('The folder inside the root or the workspace. Without it, the root itself.'),
+  pattern: { type: 'string', check: (value) => typeof value === 'string' && /^[^/\\\0]{1,120}$/.test(value),
+    doc: 'File names to list: * is any run of characters, ? is one character, e.g. *.md. Default *. Names starting with a dot are never listed.' },
+  recursive: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'Look in subfolders too, 8 deep. Default false.' },
+  match: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n\0]/.test(value),
+    doc: 'Only files holding a line that is exactly this text (spaces at either end ignored); the newest 200 files are checked.' },
+};
 export const SECTION = {
   title: { type: 'string', required: true, check: (value) => typeof value === 'string' && Boolean(value.trim()), doc: 'The section heading. Not blank.' },
   icon,
@@ -82,6 +95,9 @@ export const SECTION = {
   logs: { type: 'array', check: Array.isArray, doc: 'Log views.' },
   notes: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.' },
+  folders: { type: 'array', check: Array.isArray, doc: 'Folder lists: files in a folder, newest first, with a count. Each opens read-only.' },
+  refs: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === 'string' && ID.test(item)),
+    doc: 'IDs of registry scripts, apps or pages (or space buttons) shown in this section too. An ID nothing has shows "not found".' },
 };
 export const SETTINGS = {
   primary: { ...relative('The workspace file naming the main project ("**Main project: Name** (`folder/`").'), required: true },
@@ -123,5 +139,5 @@ export const SCHEMAS = {
     properties: { scripts: list(jsonSchema(RECORD), 'Buttons whose output Mission Control shows.'), apps: list(jsonSchema(RECORD), 'Programs launched and left running.'),
       pages: list(jsonSchema(PAGE), 'Links.') } },
   space: { type: 'object', required: ['sections'], description: 'The space: free-form sections. A malformed section, button or log view is dropped and listed as invalid.',
-    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD) }, logs: { items: jsonSchema(LOG) } }), 'Sections in order.') } },
+    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD) }, logs: { items: jsonSchema(LOG) }, folders: { items: jsonSchema(FOLDER) } }), 'Sections in order.') } },
 };
