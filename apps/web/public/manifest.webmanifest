@@ -1,1 +1,1 @@
-{"name":"P9 Event Horizon","short_name":"P9","start_url":"/phone/","scope":"/","display":"standalone","background_color":"#080b10","theme_color":"#080b10","icons":[{"src":"/p9-icon.png","sizes":"512x512","type":"image/png","purpose":"any"},{"src":"/p9-icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
+{"name":"P9 Event Horizon","short_name":"P9","start_url":"/phone/","scope":"/","display":"standalone","background_color":"#080b10","theme_color":"#080b10","icons":[{"src":"/p9-icon.png","sizes":"512x512","type":"image/png","purpose":"any"}]}
