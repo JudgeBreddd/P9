@@ -64,13 +64,14 @@ test('D1: a toast shows its whole message; a click opens it with where to start,
   console.log('PASS D1');
 });
 
-test('D14: the floating terminal is never under a panel: above a full side panel, and Dev Focus\'s editor view keeps clear of it', { timeout: 90000 }, async (t) => {
+test('D14: the terminal is never under a panel: floating above a full side panel, and docked in Dev Focus beside the editor view', { timeout: 90000 }, async (t) => {
   const { page, native, shot } = await launch(t);
   await page.click('#rDev');
   await page.keyboard.press('Control+Backquote');
   await page.locator('#dock:not([hidden])').waitFor({ timeout: 5000 });
-  if (!(await page.locator('#dock.float').count())) await page.click('#dFloat');
-  await page.locator('#dock.float').waitFor({ timeout: 5000 });
+  // Dev Focus docks the terminal only: the editor view is drawn above the page, so a floating terminal went behind it.
+  assert.equal(await page.locator('#dock.float').count(), 0, 'docked in Dev Focus');
+  assert.equal(await page.locator('#dFloat').isVisible(), false, 'no float button in Dev Focus');
   let dock, view;
   const deadline = Date.now() + 5000;
   do {
@@ -79,14 +80,8 @@ test('D14: the floating terminal is never under a panel: above a full side panel
     view = (await native()).find((c) => c.url.startsWith('p9://dev'));
   } while ((!view?.visible || overlap(dock, view)) && Date.now() < deadline);
   assert.ok(view?.visible, 'the editor view shows');
-  assert.ok(!overlap(dock, view), 'the editor view keeps clear of the terminal: ' + JSON.stringify({ dock, view }));
-  assert.ok(view.width * view.height > 1400 * 900 / 8, 'the editor keeps the biggest side: ' + JSON.stringify(view));
+  assert.ok(!overlap(dock, view), 'the editor view keeps clear of the docked terminal: ' + JSON.stringify({ dock, view }));
   await shot('c23-d14-dev', true);
-  // Docked again, the editor takes its whole pane back.
-  await page.click('#dFloat');
-  await page.waitForFunction(() => !document.querySelector('#dock').classList.contains('float'));
-  await page.waitForTimeout(300);
-  assert.ok((await native()).find((c) => c.url.startsWith('p9://dev')).width > view.width, 'docked, the editor is wider again');
   // Chat Focus with the side panel full: the floating terminal is on top of it.
   await page.click('#rChat');
   await page.evaluate(() => window.__side.open('artifact', { title: 'Editor', mode: 'full', render: (b) => { b.textContent = 'editor'; } }));

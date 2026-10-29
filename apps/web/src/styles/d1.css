@@ -23,6 +23,8 @@ pre,code,kbd,.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size
 
 /* ---- Button ---- */
 [data-slot="button"]{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:calc(var(--radius) - 2px);font-size:13px;font-weight:500;white-space:nowrap;border:1px solid transparent;transition:background .15s ease,border-color .15s ease,color .15s ease,box-shadow .2s ease,translate .2s ease;user-select:none}
+/* hidden wins over the display above and any more specific button rule (the Shell's float button stayed in Dev Focus) */
+[data-slot="button"][hidden]{display:none!important}
 [data-slot="button"]:disabled{opacity:.5;cursor:not-allowed}
 [data-slot="button"][data-variant="default"]{background:var(--primary);color:var(--primary-foreground)}
 [data-slot="button"][data-variant="default"]:hover{background:color-mix(in oklch,var(--primary) 88%,white)}

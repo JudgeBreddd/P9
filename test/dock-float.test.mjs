@@ -66,4 +66,15 @@ test('Floating Shell dock: nothing light drawn over the terminal', { skip: proce
   const docked = await reopen('dock-drawer-reopen');
   assert.deepEqual({ floated: floated.first, docked: docked.first }, { floated: 0, docked: 0 },
     JSON.stringify({ floated, docked }));
+  // Dev Focus: its editor is drawn above the page, so the terminal there only docks (no float button, a floating one docks
+  // itself) and the theme picker is off, saying why. Back in Chat the terminal floats again and the picker works.
+  await page.click('#dFloat'); await page.waitForTimeout(300);
+  assert.ok(await page.locator('#dock.float').isVisible(), 'floating again in Chat Focus');
+  const dev = () => page.evaluate(() => ({ float: document.querySelector('#dock').classList.contains('float'), floatButton: Boolean(document.querySelector('#dFloat').offsetParent),
+    theme: document.querySelector('#themeBtn').disabled, title: document.querySelector('#themeBtn').title }));
+  await page.click('[data-focus-btn="dev"]'); await page.waitForTimeout(800);
+  await evidence(page, 'dev-focus-docked');
+  assert.deepEqual(await dev(), { float: false, floatButton: false, theme: true, title: 'Look: not available in Dev Focus, where the editor would cover the picker' });
+  await page.click('[data-focus-btn="chat"]'); await page.waitForTimeout(500);
+  assert.deepEqual(await dev(), { float: true, floatButton: true, theme: false, title: 'Look: the theme of this focus mode' });
 });
