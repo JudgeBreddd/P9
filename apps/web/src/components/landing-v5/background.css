@@ -1,0 +1,6 @@
+.p9-cosmos{position:absolute;inset:0;overflow:hidden;pointer-events:none;background:#02040a;isolation:isolate}
+.p9-cosmos__scene{position:absolute;inset:0 0 auto;height:80%;overflow:hidden;mask-image:linear-gradient(#000 68%,transparent 100%)}
+.p9-cosmos__poster,.p9-cosmos__video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 30%}
+.p9-cosmos__video{opacity:0}
+.p9-cosmos[data-video-state="playing"] .p9-cosmos__video,.p9-cosmos[data-video-state="paused"] .p9-cosmos__video{opacity:1}
+@media(prefers-reduced-motion:reduce){.p9-cosmos .p9-cosmos__video{display:none}}

@@ -1675,7 +1675,9 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   // Behind the main page the sky draws at full resolution, not a fraction scaled up (Builder, 2026-10-19: "when it is in the
   // background it looks low quality. as if it lost its quality somehow").
   // Without WebGL (a display with no GPU, such as GitHub's Xvfb) the sky is off by design (landing-sky.mjs), so there is nothing to size.
-  if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
+  // Landing v5 plays a video by default and leaves this canvas hidden; landing-video.test.mjs runs this check with P9_LANDING=original.
+  if (await page.evaluate(() => document.querySelector('#landSky').hidden)) t.diagnostic('landing video on: sky resolution check is in landing-video.test.mjs');
+  else if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
   else await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');

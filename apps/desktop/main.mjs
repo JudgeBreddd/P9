@@ -234,10 +234,11 @@ export async function createDesktop({ state, open } = {}) {
   const appSite = async () => {
     const files = await assets(webDist);
     const html = files.get('/index.html').toString('utf8');
-    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src ${FRAME_URL}; frame-ancestors 'none'` };
+    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src ${FRAME_URL}; frame-ancestors 'none'` };
   };
   const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2',
-    '.woff': 'font/woff', '.ttf': 'font/ttf', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg' };
+    '.woff': 'font/woff', '.ttf': 'font/ttf', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg',
+    '.webp': 'image/webp', '.mp4': 'video/mp4' };
   // Three origins: p9://app (the shell), p9://dev (Dev Focus, filled once the editor host is up) and p9://webview (its
   // extension pages). Each gets its own CSP, and each session serves only its own origins.
   const sites = { app: await appSite() };
@@ -389,7 +390,7 @@ export async function createDesktop({ state, open } = {}) {
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : []), // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, ...(['off', 'original'].includes(process.env.P9_LANDING) ? ['--p9-landing=' + process.env.P9_LANDING] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
   // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
