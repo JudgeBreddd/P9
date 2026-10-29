@@ -17,7 +17,16 @@ if [ ${#missing[@]} -gt 0 ]; then
   echo "MISSING: ${missing[*]}. Install them with your package manager (for example: sudo apt install ${missing[*]}), then run this again."
   exit 1
 fi
-: "${XDG_RUNTIME_DIR:?not set: run this from a normal desktop or ssh login}"
+# A non-interactive ssh session (a desktop's Install on a remote) can come without XDG_RUNTIME_DIR; systemd's own
+# /run/user/<uid> stands in, as for remote.mjs READ and PROBE, and systemctl --user below finds the user bus through it.
+# Only this user's own folder (systemd makes it 0700, owned by the user). None, or not this user's: no user manager
+# runs, so P9's service has nothing to run under until linger is on.
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+  if [ -d "/run/user/$(id -u)" ] && [ -O "/run/user/$(id -u)" ]; then export XDG_RUNTIME_DIR="/run/user/$(id -u)"; else
+    echo "P9 runs as a service of this user, and this user has none running here. Run this on this machine: loginctl enable-linger $(id -un)   (it keeps the service running when nobody is logged in), then Install again."
+    exit 1
+  fi
+fi
 
 # Item 15 (row 61): the admin password only for what P9 cannot carry, and only after the reason is on the screen.
 # $1: the command, shown in full before the question. No answer (a pipe that ends, a closed terminal) is a no.
