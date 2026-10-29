@@ -141,7 +141,7 @@ export function parseSpace(text) {
     (section.checklists ?? []).forEach((record, checklist) => {
       const detail = problem(record, CHECKLIST, true) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
       if (detail) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'malformed-record', detail }); else checklists.push({ ...record }); });
-    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
   });
   return result;
 }
@@ -333,7 +333,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
     return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name, root }) => ({ id, title: name, ...(root ? { root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget, quick_note }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(quick_note ? { quick_note } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name, root }) => ({ id, title: name, ...(root ? { root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
         ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
@@ -551,7 +551,12 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
   async function notesCreate(body) {
     if (!fields(body, 'content,path,root') || !note(body.path) || typeof body.content !== 'string') return refused;
-    const target = await notesRoot(body.root);
+    // A Quick note (threat model row 76): only a new file directly in the section's folder, so the vault never gets the full editor.
+    const at = body.path.lastIndexOf('/'), name = body.path.slice(at + 1);
+    const quick = (await registry()).space.some((section) => section.quick_note?.root === body.root && section.quick_note.path === body.path.slice(0, Math.max(at, 0)));
+    if (quick && (name.length > 103 || /[\x00-\x1f\x7f\\:*?"<>|#^[\]]/.test(name))) return refused;
+    if (quick && Buffer.byteLength(body.content) > 64 * 1024) return { status: 413, error: 'too-large' };
+    const target = quick ? await namedRoot(body.root) : await notesRoot(body.root);
     if (target.error) return target;
     stillAuthorized();
     try { return { status: 201, path: body.path, hash: (await createFile(target.root, body.path, body.content)).hash }; }

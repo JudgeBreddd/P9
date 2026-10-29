@@ -9,7 +9,7 @@ import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
-import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
+import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
@@ -1233,6 +1233,8 @@ const sample = () => (sampleView ? ' · sample' : '');
 // names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
 // written. A fresh install has neither, so it gets none.
 const widgetOn = w => sampleView || M.space.some(s => s.widget === w) || (M.icmFiles && !M.space.some(s => s.widget));
+// + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
+const icmSpace = () => sampleView || M.space.some(s => s.widget) || M.icmFiles && !M.space.some(s => s.widget);
 const allNotes = () => [...(H.notices || []), ...S.alerts];
 const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
@@ -1313,12 +1315,25 @@ function bindOnboard(root) {
   bindSpacePick(root);
 }
 // The Obsidian vault folder (threat model row 73): desktop only. Main shows the native picker and a confirm, then tells the daemon.
+// On a remote the vault is the remote's folder (finding 3b, answer A): the setup chat opens with the ask typed, not sent,
+// and adds the folder with allow_folder once the user confirms there.
+async function vaultChat() {
+  const r = await window.p9.mission('build', { provider: wizPicked()[0] || 'claude' });
+  if (r.status !== 201) { toast({ kind: 'chat', level: 'bad', txt: 'Setup chat not started (' + (r.body?.error || r.status) + ').' }, true); return false; }
+  const id = r.body.conversation;
+  openModal({ kind: 'chat', id });
+  for (let i = 0; i < 50 && !S.sessions.some(s => s.id === id); i++) await new Promise(res => setTimeout(res, 100));
+  const s = S.sessions.find(x => x.id === id);
+  if (s && !s.draft) { s.draft = 'Add my Obsidian vault folder'; if (S.modal?.id === id) renderModal(); }
+  toast({ kind: 'chat', level: 'ok', txt: 'P9 runs on the remote, so the setup chat adds the folder there.' }, true);
+  return false;
+}
 async function pickVault() {
   const r = await window.p9.pickVault();
   if (r.body?.canceled) return false;
   const ok = r.status === 201, e = r.body?.error;
+  if (e === 'server-mode-local-only') return vaultChat();
   toast({ kind: ok ? 'saved' : 'not saved', level: ok ? 'ok' : 'bad', txt: ok ? 'Vault folder set: ' + r.body.vault
-    : e === 'server-mode-local-only' ? 'Pick the vault folder in the P9 desktop app on the remote computer.'
       : e === 'name-taken' ? 'A vault folder is already set: ' + r.body.folder : e === 'root-refused' ? 'Mission does not use this folder: it holds the workspace, the home folder or P9\'s own files.'
         : 'Vault folder not set (' + (e || r.status) + ').' }, true);
   if (ok) refreshMission();
@@ -1333,7 +1348,7 @@ function renderMission() {
     return;
   }
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}${spacePicker(live.spaces || [], live.spaceName, esc)}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}${spacePicker(live.spaces || [], live.spaceName, esc)}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
@@ -1604,6 +1619,20 @@ function missionModal(m, body, row) {
     body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
       window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
     body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
+    if (sp?.quick_note) {
+      // Row 76: typed text lives on the modal, so a tile answering (renderModal) does not wipe it.
+      const qn = sp.quick_note; m.qn ||= {};
+      body.insertAdjacentHTML('beforeend', quickNoteHtml(esc, qn, m.qn, true));
+      const form = body.querySelector('[data-quicknote]');
+      form.oninput = () => { m.qn.title = form.elements.title.value; m.qn.body = form.elements.body.value; };
+      form.onsubmit = async e => {
+        e.preventDefault();
+        const file = quickNotePath(qn.path, m.qn.title || '');
+        const r = file ? await window.p9.mission('noteCreate', { root: qn.root, path: file, content: (m.qn.body || '').replace(/\s+$/, '') + '\n' }) : null;
+        m.qn = r?.status === 201 ? { status: quickNoteWords(r, file, qn) } : { ...m.qn, status: r ? quickNoteWords(r, file, qn) : 'Type a title first.' };
+        renderModal();
+      };
+    }
     body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back: m }));
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));

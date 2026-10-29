@@ -6,7 +6,7 @@ import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
-import { tileHtml, linkHtml, tileAnswer } from './data-tiles.mjs';
+import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, spacePicker, templateWords } from './onboarding.mjs';
 import { FILE_PROTECTION_RISK } from '../../../packages/protocol/index.mjs';
@@ -1077,6 +1077,8 @@ const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, 
 // name (its place in the list can change); a sent answer or a saved idea leaves the record.
 type MissionDraft = { answers: Record<string, string>; idea: { name: string; text: string; needs: boolean } | null };
 const typed: MissionDraft = { answers: {}, idea: null };
+// Quick note: title, body and the last answer, kept by folder; the window redraws on every poll.
+const quickTyped: Record<string, { title?: string; body?: string; status?: string }> = {};
 const answerForms = () => [...document.querySelectorAll<HTMLFormElement>('#mission form[data-answer]')].map((form) => ({ form, name: mission.queue[Number(form.dataset.answer)]?.name, box: form.querySelector('textarea')! }));
 const ideaField = (form: HTMLFormElement, name: string) => form.elements.namedItem(name) as HTMLInputElement;
 function holdTyped() {
@@ -1179,7 +1181,8 @@ async function loadMission(cached = false) {
           : `<button type="button" class="link" data-open-page="${escape(page.id)}" data-url="${escape(page.url)}">Open on the laptop</button>`, attrs);
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs]);
+      const quick = space.quick_note ? [`<div class="tile-row" data-qn="${escape(JSON.stringify(space.quick_note))}">${quickNoteHtml(escape, space.quick_note, quickTyped[space.quick_note.root + '/' + space.quick_note.path])}</div>`] : [];
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...quick, ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs]);
       names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
         ...(space.folders ?? []).map((list) => list.title), ...(space.checklists ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
@@ -1316,6 +1319,25 @@ one('#mission').addEventListener('click', async (event) => {
 });
 async function loadFolders(box: HTMLElement) {
   for (const list of box.querySelectorAll<HTMLElement>('div[data-ck]:not([data-loaded])')) { list.dataset.loaded = '1'; void loadChecklist(list); }
+  // Quick note (threat model row 76): the phone's write goes through mutate (session, CSRF, one-use op ID); typed text stays on a refusal.
+  for (const form of box.querySelectorAll<HTMLFormElement>('form[data-quicknote]:not([data-loaded])')) {
+    form.dataset.loaded = '1';
+    const qn = JSON.parse((form.parentElement as HTMLElement).dataset.qn!), status = form.querySelector<HTMLElement>('[data-qn-status]')!;
+    const kept = quickTyped[qn.root + '/' + qn.path] ??= {};
+    const say = (words: string) => { status.textContent = kept.status = words; };
+    form.oninput = () => { kept.title = (form.elements.namedItem('title') as HTMLInputElement).value; kept.body = (form.elements.namedItem('body') as HTMLTextAreaElement).value; };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const title = (form.elements.namedItem('title') as HTMLInputElement), text = (form.elements.namedItem('body') as HTMLTextAreaElement);
+      const file = quickNotePath(qn.path, title.value);
+      if (!file) { say('Type a title first.'); return; }
+      let r: { status: number; body: any };
+      try { r = await mutate('/mission/notes/create', { root: qn.root, path: file, content: text.value.replace(/\s+$/, '') + '\n' }); }
+      catch (error) { say('Not saved (' + (error as Error).message + '). Your text is still here.'); return; }
+      say(quickNoteWords(r, file, qn));
+      if (r.status === 201) { form.reset(); kept.title = kept.body = ''; }
+    };
+  }
   await Promise.all([...box.querySelectorAll<HTMLElement>('div[data-folder]:not([data-loaded])')].map(async (list) => {
     list.dataset.loaded = '1';
     const id = list.dataset.folder!, count = box.querySelector<HTMLElement>(`[data-folder-count="${CSS.escape(id)}"]`), unit = count?.nextElementSibling as HTMLElement | null;

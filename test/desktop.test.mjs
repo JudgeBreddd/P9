@@ -321,6 +321,8 @@ test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless 
     await page.waitForFunction((name) => document.querySelector('#fMission [data-space-pick]')?.value === name, name, { timeout: 15000 });
     const on = name === 'icm';
     assert.deepEqual(await widgets(), { waiting: on, usage: on, apps: on, notifications: on }, name);
+    // + New idea writes to the workspace's _ideas folder: an ICM widget too (finding 3b follow-up).
+    assert.equal(await page.locator('#fMission [data-idea]').count(), on ? 1 : 0, name + ': New idea');
     // A widget section is its panel, not a tile.
     assert.doesNotMatch(await page.locator('#fMission .tiles').innerText(), /Waiting on you|Usage|Apps and pages|Notifications/, name + ': widget tiles');
     await shot('template-' + name + '-dark');
@@ -372,6 +374,20 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
   await page.locator('#mdlBody [data-folder="0"]').click();
   await page.locator('#mdlBody [data-pick-vault]').waitFor({ timeout: 10000 });
   await shot('obsidian-no-vault-dark');
+  // On a remote main refuses the pick before any request (remote.test checks that answer); the button then opens the setup
+  // chat with the ask typed, not sent, and the vault stays unset (finding 3b, answer A).
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  await app.evaluate(({ ipcMain }) => { globalThis.pickVault = ipcMain._invokeHandlers.get('p9:pick-vault'); ipcMain.removeHandler('p9:pick-vault');
+    ipcMain.handle('p9:pick-vault', () => ({ status: 409, body: { error: 'server-mode-local-only' } })); });
+  await page.locator('#mdlBody [data-pick-vault]').click();
+  await page.waitForFunction(() => document.querySelector('#mdlBody .composer textarea')?.value === 'Add my Obsidian vault folder', null, { timeout: 15000 });
+  await page.getByText('P9 runs on the remote, so the setup chat adds the folder there.').first().waitFor({ timeout: 5000 });
+  await shot('obsidian-remote-vault-chat-dark');
+  assert.equal(await page.locator('#mdlBody .hist', { hasText: 'Add my Obsidian vault folder' }).count(), 0, 'typed, not sent');
+  assert.equal(JSON.parse(await readFile(settingsFile, 'utf8').catch(() => '{}')).notes_roots?.vault, undefined, 'no vault set');
+  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:pick-vault'); ipcMain.handle('p9:pick-vault', globalThis.pickVault); });
+  await page.reload(); await page.click('#rMission'); await tile.click();
+  await page.locator('#mdlBody [data-folder="0"]').click();
   await page.locator('#mdlBody [data-pick-vault]').click();
   await page.locator('#mdlBody', { hasText: 'Welcome.md' }).waitFor({ timeout: 10000 });
   assert.deepEqual(await app.evaluate(() => globalThis.asked), ['Use ' + vault + ' as your Obsidian vault?']);
@@ -383,6 +399,37 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
   await page.click('#rMission');
   await tile.click();
   await shot('obsidian-vault-dark');
+  const light = async (name) => { await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+    await shot(name); await page.evaluate(() => { const h = document.documentElement; h.classList.add('dark'); delete h.dataset.theme; }); };
+  // Quick note (threat model row 76): the title is the file name, one new .md in Inbox; the same title again is refused, never replaced.
+  const form = page.locator('#mdlBody [data-quicknote]'), saved = path.join(vault, 'Inbox', 'Plan week 1 & more.md');
+  await form.locator('[name="title"]').fill('Plan / week 1 & more');
+  await form.locator('[name="body"]').fill('first thought');
+  await form.locator('button[type="submit"]').click();
+  await form.locator('[data-qn-status]', { hasText: 'Saved Inbox/Plan week 1 & more.md.' }).waitFor({ timeout: 10000 });
+  assert.equal(await readFile(saved, 'utf8'), 'first thought\n');
+  await form.locator('[name="title"]').fill('Plan week 1 & more');
+  await form.locator('[name="body"]').fill('second thought');
+  await form.locator('button[type="submit"]').click();
+  await form.locator('[data-qn-status]', { hasText: 'already there' }).waitFor({ timeout: 10000 });
+  assert.equal(await readFile(saved, 'utf8'), 'first thought\n', 'never replaced');
+  assert.equal(await form.locator('[name="body"]').inputValue(), 'second thought', 'typed text kept');
+  await shot('obsidian-quick-note-dark'); await light('obsidian-quick-note-light');
+  // The saved note in the Inbox list, and the Templates list (the vault has a Templates folder).
+  for (const [group, files, name] of [['Inbox', ['Idea.md', 'Plan week 1 & more.md'], 'obsidian-inbox'], ['Templates', ['Daily.md'], 'obsidian-templates']]) {
+    await page.reload(); await page.click('#rMission');
+    await page.locator(`#fMission [data-group="${group}"]`).click();
+    await page.locator('#mdlBody [data-folder="0"]').click();
+    await page.locator('#mdlBody [data-i]').first().waitFor({ timeout: 10000 });
+    assert.deepEqual((await page.locator('#mdlBody [data-i] .truncate:not(.sub)').allInnerTexts()).map((s) => s.trim()).sort(), files, group);
+    await shot(name + '-dark'); await light(name + '-light');
+  }
+  // A space's own link that asks for text (row 75) still works: added by hand, as a user's space would.
+  const spaceFile = path.join(instance.directory, '.config', 'p9', 'spaces', 'obsidian.json'), space = JSON.parse(await readFile(spaceFile, 'utf8'));
+  space.sections[0].links.push({ id: 'new-note', title: 'New note', url: 'obsidian://new?name=', ask: 'Note title' });
+  await writeFile(spaceFile, JSON.stringify(space, null, 2));
+  await page.reload(); await page.click('#rMission');
+  await tile.click();
   // New note: the typed title is URL-encoded onto the link, shown before it opens, and opened only on Open.
   await page.locator('#mdlBody [data-weblink="new-note"]').click();
   await page.locator('#mdlBody [data-weblink-text]').fill('Plan / week 1 & more');

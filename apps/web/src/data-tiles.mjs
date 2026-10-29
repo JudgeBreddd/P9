@@ -29,3 +29,20 @@ export const linkHtml = (l, esc, open = true) => web(l.url) && !l.ask
 
 // The daemon's reply to a tile's ask, as tileHtml takes it.
 export const tileAnswer = (status, body) => status === 200 ? body : body?.error === 'allow-required' ? { allow: body.script } : { error: body?.detail || body?.error || String(status) };
+
+// Quick note (threat model row 76), the same on the desktop and the phone: the title is the file name (characters a file name or
+// Obsidian cannot hold become spaces), saved as one new .md in the section's folder; an existing name is refused, never replaced.
+export const quickNotePath = (folder, title) => {
+  const name = String(title).replace(/[\x00-\x1f\x7f\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 100).trim();
+  return name ? folder + '/' + name + '.md' : '';
+};
+export const quickNoteHtml = (esc, qn, v = {}, desk = false) => `<form class="quick-note" data-quicknote><h3>Quick note</h3>`
+  + `<label>Title<input name="title" maxlength="100" autocomplete="off" value="${esc(v.title || '')}"${desk ? ' data-slot="input"' : ''}></label>`
+  + `<label>Note<textarea name="body" rows="5" maxlength="60000"${desk ? ' data-slot="textarea"' : ''}>${esc(v.body || '')}</textarea></label>`
+  + `<p class="tile-note" role="status" data-qn-status>${esc(v.status || 'Saved as a new note in the ' + qn.path + ' folder. A note with the same title is never replaced.')}</p>`
+  + `<button type="submit"${desk ? ' data-slot="button"' : ''}>Save to ${esc(qn.path.split('/').pop())}</button></form>`;
+export const quickNoteWords = (r, file, qn) => r.status === 201 ? 'Saved ' + file + '.'
+  : r.body?.error === 'exists' ? 'A note named ' + file.split('/').pop() + ' is already there. Nothing was replaced: change the title.'
+    : r.body?.error === 'no-such-folder' ? 'The vault has no ' + qn.path + ' folder. Make it in Obsidian, then save again.'
+      : r.body?.error === 'unknown-root' || r.body?.error === 'root-not-set' ? 'Pick the vault folder in the P9 desktop app first.'
+        : r.body?.error === 'too-large' ? 'The note is over 64 KB. Make it shorter.' : 'Not saved (' + (r.body?.error || r.status) + ').';
