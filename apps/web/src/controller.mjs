@@ -1869,9 +1869,9 @@ const openDock = () => docking ??= (async () => {
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING, unavailableText: text }) => {
+if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING_HERE, unavailableText: text }) => {
   if (lifetime.signal.aborted) return;
-  tmuxMissing = TMUX_MISSING; unavailableText = text;
+  tmuxMissing = TMUX_MISSING_HERE; unavailableText = text;
   dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, open: url => window.p9.openLink(url).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true)), state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
@@ -2453,7 +2453,7 @@ const WIZ_ERR = {
   'terminal-unavailable': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
   'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
   updating: ['P9 is updating and restarts in a moment.', 'Send again in a minute.'],
-  'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
+  'tmux-not-found': ['tmux is not installed.', 'P9 does not know this system\'s package manager, so someone who administers it must install tmux, then Retry. The rest of P9 works without it.'],
   'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Continue without it goes on: chats still work, they use the agent P9 ships.'],
   'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
   'wrong-password': ['That password did not work.', 'Check it and press Install again.'],
