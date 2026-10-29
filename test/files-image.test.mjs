@@ -24,8 +24,8 @@ const png = (() => {
 
 test('Chat Focus Files pane: a workspace image shows read-only through GET /files/image, with row 27\'s checks (A/B)', { timeout: 180000, skip: process.platform !== 'linux' && 'the FIFO and link cases are Linux' }, async (t) => {
   const instance = await daemon(t, undefined, false, async (paths) => {
-    const w = paths.workspace, pics = path.join(w, 'pics');
-    for (const dir of ['_tyler', 'hub', 'proj', 'pics/folder.png', '_' + 'private']) await mkdir(path.join(w, dir), { recursive: true });
+    const w = paths.workspace, pics = path.join(w, 'proj/pics');
+    for (const dir of ['_tyler', 'hub', 'proj', 'proj/pics/folder.png', '_' + 'private']) await mkdir(path.join(w, dir), { recursive: true });
     await writeFile(path.join(w, 'hub/registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
     await writeFile(path.join(w, 'AGENTS.md'), '# Projects\n\n**Main project: Proj** (`proj/`)\n');
     await writeFile(path.join(w, '_tyler/question.md'), '# Question\n\nA.\n');
@@ -54,27 +54,28 @@ test('Chat Focus Files pane: a workspace image shows read-only through GET /file
   const ask = (payload) => page.evaluate((p) => window.p9.mission('image', p), payload);
 
   // The route, through main's fixed op: the type comes from the bytes; nothing else leaves the daemon.
-  assert.deepEqual(await ask({ path: 'pics/dot.png' }), { status: 200, body: { mimeType: 'image/png', data: png.toString('base64') } });
-  assert.equal((await ask({ path: 'pics/photo.jpg' })).body.mimeType, 'image/jpeg');
-  for (const name of ['notes.png', 'script.png', 'tiny.png']) assert.deepEqual(await ask({ path: 'pics/' + name }), { status: 415, body: { error: 'not-an-image' } }, name);
-  for (const name of ['pics/huge.png', 'pics/link.png', 'pics/hard.png', 'pics/pipe.png', 'pics/folder.png', '_' + 'private/locked.png', '../outside.png', '/etc/passwd'])
+  assert.deepEqual(await ask({ path: 'proj/pics/dot.png' }), { status: 200, body: { mimeType: 'image/png', data: png.toString('base64') } });
+  assert.equal((await ask({ path: 'proj/pics/photo.jpg' })).body.mimeType, 'image/jpeg');
+  for (const name of ['notes.png', 'script.png', 'tiny.png']) assert.deepEqual(await ask({ path: 'proj/pics/' + name }), { status: 415, body: { error: 'not-an-image' } }, name);
+  for (const name of ['proj/pics/huge.png', 'proj/pics/link.png', 'proj/pics/hard.png', 'proj/pics/pipe.png', 'proj/pics/folder.png', '_' + 'private/locked.png', '../outside.png', '/etc/passwd'])
     assert.deepEqual(await ask({ path: name }), { status: 400, body: { error: 'request-refused' } }, name);
-  assert.equal((await ask({ path: 'pics/missing.png' })).status, 404);
+  assert.equal((await ask({ path: 'proj/pics/missing.png' })).status, 404);
   assert.deepEqual(await ask({ path: 1 }), { status: 400, body: { error: 'request-refused' } }, 'main sends only a string path');
 
   // The window: the image itself, whole, read-only (no editor, no Save), in a dark and a light theme; a fake one says why.
   await page.click('#rFiles');
-  await page.locator('#tree [data-lfile="pics/dot.png"]').waitFor({ timeout: 8000 });
+  await page.locator('#tree [data-ldir="proj/pics"]').click({ timeout: 8000 });
+  await page.locator('#tree [data-lfile="proj/pics/dot.png"]').waitFor({ timeout: 8000 });
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
-    await page.locator('#tree [data-lfile="pics/dot.png"]').click();
+    await page.locator('#tree [data-lfile="proj/pics/dot.png"]').click();
     await page.waitForFunction(() => document.querySelector('#mdlBody .file-image img')?.naturalWidth === 64, null, { timeout: 8000 });
     assert.equal(await page.locator('#mdlBody textarea').count(), 0, 'no editor for an image');
     assert.equal(await page.locator('#mdlFoot [data-savefile]').count(), 0, 'no Save');
     await shot('files-image-' + theme);
     await page.keyboard.press('Escape');
   }
-  await page.locator('#tree [data-lfile="pics/notes.png"]').click();
+  await page.locator('#tree [data-lfile="proj/pics/notes.png"]').click();
   await page.locator('#mdlBody .file-image-note', { hasText: 'Not a PNG, JPEG, GIF or WebP image' }).waitFor({ timeout: 8000 });
   assert.equal(await page.locator('#mdlBody img').count(), 0);
 });
