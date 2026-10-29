@@ -71,8 +71,8 @@
   <footer class="statusbar"><span id="dataNote">Shell preview · sample data</span><span id="runCount">3 running</span><span class="spacer"></span><span id="daemonStatus">Daemon checking…</span><span id="keepNote" class="keep-note" hidden><span id="keepText" role="status"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="keepBtn" hidden>Keep it running</button></span><span><kbd>Ctrl</kbd> <kbd>K</kbd> commands</span><span data-theme-label></span></footer>
 </div>
 
-<!-- D20: while this window connects to a remote, a black hole turning instead of a blank window. Shell.tsx opens and closes it. -->
-<dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"></div>
+<!-- D20: while this window connects to a remote, the P9 black hole (black-hole.html) instead of a blank window. Shell.tsx opens and closes it. -->
+<dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"><!--black-hole--></div>
   <h2 id="connT">Connecting</h2><p id="connWhy" class="muted" role="status" aria-live="polite"></p>
   <div class="conn-acts"><button data-slot="button" data-variant="outline" id="connStart" hidden>Start P9 there</button><button data-slot="button" data-variant="default" id="connInstall" hidden>Install P9 there</button></div>
   <div id="connProgress" class="conn-progress" hidden><span class="conn-spin" aria-hidden="true"></span><span id="connStep" class="truncate"></span><span id="connTime"></span></div>
@@ -83,6 +83,11 @@
 <!-- Landing page (Builder, plan.md "Landing page"): the black hole intro, then a greeting, the focus modes and the pets. -->
 <dialog id="land" class="land" tabindex="-1" aria-labelledby="landHi" data-stage="intro" data-pending>
   <canvas id="landSky" aria-hidden="true"></canvas>
+  <!-- Landing v5 (components/landing-v5): the rendered loop over its still poster. The controller sets the sources and
+       picks this or the canvas above (LAND_BG). -->
+  <div class="p9-cosmos" aria-hidden="true" hidden><div class="p9-cosmos__scene">
+    <img class="p9-cosmos__poster" width="1536" height="1024" alt="" decoding="async">
+    <video class="p9-cosmos__video" muted loop playsinline preload="metadata"></video></div></div>
   <div class="land-brand" aria-hidden="true">
     <svg class="land-mark" viewBox="0 0 320 150">
       <defs>

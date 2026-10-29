@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { childEnv } from './child-env.mjs';
+import { imageType } from '../../packages/files/index.mjs';
 import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
@@ -168,11 +169,6 @@ const MAX_AGENT_IMAGE = 8 * 1024 * 1024, IMAGE_NOTE = '\n\n[image not shown: onl
 // An image the agent opened from disk arrives as a resource_link naming only its path (Codex's view_image). The daemon
 // reads that file once, here, and keeps it only when it is a regular file of at most 6 MiB whose first bytes say PNG,
 // JPEG, GIF or WebP (threat model row 27); anything else stays a plain link and nothing is read.
-const imageType = (bytes) => {
-  const head = bytes.toString('latin1', 0, 12);
-  return head.startsWith('\x89PNG\r\n\x1a\n') ? 'image/png' : head.startsWith('\xff\xd8\xff') ? 'image/jpeg'
-    : /^GIF8[79]a/.test(head) ? 'image/gif' : head.startsWith('RIFF') && head.endsWith('WEBP') ? 'image/webp' : null;
-};
 function fileImage(block) {
   let file = typeof block.uri === 'string' ? block.uri : '', fd;
   try {

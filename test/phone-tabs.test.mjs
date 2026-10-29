@@ -10,8 +10,8 @@ import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
 // reads false and the phone disables New terminal and Save; this file says online, as phone-continue does.
 // The dev space keeps no files: pictures go out in the log as "P9_SHOT <name> <base64>" (not on GitHub).
 const shot = async (page, name) => { const png = await page.screenshot(); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
-async function setup(paths) {
-  const settings = { registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler', hub: 'hub', space: 'p9/mission-space.json', server_host: 'test-server' };
+async function setup(paths, space = true) {
+  const settings = { registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler', hub: 'hub', ...(space && { space: 'p9/mission-space.json' }), server_host: 'test-server' };
   for (const dir of ['hub', 'projects/event-horizon', '_tyler', '_ideas/needs-done', 'p9', 'docs']) await mkdir(path.join(paths.workspace, dir), { recursive: true });
   await writeFile(path.join(paths.workspace, 'hub', 'registry.json'), JSON.stringify({
     scripts: [{ id: 'health', title: 'Health check', group: 'Health', cmd: [process.execPath, '-e', 'console.log("ok")'] }], apps: [], pages: [{ id: 'wiki', title: 'Wiki', url: 'https://wiki.example.test/' }] }));
@@ -77,7 +77,8 @@ async function signedInPage(browser, server) {
 }
 
 test('T7: a tap on Mission draws the last answer at once and refreshes behind', { timeout: 120000 }, async (t) => {
-  const server = await remoteDaemon(t, { setup });
+  // No space file: with one, the built-in hub layer is off (threat model row M4-b) and its tiles are what T7 times.
+  const server = await remoteDaemon(t, { setup: (paths) => setup(paths, false) });
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const { page } = await signedInPage(browser, server);
@@ -172,7 +173,8 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   // Paste with a stubbed clipboard is phone-parity.test.mjs's T2 (typed, refused, too late).
 
   await page.click('[data-nav="mission"]');
-  await page.waitForSelector('#hub [data-open="work"]', { timeout: 10000 });
+  // The space file is Mission here, so the hub's tiles are off (row M4-b); the space's Backups tile shows it loaded.
+  await page.waitForSelector('#mission .tile:has(span:text-is("Backups"))', { timeout: 10000 });
   // Every row shows its detail line, "Everything else" too; a section's line names what is in it.
   await soft('Mission rows show their detail line', async () => {
     const lines = await page.evaluate(() => [...document.querySelectorAll('#mission .tile')].map((tile) => [tile.querySelector('span').textContent, getComputedStyle(tile.querySelector('small')).display, tile.querySelector('small').textContent]));

@@ -1,5 +1,9 @@
 import { useEffect } from 'react';
-import markup from './shell.html?raw';
+import shell from './shell.html?raw';
+import hole from './black-hole.html?raw';
+import './styles/black-hole.css';
+
+const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
@@ -88,6 +92,8 @@ export default function Shell() {
     const dispose = mountShell();
     let keepAsked = false, adminAsked = '';
     let active = true, waited = false, connected = false, asking = false, starting = false, refused = '', startSaid = '', timer: ReturnType<typeof setTimeout> | undefined;
+    // D20: the remote this window has shown.
+    let shown = '';
     // The title-bar badge (Remote · host or Local) and its machine menu: controller.mjs, serverMenu.
     // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
     const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
@@ -97,10 +103,12 @@ export default function Shell() {
         if (!active) return;
         // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
         if (result.mode === 'server') {
-          // D20: the connecting layer until the remote answers. A window that loaded before it answered loads once more, so
-          // its chats and Mission Control come from the remote; a drop later only shows the layer again.
-          const layer = document.getElementById('connecting') as HTMLDialogElement | null, ok = result.status === 'ok';
-          if (layer && !ok) {
+          // D20: the full connecting layer only while this window has never shown this remote. A window that loaded before it
+          // answered loads once more, so its chats and Mission Control come from the remote. After that a slow or failed poll
+          // (a slow network, the tunnel rebuilt) shows nothing: main reconnects on its own, and only what the user does waits
+          // where they did it (a send's working row, a page's Loading).
+          const layer = document.getElementById('connecting') as HTMLDialogElement | null, ok = result.status === 'ok', known = shown === result.host;
+          if (layer && !ok && !known) {
             document.getElementById('connT')!.textContent = 'Connecting to ' + result.host;
             const why = document.getElementById('connWhy')!, install = document.getElementById('connInstall') as HTMLButtonElement, no = document.getElementById('connNo')!;
             const host = result.host ?? '', i = result.install, phase = i?.phase;
@@ -155,8 +163,8 @@ export default function Shell() {
             if (!layer.open) { layer.addEventListener('cancel', e => e.preventDefault()); layer.showModal(); }
           }
           if (ok && waited && !connected) return location.reload();
-          if (ok) { connected = true; if (layer?.open) layer.close(); } else waited = true;
-          if (label) {
+          if (ok) { connected = true; shown = result.host ?? ''; if (layer?.open) layer.close(); } else waited = true;
+          if (label && (ok || !known)) {
             label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
             label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Settings > Remote switches back to this computer.';
           }

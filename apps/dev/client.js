@@ -3,6 +3,7 @@
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
 import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
+import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
 import getAuthentication from '@codingame/monaco-vscode-authentication-service-override';
 import getTesting from '@codingame/monaco-vscode-testing-service-override';
@@ -138,10 +139,16 @@ for (const op of ['rename', 'delete', 'mkdir']) guarded[op] = async function (ur
 };
 
 // Open Folder: main's picker (and its confirm for a folder outside the workspace); main loads this page again on the folder it took.
+// Server mode: the picker would list this computer's folders, so this asks for the server path and main checks it (rows 41/50).
 const openFolder = async () => {
-  const result = await window.p9dev.openFolder();
-  if (result.error) v.window.showErrorMessage(result.error === 'root-refused'
-    ? 'P9 does not open that folder: it holds the workspace, your home folder or P9\'s own files.' : 'P9 could not open that folder: ' + result.error);
+  let result = await window.p9dev.openFolder();
+  if (result.pathNeeded) {
+    const typed = await v.window.showInputBox({ title: 'Open Folder on the server', value: result.value, ignoreFocusOut: true,
+      prompt: 'The folder\'s full path on the server. Outside the workspace, P9 asks once before it opens it.' });
+    if (!typed) return false;
+    result = await window.p9dev.openFolder(typed);
+  }
+  if (result.error) v.window.showErrorMessage(folderError(result.error, result.server));
   return Boolean(result.ok);
 };
 await initialize({ ...getAuthentication(), ...getTesting(), ...getTask(), ...getGallery({ webOnly: false }), ...getConfiguration(), ...getModel(),

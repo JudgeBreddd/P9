@@ -1,0 +1,13 @@
+/* The P9 black hole (black-hole.html), on the phone loading screen and the desktop connecting screen: a black core, a flat
+   lensed disc from violet to warm white, a soft glow, bobbing with squash and stretch inside a broken blue ring that turns.
+   The glow is a wider faint stroke under each line, not a blur filter, so a phone GPU does no filter work; transforms only;
+   still with reduced motion. */
+.bh{width:140px;height:140px;overflow:visible}
+.bh .ring{fill:none;stroke:url(#bhBlue);stroke-width:3.5;stroke-linecap:round;stroke-dasharray:230 97;transform-origin:60px 60px}
+.bh .hole{transform-box:fill-box;transform-origin:50% 100%}.bh .halo{fill:url(#bhGlow)}.bh .core{fill:#000}
+.bh .lit{fill:none;stroke:url(#bhDisc);stroke-width:2.4;stroke-linecap:round}.bh .disc{stroke-width:1.6}.bh .glow{stroke-width:7;opacity:.34}
+.bh .shade{fill:#5a5cff;opacity:.18;transform-box:fill-box;transform-origin:50% 50%}
+@media(prefers-reduced-motion:no-preference){
+.bh .ring{animation:spin 1.1s linear infinite}.bh .hole{animation:bob .9s cubic-bezier(.45,0,.55,1) infinite}.bh .shade{animation:shade .9s cubic-bezier(.45,0,.55,1) infinite}
+@keyframes bob{0%,100%{transform:translateY(0) scale(1.12,.88)}18%{transform:translateY(-3px) scale(.95,1.06)}50%{transform:translateY(-11px) scale(1,1)}82%{transform:translateY(-3px) scale(.95,1.06)}}@keyframes shade{0%,100%{transform:scale(1);opacity:.24}50%{transform:scale(.6);opacity:.1}}
+@keyframes spin{to{transform:rotate(360deg)}}}
