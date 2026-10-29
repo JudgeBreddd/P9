@@ -273,6 +273,16 @@ details.tool pre{margin:0;padding:8px 12px 10px;border-top:1px solid var(--borde
 details.thought summary{color:var(--muted-foreground);font-size:12px;cursor:pointer;list-style:none}
 details.thought summary::-webkit-details-marker{display:none}
 details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid var(--border);color:var(--muted-foreground);font-size:13px}
+/* An agent program's warning (helpers.mjs warnHtml): one grey line above the reply; its "i" opens what it means. */
+details.agent-warn{font-size:12px;color:var(--muted-foreground)}
+details.agent-warn summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;width:fit-content;max-width:100%}
+details.agent-warn summary::-webkit-details-marker{display:none}
+details.agent-warn summary>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.agent-warn .i{flex:none;display:inline-grid;place-items:center;width:15px;height:15px;border:1px solid currentColor;border-radius:50%;font:italic 600 10px/1 Georgia,serif}
+details.agent-warn summary:hover .i,details.agent-warn[open] .i{color:var(--foreground)}
+details.agent-warn summary:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
+details.agent-warn p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid var(--border);font-size:13px;max-width:62ch}
+details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overflow-wrap:anywhere}
 .plan{border:1px solid color-mix(in oklch,var(--glow2) 30%,var(--border));border-radius:calc(var(--radius) - 2px);padding:10px 14px;font-size:13px;background:color-mix(in oklch,var(--glow2) 5%,transparent)}
 .plan .eyebrow{margin-bottom:6px}
 .plan li{list-style:none;display:flex;gap:8px;align-items:baseline;padding:2px 0}

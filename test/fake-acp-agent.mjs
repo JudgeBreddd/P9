@@ -161,6 +161,13 @@ const connection = new acp.AgentSideConnection(() => ({
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     if (text === 'crash') process.exit(3);
     if (text === 'auth-required') throw acp.RequestError.authRequired();
+    // codex-acp 2.1.1 to a client that takes no notices: its warnings arrive as whole reply chunks, then the reply.
+    if (text === 'codex warning') {
+      await say('Warning: Falling back from WebSockets to HTTPS transport. stream disconnected before completion: websocket closed by server before response.completed\n\n');
+      await say('Warning: Some new thing the agent program says\n\n');
+      await say('Glad she turned out just how you wanted!');
+      return { stopReason: 'end_turn' };
+    }
     // Images the way the real adapters send them (threat model row 26): Codex's image generation as a finished tool call
     // with the image (and its saved path as uri), Claude's image in a reply, and an image known only by its address.
     if (text === 'images') {

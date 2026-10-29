@@ -74,6 +74,16 @@ export function sprintTime(value, now = new Date()) {
 export const sprintTimes = (d, now) => `Updated ${sprintTime(d.updatedAt, now) || 'unknown'}${d.cutoff ? ' · cutoff ' + sprintTime(d.cutoff, now) : ''}`;
 // HI1: the hover "i" beside a Settings row (T-tracer's .info). Its tip says what the row does; a click opens that guide section.
 export const info = (tip, section) => `<button class="info" type="button" data-docs="${esc(section)}" aria-label="${esc(tip)}" title="${esc(tip)}">i</button>`;
+// An agent program's own warning, out of the reply (the owner, 2026-10-29). codex-acp 2.1.1 (createWarningEvent) sends one,
+// to a client that takes no notices, as a whole reply chunk "Warning: <message>\n\n"; claude-agent-acp sends none.
+// agentWarning gives the message when a chunk is exactly that, and warnHtml draws it as a small grey line above the reply,
+// its "i" opening what it means: a known warning in plain words, any other with the generic line and the raw text.
+export const agentWarning = text => /^Warning: ([^]*\S)\n\n$/.exec(String(text ?? ''))?.[1] ?? null;
+const WARNINGS = [[/falling back from websockets to https/i, 'Connection dropped · Codex retried', 'The connection to OpenAI dropped mid-reply. Codex retried another way and the reply came through. Nothing to do; if it shows on every message, OpenAI is having trouble.']];
+export const warnHtml = (raw, attrs = '') => {
+  const [, line, say] = WARNINGS.find(([re]) => re.test(raw)) ?? [null, 'Warning: ' + raw, "The agent's program printed this warning. Your reply is not affected unless the reply itself says so."];
+  return `<details class="agent-warn"${attrs}><summary><span>${esc(line)}</span><span class="i" title="What this means">i</span></summary><p>${esc(say)}</p>${line.startsWith('Warning: ') ? `<code>${esc(raw)}</code>` : ''}</details>`;
+};
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed
 // shows "new window": the old figure expired and the new one is not known until the tool records it again.
