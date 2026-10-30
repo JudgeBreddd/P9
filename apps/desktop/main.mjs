@@ -266,7 +266,7 @@ export async function createDesktop({ state, open } = {}) {
   const sshCommand = (!app.isPackaged && process.env.P9_SSH) || 'ssh'; // P9_SSH: the tests' stand-in, source checkouts only
   // last: the host used before, so Local can show a one-click way back.
   const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
-  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
+  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
   // Row 79: P9's own ssh key, in its data folder; noKey: the remotes whose key offer got Don't ask again.
@@ -302,8 +302,10 @@ export async function createDesktop({ state, open } = {}) {
           tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
-      serverError = error.message;
+      serverError = error.message; knownHosts = error.knownHosts ?? null;
       if (attempt !== serverTry) return;
+      // Row 78: a changed host key stops here until the person's Try again: no password window, no timed retry.
+      if (serverError === 'ssh-host-key-changed') return;
       // Row 78: key-only ssh refused. One login with the password window, then connect over it. Never retried on a timer:
       // a refused or cancelled login waits for the person's Try again.
       if (serverError === 'ssh-login-needed' && !loggedIn) {
@@ -313,6 +315,7 @@ export async function createDesktop({ state, open } = {}) {
         // Row 79: the offer comes after every password login (a refused key included) unless this remote said Don't ask again.
         if (r === 'ok' && !noKey.includes(serverHost)) keyOffer = { host: serverHost, id: ++sshAsks };
         if (r === 'ok') return connect(attempt, wait, true);
+        if (r?.changed !== undefined) { serverError = 'ssh-host-key-changed'; knownHosts = r.changed; return; }
         serverError = 'ssh-' + r;
         return;
       }
@@ -505,7 +508,7 @@ export async function createDesktop({ state, open } = {}) {
       const h = await server?.check().catch(() => null);
       // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
       const there = { ...keeper.status(serverHost, !!server?.background), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
-      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
     }
     try {
       const h = state && await health(state);

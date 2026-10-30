@@ -31,6 +31,11 @@ const identity = () => KEY && existsSync(KEY)
 export const sshOptions = () => [...SSH_OPTIONS, ...identity()];
 // What ssh writes when key-only login is refused or the host key is not known yet: then the password window can log in.
 export const LOGIN = /Permission denied|Host key verification failed|No more authentication methods/;
+// Row 78: the host key differs from the one known_hosts has. Checked before LOGIN (it ends in the same failed line): never a
+// password window or a yes, only ssh-host-key-changed and the known_hosts line ssh pointed at (printable, at most 300 long).
+export const CHANGED = /REMOTE HOST IDENTIFICATION HAS CHANGED/;
+export const knownHostsLine = (err) => { const m = /Offending \S+ key in ([^\x00-\x1f\x7f]{1,300}):(\d{1,7})$/m.exec(err); return m ? { file: m[1], line: Number(m[2]) } : null; };
+const changed = (err) => Object.assign(new Error('ssh-host-key-changed'), { knownHosts: knownHostsLine(err) });
 // What the server runs over ssh: its runtime folder, then its desktop credentials. The server's login shell expands $XDG_RUNTIME_DIR;
 // a non-tty ssh session can come without it (a home server, 2026-10-26), so systemd's own default /run/user/<uid> stands in.
 // exit 0: a server that answers always succeeds, so an ssh failure is server-unreachable and a missing file is server-no-p9.
@@ -62,7 +67,7 @@ export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.t
 function readServer(host, ssh) {
   // 60 s: a background start waits up to 30 s for its daemon.
   return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536 }, (error, out, err) => {
-    if (error) return reject(new Error(LOGIN.test(err) && !WINDOWS ? 'ssh-login-needed' : 'server-unreachable'));
+    if (error) return reject(CHANGED.test(err) ? changed(err) : new Error(LOGIN.test(err) && !WINDOWS ? 'ssh-login-needed' : 'server-unreachable'));
     const [runtime, ...rest] = out.split('\n');
     let credentials;
     try { credentials = JSON.parse(rest.join('\n')); } catch { return reject(new Error('server-no-p9')); }

@@ -3,14 +3,15 @@
 // socket, main asks the person in the password window (ask), and the answer goes back on the helper's stdout, a pipe to ssh.
 // The password is never on a command line, in the environment, in a file or a log. The login stays as an ssh control master
 // (ControlPersist, 10 minutes idle) that every later call in remote.mjs uses through ControlPath, so the person types it once.
-// -> 'ok' | 'refused' (ssh said no after its tries) | 'cancelled' (the person closed the window) | 'failed'.
+// -> 'ok' | 'refused' (ssh said no after its tries) | 'cancelled' (the person closed the window) | 'failed'
+// | { changed: knownHostsLine } (the host key differs from known_hosts: ssh stopped before any prompt).
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import net from 'node:net';
 import path from 'node:path';
-import { HOST, LOGIN, CONTROL_DIR, sshOptions } from './remote.mjs';
+import { HOST, LOGIN, CHANGED, knownHostsLine, CONTROL_DIR, sshOptions } from './remote.mjs';
 
 const q = (s) => "'" + String(s).replaceAll("'", "'\\''") + "'";
 // The helper's own code: argv is ssh's prompt and the socket path; an empty answer (Cancel) exits 1, which stops ssh asking.
@@ -52,7 +53,9 @@ export async function sshLogin({ host, ssh = 'ssh', ask, dir = CONTROL_DIR }) {
     await err.close();
     if (code === 0) return 'ok';
     if (cancelled) return 'cancelled';
-    return LOGIN.test(await readFile(log, 'utf8').catch(() => '')) ? 'refused' : 'failed';
+    const said = await readFile(log, 'utf8').catch(() => '');
+    if (CHANGED.test(said)) return { changed: knownHostsLine(said) };
+    return LOGIN.test(said) ? 'refused' : 'failed';
   } finally {
     server.close();
     await Promise.all([sock, helper, log].map((file) => rm(file, { force: true })));

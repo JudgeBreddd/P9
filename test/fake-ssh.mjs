@@ -19,6 +19,15 @@ for (; i < argv.length && argv[i].startsWith('-'); i++) {
 }
 const [host, ...command] = argv.slice(i);
 if (!host || host.startsWith('unreachable')) process.exit(255); // a host named unreachable* is one ssh cannot reach
+// A host named changed* answers with a host key that differs from known_hosts: OpenSSH's warning, whatever the options
+// (StrictHostKeyChecking ask or yes stops there), as it prints it.
+if (host.startsWith('changed')) {
+  process.stderr.write('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n'
+    + '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\n'
+    + 'Add correct host key in /tmp/fake-home/.ssh/known_hosts to get rid of this message.\nOffending ED25519 key in /tmp/fake-home/.ssh/known_hosts:7\n'
+    + "  remove with:\n  ssh-keygen -f '/tmp/fake-home/.ssh/known_hosts' -R '" + host + "'\nHost key for " + host + ' has changed and you have requested strict checking.\nHost key verification failed.\n');
+  process.exit(255);
+}
 // A host named password* has no key for this user: key-only ssh (BatchMode) is refused as OpenSSH says it. A login with
 // BatchMode=no runs SSH_ASKPASS (at most NumberOfPasswordPrompts times); FAKE_PASSWORD right, it leaves a control master at
 // ControlPath (%C: the host) that every later call rides. Each askpass run is logged with its exit code, and the names of any

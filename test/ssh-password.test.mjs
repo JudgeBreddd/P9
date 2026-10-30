@@ -200,6 +200,7 @@ test('Key offer, No with Don\'t ask again: nothing is made or added, the next pa
   const page = await launch(t, s, local);
   await typePassword(page);
   await page.locator('dialog#keyDlg[open]').waitFor({ timeout: 30000 });
+  assert.equal(await page.locator('#keyLater').textContent(), 'Settings > Remote Connect can offer it again.');
   await page.check('#keyNever');
   await page.click('#keyNo');
   await page.locator('dialog#keyDlg').waitFor({ state: 'hidden', timeout: 5000 });
@@ -243,4 +244,26 @@ test('A dropped connection to a password-only remote says it dropped and asks fo
   await page.click('#sshOk');
   await connected(page);
   await page.locator('dialog#connecting').waitFor({ state: 'hidden', timeout: 15000 });
+});
+
+test('A changed host key: P9 says so and will not connect, offers no password window and no yes, and names the known_hosts line', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'changed-host', remotes: ['changed-host'] }));
+  const page = await launch(t, s, local);
+  const why = page.locator('#connWhy', { hasText: 'host key' });
+  await why.waitFor({ timeout: 30000 });
+  await page.waitForTimeout(8000); // more than one status poll and the first timed retry would have been
+  const text = await why.textContent();
+  assert.match(text, /changed-host/);
+  assert.equal(await page.locator('#connT').textContent(), 'Not connecting to changed-host');
+  assert.match(text, /will not connect/);
+  assert.match(text, /\/tmp\/fake-home\/\.ssh\/known_hosts line 7/);
+  assert.match(text, /ssh-keygen -R changed-host/);
+  assert.equal(await page.locator('dialog#sshDlg[open]').count(), 0, 'no password window');
+  const calls = await s.calls();
+  assert.equal(calls.filter((c) => 'askpass' in c).length, 0, 'ssh never asked');
+  assert.ok(!calls.some((c) => c.argv.includes('BatchMode=no')), 'no password login was started');
+  assert.equal(calls.filter((c) => c.argv.at(-1)?.includes('desktop.json')).length, 1, 'no timed retry');
+  assert.equal(await page.locator('#connRetry').isVisible(), true, 'Try again is the way back');
+  await both(page, 'ssh-host-key-changed', page.locator('#connWhy').locator('xpath=ancestor::dialog[1]'));
 });

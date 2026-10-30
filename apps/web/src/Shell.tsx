@@ -7,7 +7,7 @@ const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
@@ -18,6 +18,7 @@ const REMOTE_WHY: Record<string, string> = {
   'ssh-refused': 'The remote did not accept the password. Press Try again to type it again.',
   'ssh-cancelled': 'Connecting stopped before the password was typed. Press Try again when you are ready.',
   'ssh-failed': 'ssh could not log in to the remote. Check its name or address, then press Try again.',
+  'ssh-host-key-changed': 'The remote\'s ssh host key has changed, so P9 will not connect or ask for a password.',
   'server-no-p9': 'The remote answered, but P9 is not running there. If P9 is installed there, start it; if not, install it from here.',
   'server-not-answering': 'The tunnel opened, but P9 on the remote did not answer.',
   'server-host-refused': 'ssh refused that host name.',
@@ -25,6 +26,10 @@ const REMOTE_WHY: Record<string, string> = {
 };
 
 // Row 78 (desktop/ssh-login.mjs): what the waiting ssh login asks. A prompt with (yes/no is a host key seen for the first time.
+// Row 78: a changed host key, said plainly, with the known_hosts line ssh pointed at. P9 never edits known_hosts itself.
+const keyChanged = (host: string, kh?: { file: string; line: number }) => 'The ssh host key of ' + host + ' is not the one your known_hosts file has for it, '
+  + 'so P9 will not connect and will not ask for your password. A reinstalled remote gets a new key; so does another machine answering in its place. '
+  + 'If you know why it changed, remove the old key' + (kh ? ' (' + kh.file + ' line ' + kh.line + ')' : '') + ' with ssh-keygen -R ' + host + ', then press Try again.';
 type SshAsk = { id: number; prompt: string; again?: boolean; dropped?: boolean };
 const askSsh = (host: string, ask: SshAsk) => {
   const dialog = document.getElementById('sshDlg') as HTMLDialogElement | null, pw = document.getElementById('sshPw') as HTMLInputElement | null;
@@ -54,7 +59,7 @@ const askSsh = (host: string, ask: SshAsk) => {
 };
 
 // Row 79: the offer after a password login. Yes makes P9's key and adds it to host, and the window says how that went;
-// No (or Esc) changes nothing. Don't ask again is kept for this remote; Settings > Remote offers it again.
+// No (or Esc) changes nothing. Don't ask again is kept for this remote; Settings > Remote Connect offers it again.
 const KEY_SAID: Record<string, string> = {
   'key-not-made': 'This computer could not make the key (ssh-keygen failed). Nothing was added to HOST.',
   'key-not-accepted': 'The key was added to HOST, but HOST does not accept it, so P9 still asks for your password there.',
@@ -180,7 +185,7 @@ export default function Shell() {
           // Row 78: a window already on this remote shows the layer again only when the ssh login needs the person.
           const person = !!result.sshAsk || /^ssh-(refused|cancelled|failed)$/.test(result.error ?? '');
           if (layer && !ok && (!known || person)) {
-            document.getElementById('connT')!.textContent = (known ? 'Reconnecting to ' : 'Connecting to ') + result.host;
+            document.getElementById('connT')!.textContent = (result.error === 'ssh-host-key-changed' ? 'Not connecting to ' : known ? 'Reconnecting to ' : 'Connecting to ') + result.host;
             const why = document.getElementById('connWhy')!, install = document.getElementById('connInstall') as HTMLButtonElement, no = document.getElementById('connNo')!;
             const host = result.host ?? '', i = result.install, phase = i?.phase;
             if (phase === 'running') refused = '';
@@ -192,11 +197,11 @@ export default function Shell() {
             if (admin && adminAsked !== i!.started + (i!.error ?? '')) { adminAsked = i!.started + (i!.error ?? ''); openAdmin(); }
             // Row 78: the ssh login's question opens the password window once; a refused or cancelled login offers Try again.
             const retry = document.getElementById('connRetry') as HTMLButtonElement;
-            retry.hidden = !/^ssh-(refused|cancelled|failed)$/.test(result.error ?? '');
+            retry.hidden = !/^ssh-(refused|cancelled|failed|host-key-changed)$/.test(result.error ?? '');
             retry.onclick = () => { retry.disabled = true; void window.p9?.server?.(host); };
             // D15a: Install P9 there asks first, in place: what happens, where, and what it never does. Then the poll shows its
             // progress (a reopened window too: main keeps it): the button stays off, a spinner, the last line, the time so far.
-            if (!asking) why.textContent = refused || startSaid || (result.sshAsk?.dropped ? 'The connection to ' + host + ' dropped. No ssh key works there, so P9 needs your password to connect again.' : '') || (i ? installWhy(host, i) : REMOTE_WHY[result.error ?? ''] ?? 'Not connected yet (' + result.error + ')');
+            if (!asking) why.textContent = refused || startSaid || (result.sshAsk?.dropped ? 'The connection to ' + host + ' dropped. No ssh key works there, so P9 needs your password to connect again.' : '') || (result.error === 'ssh-host-key-changed' ? keyChanged(host, result.knownHosts) : '') || (i ? installWhy(host, i) : REMOTE_WHY[result.error ?? ''] ?? 'Not connected yet (' + result.error + ')');
             install.hidden = !(busy || asking || result.error === 'server-no-p9') || !window.p9?.remoteInstall;
             install.disabled = busy;
             install.textContent = admin ? 'Continue' : phase === 'done' ? 'Connecting…' : busy ? 'Installing…' : asking ? 'Install' : phase === 'failed' || refused ? 'Try again' : 'Install P9 there';
