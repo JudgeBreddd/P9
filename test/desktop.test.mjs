@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'remoteStart', 'remoteAdmin', 'remoteDepsCheck', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'remoteStart', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -250,7 +250,7 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: path.
   body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => JSON.parse(result.text));
 
 // Chunk 3 (v0.1.6): first launch and Mission Control. D13.5 maximised window, D9 empty Mission explains itself, D3 the
-// starter-files step, D1 "Connect to a P9 on another machine" on the welcome screen, D6 an existing layout is attached,
+// starter-files step, D1 "Connect to a remote" on the welcome screen, D6 an existing layout is attached,
 // D4 labels use the owner's own name, D10 robot heads are numbered.
 const openFirst = async (t, instance) => {
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-first-')), 'profile');
@@ -494,7 +494,7 @@ test('First launch D1: the welcome screen offers a P9 on another machine', { tim
   const { page, shot } = await emptyFirst(t);
   await openWelcome(page);
   const connect = page.locator('#welBody [data-act="remote"]');
-  assert.match(await connect.innerText(), /Connect to a P9 on another machine/);
+  assert.match(await connect.innerText(), /Connect to a remote/);
   await shot('wizard-welcome', page.locator('#welDlg'));
   await connect.click();
   await page.locator('#welBody [data-wiz-remote]').waitFor({ timeout: 10000 });
