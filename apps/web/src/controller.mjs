@@ -2580,7 +2580,9 @@ const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, 
 // starter paths). Empty fields are left out; hub is optional.
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || (W.s?.conflict ? W.s.proposed : W.s?.found) || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict || (s.settings && s.agentsFile === null && s.registryFile === null));
-const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
+// Fresh-install attempt 2, item 8: Mission Control is the last step, once everything else is set up; its button opens
+// Mission's own onboarding card.
+const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done', 'mission'];
 // D17: stale = the chat said this agent is not signed in. Its login file can outlive the login, so /setup still says
 // signed in; the step believes the chat until a sign-in started here ends well.
 async function welcome(at, agent, stale) {
@@ -2672,7 +2674,7 @@ function wizRender() {
   } else if (key === 'workspace') {
     title = 'Your workspace';
     body = row('Folder', `<span class="mono" id="welWs">${esc(s.workspace)}</span>`, yes(s.writable, 'P9 can write here', 'P9 cannot write here'))
-      + `<p class="muted sm">${s.workspaceEmpty ? 'It is empty; the Mission Control step adds starter files. ' : ''}Changing it restarts P9's background service: running chats, scripts and terminals stop.</p>`
+      + `<p class="muted sm">This is your main working folder while you use P9. You can change it any time in Settings. If you have no workspace or project folder you prefer, P9 makes one for you. Changing it restarts P9's background service: running chats, scripts and terminals stop.</p>`
       + (window.p9.workspaceChange ? `<div class="set-row">${btn('change', 'Change the folder')}</div>` : '')
       + (s.writable ? '' : fail('workspace-unwritable'))
       + (note?.error ? fail(note.error, note.detail) : '');
@@ -2710,14 +2712,14 @@ function wizRender() {
       }).join('');
     if (!d.agents) next = '<span class="muted sm">Sign in to one to go on, or Skip.</span>' + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
-    title = 'Mission Control';
+    title = 'Mission Control'; next = settings.focus.mission ? btn('mission-open', 'Open Mission Control', 'default') : '';
     // Fresh-install findings 1 and 2: Mission starts empty and is built there; the daemon writes its own empty settings file
     // (a finished step, unless the workspace already has a registry or a waiting folder: then this step opens with them filled in), from its onboarding card (with an agent or a
     // template). Files from an older setup sit under "I already have Mission files", every path optional. A folder with
     // things in it keeps them (needs-done p9-wizard-respects-existing-workspace): Use these files writes only settings.json,
     // plus any path typed here that is not there yet, listed first.
     const choosing = wizChoosing(s), paths = wizPaths(), open = W.have ?? Boolean(s.found?.registry || s.found?.waiting || (s.conflict && (s.agentsFile !== null || s.registryFile !== null)));
-    body = '<p data-mission-empty>Mission starts empty. After setup, open it and build it there: ask an agent to add buttons, apps and pages, or start from a template.</p>'
+    body = '<p data-mission-empty>Last, build Mission Control: your control room for scripts, live numbers, logs, notes and links. It starts empty. Open Mission Control takes you to its own wizard, where an agent builds it with you or you start from a template.</p>'
       + (s.settings && !(s.agentsFile === null && s.registryFile === null) ? `<p class="muted sm">Mission already uses your settings file, <span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>.</p>` : '')
       + (choosing ? `<details class="wiz-have" data-have${open ? ' open' : ''}><summary>I already have Mission files</summary>`
         + `<div class="set-row"><span class="muted sm">Point P9 at the files you already have. Every path is optional: leave out any you do not use.</span>${btn('docs', 'How these files work')}</div>`
@@ -2761,14 +2763,15 @@ function wizRender() {
       // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
       + row('Pets', 'Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.', '', btn('pets', 'Open Settings → Pets'));
   } else {
-    title = Object.values(d).includes(false) ? 'Almost there' : 'You are set'; next = btn('tour', 'Take the tour', 'default');
-    body = Object.entries(STEP_NAMES).filter(([k]) => k !== 'terminal' || s.tmux !== null).map(([k, name]) => row(name[0].toUpperCase() + name.slice(1), '', yes(d[k], 'Done', 'Not done yet'))).join('')
-      + '<p class="muted sm">The tour shows each focus in about two minutes. Settings → Setup opens this again.</p>';
+    title = Object.values(d).includes(false) ? 'Almost there' : 'You are set';
+    body = Object.entries(STEP_NAMES).filter(([k]) => k !== 'mission' && (k !== 'terminal' || s.tmux !== null)).map(([k, name]) => row(name[0].toUpperCase() + name.slice(1), '', yes(d[k], 'Done', 'Not done yet'))).join('')
+      + row('Tour', 'Each focus in about two minutes.', '', btn('tour', 'Take the tour'))
+      + '<p class="muted sm">Settings → Setup opens this again.</p>';
   }
   $('#welT').textContent = title;
   $('#welStep').textContent = `Step ${W.i + 1} of ${steps.length}`;
   morph($('#welBody'), body);
-  morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (key === 'done' ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
+  morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (W.i === steps.length - 1 ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
 }
 $('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value;
   if (e.target.dataset.path) W.paths = { ...wizPaths(), [e.target.dataset.path]: e.target.value.trim() }; });
@@ -2786,6 +2789,7 @@ $('#welDlg').addEventListener('click', async e => {
     skipWelcome(); return $('#welDlg').close();
   }
   if (act === 'close') return $('#welDlg').close();
+  if (act === 'mission-open') { $('#welDlg').close(); setFocus('mission'); if (!live.empty) { live.adding = true; live.preview = null; } return renderMission(); }
   if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
   if (act === 'remote' || act === 'remote-retry') { W.remote = act === 'remote-retry' || !W.remote; if (W.remote) W.hosts = await window.p9.server().catch(() => null); return wizRender(); }
   if (act === 'connect') {
