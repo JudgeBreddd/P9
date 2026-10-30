@@ -143,7 +143,9 @@ test('Setup wizard card 1: says what connecting offers, and connects to a new re
   await page.click('#sshOk');
   await connected(page);
   assert.equal(await page.locator('#setDlg[open]').count(), 0, 'Settings never opened');
-  assert.deepEqual((await page.evaluate(() => window.p9.server())).remotes, ['password-host'], 'the new remote is in Settings > Remote\'s list');
+  // The window reloads onto the remote around now; read again until it has settled.
+  let st; for (const end = Date.now() + 15000; !st && Date.now() < end;) st = await page.evaluate(() => window.p9.server()).catch(() => page.waitForTimeout(500));
+  assert.deepEqual(st?.remotes, ['password-host'], 'the new remote is in Settings > Remote Connect\'s list');
 });
 
 const typePassword = async (page) => {
@@ -213,8 +215,7 @@ test('Key offer, No with Don\'t ask again: nothing is made or added, the next pa
   assert.equal(await page.locator('dialog#keyDlg[open]').count(), 0, 'not offered again');
   await page.click('#setBtn');
   const again = page.locator('#setDlg [data-key-again="password-host"]');
-  const tab = page.locator('#setDlg .set-pages button', { hasText: /^Remote( Connect)?$/ });
-  if (await tab.count()) await tab.first().click();
+  await page.click('[data-set-page="Remote Connect"]');
   await again.waitFor({ timeout: 10000 });
   await shot(page, 'ssh-key-settings-dark', page.locator('#setRemote'));
   await again.click();
