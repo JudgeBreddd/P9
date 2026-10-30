@@ -93,6 +93,32 @@ write_start() {
   if [ -n "$lingered" ]; then : > "$run_dir/lingered"; fi
 }
 
+# The menu entry and its icon (a Linux desktop): main.mjs names the window p9-event-horizon.desktop, which the desktop
+# matches to this entry. Not with --headless or with no graphical session. Exec is one quoted argument (the spec's quoting
+# rule, then its string escape, then % doubled); the open script quotes every value as start does (threat model row).
+write_menu() {
+  [ -z "$headless" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0
+  local data="${XDG_DATA_HOME:-$HOME/.local/share}" open icon="$PWD/apps/web/public/p9-icon.png"
+  open="$data/p9-event-horizon/open"
+  case "$open$icon" in *[[:cntrl:]]*) echo "No menu entry: a folder name has a control character. Open P9 with the line below."; return 0 ;; esac
+  mkdir -p -- "$data/p9-event-horizon" "$data/applications" || return 0
+  {
+    echo '#!/bin/sh'
+    echo "# Written by P9's install.sh: the menu entry p9-event-horizon.desktop runs this to open P9."
+    echo "PATH=$(q "$PATH"); export PATH"
+    echo "cd $(q "$PWD") && exec pnpm desktop --state \"\$XDG_RUNTIME_DIR/p9-foundation\""
+  } > "$open.new" && chmod 700 -- "$open.new" && mv -f -- "$open.new" "$open" || return 0
+  {
+    echo '[Desktop Entry]'
+    echo 'Type=Application'
+    echo 'Name=P9 Event Horizon'
+    echo "Icon=$(printf %s "$icon" | sed 's/\\/\\\\/g')"
+    echo "Exec=\"$(printf %s "$open" | sed -e 's/[\\"$`]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')\""
+    echo 'Terminal=false'
+    echo 'Categories=Development;'
+  } > "$data/applications/p9-event-horizon.desktop.new" && mv -f -- "$data/applications/p9-event-horizon.desktop.new" "$data/applications/p9-event-horizon.desktop"
+}
+
 # Item 15 (row 61): the admin password only for what P9 cannot carry, and only after the reason is on the screen.
 # $1: the command, shown in full before the question. No answer (a pipe that ends, a closed terminal) is a no.
 admin_install() {
@@ -171,6 +197,7 @@ if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] || { [ -n "$backgro
   "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
   if [ -n "$background" ]; then write_start; echo "P9 is already installed here; a desktop's connect starts it."; exit 0; fi
   if [ -n "$headless" ]; then write_start; fi
+  write_menu
   echo "P9 is already installed. To update: git pull && pnpm install --frozen-lockfile && pnpm build && systemctl --user restart p9-foundation"
   exit 0
 fi
@@ -190,6 +217,7 @@ if [ -n "$background" ]; then sh "$run_dir/start" up; else node scripts/install-
 # Dev Focus's editor server (pinned and checked, threat model row 52). Headless too: a desktop in Server mode runs Dev Focus
 # on the server's editor server. If it fails, Dev Focus offers the same install as a button.
 node scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
+write_menu
 if [ ${#path_added[@]} -gt 0 ]; then
   new_path=$(IFS=:; echo "${path_added[*]}")
   echo "Add this line to ~/.bashrc so node and pnpm are found next time:  export PATH=\"$new_path:\$PATH\""
