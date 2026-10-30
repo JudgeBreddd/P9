@@ -431,6 +431,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
 
   // Title and icon of one record (kind scripts|apps|pages) or one space section (kind sections, key = its title). icon '' removes it.
+  // A section also takes widget, refs and notes (threat model row 72 e); any other kind given one is refused. "" or [] removes each.
   const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
   // picture (the name of a stored file, '' removes it) is the desktop form's alone: an agent's tool call is refused if it names one.
   function update(kind, { key, section: sectionTitle, title, icon, picture, widget, refs, notes, hash }, by) {

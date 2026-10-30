@@ -252,6 +252,9 @@ for (const provider of ['claude', 'codex']) {
     assert.deepEqual(['widget', 'refs', 'notes'].filter((key) => key in cleared), []);
     await call(instance, '/agent-lock', 'POST', { on: true });
     assert.equal((await tool('update_app', { id: 'editor', icon: 'E' })).error, 'agent-lock-on');
+    const locked = await file(instance, SETTINGS.space);
+    assert.equal((await tool('update_section', { title: 'Operations', widget: 'usage' })).error, 'agent-lock-on', 'the agent lock refuses a widget too');
+    assert.equal(await file(instance, SETTINGS.space), locked);
     console.log(`PASS MCP update tools (${provider}): button, app, link, section changed; stale hash, link/path icons, unknown ID, lock and protection refused`);
   });
 }
