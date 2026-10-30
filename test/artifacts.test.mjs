@@ -298,3 +298,33 @@ test('artifacts: a pinned artifact sits above the black hole; its top right corn
     await shot('a1-pinned-over-blackhole-' + theme);
   }
 });
+
+test('artifacts: with an artifact panel open the notification cards sit below its header, so Pin and Full screen are on top', { timeout: 60000 }, async (t) => {
+  const { page, shot, reply } = await launch(t);
+  const cardsTop = () => page.locator('#cards').evaluate(e => Math.round(e.getBoundingClientRect().top));
+  const before = await cardsTop();
+  // '' when the button is the top element at its centre, else what is drawn there.
+  const onTop = names => page.evaluate(names => Object.fromEntries(names.map(n => {
+    const b = [...document.querySelectorAll('#side .art-bar button')].find(x => x.textContent.trim() === n);
+    if (!b) return [n, 'missing'];
+    const r = b.getBoundingClientRect(), e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return [n, b.contains(e) ? '' : (e?.outerHTML ?? 'nothing').slice(0, 160)];
+  })), names);
+  await reply(`${F}html artifact Panel one\n<h1>Panel</h1>\n${F}`);
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    assert.ok(await page.locator('#cards .card').first().isVisible(), theme + ': the cards show');
+    assert.deepEqual(await onTop(['Pin', 'Full screen']), { Pin: '', 'Full screen': '' }, theme + ': Pin and Full screen are on top');
+    const bar = await page.locator('#side .art-bar').boundingBox();
+    assert.ok(await cardsTop() >= bar.y + bar.height, theme + ': the cards start below the panel header');
+    await shot('a3-cards-below-panel-header-' + theme);
+    await page.locator('#side .art-bar button', { hasText: 'Full screen' }).click();
+    await page.waitForFunction(() => document.querySelector('.stage').dataset.sideMode === 'full');
+    assert.deepEqual(await onTop(['Full screen']), { 'Full screen': '' }, theme + ': Full screen (to leave it) is on top in full mode');
+    await page.locator('#side .art-bar button', { hasText: 'Full screen' }).click();
+    await page.waitForFunction(() => document.querySelector('.stage').dataset.sideMode === 'panel');
+  }
+  await page.evaluate(() => window.__side.close('artifact'));
+  assert.equal(await cardsTop(), before, 'with no panel the cards are back where they were');
+});
