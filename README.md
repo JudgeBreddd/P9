@@ -448,7 +448,8 @@ A source checkout never updates itself:
   `pnpm teh doctor --state "$XDG_RUNTIME_DIR/p9-foundation"`. A build older than the state file refuses to
   open it, rather than damaging it.
 - **Remove the service:** `node scripts/uninstall-service.mjs` runs Stop All (agent chats, registry scripts
-  and P9 tmux terminals), then removes the `p9-foundation` unit and its drop-ins. If the daemon is not
+  and P9 tmux terminals), then removes the `p9-foundation` unit and its drop-ins, and the P9 Event Horizon
+  menu entry that `install.sh` added. If the daemon is not
   answering it says so and exits 1; check for leftovers with `systemctl --user list-units 'p9-*'`.
 - **Remove everything:** remove the service, turn phone access off (above), then delete the clone
   (`~/p9`) and each folder in the table below that you no longer want.
