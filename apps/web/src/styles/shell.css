@@ -136,6 +136,9 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))} /* K11: the Mission page makes room for the cards */
 .cards{position:absolute;top:50px;right:14px;width:var(--card-w);display:flex;flex-direction:column;gap:8px;z-index:20;pointer-events:none}
 .cards>*{pointer-events:auto}
+/* An artifact in the side panel (any mode, or over the Dev chat): the cards start below its header (the 30 px side head and
+   the artifact bar), so Pin and Full screen stay clickable. ponytail: fixed heights; the artifacts test checks both themes. */
+.stage:has(>.side:not([hidden]) .art)>.cards{top:72px}
 .shell[data-focus=dev] .cards{visibility:hidden} /* Dev Focus: the overlay view draws them above the editor */
 .card{position:relative;border-radius:11px;background:color-mix(in oklch,var(--popover) 95%,transparent);border:1px solid var(--border);backdrop-filter:blur(8px)}
 .card .open{display:grid;grid-template-columns:auto 1fr;gap:3px 9px;align-items:center;width:100%;padding:7px 28px 7px 10px;border:0;background:none;color:var(--foreground);font:inherit;font-size:12px;text-align:left;cursor:pointer;border-radius:inherit}
