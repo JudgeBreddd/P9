@@ -56,7 +56,7 @@ const mid = b => ({ x: b.x + b.width / 2, y: b.y + 250 });
 
 test('side panel: the drag bar, slots, narrow mode, the editor view beside it, swap, toggle, cards over the view, the Chat split bar (A/B)', { timeout: 240000 }, async (t) => {
   const { app, page, reset, native, box, shot, drag, size, frames } = await launch(t);
-  const goDev = async () => { await page.click('#rDev'); await page.locator('#side').waitFor(); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat'); };
+  const goDev = async () => { await page.click('#rDev'); if (await page.evaluate(() => window.__side.current()?.slot !== 'dan-chat')) await page.click('#sideToggle'); await page.locator('#side').waitFor(); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat'); };
 
   await t.test('1. dragBar: the bar drags the panel, the width survives a reload, ArrowLeft adds 24, a drag past the end stops at the end', async () => {
     await reset(); await goDev();
@@ -169,7 +169,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
   });
 
   await t.test('7. cards float over the Dev view in their own overlay view and never resize a pane', async () => {
-    await reset(); await page.click('#rDev'); await page.locator('#side').waitFor();
+    await reset(); await goDev();
     await page.waitForFunction(() => document.querySelector('#cards .card'));
     await page.waitForFunction(() => true);
     const views = async () => { for (let i = 0; i < 40; i++) { const v = await native(); if (v.length === 2 && v[1].visible && v[1].height > 20) return v; await new Promise(r => setTimeout(r, 150)); } return native(); };
@@ -225,7 +225,8 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
       assert.equal((await extras.evaluateAll(l => l.filter(e => e.checkVisibility({ visibilityProperty: true })).length)), 0, name + ': full mode hides the plan card and the meters');
       const ta = page.locator('#chats > .pane textarea').first();
       assert.ok(await ta.isVisible(), name + ': the text box is visible under the full-screen artifact');
-      assert.ok(await ta.evaluate(el => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el; }), name + ': nothing covers the text box');
+      const cover = await ta.evaluate(el => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return top === el ? '' : (top?.outerHTML ?? 'nothing').slice(0, 200); });
+      assert.equal(cover, '', name + ': nothing covers the text box');
       const side = await box('#side'), tb = await ta.boundingBox();
       assert.ok(side.y + side.height <= tb.y + 1, `${name}: the artifact ends at ${side.y + side.height}, the text box starts at ${tb.y}`);
       assert.ok(side.height > 100, name + ': the artifact still has room: ' + side.height);
@@ -251,7 +252,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     await reset();
     const metrics = () => app.evaluate(({ app }) => app.getAppMetrics().map(m => ({ pid: m.pid, type: m.type, name: m.name ?? '', ws: m.memory.workingSetSize, priv: m.memory.privateBytes ?? 0 })));
     const sum = list => list.reduce((a, m) => a + m.ws, 0);
-    await page.click('#rDev'); await page.locator('#side').waitFor();
+    await goDev();
     // cards snoozed: the editor view exists, the overlay does not
     for (let i = 0; i < 5 && await page.locator('#cards .card').count(); i++) { await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[1]?.webContents.executeJavaScript("document.querySelector('.x')?.click()")); await new Promise(r => setTimeout(r, 400)); }
     await new Promise(r => setTimeout(r, 2500));
