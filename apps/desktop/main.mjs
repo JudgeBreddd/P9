@@ -1397,7 +1397,7 @@ export async function createDesktop({ state, open } = {}) {
     let detail = '';
     const run = (script, ...more) => new Promise(resolve => execFile(node, [path.join(scripts, script), ...more], { env, timeout: 60_000 },
       (error, _stdout, stderr) => { if (error) detail = String(stderr).trim().split('\n').filter(l => /^\w*Error/.test(l)).pop()?.slice(0, 300) ?? 'exit ' + error.code; resolve(!error); }));
-    if (!await run('uninstall-service.mjs')) await run('uninstall-service.mjs', '--force');
+    if (!await run('uninstall-service.mjs', '--keep-menu')) await run('uninstall-service.mjs', '--force', '--keep-menu');
     if (await run('install-service.mjs', folder)) { devToWorkspace(); return { workspace: folder }; }
     // install-service.mjs removed its own unit when the daemon did not answer; the old folder again.
     const why = detail;
