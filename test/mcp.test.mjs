@@ -237,8 +237,24 @@ for (const provider of ['claude', 'codex']) {
     assert.deepEqual([overview.apps[0].icon, overview.pages[0].icon, overview.space[0].icon], ['✏️', 'D', '🛠']);
     assert.equal((await tool('update_section', { title: 'Operations', new_title: ' ' })).error, 'invalid-record');
     assert.equal((await tool('update_section', { title: 'Nope', icon: 'x' })).error, 'unknown-section');
+    // W1 (threat model row 72 e): a section's built-in panel, references and notes key; "" or [] removes each; a bad value changes nothing.
+    let set = await tool('update_section', { title: 'Operations', widget: 'usage', refs: ['hello', 'dash'], notes: 'vault' });
+    assert.deepEqual([set.record?.widget, set.record?.refs, set.record?.notes], ['usage', ['hello', 'dash'], 'vault'], JSON.stringify(set));
+    const withAll = await file(instance, SETTINGS.space);
+    assert.deepEqual((({ widget, refs, notes }) => ({ widget, refs, notes }))(JSON.parse(withAll).sections[0]), { widget: 'usage', refs: ['hello', 'dash'], notes: 'vault' });
+    for (const bad of [{ widget: 'shell' }, { notes: '../outside' }, { refs: ['rm -rf /'] }]) {
+      assert.equal((await tool('update_section', { title: 'Operations', ...bad })).error, 'invalid-record', JSON.stringify(bad));
+    }
+    assert.equal((await tool('update_button', { id: 'hello', widget: 'usage' })).error, 'request-refused', 'only sections take a widget');
+    assert.equal(await file(instance, SETTINGS.space), withAll);
+    set = await tool('update_section', { title: 'Operations', widget: '', refs: [], notes: '' });
+    const cleared = JSON.parse(await file(instance, SETTINGS.space)).sections[0];
+    assert.deepEqual(['widget', 'refs', 'notes'].filter((key) => key in cleared), []);
     await call(instance, '/agent-lock', 'POST', { on: true });
     assert.equal((await tool('update_app', { id: 'editor', icon: 'E' })).error, 'agent-lock-on');
+    const locked = await file(instance, SETTINGS.space);
+    assert.equal((await tool('update_section', { title: 'Operations', widget: 'usage' })).error, 'agent-lock-on', 'the agent lock refuses a widget too');
+    assert.equal(await file(instance, SETTINGS.space), locked);
     console.log(`PASS MCP update tools (${provider}): button, app, link, section changed; stale hash, link/path icons, unknown ID, lock and protection refused`);
   });
 }

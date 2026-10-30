@@ -18,8 +18,14 @@ In a P9 chat, Claude and Codex have P9's Mission tools. The agent should:
 
 1. Call describe_mission to read the format and an example of every item.
 2. Ask you what you want, one section at a time.
-3. Add each section with add_section, then its items with add_button and set_section_items.
-4. Check the space with validate_space.
+3. Add each section with add_section.
+4. For a built-in panel (Waiting on you, Usage, Apps and pages or Notifications), call update_section with widget.
+5. To show a button you already have in the registry, call update_section with refs and the button's ID. Never copy its command into a new button.
+6. Add new buttons with add_button. Add data tiles, log views, folders, links and checklists with set_section_items.
+7. For a custom card, write a workspace .html file with its own file tool (you approve the write). Then add it with set_section_items cards. The .html file stays in the workspace even if a scratch space is dropped.
+8. When it cannot find a folder, file or command, ask you in the chat. Never skip it.
+9. Check the space with validate_space.
+10. At the end, list anything it did not build.
 
 To try changes without touching the space you use, the agent passes a scratch space name, such as "draft", to each write tool. Pick that name in Mission's space picker to see it, and pick Main to go back.
 

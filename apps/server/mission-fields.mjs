@@ -137,7 +137,7 @@ export const CARD_BYTES = 256 * 1024;
 export const CARD = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The card label.' },
-  html: { ...relative('The workspace .html file the card draws (256 KiB at most).'), required: true, check: (value) => relativePath(value) && /\.html$/i.test(value) },
+  html: { ...relative('The workspace .html file the card draws (256 KiB at most). An agent writes it with its own file tool, which the user approves; Mission tools never write it.'), required: true, check: (value) => relativePath(value) && /\.html$/i.test(value) },
   script: { ...DATA.script, doc: 'The ID of a registry script or space button with no args, confirm, terminal or detach, run under the data tile rules: only after the user answers Allow on the card, '
     + 'only while Mission shows it, at most every 30 s, stopped at 10 s, 64 KiB read. It prints any JSON. The card reads it as window.p9data, and gets a p9data event (event.detail) on each run. '
     + 'The card runs with no network (no fetch, no images or CSS from the web), no access to P9 and no navigation, like a chat artifact: put styles and scripts inline.' },
@@ -194,7 +194,7 @@ export const SECTION = {
     doc: 'IDs of registry scripts, apps or pages (or space buttons) shown in this section too, at most 64. An ID nothing has shows "not found".', example: ['disk-free', 'dashboard'] },
   data: { type: 'array', check: Array.isArray, fields: DATA, doc: 'Data tiles: a script\'s JSON drawn as a number, list, table or rings (threat model row 70).',
     example: [{ id: 'inbox-count', title: 'Inbox', script: 'count-inbox' }] },
-  cards: { type: 'array', check: Array.isArray, fields: CARD, doc: 'Custom cards: your own HTML file, drawn in a sandbox with no network, showing one script\'s JSON (threat model row M5).',
+  cards: { type: 'array', check: Array.isArray, fields: CARD, doc: 'Custom cards: your own HTML file, drawn in a sandbox with no network, showing one script\'s JSON (threat model row M5). Write the .html file first, then add the card here.',
     example: [{ id: 'inbox-card', title: 'Inbox', html: 'cards/inbox.html', script: 'count-inbox' }] },
   checklists: { type: 'array', check: Array.isArray, fields: CHECKLIST, doc: 'Checklists: the user sets each row\'s mark, or the file\'s review line, one at a time (threat model row M4-a). Each needs a .md path or a file.',
     example: [{ id: 'wiki-audit', title: 'Weekly Wiki audit', root: 'audit', path: 'runs', file: '_decision.md', newest: true, heading: 'Proposed register changes',
