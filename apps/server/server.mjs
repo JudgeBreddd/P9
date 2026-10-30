@@ -16,7 +16,7 @@ import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
 import { SETTINGS, SPACES_DIR, TEMPLATES } from './mission-fields.mjs';
-import { GUIDE, BUILD_PROMPT } from './templates/guide.mjs';
+import { GUIDE, buildPrompt } from './templates/guide.mjs';
 import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
@@ -352,11 +352,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return done.error ? c.json(done, done.error === 'settings-invalid' ? 503 : 409) : c.json({ vault: real }, 201);
   });
   api.post('/mission/build', async (c) => {
-    const { provider, ...rest } = (await json(c)) ?? {};
-    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider)) return reply(c, { status: 400, error: 'request-refused' });
+    // space (threat model row 72): + Add builds into a new scratch space; one that exists is never named, so never rewritten.
+    const { provider, space, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || !['claude', 'codex'].includes(provider) || (space !== undefined && !draftAt(drafts, space))) return reply(c, { status: 400, error: 'request-refused' });
+    if (space !== undefined && (await draftNames(drafts)).includes(space)) return reply(c, { status: 409, error: 'space-exists' });
     const made = await chat.create({ provider, title: 'Build Mission Control' });
-    const sent = await chat.prompt(made.conversation, { text: BUILD_PROMPT });
-    return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
+    const sent = await chat.prompt(made.conversation, { text: buildPrompt(space) });
+    return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation, ...(space === undefined ? {} : { space }) } : sent);
   });
   // The space picker (threat model row 71): Main (null) or a scratch space that is there, recorded as settings.space_name.
   api.post('/mission/space', async (c) => {

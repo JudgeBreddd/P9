@@ -336,6 +336,8 @@ dialog.window [data-folder] details.row summary small{font-size:12px}
 .onboard-protect{display:grid;gap:8px;padding:10px 12px;border:1px solid color-mix(in oklch,var(--amber) 35%,var(--line));background:color-mix(in oklch,var(--amber) 6%,transparent);border-radius:10px}.onboard-protect p{margin:0}
 .onboard-go{display:grid;gap:8px}.onboard-go [data-variant=default]{background:var(--cyan);color:var(--bg);border-color:var(--cyan)}
 .onboard-tpls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+div.onboard-tpl{border:1px solid var(--line);border-radius:10px}
+#mission [data-preview-back]{background:transparent;color:var(--text);border-color:var(--line)} /* Back is the quiet one, as button.quiet */ /* a preview's sections: shown, not tapped */
 .onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px;text-align:left;background:var(--raised);color:var(--text)}.onboard-tpl b{font-weight:600}.onboard-tpl span{font-size:13px;color:var(--dim)}
 .space-pick{display:flex;align-items:center;gap:8px;margin:12px 12px 0;color:var(--dim)}.space-pick select{flex:1}
 /* A workspace image: whole and centred on a quiet surface, so a transparent PNG still reads; read-only, so no Save or file menu. */

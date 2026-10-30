@@ -31,3 +31,11 @@ export const spacePicker = (spaces, current, esc) => (spaces.length || current
 export const templateWords = (status, body) => (status === 201 ? 'Template added. Rename and fill its sections.'
   : body?.error === 'space-not-empty' ? 'Your space has sections already, so P9 adds no template to it.'
     : 'Template not added (' + (body?.error || status) + ').');
+// A template click shows what the template holds; only Choose template writes (finding 4).
+export const previewCard = (t, esc) => `<section class="onboard" data-preview aria-labelledby="previewTitle"><h3 id="previewTitle">${esc(t.title)}</h3><p class="muted">${esc(t.about)}</p>`
+  + (t.sections?.length ? '<h4>Its sections</h4><div class="onboard-tpls">' + t.sections.map(s => `<div class="onboard-tpl"><b>${esc((s.icon ? s.icon + ' ' : '') + s.title)}</b><span>${esc(s.text || '')}</span></div>`).join('') + '</div>'
+    : '<p class="muted">No sections yet: an empty space to fill in.</p>')
+  + `<div class="onboard-go"><button type="button" data-slot="button" data-variant="default" data-choose="${esc(t.name)}">Choose template</button>`
+  + '<button type="button" data-slot="button" data-variant="outline" data-preview-back>Back to wizard</button></div><p class="muted" data-onboard-note role="status"></p></section>';
+// A space name nobody has yet: base, then base-2, base-3, ... So Choose and + Add never write into a space that exists.
+export const freeName = (base, taken) => { let name = base; for (let i = 2; taken.includes(name); i++) name = base + '-' + i; return name; };
