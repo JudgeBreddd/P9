@@ -504,7 +504,7 @@ test('First launch D1: the welcome screen offers a P9 on another machine', { tim
   assert.equal(await page.locator('#welBody [data-wiz-remote]').count(), 0, 'Hide closes the choice');
 });
 
-test('First launch D3: an older setup\'s waiting folder opens the Mission step with it filled in; Next stays the main button', { timeout: 60000 }, async (t) => {
+test('First launch D3: an older setup\'s waiting folder opens the Mission step with it filled in; Open Mission Control stays the main button', { timeout: 60000 }, async (t) => {
   // Signed in, and the workspace has a needs-you folder: Mission is the first thing not done (a bare workspace has nothing to do).
   const { page, shot } = await openFirst(t, await daemon(t, undefined, false, async (where) => {
     await mkdir(path.join(where.workspace, 'needs-you'), { recursive: true }); await signedIn(where); return { args: ['--acp-override', fake] }; }));
@@ -512,11 +512,11 @@ test('First launch D3: an older setup\'s waiting folder opens the Mission step w
   await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
   await page.locator('#welT', { hasText: 'Mission Control' }).waitFor({ timeout: 10000 });
   const step = await page.locator('#welBody').innerText();
-  assert.match(step, /Mission starts empty\. After setup, open it and build it there/);
+  assert.match(step, /Last, build Mission Control[\s\S]*It starts empty\. Open Mission Control takes you to its own wizard/);
   assert.match(step, /I already have Mission files[\s\S]*Every path is optional/);
   assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), true, 'open: something was found');
   assert.equal(await page.locator('#welBody [data-path="waiting"]').inputValue(), 'needs-you');
-  assert.equal(await page.locator('#welFoot [data-act="next"]').getAttribute('data-variant'), 'default');
+  assert.equal(await page.locator('#welFoot [data-act="mission-open"]').getAttribute('data-variant'), 'default');
   assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
   await shot('wizard-mission-step', page.locator('#welDlg'));
 });

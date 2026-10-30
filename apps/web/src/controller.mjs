@@ -222,7 +222,7 @@ function cardList(all) {
   if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
   for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, halo: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
-  if (S.setup) { const d = setupDone(S.setup), left = Object.keys(d).filter(k => !d[k] && k !== 'pick'); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${4 - left.length} of 4 done`, sub: left.map(k => STEP_NAMES[k]).join(' · ') }); }
+  if (S.setup) { const d = setupDone(S.setup), rows = Object.keys(d).filter(k => k !== 'pick' && k !== 'mission' && (k !== 'terminal' || S.setup.tmux !== null)), left = rows.filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${rows.length - left.length} of ${rows.length} done`, sub: [...left.map(k => STEP_NAMES[k]), ...(d.mission ? [] : ['Mission Control'])].join(' · ') }); }
   return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
 }
 const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.key)).length + S.alerts.length;
