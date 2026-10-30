@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   remoteStart: () => ipcRenderer.invoke('p9:remote-start'), // row I1: start P9 on this remote, no terminal
   remoteAdmin: password => ipcRenderer.invoke('p9:remote-admin', password), // row I2: the admin password for this remote's admin step
   remoteDepsCheck: () => ipcRenderer.invoke('p9:remote-deps-check'), // row 61 on a remote: the command that remote computed for tmux or ssh
+  sshAnswer: answer => ipcRenderer.invoke('p9:ssh-answer', answer), // row 78: the ssh password (or 'yes' to a host key) for the waiting login; null cancels
+  sshKey: (yes, never) => ipcRenderer.invoke('p9:ssh-key', yes, never), // row 79: the key offer's answer (yes, Don't ask again)
+  sshKeySetting: host => ipcRenderer.invoke('p9:ssh-key-setting', host), // Settings > Remote: offer a P9 key again for this remote
   remoteDeps: password => ipcRenderer.invoke('p9:remote-deps', password), // row 61 on a remote: the admin password for it
   adminInstall: (id, password) => ipcRenderer.invoke('p9:admin-install', id, password), // row 61: tmux or ssh here, with the admin password
   onServerUpdate: (callback) => { ipcRenderer.on('p9:server-update', (_event, update) => callback(update)); },

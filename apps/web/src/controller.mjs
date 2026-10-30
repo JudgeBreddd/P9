@@ -2240,16 +2240,17 @@ function wireMission() {
 // Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
 // lists them). Nothing is built in; Add remote takes a Host name or user@address.
 function serverRow() {
-  const { host, connected, error, hosts, remotes = [], keep = {} } = serverInfo, all = [...new Set([...remotes, ...hosts])];
+  const { host, connected, error, hosts, remotes = [], keep = {}, noKey = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
   // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
   const keepPick = h => window.p9?.remoteKeepSetting ? '<select data-slot="select" data-remote-keep="' + esc(h) + '" aria-label="P9 on ' + esc(h) + ' when you disconnect" title="What P9 on ' + esc(h) + ' does when you disconnect">'
     + [['', 'Ask'], ['keep', 'Keeps running'], ['stop', 'Stops']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
   const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
     : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
   const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>' + keepPick(h)
+    + (noKey.includes(h) && window.p9?.sshKeySetting ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-key-again="' + esc(h) + '" title="After the next password login to ' + esc(h) + ', P9 asks again whether to add its own key">Offer a P9 key again</button>' : '')
     + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
     + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
-  return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. ssh to the remote must work without a password prompt. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
+  return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. If ssh needs a password, P9 asks for it in its own window and can add its own key so it stops asking. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
     + '<p class="muted sm">' + esc(note) + '</p>' + (rows ? '<ul class="remote-list">' + rows + '</ul>' : '')
     + '<form class="set-row" id="setRemoteAdd"><input data-slot="input" id="setRemoteName" placeholder="Host name or user@address" aria-label="Remote to add" maxlength="253" autocomplete="off" spellcheck="false"><button data-slot="button" data-variant="default">Add remote</button></form>'
     + '<p class="warn sm" id="setRemoteErr" role="alert" hidden></p>'
@@ -2347,6 +2348,11 @@ function renderSettings() {
   $('#setBody').querySelectorAll('[data-remote-keep]').forEach(s => { s.onchange = async () => {
     const r = await window.p9.remoteKeepSetting(s.dataset.remoteKeep, s.value === 'keep' ? true : s.value === 'stop' ? false : null).catch(() => null);
     if (r) serverInfo.keep = r.keep;
+  }; });
+  // Row 79: a remote's key offer said Don't ask again; this offers it again after the next password login.
+  $('#setBody').querySelectorAll('[data-key-again]').forEach(b => { b.onclick = async () => {
+    const r = await window.p9.sshKeySetting(b.dataset.keyAgain).catch(() => null);
+    if (r) { serverInfo.noKey = r.noKey; renderSettings(); }
   }; });
   if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
     e.preventDefault();
@@ -2660,12 +2666,13 @@ const WIZ_ERR = {
   'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
 // The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
+// Attempt 2 items 1-2: the wizard connects itself. One field: a remote already used, a Host from ~/.ssh/config, or a new
+// user@address (kept in Settings > Remote's list too). A password, if ssh needs one, is asked in its own window (row 78).
 function wizRemote(btn) {
-  const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"' + (x === (h.last || hosts[0]) ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
-  return '<div data-wiz-remote>' + (hosts.length
-    ? `<div class="set-row"><span><strong>Which machine</strong><span class="muted sm">A remote added in Settings > Remote, or a Host from ~/.ssh/config. ssh to it must work without a password prompt, and P9 must already run there.</span></span><span class="spacer"></span><select data-slot="input" id="welHost">${opts}</select>${btn('connect', 'Connect', 'default')}</div>`
-    : `<p class="muted sm">No remotes yet. Add one with Add remote in Settings > Remote (a Host name from ~/.ssh/config or user@address), check that ssh to it works without a password prompt, then Retry.</p><div class="set-row">${btn('remote-retry', 'Retry')}</div>`)
-    + (W.note.remote?.error ? `<p class="warn sm" role="alert">Could not connect (${esc(W.note.remote.error)}). Settings > Remote shows why and switches back to this computer.</p>` : '') + '</div>';
+  const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"></option>').join('');
+  return '<div data-wiz-remote>'
+    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || hosts[0] || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
+    + (W.note.remote?.error ? `<p class="warn sm" role="alert">${W.note.remote.error === 'host' ? 'Type a Host name or user@address, with no spaces.' : 'Could not connect (' + esc(W.note.remote.error) + ').'}</p>` : '') + '</div>';
 }
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
@@ -2681,8 +2688,8 @@ function wizRender() {
   else if (key === 'welcome') {
     title = 'Welcome to Event Horizon'; next = btn('next', window.p9?.server ? 'Set up this computer' : 'Start', 'default');
     // D1: P9 can also be this window onto a P9 that runs on another machine (Server mode, Settings > Server).
-    body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`
-      + (window.p9?.server ? row('Work on another machine?', 'Use this window on another machine\'s P9 over ssh (the way VS Code Remote-SSH works). If that machine has no P9 yet, connecting offers to install it there. Chats there keep running when you close this window.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a P9 on another machine')) : '')
+    body = `<p>A few checks make P9 yours: a workspace folder it can write to${s?.tmux === null ? ' and' : ','} an agent you are signed in to${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`
+      + (window.p9?.server ? row('Work on a remote over ssh?', 'This window can use P9 on another machine. Once connected, you choose how P9 runs there: kept running, so your phone and this desktop reach it any time, or only while you are connected, the way VS Code Remote-SSH works. A remote with no P9 yet gets it installed when you say so.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a remote')) : '')
       + (W.remote ? wizRemote(btn) : '');
   } else if (key === 'workspace') {
     title = 'Your workspace';
@@ -2806,8 +2813,10 @@ $('#welDlg').addEventListener('click', async e => {
   if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
   if (act === 'remote' || act === 'remote-retry') { W.remote = act === 'remote-retry' || !W.remote; if (W.remote) W.hosts = await window.p9.server().catch(() => null); return wizRender(); }
   if (act === 'connect') {
-    const host = $('#welHost')?.value;
-    const r = await run(() => window.p9.server(host).catch(() => ({ error: 'ipc-refused' }))); // main reloads the window onto that P9
+    const host = $('#welHost')?.value.trim() ?? '';
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(host)) { W.note.remote = { error: 'host' }; return wizRender(); } // remote.mjs HOST
+    // A new name joins the remote list first, as Settings > Remote's Add remote does; then main reloads the window onto it.
+    const r = await run(() => (W.hosts?.remotes?.includes(host) ? Promise.resolve() : window.p9.remotes('add', host)).then(() => window.p9.server(host)).catch(() => ({ error: 'ipc-refused' })));
     W.note.remote = r?.ok ? null : { error: r?.error || 'refused' };
     return wizRender();
   }

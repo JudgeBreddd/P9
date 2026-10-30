@@ -632,6 +632,9 @@ dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 .conn-progress[hidden],.conn-log[hidden]{display:none}
 .conn-spin{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid oklch(0.9 0.09 80/.25);border-top-color:oklch(0.9 0.09 80);animation:conn-turn .8s linear infinite}
 #connTime{flex:none;font-variant-numeric:tabular-nums;color:oklch(0.7 0.03 262)}
+.conn-steps{max-width:min(72ch,90vw);margin:12px 0 0;padding-left:1.4em;text-align:left;font-size:13px;line-height:1.5}
+.conn-steps li{margin:0 0 10px}
+.conn-steps code{display:block;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;user-select:all;overflow-wrap:anywhere}
 .conn-log{max-width:min(72ch,90vw);max-height:30vh;overflow:auto;margin:12px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;white-space:pre-wrap;text-align:left;color:oklch(0.82 0.03 262)}
 #connInstall{min-width:16ch}
 @keyframes conn-turn{to{rotate:360deg}}

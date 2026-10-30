@@ -8,7 +8,8 @@ import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
-import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD } from './remote.mjs';
+import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
+import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
@@ -265,12 +266,16 @@ export async function createDesktop({ state, open } = {}) {
   const sshCommand = (!app.isPackaged && process.env.P9_SSH) || 'ssh'; // P9_SSH: the tests' stand-in, source checkouts only
   // last: the host used before, so Local can show a one-click way back.
   const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
-  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0;
+  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
+  // Row 79: P9's own ssh key, in its data folder; noKey: the remotes whose key offer got Don't ask again.
+  const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
+  useKey(sshKeyFile);
+  let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
   // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
   const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action, password) => remoteMode(h, action, sshCommand, password), save: () => keepServer() });
-  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep }), { mode: 0o600 });
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey }), { mode: 0o600 });
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
@@ -279,12 +284,15 @@ export async function createDesktop({ state, open } = {}) {
   // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
   const ownVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
   // One attempt chain per choice (serverTry): retried 1 s, then doubling to 30 s; a drop starts it again.
-  const connect = async (attempt, wait = 1000) => {
+  // Row 78: the ssh login waiting on the password window: { id, prompt, again, resolve }. One at a time; a new connect ends it.
+  // dropped: the connection was up and fell (said in the password window). keyOffer: { host, id }, after a password login.
+  let sshAsk = null, sshAsks = 0, dropped = false, keyOffer = null;
+  const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
-      const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; connect(attempt); } } });
+      const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; dropped = true; connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
-      server = s; serverError = null;
+      server = s; serverError = null; dropped = false;
       keeper.connected(serverHost, !!s.background);
       if (!serverUpdating) {
         // Item 14 (server-update.mjs): an older server is updated from this app; a newer one only says to update this app.
@@ -294,14 +302,33 @@ export async function createDesktop({ state, open } = {}) {
           tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
-      serverError = error.message;
-      if (attempt === serverTry) setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
+      serverError = error.message; knownHosts = error.knownHosts ?? null;
+      if (attempt !== serverTry) return;
+      // Row 78: a changed host key, or a remote that needs a key from this Windows computer, stops here until the person's
+      // Try again: no password window, no timed retry.
+      if (serverError === 'ssh-host-key-changed' || serverError === 'ssh-key-needed') return;
+      // Row 78: key-only ssh refused. One login with the password window, then connect over it. Never retried on a timer:
+      // a refused or cancelled login waits for the person's Try again.
+      if (serverError === 'ssh-login-needed' && !loggedIn) {
+        const r = await sshLogin({ host: serverHost, ssh: sshCommand, ask: a => new Promise(resolve => { sshAsk = { ...a, id: ++sshAsks, dropped, resolve }; }) });
+        sshAsk?.resolve(null); sshAsk = null;
+        if (attempt !== serverTry) return;
+        // Row 79: the offer comes after every password login (a refused key included) unless this remote said Don't ask again.
+        if (r === 'ok' && !noKey.includes(serverHost)) keyOffer = { host: serverHost, id: ++sshAsks };
+        if (r === 'ok') return connect(attempt, wait, true);
+        if (r?.changed !== undefined) { serverError = 'ssh-host-key-changed'; knownHosts = r.changed; return; }
+        serverError = 'ssh-' + r;
+        return;
+      }
+      if (serverError === 'ssh-login-needed') { serverError = 'ssh-failed'; return; }
+      setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
     }
   };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
     // A finished install stays for its own remote while it reconnects, so the window says installed, not Install again.
     serverUpdate = null; if (remoteInstall?.phase !== 'running' && !(remoteInstall?.phase === 'done' && host === serverHost)) remoteInstall = null;
+    sshAsk?.resolve(null); sshAsk = null; dropped = false; if (keyOffer?.host !== host) keyOffer = null;
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
     await old?.close().catch(() => {});
@@ -481,8 +508,8 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost) {
       const h = await server?.check().catch(() => null);
       // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
-      const there = keeper.status(serverHost, !!server?.background);
-      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(remoteInstall && { install: remoteInstall }) };
+      const there = { ...keeper.status(serverHost, !!server?.background), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
     }
     try {
       const h = state && await health(state);
@@ -735,7 +762,7 @@ export async function createDesktop({ state, open } = {}) {
   // the window reloads onto that daemon. Neither daemon is stopped.
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
-    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep };
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey };
     endDock();
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
@@ -774,6 +801,37 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost && serverError === 'server-no-p9' && remoteInstall?.phase === 'admin' && remoteInstall.command) return runInstall(args[0]);
     if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
     return { error: 'remote-admin-refused' };
+  });
+  // Row 78: the password window's answer for the ssh login waiting on it: a password, 'yes' for a host key, or null (Cancel).
+  // Handed to the login once and kept nowhere.
+  ipcMain.handle('p9:ssh-answer', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || (args[0] !== null && !PASSWORD(args[0]))) throw new Error('ipc-sender-refused');
+    if (!sshAsk) return { error: 'nothing-asked' };
+    const { resolve } = sshAsk;
+    sshAsk = null;
+    resolve(args[0]);
+    return { ok: true };
+  });
+  // Row 79: the answer to the key offer for this window's remote, only while main's own password login left one open. yes makes
+  // P9's key (if it has none) and adds it there; never: Don't ask again for that remote. Nothing is made or sent without yes.
+  ipcMain.handle('p9:ssh-key', async (event, ...args) => {
+    const [yes, never] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof yes !== 'boolean' || typeof never !== 'boolean') throw new Error('ipc-sender-refused');
+    if (!keyOffer || keyOffer.host !== serverHost) return { error: 'nothing-offered' };
+    const { host } = keyOffer;
+    keyOffer = null;
+    if (never) { noKey = [...new Set([...noKey, host])].slice(-50); await keepServer(); }
+    if (!yes) return { ok: true };
+    if (!await makeKey(sshKeyFile, sshCommand)) return { error: 'key-not-made' };
+    const r = await installKey({ host, ssh: sshCommand, file: sshKeyFile });
+    return r === 'ok' ? { ok: true } : { error: 'key-' + r };
+  });
+  // Settings > Remote's Offer a P9 key again: the remote's Don't ask again is gone.
+  ipcMain.handle('p9:ssh-key-setting', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || typeof args[0] !== 'string' || !HOST.test(args[0])) throw new Error('ipc-sender-refused');
+    noKey = noKey.filter(h => h !== args[0]);
+    await keepServer();
+    return { noKey };
   });
   // Row 61 on a remote: tmux or ssh missing on this window's remote. The check asks the remote for its own command (the
   // admin window shows it); the password then runs that remote's command, computed there again. One check, one password.
@@ -840,6 +898,7 @@ export async function createDesktop({ state, open } = {}) {
     const [action, host] = args;
     if (!fromApp(event) || args.length !== 2 || !['add', 'remove'].includes(action) || typeof host !== 'string' || !HOST.test(host)) throw new Error('ipc-sender-refused');
     remotes = action === 'add' ? [...new Set([...remotes, host])].slice(-50) : remotes.filter(h => h !== host); // ponytail: 50 kept, the oldest go
+    if (action === 'remove') noKey = noKey.filter(h => h !== host); // row 79: a removed remote's Don't ask again goes with it
     await keepServer();
     return { remotes };
   });

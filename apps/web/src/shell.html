@@ -76,7 +76,10 @@
 <!-- D20: while this window connects to a remote, the P9 black hole (black-hole.html) instead of a blank window. Shell.tsx opens and closes it. -->
 <dialog id="connecting" class="connecting" aria-labelledby="connT"><div class="conn-hole" aria-hidden="true"><!--black-hole--></div>
   <h2 id="connT">Connecting</h2><p id="connWhy" class="muted" role="status" aria-live="polite"></p>
-  <div class="conn-acts"><button data-slot="button" data-variant="outline" id="connStart" hidden>Start P9 there</button><button data-slot="button" data-variant="default" id="connInstall" hidden>Install P9 there</button></div>
+  <!-- Windows, keys only (Shell.tsx keyNeeded): how to add a key, each command on its own line to copy. -->
+  <ol id="connSteps" class="conn-steps" hidden><li>In PowerShell, make a key. Press Enter at each question; if it asks to overwrite, answer n: you already have one.<code>ssh-keygen -t ed25519</code></li>
+    <li>Add it to <span data-host></span>. Type your password there when asked; it is the last time.<code id="connAddKey"></code></li><li>Press Try again.</li></ol>
+  <div class="conn-acts"><button data-slot="button" data-variant="outline" id="connStart" hidden>Start P9 there</button><button data-slot="button" data-variant="default" id="connInstall" hidden>Install P9 there</button><button data-slot="button" data-variant="default" id="connRetry" hidden>Try again</button></div>
   <div id="connProgress" class="conn-progress" hidden><span class="conn-spin" aria-hidden="true"></span><span id="connStep" class="truncate"></span><span id="connTime"></span></div>
   <pre id="connLog" class="conn-log" hidden></pre>
   <button data-slot="button" data-variant="ghost" data-size="sm" id="connNo" hidden>Not now</button>
@@ -169,6 +172,29 @@
     <p id="adminNote" class="muted sm">Sent once over your ssh connection to sudo there. Never saved, never shown in any log.</p>
   </div>
   <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="cancel" formnovalidate>Cancel</button><button data-slot="button" data-variant="default" value="ok" id="adminOk"></button></div>
+</form></dialog>
+<!-- Row 78: ssh's password (or a new host key to trust) for a remote with no key set up. Shell.tsx askSsh fills it. -->
+<dialog id="sshDlg" class="admin-dlg" aria-labelledby="sshT" aria-describedby="sshP"><form method="dialog">
+  <div class="dlg-head"><div><h2 id="sshT"></h2><p id="sshP"></p></div></div>
+  <div class="dlg-body">
+    <pre id="sshKey" class="admin-cmd" tabindex="0" aria-label="What ssh says about this remote" hidden></pre>
+    <label class="admin-pw" for="sshPw" id="sshL"></label>
+    <input data-slot="input" type="password" id="sshPw" autocomplete="off" spellcheck="false" maxlength="1024" aria-describedby="sshErr sshNote">
+    <p id="sshErr" class="admin-err sm" role="alert" hidden>That password did not work. Check it and try again.</p>
+    <p id="sshNote" class="muted sm">Used once to log in over ssh. Never saved, never shown in any log.</p>
+  </div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="cancel" formnovalidate>Cancel</button><button data-slot="button" data-variant="default" value="ok" id="sshOk"></button></div>
+</form></dialog>
+<!-- Row 79: after a password login, the offer to make P9's own ssh key and add it to this remote. Nothing happens without Yes. -->
+<dialog id="keyDlg" class="keep-dlg" aria-labelledby="keyT" aria-describedby="keyP"><form method="dialog">
+  <div class="dlg-head"><div><h2 id="keyT"></h2><p id="keyP"></p></div></div>
+  <div class="dlg-body">
+    <p class="sm" id="keyWhat"></p>
+    <p id="keyMsg" class="sm" role="status" hidden></p>
+    <label class="keep-again sm" id="keyNeverRow"><input type="checkbox" id="keyNever"> Don't ask again for this remote</label>
+    <p class="muted sm keep-later" id="keyLater">Settings &gt; Remote Connect can offer it again.</p>
+  </div>
+  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no" id="keyNo">No</button><button data-slot="button" data-variant="default" value="yes" id="keyYes" autofocus></button></div>
 </form></dialog>
 <dialog id="moveDlg" aria-labelledby="moveT" aria-describedby="moveP"><form method="dialog">
   <div class="dlg-head"><div><h2 id="moveT"></h2><p id="moveP"></p></div></div>

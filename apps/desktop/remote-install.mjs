@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { names } from './server-update.mjs';
 // PASSWORD: one line, so the remote's read takes exactly it and the archive after it is untouched.
-import { HOST, SSH_OPTIONS, PASSWORD } from './remote.mjs';
+import { HOST, sshOptions, PASSWORD } from './remote.mjs';
 export { PASSWORD };
 // Row 61 (commit C): a system package missing on this computer, installed with the admin password typed into the wizard.
 // command: deps.mjs's own (adminCommand), run as admin without its leading sudo; the password is stdin's first line,
@@ -92,7 +92,7 @@ export function installRemote({ host, ssh = 'ssh', version = null, archive = nul
   if (admin !== null && !PASSWORD(admin)) throw new Error('remote-install-password');
   const command = 'sh -c ' + quote(script(archive ? null : version, keep === true, admin !== null));
   return new Promise((resolve) => {
-    const child = spawn(ssh, [...SSH_OPTIONS, host, command], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(ssh, [...sshOptions(), host, command], { stdio: ['pipe', 'pipe', 'pipe'] });
     let tail = '', done = false;
     const finish = (event) => { if (done) return; done = true; clearTimeout(timer); tell(event); resolve(event); };
     const timer = setTimeout(() => { child.kill(); finish({ phase: 'failed', error: 'timed-out', tail: names(tail.split('\n')).join('\n') }); }, limit);
