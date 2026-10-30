@@ -150,7 +150,8 @@
 /* The glow hangs 190 px past the stage's right edge: clipped there, or the page is 190 px wider than the window and a focused
    node (the theme card picked again) scrolls it sideways. */
 [data-theme="event-horizon-prime"] .stage { overflow-x: clip; }
-[data-theme="event-horizon-prime"] .focuses { position: relative; z-index: 1; }
+/* The panes and the side panel (a pinned artifact too) sit above the black hole; full mode keeps its own 15 (shell.css). */
+[data-theme="event-horizon-prime"] :is(.focuses, .side) { position: relative; z-index: 1; }
 [data-theme="event-horizon-prime"] :is(.topbar, .statusbar) { background: color-mix(in oklch, var(--card) 30%, transparent); }
 [data-theme="event-horizon-prime"] .shell::after { content: ""; position: fixed; inset: 0 0 auto; height: 1px; background: var(--ring-line); pointer-events: none; z-index: 50; }
 
