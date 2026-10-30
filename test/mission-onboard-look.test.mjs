@@ -100,10 +100,29 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   assert.equal(await phone.locator('#mission [data-onboard-protect]').count(), 0);
   assert.equal((await server.desk('/file-protection', 'POST', { on: true })).status, 200);
   await page.locator('#fMission [data-onboard-protect]').waitFor({ timeout: 20000 });
+  // Finding 4 follow-up: a phone template tap is a preview too. Back writes nothing; Choose (File protection asks with a
+  // second tap) writes a new space and shows it.
+  const spaces = async () => (await server.desk('/mission')).body.spaces;
+  await phone.click('#mission [data-template="homelab"]');
+  await phone.locator('#mission [data-preview] [data-choose="homelab"]').waitFor({ timeout: 10000 });
+  await phone.locator('#mission [data-preview] [data-preview-back]').waitFor();
+  await settled(phone); shot('f4-preview-phone', await phone.screenshot());
+  assert.deepEqual(await spaces(), [], 'a phone preview writes no file');
+  await phone.click('#mission [data-preview-back]');
+  await phone.locator('#mission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await spaces(), [], 'Back to wizard writes no file');
+  await phone.click('#mission [data-template="homelab"]');
+  await phone.click('#mission [data-choose="homelab"]');
+  await phone.locator('#mission [data-onboard-note]:has-text("File protection")').waitFor({ timeout: 10000 });
+  await phone.click('#mission [data-choose="homelab"]');
+  await phone.locator('#mission [data-open]:has-text("Services")').waitFor({ timeout: 15000 });
+  assert.deepEqual(await spaces(), ['homelab']);
   // A scratch space appears in the top bar's Space menu (finding 4); picking it shows that space.
   assert.equal((await server.desk('/mission/template', 'POST', { name: 'homelab', space: 'draft', confirm: true })).status, 201);
   await page.locator('#spaceBtn').click();
   await page.locator('#spacePop [data-space="draft"]').click({ timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'draft', null, { timeout: 15000 });
+  assert.equal((await server.desk('/mission')).body.spaceName, 'draft', 'the server shows draft after the pick');
   await page.locator('#fMission [data-group="Services"]').waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#fMission [data-onboard]').count(), 0);
   for (const name of THEMES) { await theme(name); await settled(page); shot('m4a-picker-desktop-' + name, await page.screenshot()); }
@@ -111,6 +130,7 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.click('[data-nav="mission"]');
   await phone.locator('#mission [data-space-pick]').waitFor({ timeout: 15000 });
   await phone.locator('#mission [data-open]:has-text("Services")').waitFor({ timeout: 15000 });
+  assert.equal((await server.desk('/mission')).body.spaceName, 'draft', 'the server still shows draft when the phone opens');
   assert.equal(await phone.locator('#mission [data-space-pick]').inputValue(), 'draft');
   await settled(phone); shot('m4a-picker-phone', await phone.screenshot());
 

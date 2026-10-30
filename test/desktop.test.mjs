@@ -593,7 +593,17 @@ test('Mission D13 (finding 4): Switch mission control, + Add, template preview a
   assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json']);
   await page.locator('#spaceBtn').click();
   await page.locator('#spacePop [data-space="homelab"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#spacePop [aria-checked="true"]').getAttribute('data-space'), 'homelab-2', 'the current space carries the check');
+  assert.equal(await page.locator('#spacePop [data-space="homelab-2"]').evaluate((el) => getComputedStyle(el, '::after').content), '"\u2713"');
   await shot('space-switch-2-open-dark'); await light('space-switch-2-open-light');
+  // + Add, then Have Claude build it: the build chat is for a new space under a free name, not the one shown.
+  await page.locator('#spacePop [data-space-add]').click();
+  await page.locator('#fMission [data-onboard] [data-build="claude"]').click();
+  await page.waitForFunction(() => /builds the new space|build it: /.test(document.body.innerText), null, { timeout: 15000 });
+  assert.match(await page.evaluate(() => document.body.innerText), /builds the new space new-space\./);
+  await page.keyboard.press('Escape');
+  assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json'], 'starting the build writes no file');
+  await page.locator('#spaceBtn').click();
   await page.locator('#spacePop [data-space=""]').click();
   await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === '', null, { timeout: 15000 });
   assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json'], 'switching deletes no space file');

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { parseSettings } from '../apps/server/mission.mjs';
 import { TEMPLATES } from '../apps/server/mission-fields.mjs';
-import { BUILD_PROMPT, GUIDE } from '../apps/server/templates/guide.mjs';
+import { BUILD_PROMPT, buildPrompt, GUIDE } from '../apps/server/templates/guide.mjs';
 import { missionKeys } from '../apps/web/src/mission-files.mjs';
 
 // D10: the Settings rows say "remote", never "server" (the settings.json key server_host stays: files already use it).
@@ -186,5 +186,14 @@ test('M4a onboarding (server): a fresh profile is empty; the guide and templates
     const echo = await until(instance, (event) => event.conversation === made.body.conversation && event.data?.content?.text?.startsWith('echo:'));
     assert.equal(echo.data.content.text, 'echo:' + BUILD_PROMPT, provider + ': the first message is the shipped text only');
   }
+  // Finding 4: + Add's build names a new space; the prompt adds only that name. An existing space or a bad name is refused, no chat.
+  const built = await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'new-space' });
+  assert.equal(built.status, 201); assert.equal(built.body.space, 'new-space');
+  const told = await until(instance, (event) => event.conversation === built.body.conversation && event.data?.content?.text?.startsWith('echo:'));
+  assert.equal(told.data.content.text, 'echo:' + buildPrompt('new-space'));
+  assert.match(told.data.content.text, /pass space "new-space" on every Mission tool call/);
+  assert.equal((await call(instance, '/mission/template', 'POST', { name: 'blank', space: 'taken', confirm: true })).status, 201);
+  assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space: 'taken' })).status, 409, 'an existing space is never the build target');
+  for (const space of ['../x', 'a b', '', 7]) assert.equal((await call(instance, '/mission/build', 'POST', { provider: 'claude', space })).status, 400, JSON.stringify(space));
   console.log('PASS M4a onboarding server: fresh profile empty, guide shipped, bad provider and extra fields refused, Claude and Codex chats start with the guide');
 });

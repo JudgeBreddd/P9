@@ -11,7 +11,7 @@ import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './
 import { editorModal, editItems } from './mission-editor.mjs';
 import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
-import { onboardCard, templateWords } from './onboarding.mjs';
+import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
 import { mountLandingVideo } from './components/landing-v5/playback.mjs';
 import landPoster from './components/landing-v5/black-hole.webp?url';
@@ -1309,17 +1309,16 @@ function renderSpaceMenu() {
   });
   pop.querySelector('[data-space-add]').onclick = () => { spacePop.close(); live.adding = true; live.preview = null; renderMission(); };
 }
-// A template click shows what it holds; only Choose template writes (a new scratch space, then made current).
-const previewHtml = t => `<section class="onboard" data-preview aria-labelledby="previewTitle"><h3 id="previewTitle">${esc(t.title)}</h3><p class="muted">${esc(t.about)}</p>`
-  + (t.sections?.length ? '<h4>Its sections</h4><div class="onboard-tpls">' + t.sections.map(s => `<div class="onboard-tpl"><b>${esc((s.icon ? s.icon + ' ' : '') + s.title)}</b><span>${esc(s.text || '')}</span></div>`).join('') + '</div>'
-    : '<p class="muted">No sections yet: an empty space to fill in.</p>')
-  + `<div class="onboard-go"><button type="button" data-slot="button" data-variant="default" data-choose="${esc(t.name)}">Choose template</button>`
-  + '<button type="button" data-slot="button" data-variant="outline" data-preview-back>Back to wizard</button></div><p class="muted" data-onboard-note role="status"></p></section>';
 function bindOnboard(root) {
   root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    const r = await window.p9.mission('build', { provider: b.dataset.build });
+    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72).
+    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(live.adding ? { space: freeName('new-space', live.spaces || []) } : {}) });
     b.disabled = false;
+    if (r.status === 201 && r.body.space) {
+      live.adding = false; renderMission();
+      toast({ kind: 'chat', txt: (b.dataset.build === 'codex' ? 'Codex' : 'Claude') + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
+    }
     if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation });
     else toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   });
@@ -1332,8 +1331,7 @@ function bindOnboard(root) {
   // File protection answers the first click 403 and arms the button; the second click sends the user's confirmation, as the edit form does.
   root.querySelectorAll('[data-choose]').forEach(b => b.onclick = async () => {
     const name = b.dataset.choose, note = root.querySelector('[data-onboard-note]');
-    let space = name;
-    for (let i = 2; (live.spaces || []).includes(space); i++) space = name + '-' + i;
+    const space = freeName(name, live.spaces || []);
     b.disabled = true;
     const r = await window.p9.mission('template', { name, space, ...(b.dataset.armed ? { confirm: true } : {}) });
     const shown = r.status === 201 && (await window.p9.mission('space', { name: space })).status === 200;
@@ -1378,7 +1376,7 @@ function renderMission() {
   // a template click shows its preview.
   if ((live.empty || live.adding) && !sampleView) {
     const t = live.preview && guide?.templates?.find(x => x.name === live.preview);
-    setHTML($('#fMission'), t ? previewHtml(t) : onboardCard({ templates: guide?.templates, protect: live.fileProtection }, esc)
+    setHTML($('#fMission'), t ? previewCard(t, esc) : onboardCard({ templates: guide?.templates, protect: live.fileProtection }, esc)
       + (live.adding ? `<p class="onboard-back"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-add-cancel>Back to ${esc(live.spaceName || 'Main')}</button></p>` : ''));
     bindOnboard($('#fMission'));
     if (!guide) loadGuide();

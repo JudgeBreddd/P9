@@ -562,7 +562,7 @@ export async function createDesktop({ state, open } = {}) {
     // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
     guide: () => ['GET', '/mission/guide'],
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
-    build: ({ provider }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider }],
+    build: ({ provider, space }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}) }],
     space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
     // Sprint tracker: the connected machine's status file, and a terminal attached to its sprint tmux session (no body).
     sprint: () => ['GET', '/mission/sprint'],
