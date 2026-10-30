@@ -912,7 +912,7 @@ function xferWire() { $('#xferDlg').querySelectorAll('[data-xfer-close]').forEac
 function xferRefused(r) {
   xferShow('Not sent', r.message || r.error || 'No answer.', '', (r.setting ? '<button data-slot="button" data-variant="default" id="xferSetting">Open Settings</button>' : '') + xferClose);
   xferWire();
-  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); input?.scrollIntoView({ block: 'center' }); input?.focus(); };
+  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); settingsAt(input); input?.focus(); };
 }
 async function sendFiles() {
   const folder = fileRoot(), b = $('#xferBtn');
@@ -2220,6 +2220,8 @@ async function setUnrestricted(on) {
 const SET_PAGES = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
 const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
 let setPage = 'General';
+// Settings opened at one row (Add a machine, a send limit): show the page that holds it, then the row.
+const settingsAt = el => { if (!el) return; $('[data-set-page="' + el.closest('.set-page').dataset.page + '"]').click(); el.scrollIntoView({ block: 'center' }); };
 function settingsPages() {
   const body = $('#setBody'), legend = g => g.querySelector('legend')?.firstChild?.textContent.trim() || '';
   const pages = Object.fromEntries(SET_PAGES.map(n => { const p = document.createElement('section'); p.className = 'set-page'; p.dataset.page = n; p.setAttribute('aria-label', n); return [n, p]; }));
@@ -3236,7 +3238,7 @@ async function renderServerMenu() {
     const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
     if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
   }, () => {}));
-  $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); $('#setRemote')?.scrollIntoView({ block: 'center' }); $('#setRemoteName')?.focus(); };
+  $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }
 if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();

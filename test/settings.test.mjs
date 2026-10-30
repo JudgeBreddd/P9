@@ -1919,7 +1919,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody .set-row').querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
   // HI1: every top-level row, every group's legend and every Maintenance row has an "i" with a tip, and each opens a guide
   // section main allows and docs/guide.md has.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > .set-group:first-child > .set-row, #setBody legend, #setBody fieldset:last-child .set-row')]
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > [data-page="General"] > .set-group:first-child > .set-row, #setBody legend, #setBody > [data-page="General"] > fieldset:last-child .set-row')]
     .filter((row) => !row.querySelector(':scope > .info[title]:not([title=""])')).map((row) => row.textContent.slice(0, 40))), []);
   const sections = await page.evaluate(() => [...new Set([...document.querySelectorAll('#setBody [data-docs]')].map((b) => b.dataset.docs))]);
   const allowed = JSON.parse(/GUIDE_SECTIONS = Object\.freeze\((\[[^\]]*\])\)/.exec(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'))[1].replaceAll("'", '"'));

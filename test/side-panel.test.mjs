@@ -169,7 +169,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
   });
 
   await t.test('7. cards float over the Dev view in their own overlay view and never resize a pane', async () => {
-    await reset(); await page.click('#rDev'); await page.locator('#side').waitFor();
+    await reset(); await goDev();
     await page.waitForFunction(() => document.querySelector('#cards .card'));
     await page.waitForFunction(() => true);
     const views = async () => { for (let i = 0; i < 40; i++) { const v = await native(); if (v.length === 2 && v[1].visible && v[1].height > 20) return v; await new Promise(r => setTimeout(r, 150)); } return native(); };
@@ -251,7 +251,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     await reset();
     const metrics = () => app.evaluate(({ app }) => app.getAppMetrics().map(m => ({ pid: m.pid, type: m.type, name: m.name ?? '', ws: m.memory.workingSetSize, priv: m.memory.privateBytes ?? 0 })));
     const sum = list => list.reduce((a, m) => a + m.ws, 0);
-    await page.click('#rDev'); await page.locator('#side').waitFor();
+    await goDev();
     // cards snoozed: the editor view exists, the overlay does not
     for (let i = 0; i < 5 && await page.locator('#cards .card').count(); i++) { await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children[1]?.webContents.executeJavaScript("document.querySelector('.x')?.click()")); await new Promise(r => setTimeout(r, 400)); }
     await new Promise(r => setTimeout(r, 2500));
