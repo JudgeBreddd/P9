@@ -258,7 +258,7 @@ export default function Shell() {
           if (ok) { connected = true; shown = result.host ?? ''; if (layer?.open) layer.close(); } else waited = true;
           if (label && (ok || !known)) {
             label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
-            label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Settings > Remote switches back to this computer.';
+            label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Settings > Remote Connect switches back to this computer.';
           }
           // Row 79: the key offer, once per password login, before Keep P9 running's question.
           const keyDlg = document.getElementById('keyDlg') as HTMLDialogElement | null;
