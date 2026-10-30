@@ -118,7 +118,7 @@ const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick:
 const names = { claude: 'Claude', codex: 'Codex' };
 // The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
 const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });
-const chatOn = () => localStorage.getItem('eh-dan-chat:dev') !== 'off';
+const chatOn = () => localStorage.getItem('eh-dan-chat:dev') === 'on'; // off until turned on (the owner, attempt 2 item 4)
 const sideSession = () => S.sessions.find(s => s.id === S.sideId && !s.hidden) ?? S.sessions.find(s => s.id === S.open[0]) ?? S.sessions.find(s => !s.hidden);
 function renderSideChat(only) {
   const box = $('#sideChats'); if (!box || side.current()?.slot !== 'dan-chat') return;
@@ -912,7 +912,7 @@ function xferWire() { $('#xferDlg').querySelectorAll('[data-xfer-close]').forEac
 function xferRefused(r) {
   xferShow('Not sent', r.message || r.error || 'No answer.', '', (r.setting ? '<button data-slot="button" data-variant="default" id="xferSetting">Open Settings</button>' : '') + xferClose);
   xferWire();
-  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); input?.scrollIntoView({ block: 'center' }); input?.focus(); };
+  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); settingsAt(input); input?.focus(); };
 }
 async function sendFiles() {
   const folder = fileRoot(), b = $('#xferBtn');
@@ -2277,22 +2277,35 @@ async function setUnrestricted(on) {
   setWarnsLoose(!on); setStarts(on, START);
   renderSettings();
 }
-// D6: the loose rows at the top become a General group; past four groups a page selector shows one (or all) at a time.
-let setPage = 'All';
+// Attempt 2 items 6 and 7 (the owner): five pages, picked on the left; every row moves, unchanged, to the page it mainly
+// affects. The wiring below finds rows by id in #setBody, so it does not care which page holds them.
+const SET_PAGES = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
+const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
+let setPage = 'General';
+// Settings opened at one row (Add a machine, a send limit): show the page that holds it, then the row.
+const settingsAt = el => { if (!el) return; $('[data-set-page="' + el.closest('.set-page').dataset.page + '"]').click(); el.scrollIntoView({ block: 'center' }); };
 function settingsPages() {
-  const body = $('#setBody'), loose = [...body.children].filter(c => c.tagName !== 'FIELDSET');
-  if (loose.length) { const g = document.createElement('fieldset'); g.className = 'set-group'; g.innerHTML = '<legend>General ' + info('The docs, zoom, your name, and how P9 opens and closes its windows.', 'settings') + '</legend>'; g.append(...loose); body.prepend(g); }
-  const groups = [...body.children], name = g => g.querySelector('legend')?.firstChild?.textContent.trim() || '';
-  if (groups.length < 5) return $('#setDlg .set-pages')?.remove();
-  if (setPage !== 'All' && !groups.some(g => name(g) === setPage)) setPage = 'All';
+  const body = $('#setBody'), legend = g => g.querySelector('legend')?.firstChild?.textContent.trim() || '';
+  const pages = Object.fromEntries(SET_PAGES.map(n => { const p = document.createElement('section'); p.className = 'set-page'; p.dataset.page = n; p.setAttribute('aria-label', n); return [n, p]; }));
+  const group = (page, title, tip, rows) => { const g = document.createElement('fieldset'); g.className = 'set-group'; g.innerHTML = '<legend>' + title + ' ' + tip + '</legend>'; g.append(...rows); pages[page].append(g); };
+  const loose = [...body.children].filter(c => c.tagName !== 'FIELDSET'), chatRows = loose.filter(c => c.querySelector('#setCloseSend'));
+  group('General', 'General', info('The docs, zoom, your name, and how P9 opens.', 'settings'), loose.filter(c => !chatRows.includes(c)));
+  if (chatRows.length) group('Chat Focus', 'Chat windows', info('How a chat window opened from a card or the Notification Center behaves.', 'settings'), chatRows);
+  for (const g of [...body.children]) {
+    // Focus modes: each mode's on/off row goes to that mode's page, under the same heading and tip.
+    if (legend(g) === 'Focus modes') { for (const row of [...g.querySelectorAll('.set-row')]) { const one = g.cloneNode(false); one.append(g.querySelector('legend').cloneNode(true), row); pages[focusNames[row.querySelector('input').id.slice(5)]].append(one); } continue; }
+    pages[SET_PAGE_OF[legend(g)] ?? 'General'].append(g);
+  }
+  for (const p of Object.values(pages)) if (!p.children.length) p.innerHTML = '<p class="muted sm">Nothing to set here in this window.</p>';
+  body.replaceChildren(...Object.values(pages));
   $('#setDlg .set-pages')?.remove();
   const nav = document.createElement('nav'); nav.className = 'set-pages'; nav.setAttribute('aria-label', 'Settings pages');
-  for (const n of ['All', ...groups.map(name)]) {
-    const b = document.createElement('button'); b.type = 'button'; b.textContent = n; b.dataset.setPage = n; b.setAttribute('aria-pressed', n === setPage);
-    b.onclick = () => { setPage = n; renderSettings(); }; nav.append(b);
+  const show = () => { for (const p of Object.values(pages)) p.hidden = p.dataset.page !== setPage; nav.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.setPage === setPage)); };
+  for (const n of SET_PAGES) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = n; b.dataset.setPage = n;
+    b.onclick = () => { setPage = n; show(); body.scrollTop = 0; }; nav.append(b);
   }
-  groups.forEach(g => { g.hidden = setPage !== 'All' && name(g) !== setPage; });
-  body.classList.toggle('one', setPage !== 'All'); $('#setDlg .dlg-head').after(nav);
+  show(); $('#setDlg .dlg-head').after(nav);
 }
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
@@ -3287,7 +3300,7 @@ async function renderServerMenu() {
     const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
     if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
   }, () => {}));
-  $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); $('#setRemote')?.scrollIntoView({ block: 'center' }); $('#setRemoteName')?.focus(); };
+  $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }
 if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();

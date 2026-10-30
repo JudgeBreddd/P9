@@ -160,30 +160,47 @@ test('D12: the brand mark is the real P9 logo in every theme', { timeout: 90000 
   console.log('PASS D12');
 });
 
-test('D6: Settings is wide, its sections sit side by side, and a page selector shows one section at a time', { timeout: 90000 }, async (t) => {
+test('Attempt 2 items 5-7: Settings has five pages picked on the left, no All, every control from before still there, no jump', { timeout: 120000 }, async (t) => {
   const { page, shot } = await launch(t);
+  const pages = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
+  // Controls that were in Settings before the move (the rest depend on the window: remotes, pets, mission files).
+  const before = ['#setDocs', '#setAm', '#setName', '#setStartLast', '#setCloseSend', '#setF-chat', '#setF-dev', '#setF-mission', '#setWarn', '[data-default-mode]'];
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
     await page.click('#setBtn'); await page.locator('#setDlg[open] .set-pages').waitFor({ timeout: 10000 }); await page.waitForTimeout(400);
-    assert.ok((await page.locator('#setDlg').boundingBox()).width > 1000, 'wider than the old 560px');
-    const boxes = await page.locator('#setBody>.set-group').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
-    assert.ok(new Set(boxes.map((b) => b[0])).size >= 2, 'sections in more than one column: ' + JSON.stringify(boxes));
-    assert.match(await page.locator('#setBody>.set-group>legend').first().innerText(), /^General\b/);
-    await shot('c23-d6-settings-' + theme);
+    assert.deepEqual(await page.locator('.set-pages button').allInnerTexts(), pages, 'five pages, no All');
+    const nav = await page.locator('.set-pages').boundingBox(), body = await page.locator('#setBody').boundingBox();
+    assert.ok(nav.x + nav.width <= body.x + 1 && nav.height > nav.width, 'the picker is a column on the left: ' + JSON.stringify([nav, body]));
+    const where = {}; let top;
+    for (const n of pages) {
+      await page.click('[data-set-page="' + n + '"]');
+      assert.equal(await page.locator('#setBody>.set-page:visible').count(), 1, n + ': one page shown');
+      const head = await page.locator('#setDlg .dlg-head').boundingBox();
+      top ??= head.y; assert.ok(Math.abs(head.y - top) < 1, n + ': the header does not move (' + head.y + ' vs ' + top + ')');
+      where[n] = await page.locator('#setBody>.set-page:visible legend').allInnerTexts();
+      await shot('a2-settings-' + n.toLowerCase().replace(' ', '-') + '-' + theme);
+    }
+    for (const sel of before) assert.ok(await page.locator('#setBody ' + sel).count() > 0, sel + ' is still in Settings');
+    console.log('A2 pages ' + JSON.stringify(where));
     await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
   }
-  await page.click('#setBtn'); await page.locator('#setDlg[open] .set-pages').waitFor({ timeout: 10000 });
-  await page.click('[data-set-page="Focus modes"]');
-  await page.locator('[data-set-page="Focus modes"][aria-pressed="true"]').waitFor({ timeout: 5000 });
-  assert.equal(await page.locator('#setBody>.set-group:visible').count(), 1, 'one page shown');
-  assert.match(await page.locator('#setBody>.set-group:visible legend').first().innerText(), /^Focus modes/);
-  await page.locator('#setBody input[type=checkbox]:visible').first().click(); // a save re-renders: the page stays
-  await page.waitForTimeout(400);
-  assert.equal(await page.locator('[data-set-page="Focus modes"]').getAttribute('aria-pressed'), 'true', 'the page stays after a save');
-  await shot('c23-d6-settings-page');
-  await page.click('[data-set-page="All"]');
-  assert.ok(await page.locator('#setBody>.set-group:visible').count() >= 5, 'All shows every section');
-  console.log('PASS D6');
+  console.log('PASS A2 settings');
+});
+
+test('Attempt 2 item 4: Dev Focus opens with no chat pane; the toggle still opens it', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.click('#rDev'); await page.waitForTimeout(600);
+    assert.notEqual(await page.evaluate(() => window.__side.current()?.slot), 'dan-chat', 'no chat pane on entry');
+    assert.equal(await page.locator('#sideChats').count(), 0);
+    assert.notEqual(await page.locator('#sideToggle').getAttribute('aria-pressed'), 'true');
+    await shot('a2-dev-entry-' + theme, true);
+    await page.click('#rChat');
+  }
+  await page.click('#rDev'); await page.click('#sideToggle');
+  await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat', null, { timeout: 5000 });
+  console.log('PASS A2 dev');
 });
 
 test('K11: the Mission page makes room for the cards; no card covers a Mission panel', { timeout: 90000 }, async (t) => {

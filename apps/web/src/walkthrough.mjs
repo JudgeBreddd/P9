@@ -9,7 +9,7 @@ export const WALKTHROUGH = [
   { at: '#tabs', focus: 'chat', title: 'Tabs', text: "Each open chat has a tab. The x on a tab stops that chat, like closing a terminal in VS Code. Mode and Model sit above each chat's message box: Mode sets how much the agent may do without asking." },
   { at: '#histBtn', focus: 'chat', title: 'History', text: 'Every chat is kept here. Open brings a stopped or closed one back.' },
   { at: '#agentInd', focus: 'chat', title: 'Who is working', text: 'When an agent is working or waiting on you, its pet or a spinner shows here.' },
-  { at: '#cards', focus: 'chat', title: 'Cards', text: 'Cards show what needs you: an agent asking a question, an item waiting on you. Click one to answer it without leaving what you were doing.' },
+  { at: '#cards', focus: 'chat', title: 'Cards', text: 'Cards show what needs you: an agent asking a question and notifications. Click one to answer it without leaving what you were doing.' },
   { at: '#rBell', focus: 'chat', title: 'Notification Center', text: 'Cards you set aside, older items and system notices wait here until you clear them.' },
   { at: '#rBots', focus: 'chat', title: 'Running chats', text: 'Each running chat has a numbered robot head here; hover one for its title and whether it is working. Click it to open that chat in a window.' },
   { at: '.mrow', focus: 'mission', title: 'Mission Control', text: 'Your scripts as buttons, and everything waiting on you. A button runs one exact command; nothing goes through a shell. A Sprint button shows when a sprint status file exists.' },
