@@ -336,7 +336,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget, quick_note }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(quick_note ? { quick_note } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name, root }) => ({ id, title: name, ...(root ? { root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
         ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
-      queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts),
+      queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts), mainFile: Boolean(settings.space),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
       empty: !settings.space_name && !settings.hub && !reg.space.length && !reg.scripts.length && !reg.apps.length && !reg.pages.length && !waiting.length };
   }

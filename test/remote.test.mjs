@@ -224,7 +224,7 @@ test('Keep P9 running in the window: the question, the status line, the admin pa
   await page.locator('#keepNote').waitFor({ state: 'hidden', timeout: 15000 });
   // Settings > Remote: each remote's choice, Stops for the one answered No with Do not ask again.
   const settings = async (theme) => {
-    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+    await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Remote Connect"]');
     assert.equal(await page.locator('[data-remote-keep="small-board"]').inputValue(), 'stop');
     assert.equal(await page.locator('[data-remote-keep="test-host"]').inputValue(), '');
     await page.locator('#setRemote').scrollIntoViewIfNeeded();
@@ -374,7 +374,7 @@ test('Remote list in Settings: nothing built in, Add remote refuses an option, a
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
   await page.locator('#rChat').waitFor({ timeout: 20000 });
-  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Remote Connect"]');
   const listed = () => page.locator('#setRemote li strong').allTextContents();
   assert.deepEqual(await listed(), ['from-config'], 'only the ~/.ssh/config Host, nothing built in');
   await page.fill('#setRemoteName', '-oProxyCommand=x'); await page.locator('#setRemoteAdd button').click();

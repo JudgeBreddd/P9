@@ -77,15 +77,15 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   assert.equal(await page.locator('#setLock').isChecked(), false);
   await page.click('#zIn'); await page.click('#zIn');
   await page.locator('#zVal', { hasText: '120%' }).waitFor();
-  await page.check('#setCloseSend');
-  await page.uncheck('#setF-mission');
-  await page.check('#setLock');
+  await page.click('[data-set-page="Chat Focus"]'); await page.check('#setCloseSend');
+  await page.click('[data-set-page="Mission Control"]'); await page.uncheck('#setF-mission');
+  await page.click('[data-set-page="General"]'); await page.check('#setLock');
   await page.locator('#setLock:checked').waitFor();
   assert.deepEqual(await call(instance, '/agent-lock'), { on: true });
   // The last focus mode left on cannot be turned off.
-  await page.uncheck('#setF-dev');
+  await page.click('[data-set-page="Dev Focus"]'); await page.uncheck('#setF-dev');
   assert.equal(await page.locator('#setF-chat').isDisabled(), true);
-  await page.check('#setF-dev');
+  await page.check('#setF-dev'); await page.click('[data-set-page="General"]');
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'settings.png') }); }
   await page.click('#setDocs');
   let url = '';
@@ -1318,7 +1318,7 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
     return pane.locator('[data-mode]');
   };
   const pick = page.locator('[data-default-mode="codex"]'), dlg = page.locator('#looseDlg');
-  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); };
+  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
   const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
   const kept = () => page.evaluate(() => localStorage.getItem('p9-mode-default:codex'));
   await settings();
@@ -1919,7 +1919,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody .set-row').querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
   // HI1: every top-level row, every group's legend and every Maintenance row has an "i" with a tip, and each opens a guide
   // section main allows and docs/guide.md has.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > .set-group:first-child > .set-row, #setBody legend, #setBody fieldset:last-child .set-row')]
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > [data-page="General"] > .set-group:first-child > .set-row, #setBody legend, #setBody > [data-page="General"] > fieldset:last-child .set-row')]
     .filter((row) => !row.querySelector(':scope > .info[title]:not([title=""])')).map((row) => row.textContent.slice(0, 40))), []);
   const sections = await page.evaluate(() => [...new Set([...document.querySelectorAll('#setBody [data-docs]')].map((b) => b.dataset.docs))]);
   const allowed = JSON.parse(/GUIDE_SECTIONS = Object\.freeze\((\[[^\]]*\])\)/.exec(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'))[1].replaceAll("'", '"'));
@@ -1930,7 +1930,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   // A click on an "i" opens its section, and the checkbox in the same row stays as it was.
   const locked = await page.locator('#setLock').isChecked();
   await page.locator('#setLock').locator('xpath=..').locator('.info').click();
-  await page.locator('#setBody fieldset:last-child legend .info').click();
+  await page.locator('#setBody > [data-page="General"] > fieldset:last-child legend .info').click();
   await until(async () => (await lines(opened)).length === 2, 'two guide sections opened');
   assert.deepEqual(await lines(opened), ['https://github.com/' + REPO + '/blob/main/docs/guide.md#agent-lock', 'https://github.com/' + REPO + '/blob/main/docs/guide.md#maintenance']);
   assert.equal(await page.locator('#setLock').isChecked(), locked);
@@ -1941,9 +1941,9 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
     return [link.textDecorationLine, link.color === primary];
   }), ['underline', true]);
   // MT1: the Updates row's Check now (the releases page in a source checkout), then the five buttons (maintenance.test.mjs has the row's states).
-  assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
+  assert.deepEqual(await page.locator('#setBody > [data-page="General"] > fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
   assert.deepEqual([await page.locator('#mtUpdOpen').isEnabled(), await page.locator('#setBody strong', { hasText: /^Updates$/ }).count()], [true, 1], 'updates off: one Updates row, its Check now opens the releases page');
-  await page.locator('#setBody fieldset:last-child').scrollIntoViewIfNeeded();
+  await page.locator('#setBody > [data-page="General"] > fieldset:last-child').scrollIntoViewIfNeeded();
   const png = await page.locator('#setDlg').screenshot({ type: 'png' });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-maintenance ' + png.toString('base64'));
   // The page's own refusals: a section not in the guide's list, a second argument, arguments where none are taken.
@@ -1981,7 +1981,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   const packaged = await launch({ P9_PACKAGED: '1' });
   assert.equal(await packaged.page.evaluate(() => window.p9.source), false);
   await settingsOpen(packaged.page);
-  assert.deepEqual(await packaged.page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
+  assert.deepEqual(await packaged.page.locator('#setBody > [data-page="General"] > fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
   await packaged.page.click('#setClose');
   assert.equal(await (await palette(packaged.page, 'Rebuild')).count(), 0);
   assert.equal(await (await palette(packaged.page, 'Restart daemon')).count(), 1);
@@ -2029,7 +2029,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
     const box = page.locator('#setMission [data-mission="' + key + '"]');
     await box.fill(value); await box.dispatchEvent('change');
   };
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   assert.deepEqual(await boxes(), keys.map((key) => [key, MISSION_FILES[key] ?? '']));
   // Each row has the "i" that opens its guide section, and every path row but scripts_root (a full path) has Pick.
@@ -2091,7 +2091,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   // A restart reads them back from the daemon's file.
   await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
   ({ app, page } = await launchOn(t, instance, profile));
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   const saved = { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' };
   assert.deepEqual(await boxes(), keys.map((key) => [key, { page_schemes: 'obsidian, zotero', notes_roots: 'vault = ' + notes }[key] ?? saved[key] ?? '']));
@@ -2109,7 +2109,7 @@ test('Pick: the workspace folder itself and a folder outside get their own refus
   await rm(path.join(instance.workspace, 'mission'), { recursive: true });
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-pick-')), 'profile');
   const { app, page } = await launchOn(t, instance, profile);
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   for (const [pick, text] of [[instance.workspace, 'That is the workspace folder itself.'], [instance.directory, 'That is outside the workspace.']]) {
     await pickNext(app, [pick]);

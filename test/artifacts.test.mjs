@@ -148,7 +148,7 @@ test('artifacts: the agent picks the mode, a chip reopens it, the text box stays
   assert.ok((await userTexts()).includes('typed beside the artifact'));
   // Dev Focus with the chat beside the editor: the artifact shows over that chat, above its text box, which still works.
   await page.evaluate(() => window.__side.close('artifact'));
-  await page.click('#rDev'); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat', null, { timeout: 5000 });
+  await page.click('#rDev'); await page.click('#sideToggle'); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat', null, { timeout: 5000 });
   await reply(`${F}html artifact Over the chat\n<h1>Over</h1>\n${F}`, '#side .art-over');
   const box = await page.locator('#sideChats .pane textarea').boundingBox(), over = await page.locator('#side .art-over').boundingBox();
   assert.ok(over.y + over.height <= box.y + 1, 'the artifact ends above the text box: ' + JSON.stringify({ over, box }));
