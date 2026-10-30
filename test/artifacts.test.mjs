@@ -129,6 +129,14 @@ test('artifacts: the agent picks the mode, a chip reopens it, the text box stays
   const mode = () => page.evaluate(() => window.__side.current());
   await reply(`${F}html artifact pinned Pinned one\n<h1>Pinned</h1>\n${F}`);
   assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' });
+  // Fresh install: a pinned artifact goes with its chat. Another focus hides it; back in Chat it shows again, still pinned.
+  await page.click('#rMission');
+  assert.equal(await mode(), null, 'Mission: no artifact on screen');
+  assert.equal(await page.locator('#side').isHidden(), true, 'Mission: the panel is hidden');
+  await page.click('#rChat');
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' }, 'back in Chat: shown and still pinned');
+  assert.equal(await page.locator('#side').isVisible(), true);
+  await shot('a2-pin-follows-chat');
   await reply(`${F}html artifact full Full one\n<h1>Full</h1>\n${F}`);
   assert.deepEqual(await mode(), { slot: 'artifact', mode: 'full' });
   await shot('artifact-full');

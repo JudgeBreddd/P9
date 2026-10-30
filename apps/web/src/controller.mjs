@@ -164,7 +164,7 @@ function openArtifact(art) {
     if (ART.mode === 'full') side.mode('full');
     return keepBox();
   }
-  side.open('artifact', { title: art.title, mode: ART.mode, defaultWidth: w => w / 2,
+  side.open('artifact', { title: art.title, mode: ART.mode, focuses: [S.focus], defaultWidth: w => w / 2, // it goes with its chat's focus: hidden in another, back (still pinned) on return
     render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [
       { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; side.mode(ART.mode); } }, full] }),
     onClose: why => { if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
