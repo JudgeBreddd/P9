@@ -651,7 +651,7 @@ function pane(s, i, bare) {
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host
-        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your remote (Settings > Remote)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${working ? names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
@@ -888,7 +888,7 @@ function renderTree() {
     $('#tree').querySelectorAll('[data-ldir]').forEach(b => b.onclick = () => { const p = b.dataset.ldir; files.open.has(p) ? files.open.delete(p) : files.open.add(p); renderTree(); });
     $('#tree').querySelectorAll('[data-lfile]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.lfile, live: true }));
     $('#xferBtn').hidden = !window.p9?.xferPlan || !!serverInfo?.host;
-    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your remote (Settings > Remote)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
+    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
     return;
   }
   $('#tree').innerHTML = tree(M.files, 0, q, S.modal?.kind === 'file' && mdl.open ? S.modal.name : null);
@@ -2662,7 +2662,7 @@ const WIZ_ERR = {
   'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
   'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
   'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
-  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a remote.", 'Switch to Local (the top-bar badge or Settings > Remote), then try again.'],
+  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a remote.", 'Switch to Local (the top-bar badge or Settings > Remote Connect), then try again.'],
   'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
 // The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
@@ -3260,7 +3260,7 @@ async function afterMove(m) {
   if (!pick.yes) return fxEnd();
   localStorage.setItem('p9-after-move', JSON.stringify({ id: m.id }));
   const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the remote's P9
-  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Remote switches by hand.' }); renderChats(); }
+  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Remote Connect switches by hand.' }); renderChats(); }
 }
 // After the first replay. The chat a move took here opens in the pane (on the server it is stopped, here it is moved).
 // A chat left moving by a reload: no stream event within 6 s means main is not moving it, so ask to finish.

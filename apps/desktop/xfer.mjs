@@ -114,7 +114,7 @@ export const tagSide = (side, asked) => asked.catch((error) => { throw Object.as
 export function noAnswer(error, host) {
   const why = String(error?.message ?? error).slice(0, 200);
   if (error?.side === 'remote') return why === 'bad-response' ? 'P9 on ' + host + ' is older than this app and cannot take files or chats. Update P9 there, then send again.'
-    : 'P9 on ' + host + ' did not answer (' + why + '). Check it in Settings > Remote, then send again.';
+    : 'P9 on ' + host + ' did not answer (' + why + '). Check it in Settings > Remote Connect, then send again.';
   if (error?.side === 'local') return why === 'bad-response' ? 'P9\'s background service on this computer is older than this app. Restart P9 (Settings), then send again.'
     : 'P9 on this computer did not answer (' + why + '). Restart P9 (Settings), then send again.';
   return 'The send stopped (' + why + ').';
