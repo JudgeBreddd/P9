@@ -773,7 +773,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
   // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.
   // Item 15: step 3 asks Claude, Codex or both; the card opens there unless a CLI is on PATH already.
-  const total = s.tmux === null ? 7 : 8, first = s.claudeCli || s.codexCli ? [4, 'Sign in to an agent'] : [3, 'Claude, Codex or both?'], base = s.tmux === false ? 1 : 2, settingsFile = s.settingsFile;
+  const total = s.tmux === null ? 7 : 8, first = s.claudeCli || s.codexCli ? [4, 'Sign in to an agent'] : [3, 'Claude, Codex or both?'], rows = s.tmux === null ? 2 : 3, settingsFile = s.settingsFile;
 
   let { app, page } = await launch();
   const card = () => page.locator('#cards [data-key="welcome"]'), body = () => page.locator('#welBody').innerText();
@@ -790,7 +790,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
     await page.click('#welFoot [data-act="install"]'); await at(4, 'Sign in to an agent');
   };
   await card().waitFor({ timeout: 10000 });
-  assert.match(await card().innerText(), new RegExp('Set up · ' + (base + 1) + ' of 4 done[\\s\\S]*agent sign-in$'));
+  assert.match(await card().innerText(), new RegExp('Set up · ' + (rows - 1 - (s.tmux === false ? 1 : 0)) + ' of ' + rows + ' done[\\s\\S]*agent sign-in$'));
   await shot('setup-card.png');
   // The card opens at the first step not done; Back walks to the start.
   await card().locator('.open').click();
@@ -801,6 +801,13 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.equal(await page.locator('#welWs').textContent(), s.workspace);
   assert.match(await body(), /P9 can write here/);
   await shot('wizard-1-workspace.png');
+  // Attempt 2, item 8: card 2 says what the folder is for, and nothing about starter files.
+  assert.match(await body(), /This is your main working folder while you use P9\. You can change it any time in Settings\. If you have no workspace or project folder you prefer, P9 makes one for you\. Changing it restarts P9's background service/);
+  assert.doesNotMatch(await body(), /starter/i);
+  const wizShot = async (name) => { await page.waitForTimeout(400); const png = await page.locator('#welDlg').screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  const wizLight = async (name) => { const was = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await wizShot(name); await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, was); };
+  await wizShot('wizard-card2-dark'); await wizLight('wizard-card2-light');
   await page.click('[data-act="back"]'); await at(1, 'Welcome to Event Horizon');
   await shot('wizard-0-welcome.png');
   await next(); await at(2, 'Your workspace'); await next(); await pickThrough();
@@ -831,12 +838,37 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
   await shot('wizard-2-agents.png');
 
-  await next(); await at(5, 'Mission Control');
-  // Fresh-install finding 1: Mission starts empty and is built there. Next is the main button, nothing is required, and an
+  await next();
+  if (s.tmux !== null) {
+    // Item 15: something only an admin can install (the SSH client on a machine without it) turns this step into the admin screen.
+    const admin = s.dependencies.filter((x) => x.admin).map((x) => x.id);
+    await at(5, admin.length ? 'This needs your admin password' : 'Terminal');
+    if (admin.length) assert.deepEqual(await page.locator('#welBody [data-admin]').evaluateAll((all) => all.map((x) => x.dataset.admin)), admin);
+    else assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
+    await shot('wizard-4-terminal.png');
+    await next();
+  }
+  await at(total - 2, 'You');
+  await page.fill('#welName', 'Ada');
+  await page.waitForTimeout(10500); // across one 10 s poll (BL5)
+  assert.equal(await page.locator('#welName').inputValue(), 'Ada');
+  await page.locator('#welName').press('Tab');
+  await until(() => page.evaluate(() => window.p9.getSettings().then((x) => x.name === 'Ada')), 'the name saved');
+  // Issue #4 item 4, option C: petdex.dev, opened only through the fixed-address opener.
+  await page.click('#welPetdex');
+  await until(async () => (await readFile(opened, 'utf8')).includes(PETDEX_URL), 'petdex opened');
+  await shot('wizard-5-you.png');
+  await next(); await at(total - 1, s.tmux === false ? 'Almost there' : 'You are set');
+  await shot('wizard-6-done.png');
+  // Attempt 2, item 8: no Mission Control check (Mission has no starter files); Mission Control is the last step.
+  assert.doesNotMatch(await body(), /Mission/, 'no Mission Control row');
+  await next(); await at(total, 'Mission Control');
+  assert.equal(await page.locator('#welFoot [data-act="close"]').count(), 1, 'the last step: Close, not Skip');
+  // Fresh-install finding 1: Mission starts empty and is built there. Open Mission Control is the main button, nothing is required, and an
   // older setup's files sit folded under "I already have Mission files", every path optional and empty (nothing found here).
-  assert.match(await body(), /Mission starts empty\. After setup, open it and build it there: ask an agent to add buttons, apps and pages, or start from a template\./);
-  assert.equal(await page.locator('#welFoot [data-act="next"]').getAttribute('data-variant'), 'default', 'Next is the main button');
-  assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
+  assert.match(await body(), /Last, build Mission Control: your control room for scripts, live numbers, logs, notes and links\. It starts empty\. Open Mission Control takes you to its own wizard/);
+  assert.equal(await page.locator('#welFoot [data-act="mission-open"]').getAttribute('data-variant'), 'default', 'Open Mission Control is the main button');
+  await wizShot('wizard-last-mission-dark'); await wizLight('wizard-last-mission-light');
   assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), false, 'folded away at first');
   assert.equal(await page.locator('#welBody [data-act="starter"]').count(), 0, 'no button that makes files');
   await page.waitForTimeout(400);
@@ -876,28 +908,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.locator('#welBody [data-path="waiting"]').dispatchEvent('change');
   await page.locator('#welBody [data-act="starter"]').waitFor({ state: 'detached', timeout: 10000 });
   for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
-  await next();
-  if (s.tmux !== null) {
-    // Item 15: something only an admin can install (the SSH client on a machine without it) turns this step into the admin screen.
-    const admin = s.dependencies.filter((x) => x.admin).map((x) => x.id);
-    await at(6, admin.length ? 'This needs your admin password' : 'Terminal');
-    if (admin.length) assert.deepEqual(await page.locator('#welBody [data-admin]').evaluateAll((all) => all.map((x) => x.dataset.admin)), admin);
-    else assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
-    await shot('wizard-4-terminal.png');
-    await next();
-  }
-  await at(total - 1, 'You');
-  await page.fill('#welName', 'Ada');
-  await page.waitForTimeout(10500); // across one 10 s poll (BL5)
-  assert.equal(await page.locator('#welName').inputValue(), 'Ada');
-  await page.locator('#welName').press('Tab');
-  await until(() => page.evaluate(() => window.p9.getSettings().then((x) => x.name === 'Ada')), 'the name saved');
-  // Issue #4 item 4, option C: petdex.dev, opened only through the fixed-address opener.
-  await page.click('#welPetdex');
-  await until(async () => (await readFile(opened, 'utf8')).includes(PETDEX_URL), 'petdex opened');
-  await shot('wizard-5-you.png');
-  await next(); await at(total, s.tmux === false ? 'Almost there' : 'You are set');
-  await shot('wizard-6-done.png');
+  await page.click('[data-act="back"]'); await at(total - 1, s.tmux === false ? 'Almost there' : 'You are set');
   if (s.tmux !== false) await card().waitFor({ state: 'detached', timeout: 5000 }); // every check passes: no card anywhere
   await page.click('[data-act="tour"]');
   await page.locator('#walk').waitFor({ timeout: 5000 });
@@ -924,7 +935,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await app.close();
   ({ app, page } = await launch());
   await card().waitFor({ timeout: 10000 });
-  assert.match(await card().innerText(), new RegExp('Set up · ' + (base + 1) + ' of 4 done'));
+  assert.match(await card().innerText(), new RegExp('Set up · ' + (rows - 1 - (s.tmux === false ? 1 : 0)) + ' of ' + rows + ' done'));
   await card().locator('.x').click();
   assert.equal(await card().count(), 0);
   const centerRow = () => page.locator('#mdlBody [data-i]', { hasText: 'Set up ·' });
@@ -958,9 +969,19 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   }
   // "Turn Mission off for now" stays on the Mission Control screen.
   await page.click('#setBtn'); await page.click('#setWel');
-  await at(s.tmux === false ? 6 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
-  if (s.tmux === false) { await page.click('[data-act="back"]'); } else { await next(); await next(); await pickThrough(); await next(); }
-  await at(5, 'Mission Control');
+  await at(s.tmux === false ? 5 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
+  if (s.tmux !== false) { await next(); await next(); await pickThrough(); }
+  for (let i = 0; i < 4 && await page.locator('#welT').textContent() !== 'Mission Control'; i++) { await next(); await page.waitForTimeout(300); }
+  await at(total, 'Mission Control');
+  // Its button opens Mission's onboarding card.
+  await page.click('[data-act="mission-open"]');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#welDlg').evaluate((d) => d.open), false);
+  await page.click('#setBtn'); await page.click('#setWel');
+  await at(s.tmux === false ? 5 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
+  if (s.tmux !== false) { await next(); await next(); await pickThrough(); }
+  for (let i = 0; i < 4 && await page.locator('#welT').textContent() !== 'Mission Control'; i++) { await next(); await page.waitForTimeout(300); }
+  await at(total, 'Mission Control');
   await page.click('[data-act="mission-off"]');
   await page.waitForFunction(() => document.querySelector('[data-focus-btn="mission"]').hidden && !document.querySelector('#welDlg').open);
   console.log('PASS setup wizard UI: card count, resume at the first step not done, sign-in code and open, ended shows Retry, starter files, name and petdex, tour, skip to the Notification Center across a restart, gone when done, Mission off');
