@@ -28,8 +28,8 @@ async function stage(remote) {
   const master = path.join(local, 'p9-ssh-' + process.getuid(), 'password-host'); // fake-ssh's control master: %C is the host
   return { directory, local, profile, home, ssh, calls, master, keys: path.join(home, '.ssh', 'authorized_keys') };
 }
-async function launch(t, s, local) {
-  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_PASSWORD: PASSWORD }; delete env.ELECTRON_RUN_AS_NODE;
+async function launch(t, s, local, more = {}) {
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_PASSWORD: PASSWORD, ...more }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + s.profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
@@ -266,4 +266,40 @@ test('A changed host key: P9 says so and will not connect, offers no password wi
   assert.equal(calls.filter((c) => c.argv.at(-1)?.includes('desktop.json')).length, 1, 'no timed retry');
   assert.equal(await page.locator('#connRetry').isVisible(), true, 'Try again is the way back');
   await both(page, 'ssh-host-key-changed', page.locator('#connWhy').locator('xpath=ancestor::dialog[1]'));
+});
+
+// The 0.1.6 decision: Windows stays key-only in 0.1.6 (its OpenSSH has no control master, so no password window and no key
+// offer); a remote that wants a password says it needs a key from this computer and how to add one.
+test('sshFailure: what each ssh failure means, on Windows and elsewhere', { timeout: 10000 }, async () => {
+  const { sshFailure } = await import('../apps/desktop/remote.mjs');
+  const denied = 'tester@password-host: Permission denied (publickey,password).\n';
+  assert.equal(sshFailure(denied, true).message, 'ssh-key-needed');
+  assert.equal(sshFailure(denied, false).message, 'ssh-login-needed');
+  assert.equal(sshFailure('Received disconnect from 192.0.2.1 port 22:2: Too many authentication failures\nNo more authentication methods to try.\n', true).message, 'ssh-key-needed');
+  assert.equal(sshFailure('Host key verification failed.\n', true).message, 'server-unreachable', 'an unknown host key on Windows is not a missing key');
+  assert.equal(sshFailure('ssh: connect to host password-host port 22: Connection refused\n', true).message, 'server-unreachable');
+  const changed = sshFailure('@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nOffending ED25519 key in C:\\Users\\tester\\.ssh\\known_hosts:4\nHost key verification failed.\n', true);
+  assert.equal(changed.message, 'ssh-host-key-changed');
+  assert.deepEqual(changed.knownHosts, { file: 'C:\\Users\\tester\\.ssh\\known_hosts', line: 4 });
+});
+
+test('Windows: a remote with no key from this computer says how to add one; no password window, no key offer, no timed retry', { skip, timeout: 90000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host', remotes: ['password-host'] }));
+  // Windows' keys-only ssh (remote.mjs sshFailure) without the rest of main taking its Windows paths.
+  const page = await launch(t, s, local, { P9_SSH_KEYS_ONLY: '1' });
+  const why = page.locator('#connWhy', { hasText: 'ssh key' });
+  await why.waitFor({ timeout: 30000 });
+  await page.waitForTimeout(8000); // more than one status poll and the first timed retry would have been
+  assert.equal(await page.locator('#connT').textContent(), 'Not connecting to password-host');
+  assert.equal(await page.locator('#connSteps').isVisible(), true);
+  const text = (await why.textContent()) + ' ' + (await page.locator('#connSteps').textContent());
+  for (const said of ['password-host needs an ssh key from this computer', 'ssh-keygen -t ed25519', 'authorized_keys', 'ssh password-host', 'Try again']) assert.ok(text.includes(said), said);
+  assert.equal(await page.locator('dialog#sshDlg[open]').count(), 0, 'no password window');
+  assert.equal(await page.locator('dialog#keyDlg[open]').count(), 0, 'no key offer');
+  const calls = await s.calls();
+  assert.ok(!calls.some((c) => c.argv.includes('BatchMode=no') || 'askpass' in c), 'no password login was started');
+  assert.equal(calls.filter((c) => c.argv.at(-1)?.includes('desktop.json')).length, 1, 'no timed retry');
+  assert.equal(await page.locator('#connRetry').isVisible(), true, 'Try again is the way back');
+  await both(page, 'ssh-windows-key-needed', page.locator('#connWhy').locator('xpath=ancestor::dialog[1]'));
 });

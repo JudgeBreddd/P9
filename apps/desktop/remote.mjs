@@ -36,6 +36,13 @@ export const LOGIN = /Permission denied|Host key verification failed|No more aut
 export const CHANGED = /REMOTE HOST IDENTIFICATION HAS CHANGED/;
 export const knownHostsLine = (err) => { const m = /Offending \S+ key in ([^\x00-\x1f\x7f]{1,300}):(\d{1,7})$/m.exec(err); return m ? { file: m[1], line: Number(m[2]) } : null; };
 const changed = (err) => Object.assign(new Error('ssh-host-key-changed'), { knownHosts: knownHostsLine(err) });
+// Why an ssh read failed. Windows stays key-only in 0.1.6 (its OpenSSH has no control master, so no password window): a
+// remote that refuses every key says it needs a key from this computer (ssh-key-needed), and how to add one. An unknown
+// host key there is not that, so it stays server-unreachable. P9_SSH_KEYS_ONLY=1 gives the same keys-only behaviour on any
+// platform (as P9_SSH names the ssh to run), so the Windows path can be tested.
+const KEYLESS = /Permission denied|No more authentication methods/;
+export const sshFailure = (err, windows = WINDOWS || process.env.P9_SSH_KEYS_ONLY === '1') => CHANGED.test(err) ? changed(err)
+  : new Error(!LOGIN.test(err) ? 'server-unreachable' : !windows ? 'ssh-login-needed' : KEYLESS.test(err) ? 'ssh-key-needed' : 'server-unreachable');
 // What the server runs over ssh: its runtime folder, then its desktop credentials. The server's login shell expands $XDG_RUNTIME_DIR;
 // a non-tty ssh session can come without it (a home server, 2026-10-26), so systemd's own default /run/user/<uid> stands in.
 // exit 0: a server that answers always succeeds, so an ssh failure is server-unreachable and a missing file is server-no-p9.
@@ -67,7 +74,7 @@ export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.t
 function readServer(host, ssh) {
   // 60 s: a background start waits up to 30 s for its daemon.
   return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536 }, (error, out, err) => {
-    if (error) return reject(CHANGED.test(err) ? changed(err) : new Error(LOGIN.test(err) && !WINDOWS ? 'ssh-login-needed' : 'server-unreachable'));
+    if (error) return reject(sshFailure(err));
     const [runtime, ...rest] = out.split('\n');
     let credentials;
     try { credentials = JSON.parse(rest.join('\n')); } catch { return reject(new Error('server-no-p9')); }

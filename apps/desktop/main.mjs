@@ -304,8 +304,9 @@ export async function createDesktop({ state, open } = {}) {
     } catch (error) {
       serverError = error.message; knownHosts = error.knownHosts ?? null;
       if (attempt !== serverTry) return;
-      // Row 78: a changed host key stops here until the person's Try again: no password window, no timed retry.
-      if (serverError === 'ssh-host-key-changed') return;
+      // Row 78: a changed host key, or a remote that needs a key from this Windows computer, stops here until the person's
+      // Try again: no password window, no timed retry.
+      if (serverError === 'ssh-host-key-changed' || serverError === 'ssh-key-needed') return;
       // Row 78: key-only ssh refused. One login with the password window, then connect over it. Never retried on a timer:
       // a refused or cancelled login waits for the person's Try again.
       if (serverError === 'ssh-login-needed' && !loggedIn) {
