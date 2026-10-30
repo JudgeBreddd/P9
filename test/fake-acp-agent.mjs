@@ -11,7 +11,7 @@
 // own (startedNewTurn) that answers "got:<text>" and reports no end. "limits <n>" ends the turn, then reports context and plan use at n% a second later.
 import { Readable, Writable } from 'node:stream';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -24,6 +24,16 @@ import * as acp from '@agentclientprotocol/sdk';
 if (process.argv.includes('--cli') || process.argv[3] === 'cli') {
   writeFileSync('fake-login-argv', JSON.stringify(process.argv.slice(2)));
   const url = existsSync('fake-login-url') ? readFileSync('fake-login-url', 'utf8').trim() : 'https://claude.com/cai/oauth/authorize?fake=1';
+  // Codex's device sign-in (D8), as codex 0.159 prints it, with the code in fake-login-device; "unsupported" is a codex
+  // without the flag, which exits 2 naming it.
+  if (process.argv.includes('--device-auth')) {
+    const code = existsSync('fake-login-device') ? readFileSync('fake-login-device', 'utf8').trim() : 'ABCD-12345';
+    if (code === 'unsupported') { process.stderr.write("error: unexpected argument '--device-auth' found\n"); process.exit(2); }
+    process.stdout.write('Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \x1b[94m'
+      + (existsSync('fake-login-url') ? url : 'https://auth.openai.com/codex/device') + '\x1b[0m\n\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94m' + code + '\x1b[0m\n');
+    setInterval(() => {}, 60000); // waits, as codex polls OpenAI, until Stop
+    await new Promise(() => {});
+  }
   process.stdout.write("Opening the browser to sign in\nIf the browser didn't open, visit: " + url + '\nPaste code here if prompted > ');
   let buffer = '';
   process.stdin.setEncoding('utf8').on('data', (chunk) => {
@@ -51,7 +61,25 @@ const png = (w, h) => {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 };
-let mode = 'unset', model = 'default', cwd = '', mcpServers = null;
+let mode = 'unset', model = 'default', cwd = '', mcpServers = null, folder = '';
+// claude-home (Send to server, D14): a transcript where Claude Code keeps one, <home>/.claude/projects/<folder>/<id>.jsonl,
+// and a resume only of a session whose transcript is there (claude-agent-acp's findTranscript searches every folder).
+// The home is the test's (XDG_STATE_HOME, which the daemon passes on); never HOME, so a test cannot write a real one.
+const projects = () => existsSync('claude-home') && process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, '.claude', 'projects') : null;
+// As codex, the same marker keeps a rollout where Codex does, <home>/.codex/sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl,
+// and resumes only a session whose rollout is there (item 10).
+const rollouts = () => projects() && path.join(process.env.XDG_STATE_HOME, '.codex', 'sessions');
+const transcript = (sessionId) => {
+  if (process.argv[2] === 'codex') {
+    const root = rollouts();
+    if (!root || !existsSync(root)) return null;
+    for (const entry of readdirSync(root, { recursive: true })) if (String(entry).endsWith('-' + sessionId + '.jsonl')) return path.join(root, String(entry));
+    return null;
+  }
+  const root = projects();
+  for (const dir of root && existsSync(root) ? readdirSync(root) : []) if (existsSync(path.join(root, dir, sessionId + '.jsonl'))) return path.join(root, dir, sessionId + '.jsonl');
+  return null;
+};
 const picked = { effort: 'medium', fast: 'off', sandbox: 'on' };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
@@ -89,11 +117,24 @@ const connection = new acp.AgentSideConnection(() => ({
     return { outcome: 'injected' };
   },
   async authenticate() { return {}; },
-  async newSession(params) { cwd = 'new:' + params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`; commands(sessionId); return { sessionId, configOptions: configOptions() }; },
+  async newSession(params) {
+    cwd = 'new:' + params.cwd; folder = params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`;
+    if (projects() && process.argv[2] === 'codex') {
+      const now = new Date().toISOString(), dir = path.join(rollouts(), now.slice(0, 4), now.slice(5, 7), now.slice(8, 10));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, 'rollout-' + now.slice(0, 19).replace(/:/g, '-') + '-' + sessionId + '.jsonl'), JSON.stringify({ type: 'session_meta', cwd: params.cwd, sessionId }) + '\n');
+    } else if (projects()) {
+      const dir = path.join(projects(), params.cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, sessionId + '.jsonl'), JSON.stringify({ type: 'session', cwd: params.cwd, sessionId }) + '\n');
+    }
+    commands(sessionId); return { sessionId, configOptions: configOptions() };
+  },
   async resumeSession(params) {
     // uuid-sessions: IDs shaped like the real Claude adapter's (Hand off types one into a shell, so it takes only those).
     if (!params.sessionId.startsWith('fake-') && !existsSync('uuid-sessions')) throw new Error('unknown session');
-    cwd = 'resume:' + params.cwd;
+    if (projects() && !transcript(params.sessionId)) throw new Error('No conversation found with session ID: ' + params.sessionId);
+    cwd = 'resume:' + params.cwd; folder = params.cwd;
     mcpServers = params.mcpServers;
     commands(params.sessionId);
     return { configOptions: configOptions() };
@@ -110,6 +151,8 @@ const connection = new acp.AgentSideConnection(() => ({
     // Like Claude Code's prompt queue: a prompt during the unprompted work is taken in at its next step.
     if (background.has(sessionId)) { await deliver(sessionId, textOf(params.prompt)); return { stopReason: 'end_turn' }; }
     turns.add(sessionId);
+    const file = transcript(sessionId);
+    if (file) appendFileSync(file, JSON.stringify({ type: 'user', text: textOf(params.prompt) }) + '\n');
     try { return await this.turn(params); } finally { await take(sessionId, say); turns.delete(sessionId); }
   },
   async turn(params) {
@@ -118,6 +161,13 @@ const connection = new acp.AgentSideConnection(() => ({
     const say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     if (text === 'crash') process.exit(3);
     if (text === 'auth-required') throw acp.RequestError.authRequired();
+    // codex-acp 2.1.1 to a client that takes no notices: its warnings arrive as whole reply chunks, then the reply.
+    if (text === 'codex warning') {
+      await say('Warning: Falling back from WebSockets to HTTPS transport. stream disconnected before completion: websocket closed by server before response.completed\n\n');
+      await say('Warning: Some new thing the agent program says\n\n');
+      await say('Glad she turned out just how you wanted!');
+      return { stopReason: 'end_turn' };
+    }
     // Images the way the real adapters send them (threat model row 26): Codex's image generation as a finished tool call
     // with the image (and its saved path as uri), Claude's image in a reply, and an image known only by its address.
     if (text === 'images') {
@@ -211,6 +261,29 @@ const connection = new acp.AgentSideConnection(() => ({
       return { stopReason: 'end_turn' };
     }
     // A reply that lands well after the prompt was accepted, so a client must keep listening to see it.
+    // claude-home: what the transcript holds (the messages before this one), and whether P9 said the chat moved.
+    if (text.endsWith('recall') && transcript(sessionId)) {
+      const lines = readFileSync(transcript(sessionId), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((line) => line.type === 'user').slice(0, -1);
+      await say('recall:' + lines.map((line) => line.text).join('|') + (text.startsWith('[P9: this chat moved') ? ' +note' : ''));
+      return { stopReason: 'end_turn' };
+    }
+    // An edit the way Claude's adapter reports one: kind edit, with the file's absolute path in locations.
+    if (text.startsWith('edit ')) {
+      const file = path.join(folder, text.slice(5));
+      writeFileSync(file, 'edited by the agent\n');
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'edit-' + Date.now(), title: 'Write ' + text.slice(5), kind: 'edit', status: 'completed', locations: [{ path: file }] } });
+      await say('edited');
+      return { stopReason: 'end_turn' };
+    }
+    // "long work": a prompted turn that works on its own until cancelled, a step every 300 ms, as an unattended agent does.
+    if (text === 'long work') {
+      cancelled.delete(sessionId);
+      for (let i = 1; !cancelled.has(sessionId); i++) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'lw-' + i, title: 'Step ' + i, kind: 'execute', status: 'completed' } });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      return { stopReason: 'cancelled' };
+    }
     if (text === 'late') { await new Promise((resolve) => setTimeout(resolve, 1500)); await say('late reply'); return { stopReason: 'end_turn' }; }
     if (text === 'slow') {
       cancelled.delete(sessionId);

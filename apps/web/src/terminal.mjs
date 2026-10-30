@@ -22,19 +22,24 @@ for (const type of ['compositionend', 'keydown']) addEventListener(type, (event)
 // screen: the box xterm draws in. state(text, live): the page shows the state and turns its own key buttons on or off.
 // connect(id): a WebSocket to that terminal, or anything with the same readyState, send, close and on* handlers.
 // What the dock and the phone say when the daemon reports no tmux binary.
-export const TMUX_MISSING = 'tmux not found. Install it (Debian/Ubuntu: sudo apt install tmux · Fedora: sudo dnf install tmux · Arch: sudo pacman -S tmux), then press Refresh.';
+// tmux missing where P9 runs. Never a command to type (installing it needs the admin password, which only the desktop app
+// asks for): the phone and a browser say to finish it in the desktop app; the desktop's dock says where in the app.
+export const TMUX_MISSING = 'Terminals need tmux, and the computer P9 runs on does not have it. Installing it needs an admin password, so finish this step in the P9 desktop app on a computer: Settings → Setup → Terminal. Then press Refresh.';
+export const TMUX_MISSING_HERE = 'Terminals need tmux, and it is not installed. Open Settings → Setup → Terminal to install it with your admin password, then press Refresh.';
 // What they say when this computer has no terminal backend, or the Windows one could not start (issue #11).
 export const unavailableText = (reason) => "Terminal isn't available on this computer yet" + (reason ? ': ' + reason : '.');
-export function createTerminal({ screen, state, connect }) {
+export function createTerminal({ screen, state, connect, open }) {
   const term = { view: null, socket: null, leases: [] };
   function show(text, live = false) {
     state(text, live);
     if (term.view) term.view.options.disableStdin = !live;
   }
-  function sendKeys(data) {
+  // at: the time of the tap that asked for these keys when they are sent after an await (the phone's Paste waits for the
+  // clipboard), so they keep that tap's lease; otherwise the input event running now.
+  function sendKeys(data, at) {
     // Typed data runs inside its input event, or on one of xterm's timers above; with neither, it is xterm answering a
     // query in the output (no keys), and takes the newest lease.
-    const typed = Math.min(owed, window.event?.timeStamp ?? Infinity), bytes = new TextEncoder().encode(data);
+    const typed = Math.min(owed, at ?? window.event?.timeStamp ?? Infinity), bytes = new TextEncoder().encode(data);
     // Strictly before: coarse or sleep-paused clocks (WebKit) can give a later lease the same time as the key.
     const lease = term.leases.findLast((held) => held.at < typed)?.bytes;
     if (!lease || term.socket?.readyState !== WebSocket.OPEN) return;
@@ -44,6 +49,30 @@ export function createTerminal({ screen, state, connect }) {
       frame.set(lease); frame.set(piece, 8);
       term.socket.send(frame);
     }
+  }
+  // xterm builds a touch scroll's wheel report from a gesture event that has no clientX/clientY, so a program that had asked
+  // for the mouse (Claude Code, tmux copy mode) was sent "NaN" as the column and row, typed into its prompt. The wheel report is
+  // kept, because it is what scrolls the program's own history (the screen holds only what is drawn now), with the column and
+  // row of the finger; and a mouse report with a bad number never leaves the page.
+  let finger = null;
+  for (const type of ['touchstart', 'touchmove']) screen.addEventListener(type, (event) => { finger = event.touches[0]; }, { passive: true });
+  function mended(data) {
+    const view = term.view, box = screen.getBoundingClientRect();
+    const cell = (at, from, size, count) => Math.min(count, Math.max(1, Math.floor(((Number.isFinite(at) ? at : from + size / 2) - from) / (size / count)) + 1));
+    const sound = (n, most) => /^\d+$/.test(n) && n >= 1 && n <= most;
+    const text = data.replace(/\x1b\[(<?)(\d+);([^;mM\x1b]*);([^;mM\x1b]*)([Mm])/g, (all, lt, button, col, row, end) => sound(col, view.cols) && sound(row, view.rows) ? all
+      : '\x1b[' + lt + button + ';' + cell(finger?.clientX, box.left, box.width, view.cols) + ';' + cell(finger?.clientY, box.top, box.height, view.rows) + end);
+    // The old 1000 encoding puts one byte per number; a NUL there is a number that was not one.
+    return /\x1b\[M[\s\S]{0,2}\0/.test(text) ? '' : text;
+  }
+  // Item 4: a paste goes through xterm's own paste(), which wraps it in the bracketed-paste markers when the program asked for
+  // them (so a shell or Claude Code takes it as one paste, not typed lines) and turns newlines into Enter. xterm hands the
+  // text to onData at once, so "pasting" is the tap's time for the lease. The end marker inside the text is dropped: left in,
+  // it would close the bracket early and run the rest as typed commands.
+  let pasting;
+  function paste(text, at) {
+    pasting = at;
+    try { term.view?.paste(text.replaceAll('\x1b[201~', '')); } finally { pasting = undefined; }
   }
   // Fits the terminal to its box from one measured character; tmux gets the size as the one text frame the daemon takes.
   function fit() {
@@ -62,6 +91,27 @@ export function createTerminal({ screen, state, connect }) {
     const old = term.socket; term.socket = null; term.leases = []; old?.close();
     return Boolean(old);
   }
+  // D17 (threat model row 13): a plain http(s) address in the output opens on Ctrl/Cmd+click only, through the caller's
+  // checked opener; the link is the text on screen (OSC 8 links above stay inert: their target is not shown). A full row
+  // whose next row starts with no space is one line: Claude Code breaks its sign-in URL into rows itself.
+  // ponytail: one cell per character, so a row with wide characters before a URL places its underline off by their count.
+  function links(y, done) {
+    const buf = term.view.buffer.active, cols = term.view.cols, row = (n) => buf.getLine(n)?.translateToString(false) ?? '';
+    const joined = (n) => n > 0 && n < buf.length && !/^\s/.test(row(n)) && (buf.getLine(n).isWrapped || !/\s$/.test(row(n - 1)));
+    let top = y - 1, end = y;
+    while (joined(top)) top--;
+    while (joined(end)) end++;
+    const text = Array.from({ length: end - top }, (_, i) => row(top + i)).join(''), found = [];
+    for (const m of text.matchAll(/https?:\/\/[^\s"'<>\x60]+/g)) {
+      const url = m[0].replace(/[.,;:!?)\]}]+$/, ''), first = top + Math.floor(m.index / cols), last = top + Math.floor((m.index + url.length - 1) / cols);
+      if (first > y - 1 || last < y - 1) continue;
+      found.push({ text: url, range: { start: { x: m.index % cols + 1, y: first + 1 }, end: { x: (m.index + url.length - 1) % cols + 1, y: last + 1 } },
+        decorations: { underline: true, pointerCursor: true },
+        hover: () => { screen.title = 'Ctrl+click to open in your browser'; }, leave: () => { screen.title = ''; },
+        activate: (event, href) => { if (event.ctrlKey || event.metaKey) open(href); } });
+    }
+    done(found.length ? found : undefined);
+  }
   function attach(id) {
     close();
     if (!term.view) {
@@ -69,7 +119,8 @@ export function createTerminal({ screen, state, connect }) {
         // xterm opens OSC 8 links in its core (confirm, then window.open); surface 13 says links do not open.
         linkHandler: { activate() {} } });
       term.view.open(screen);
-      term.view.onData(sendKeys);
+      if (open) term.view.registerLinkProvider({ provideLinks: links });
+      term.view.onData((data) => { const safe = mended(data); if (safe) sendKeys(safe, pasting); });
     }
     term.view.reset();
     const socket = connect(id);
@@ -102,5 +153,11 @@ export function createTerminal({ screen, state, connect }) {
       show(event.code === 4408 ? 'Closed: keys arrived late and were dropped; press Refresh' : 'Closed: press Refresh to reconnect');
     };
   }
-  return { attach, close, fit, sendKeys, show, focus: () => term.view?.focus(), get open() { return Boolean(term.socket); } };
+  // The last 500 lines, scrollback included, trailing blank lines dropped (the phone's copy sheet, P13).
+  function text() {
+    const buffer = term.view?.buffer.active; if (!buffer) return '';
+    const lines = []; for (let i = Math.max(0, buffer.length - 500); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) ?? '');
+    return lines.join('\n').replace(/\s+$/, '');
+  }
+  return { attach, close, fit, sendKeys, paste, show, text, focus: () => term.view?.focus(), get open() { return Boolean(term.socket); } };
 }

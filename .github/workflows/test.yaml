@@ -1,6 +1,6 @@
 # Runs P9's tests on GitHub's Linux machine: every push to a branch other than main, or by hand from
-# Actions -> Tests -> Run workflow (optionally naming test files). Linux minutes count once against the
-# private repo's monthly allowance.
+# Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
+# Linux minutes count once against the private repo's monthly allowance.
 # The machine gets what the tests need and a laptop has: Chromium's sandbox and unshare (user namespaces),
 # a systemd user manager, tmux, ss, GTK 3, a display (Xvfb) and gitleaks 8.19 or newer.
 name: Tests
@@ -19,17 +19,25 @@ on:
         type: boolean
         required: false
         default: false
+      bare:
+        description: Instead of the tests, install P9 on a bare Ubuntu 24.04 (x64 and arm64), build the static tmux, and read what the Windows programs need (x64 and arm64)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
-# A new push to the same branch cancels the run it replaces.
+# A new push to the same branch cancels the run it replaces. A bare run has its own group (on a push inputs.bare is
+# empty, so the group is the same as before), so it never cancels a test run on the same branch, nor one it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ inputs.bare && '-bare' || '' }}
   cancel-in-progress: true
 
 jobs:
   linux:
+    # On a push the inputs are empty: !inputs.bare is !null, true, so the tests run as before.
+    if: ${{ !inputs.bare }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -83,5 +91,110 @@ jobs:
         with:
           name: evidence
           path: ${{ runner.temp }}/evidence
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Item 15 (v0.1.6 c13): what a bare Ubuntu 24.04 lacks for P9, found by installing on one, and the static tmux build
+  # (scripts/bare-machine.sh, which says what each step does). By hand only, with bare.
+  bare:
+    if: ${{ inputs.bare }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Boot a bare Ubuntu 24.04
+        run: bash scripts/bare-machine.sh boot
+      - name: Install P9 on it and list what it lacked
+        run: set -o pipefail; bash scripts/bare-machine.sh discover 2>&1 | tee "$RUNNER_TEMP/discover.log"
+      - name: Static tmux
+        run: set -o pipefail; bash scripts/bare-machine.sh tmux "$RUNNER_TEMP/tmux" 2>&1 | tee "$RUNNER_TEMP/tmux.log"
+      # Step B: install.sh as a user meets it on a fresh bare machine each time, answering yes to its admin question.
+      - name: Server install (headless) asks, installs, runs
+        if: always()
+        run: set -o pipefail; bash scripts/bare-machine.sh boot && bash scripts/bare-machine.sh install headless 2>&1 | tee "$RUNNER_TEMP/install-headless.log"
+      - name: Desktop install asks, installs, and its Electron starts
+        if: always()
+        run: set -o pipefail; bash scripts/bare-machine.sh boot && bash scripts/bare-machine.sh install desktop 2>&1 | tee "$RUNNER_TEMP/install-desktop.log"
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bare-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/discover.log
+            ${{ runner.temp }}/tmux.log
+            ${{ runner.temp }}/install-headless.log
+            ${{ runner.temp }}/install-desktop.log
+            ${{ runner.temp }}/tmux
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Item 15 on Windows: GitHub has no bare Windows, so what each program P9 ships needs is read from the program itself.
+  # Every DLL that node.exe (setup-node's 26.10.0 is the nodejs.org build package-windows.mjs ships) and the Claude and
+  # Codex programs in the adapters import is either part of Windows (System32, an api-ms-/ext-ms- set) or a NEEDS line;
+  # the VC++ runtime (vcruntime140, msvcp140) is a NEEDS line even though this runner has it, since a fresh Windows does
+  # not. Then each runs with PATH cut to Windows' own folders.
+  bare-windows:
+    if: ${{ inputs.bare }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.10.0
+      - run: pnpm install --frozen-lockfile
+      - name: What each shipped program imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find '**\dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin not found' }
+          $programs = @((Get-Command node).Source) + @(Get-ChildItem node_modules\.pnpm -Recurse -Filter *.exe | Where-Object { $_.FullName -match 'claude|codex' } | ForEach-Object FullName)
+          foreach ($cli in 'claude.exe', 'codex.exe') { if (-not ($programs | Where-Object { (Split-Path $_ -Leaf) -eq $cli })) { throw "$cli not found in node_modules: the adapters ship it some other way here" } }
+          $out = New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\bare-windows"
+          foreach ($program in $programs) {
+            $text = & $dumpbin /nologo /dependents $program
+            $dlls = $text | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim().ToLower() }
+            $name = Split-Path $program -Leaf
+            Write-Output "BARE_WIN_DEPS $name ($program): $($dlls -join ' ')"
+            foreach ($dll in $dlls) {
+              if ($dll -match '^(vcruntime|msvcp|concrt|vccorlib)\d') { Write-Output "BARE_WIN_NEEDS $name $dll VC++ runtime (not on a fresh Windows)" }
+              elseif ($dll -match '^(api|ext)-ms-' -or (Test-Path "$env:SystemRoot\System32\$dll")) { }
+              else { Write-Output "BARE_WIN_NEEDS $name $dll not in System32" }
+            }
+            $text | Set-Content "$out\$name.dependents.txt"
+          }
+          Get-WindowsCapability -Online -Name OpenSSH.Client* | ForEach-Object { Write-Output "BARE_WIN_SSH $($_.Name) $($_.State)" }
+      - name: Each runs with PATH cut to Windows' own folders
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $node = (Get-Command node).Source
+          $programs = @($node) + @(Get-ChildItem node_modules\.pnpm -Recurse -Include claude.exe, codex.exe | ForEach-Object FullName)
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          $failed = 0
+          foreach ($program in $programs) {
+            $text = & $program --version 2>&1
+            $code = $LASTEXITCODE
+            Write-Output "BARE_WIN_RUN $(Split-Path $program -Leaf) exit $code $($text | Select-Object -First 1)"
+            if ($code -ne 0) { $failed++ }
+          }
+          if ($failed) { throw "$failed program(s) did not start with PATH cut to Windows' folders" }
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bare-${{ matrix.runner }}
+          path: ${{ runner.temp }}/bare-windows
           retention-days: 7
           if-no-files-found: warn

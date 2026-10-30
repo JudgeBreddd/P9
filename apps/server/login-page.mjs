@@ -30,11 +30,16 @@ function encode(credential) {
 function done(result) {
   if (result.status >= 300) return status('Refused (' + (result.body.error ?? result.status) + ')');
   sessionStorage.setItem('p9-csrf', result.body.csrf);
+  // The phone keeps it as long as the session can last, so a reopened app is still signed in (phone.ts csrfToken).
+  localStorage.setItem('p9-csrf', JSON.stringify({ token: result.body.csrf, at: Date.now() }));
+  sessionStorage.removeItem('p9-ended');
   status('Logged in.');
   // A "Continue on phone" link that met sign-in keeps its chat; only an exact #chat=<uuid>, so the page bounces nowhere else.
   const chat = /^#chat=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(location.hash) ? location.hash : '';
   location.replace('/phone/' + chat);
 }
+// P2: the phone app sent us here because its session ended; say so, and that nothing typed was lost.
+if (sessionStorage.getItem('p9-ended')) status('Your sign-in ended. Log in again: what you typed is kept.');
 document.getElementById('login').onclick = async () => {
   const start = await post('/auth/login/options');
   if (start.status !== 200) return status('Refused (' + (start.body.error ?? start.status) + ')');
@@ -45,6 +50,13 @@ document.getElementById('login').onclick = async () => {
   done(await post('/auth/login/verify', encode(credential)));
 };
 document.getElementById('enroll').onclick = async () => {
+  // One request at a time: a second tap used to ask the desktop for a second approval (S1).
+  const button = document.getElementById('enroll');
+  if (button.disabled) return;
+  button.disabled = true;
+  try { await enroll(); } finally { button.disabled = false; }
+};
+async function enroll() {
   const asked = await post('/auth/enroll', { name: document.getElementById('name').value.trim() });
   if (asked.status !== 201) return status('Refused (' + (asked.body.error ?? asked.status) + ')');
   document.getElementById('code').textContent = asked.body.code;
@@ -61,5 +73,5 @@ document.getElementById('enroll').onclick = async () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   status('Approval timed out.');
-};
+}
 `;

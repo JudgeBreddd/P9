@@ -42,10 +42,9 @@ test('Setup wizard: starter files are create-only and the settings load live (th
   assert.equal(s.tmux === null, process.platform !== 'linux');
   // A folder with things in it: what is there is found, and the plan lists only what is missing (no _ideas/).
   assert.deepEqual([s.found, s.proposed, s.creates], [{ primary: 'AGENTS.md' }, STARTER, ['mission/registry.json', 'needs-you/AGENTS.md']]);
-  assert.equal((await call(instance, '/mission')).body.error, 'settings-missing');
 
   // {} or the wizard's four keys as JSON, nothing else; paths are checked as settings.json's are.
-  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: 'relative' }], [{ ...STARTER, waiting: '../out' }], [{ primary: 'A.md' }]])
+  for (const [body, type] of [[{ x: 1 }], [[]], ['null'], ['{}', 'text/plain'], [{ ...STARTER, scripts_root: 'relative' }], [{ ...STARTER, waiting: '../out' }]])
     assert.equal((await call(instance, '/setup/starter', 'POST', body, type)).status, 400, JSON.stringify(body));
   // The fixed starter paths never land in a folder with things in it unshown: {} there needs the paths.
   assert.deepEqual(Object.values(await call(instance, '/setup/starter', 'POST', {})), [409, { error: 'paths-required' }]);
@@ -132,7 +131,7 @@ test('Setup settings (ST1): only settings.json keys, checked as the file is; the
   // Refused: no key, an unknown key, not an object, and anything parseSettings refuses (a required key removed too). The file stays.
   for (const [body, type] of [[{}], [{ x: 1 }], [[]], ['null'], [{ server_host: 'box' }, 'text/plain']])
     assert.deepEqual(Object.values(await call(instance, '/setup/settings', 'POST', body, type)), [400, { error: 'request-refused' }], JSON.stringify(body));
-  for (const [body, word] of [[{ server_host: 'bad host!' }, 'server_host'], [{ waiting: '../out' }, 'waiting'], [{ primary: null }, 'primary is required'],
+  for (const [body, word] of [[{ server_host: 'bad host!' }, 'server_host'], [{ waiting: '../out' }, 'waiting'],
     [{ scripts_root: 'relative' }, 'scripts_root'], [{ page_schemes: ['javascript:'] }, 'page_schemes'], [{ notes_roots: { vault: 'rel' } }, 'notes_roots']]) {
     const r = await call(instance, '/setup/settings', 'POST', body);
     assert.deepEqual([r.status, r.body.error], [400, 'settings-refused'], JSON.stringify(body));
@@ -161,6 +160,18 @@ test('Setup settings (ST1): only settings.json keys, checked as the file is; the
   assert.equal(await readFile(file, 'utf8'), '{"primary": 1}');
   assert.match((await call(instance, '/setup/settings')).body.error, /invalid-settings/);
   console.log('PASS setup settings: keys only, parseSettings rules, .bak kept, 0600, Mission live, null removes, an invalid file is left alone');
+});
+
+// c19: the wizard's folder scan does not look inside dependency or build output (packages/files HEAVY).
+test('Setup wizard: a registry, AGENTS.md or waiting folder inside dist, build, venv or __pycache__ is not found', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const dir of ['dist/workspace-hub', 'build/needs-you', 'venv/x', '__pycache__/x', 'node_modules/x']) await mkdir(path.join(workspace, dir), { recursive: true });
+    await writeFile(path.join(workspace, 'dist/workspace-hub/registry.json'), '{}');
+    for (const dir of ['build', 'venv/x', '__pycache__/x', 'node_modules/x']) await writeFile(path.join(workspace, dir, 'AGENTS.md'), 'not mine');
+    await mkdir(path.join(workspace, 'notes'));
+    return {};
+  });
+  assert.deepEqual((await call(instance, '/setup')).body.found, {});
 });
 
 test('Setup wizard: an existing workspace-hub is used as it is; only the settings file is written', { timeout: 60000 }, async (t) => {
@@ -253,6 +264,7 @@ test('Setup wizard: confirming the found paths repoints loaded settings; the old
     await mkdir(path.join(workspace, hub), { recursive: true });
     await writeFile(path.join(workspace, hub, 'registry.json'),
       JSON.stringify({ scripts: [{ id: 'hubdoc', title: 'Hub doc', cmd: ['bash', path.basename(workspace) + '/doc.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'doc.sh'), 'echo'); // the command's path must exist above the workspace (S2)
     await writeFile(path.join(workspace, 'AGENTS.md'), '# Top\n');
     await mkdir(path.join(workspace, 'work/_owner'));
     await writeFile(path.join(workspace, 'work/_owner/AGENTS.md'), '# Waiting on me\n');
@@ -278,27 +290,54 @@ test('Setup wizard: confirming the found paths repoints loaded settings; the old
   console.log('PASS starter: confirmed paths replace the settings, keep a .bak and other keys, create nothing else, and Mission lists the hub');
 });
 
-test('Setup wizard: scripts_root is proposed only when the hub registry commands start with the workspace folder name', { timeout: 60000 }, async (t) => {
+test('Setup wizard: scripts_root is proposed only when a local hub registry command starts with the workspace folder name and that path exists above it (S2, threat model row 37)', { timeout: 60000 }, async (t) => {
   const hub = 'work/workspace-hub';
-  for (const [commands, expected] of [['ICMX', true], ['elsewhere', false]]) {
+  // ssh: an ssh record's paths name the other machine. missing: the path is not there above the workspace.
+  for (const [kind, expected] of [['local', true], ['elsewhere', false], ['ssh', false], ['missing', false]]) {
     const instance = await daemon(t, undefined, false, async ({ workspace }) => {
       await mkdir(path.join(workspace, hub), { recursive: true });
-      const start = commands === 'ICMX' ? path.basename(workspace) : 'elsewhere';
-      await writeFile(path.join(workspace, hub, 'registry.json'),
-        JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', start + '/a.sh'] }], apps: [], pages: [] }));
+      const start = kind === 'elsewhere' ? 'elsewhere' : path.basename(workspace);
+      const cmd = kind === 'ssh' ? ['ssh', 'box', 'bash', start + '/a.sh'] : ['bash', start + '/a.sh'];
+      await writeFile(path.join(workspace, hub, 'registry.json'), JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd }], apps: [], pages: [] }));
+      if (kind !== 'missing') await writeFile(path.join(workspace, 'a.sh'), 'echo');
       await writeFile(path.join(workspace, 'AGENTS.md'), 'mine');
       return {};
     });
     const s = (await call(instance, '/setup')).body;
-    assert.equal(s.found.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
-    assert.equal(s.proposed.scripts_root, expected ? path.dirname(instance.workspace) : undefined);
+    assert.equal(s.found.scripts_root, expected ? path.dirname(instance.workspace) : undefined, kind);
+    assert.equal(s.proposed.scripts_root, expected ? path.dirname(instance.workspace) : undefined, kind);
     if (expected) {
       const made = await call(instance, '/setup/starter', 'POST', s.proposed);
       assert.equal(made.status, 201);
       assert.equal(JSON.parse(await readFile(settingsPath(instance.directory), 'utf8')).scripts_root, path.dirname(instance.workspace));
     }
   }
-  console.log('PASS starter: scripts_root is proposed for a registry written from the workspace parent, and not otherwise');
+  console.log('PASS starter: scripts_root is proposed for a local registry written from the workspace parent, and not for ssh, missing or foreign paths');
+});
+
+test('Setup wizard: a workspace with nested AGENTS.md, a registry.json and a _waiting folder but no workspace-hub is found as it is (D6, threat model row 55)', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, 'Work/_waiting'), { recursive: true });
+    await mkdir(path.join(workspace, 'Work/tools'), { recursive: true });
+    await writeFile(path.join(workspace, 'Work/AGENTS.md'), '# Workspace\n');
+    await writeFile(path.join(workspace, 'Work/tools/registry.json'), JSON.stringify({ scripts: [{ id: 'a', title: 'A', cmd: ['bash', 'a.sh'] }], apps: [], pages: [] }));
+    await writeFile(path.join(workspace, 'Work/tools/other.json'), '{}');
+    await mkdir(path.join(workspace, 'Work/deep/er/est/registry'), { recursive: true });
+    await writeFile(path.join(workspace, 'notes.txt'), 'x');
+    return {};
+  });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.found.primary, s.found.registry, s.found.waiting], ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.deepEqual([s.proposed.primary, s.proposed.registry, s.proposed.waiting], ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.deepEqual(s.creates, [], 'nothing to create: it uses what is there');
+  // A registry.json that is not a registry (no scripts, apps or pages list) is not taken.
+  const other = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, 'cfg'), { recursive: true });
+    await writeFile(path.join(workspace, 'cfg/registry.json'), JSON.stringify({ name: 'npm', version: 1 }));
+    return {};
+  });
+  assert.equal((await call(other, '/setup')).body.found.registry, undefined);
+  console.log('PASS detect: nested AGENTS.md, a registry.json and a _waiting folder are found; a registry.json that is not one is ignored');
 });
 
 test('Setup wizard: a top-level waiting-on folder is found; with no Main project line the top AGENTS.md is primary', { timeout: 60000 }, async (t) => {
@@ -336,7 +375,7 @@ test('Setup wizard sign-in: the daemon runs only the fixed login of the bundled 
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).status, 202);
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'claude' })).body.error, 'login-running', 'one login per agent');
   const state = await until(async () => { const s = (await call(instance, '/setup/login')).body; return s.claude.url && s; }, 'the CLI URL');
-  assert.deepEqual(state, { claude: { running: true, url: 'https://claude.com/cai/oauth/authorize?fake=1', exit: null }, codex: { running: false, url: null, exit: null } });
+  assert.deepEqual(state, { claude: { running: true, url: 'https://claude.com/cai/oauth/authorize?fake=1', code: null, unsupported: false, exit: null }, codex: { running: false, url: null, code: null, unsupported: false, exit: null } });
   assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['claude', '--cli', 'auth', 'login', '--claudeai']);
   // At most 512 printable characters, one line: never a second line, a second command or an argument.
   for (const code of ['a\nwhoami', 'a\rb', 'x'.repeat(513), '', 7]) assert.equal((await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code })).status, 400, JSON.stringify(code));
@@ -351,8 +390,24 @@ test('Setup wizard sign-in: the daemon runs only the fixed login of the bundled 
   await call(instance, '/setup/login/code', 'POST', { agent: 'claude', code: 'done' });
   assert.equal(await until(async () => { const s = (await call(instance, '/setup/login')).body.claude; return s.exit !== null && String(s.exit); }, 'the exit'), '0');
   assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
-  await until(async () => JSON.parse(await readFile(at('fake-login-argv'), 'utf8'))[0] === 'codex', 'the codex start');
-  assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['codex', 'cli', 'login']);
+  await until(() => readFile(at('fake-login-argv'), 'utf8').then((text) => JSON.parse(text)[0] === 'codex').catch(() => false), 'the codex start'); // the fake's writeFileSync can be read mid-write
+  assert.deepEqual(JSON.parse(await readFile(at('fake-login-argv'), 'utf8')), ['codex', 'cli', 'login', '--device-auth']);
+  // D8: Codex's page and one-time code are kept (colour codes stripped); output that is not a code shape is not.
+  const codex = async () => until(async () => { const s = (await call(instance, '/setup/login')).body.codex; return (s.code || s.exit !== null) && s; }, 'the codex code');
+  assert.deepEqual(await codex(), { running: true, url: 'https://auth.openai.com/codex/device', code: 'ABCD-12345', unsupported: false, exit: null });
+  for (const shape of ['<b>x</b>', 'ABC-12', 'abcd-12345']) {
+    await call(instance, '/setup/login/stop', 'POST', { agent: 'codex' });
+    await writeFile(at('fake-login-device'), shape);
+    assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
+    await until(async () => (await call(instance, '/setup/login')).body.codex.url, 'the codex page');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal((await call(instance, '/setup/login')).body.codex.code, null, shape);
+  }
+  // A codex without the flag exits 2 naming it: unsupported, so the wizard can say why.
+  await call(instance, '/setup/login/stop', 'POST', { agent: 'codex' });
+  await writeFile(at('fake-login-device'), 'unsupported');
+  assert.equal((await call(instance, '/setup/login', 'POST', { agent: 'codex' })).status, 202);
+  assert.deepEqual(await codex(), { running: false, url: null, code: null, unsupported: true, exit: 2 });
 });
 
 test('Setup wizard sign-in: main opens only the vendor sign-in page, by parsed origin, and the page never sees the URL (threat model row 31)', { skip: process.platform === 'win32', timeout: 120000 }, async (t) => {
@@ -452,4 +507,46 @@ test('Setup wizard workspace change: only through the picker, never home or P9 s
   assert.equal(back.workspace, second, 'rolled back to the folder it was on');
   assert.equal(await readFile(unitFile, 'utf8'), moved);
   assert.equal((await health(state)).workspace, second);
+});
+
+// Fresh-install finding 1: Mission starts empty. No registry, no waiting folder and no main project is a working Mission
+// (empty), not an error; the main project may be a folder, named by the folder.
+test('Setup wizard: registry, waiting and primary are optional, and primary may be a folder', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    await mkdir(path.join(workspace, 'proj'), { recursive: true });
+    await writeFile(path.join(workspace, 'proj/AGENTS.md'), '# Proj\n\n**Status:** building\n');
+    const file = settingsPath(directory);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ primary: 'proj' }));
+    return {};
+  });
+  const m = await call(instance, '/mission');
+  assert.equal(m.status, 200, JSON.stringify(m.body));
+  assert.equal(m.body.settingsError ?? null, null);
+  assert.deepEqual([m.body.scripts, m.body.apps, m.body.pages], [[], [], []]);
+  assert.deepEqual(m.body.primary, { name: 'proj', path: 'proj', status: 'building' });
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.settings, s.agentsFile, s.registryFile], [true, true, null]);
+  // An existing settings file is never rewritten by Mission's first-run write.
+  assert.equal(await readFile(settingsPath(instance.directory), 'utf8'), JSON.stringify({ primary: 'proj' }));
+});
+
+// Fresh-install finding 2 (threat model row 17): Mission's first request with no settings file writes {} once, owner-only,
+// and makes no workspace file, so a new Mission opens empty at its onboarding card. A file deleted later is not written again.
+test('Setup wizard: Mission writes its own empty settings file on first run, and nothing in the workspace', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const file = settingsPath(instance.directory), before = (await readdir(instance.workspace)).sort();
+  await assert.rejects(stat(file));
+  const [first, ...rest] = await Promise.all([call(instance, '/mission'), call(instance, '/mission/hub'), call(instance, '/mission/icons'), call(instance, '/mission')]);
+  assert.deepEqual(rest.map((r) => [r.status, r.body?.error]), [[404, 'hub-not-set'], [200, undefined], [200, undefined]], 'requests that arrive together all see the new settings');
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.deepEqual([first.body.scripts, first.body.apps, first.body.pages, first.body.queue, first.body.primary], [[], [], [], [], null]);
+  assert.equal(await readFile(file, 'utf8'), '{}\n');
+  if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'no AGENTS.md, mission/, needs-you/ or _ideas/');
+  const s = (await call(instance, '/setup')).body;
+  assert.deepEqual([s.settings, s.agentsFile, s.registryFile, s.creates], [true, null, null, []]);
+  await rm(file);
+  assert.equal((await call(instance, '/mission')).status, 200, 'the last good settings stay');
+  await assert.rejects(stat(file), 'not written again after it loaded');
 });

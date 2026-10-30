@@ -35,14 +35,14 @@ const call = (instance, body) => http({ socketPath: path.join(instance.state, 'd
 test('Anymouse through the daemon: token files an issue, no token returns the prefilled page', async (t) => {
   const gh = await fakeGitHub(t);
   const withToken = await daemon(t, undefined, false, () => ({ env: { P9_GITHUB_TOKEN: TOKEN, P9_GITHUB_API: gh.api } }));
-  const filed = await call(withToken, { kind: 'bug', text: 'Save button @tyler\nsecond line', page: 'chat' });
+  const filed = await call(withToken, { kind: 'bug', text: 'Save button @sam\nsecond line', page: 'chat' });
   assert.deepEqual(filed, { status: 200, body: { ok: true, number: 7, url: 'https://github.com/' + REPO + '/issues/7' } });
   assert.equal(gh.seen.length, 1);
   const [req] = gh.seen;
   assert.equal(req.url, '/repos/' + REPO + '/issues');
   assert.equal(req.auth, 'Bearer ' + TOKEN);
   assert.deepEqual(req.body.labels, ['bug']);
-  assert.equal(req.body.title, 'Bug: Save button @​tyler');
+  assert.equal(req.body.title, 'Bug: Save button @​sam');
   assert.match(req.body.body, /Sent with Anymouse from P9 \(chat\)/);
   assert.equal(JSON.stringify(filed).includes(TOKEN), false);
   assert.equal((await call(withToken, { kind: 'idea', text: '   ' })).status, 400);
@@ -169,6 +169,58 @@ test('M4: 50,000 characters go through; one more is refused with its count; a to
   assert.equal(link.cut, true);
   assert.ok(link.open.length <= 7200, String(link.open.length));
   assert.equal((await createAnymouse()({ text: 'short' })).cut, undefined);
+});
+
+// D13: no GitHub token ships with P9 (the daemon reads one only from its own environment, which no installer sets), so a
+// tester's note goes out as the prefilled link: at most 7,000 characters, and the reply says how much of the note it kept.
+test('D13: the tokenless link stays within 7,000 characters, keeps the start of the note, and says how much', { timeout: 60000 }, async () => {
+  for (const name of ['scripts/install.sh', 'scripts/install-service.mjs', 'scripts/install-windows.ps1', 'scripts/installer.nsh', 'scripts/package-windows.mjs', 'scripts/package-linux.mjs', 'package.json']) {
+    const text = await readFile(path.join(root, name), 'utf8');
+    assert.doesNotMatch(text, /GITHUB_TOKEN|ghp_|github_pat_/, name + ' ships no token');
+  }
+  const note = Array.from({ length: 1500 }, (_, i) => 'line ' + i + ' of a long bug report').join('\n');
+  assert.ok(note.length > 30000 && note.length < 50000, String(note.length));
+  const r = await createAnymouse()({ kind: 'bug', text: note });
+  assert.equal(r.status, 200);
+  assert.ok(r.open.startsWith(NEW_ISSUE), r.open.slice(0, 60));
+  assert.ok(r.open.length <= 7000, String(r.open.length));
+  const body = new URL(r.open).searchParams.get('body');
+  const full = note + '\n\n---\nSent with Anymouse from P9.';
+  assert.deepEqual([r.cut, r.total], [true, full.length]);
+  assert.ok(r.kept > 1000 && r.kept < r.total, String(r.kept));
+  assert.equal(body, full.slice(0, r.kept) + '\n\n[cut to fit a link; the full note is in P9]');
+  const short = await createAnymouse()({ text: 'short' });
+  assert.deepEqual([short.cut, short.kept, short.total], [undefined, undefined, undefined]);
+});
+
+test('D13 in the desktop: a long note opens the cut link and the box says how many characters GitHub got', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-anymouse-cut-')), opened = path.join(home, 'opened.txt'), browser = path.join(home, 'browser');
+  await writeFile(browser, '#!/bin/sh\nprintf "%s\\n" "$1" > ' + opened + '\n');
+  await chmod(browser, 0o755);
+  const env = { ...process.env, P9_OPEN_URL: browser }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_GITHUB_TOKEN;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const note = Array.from({ length: 1000 }, (_, i) => 'step ' + i + ': the save button eats my edits').join('\n');
+  await page.locator('#amBtn').click();
+  await page.locator('[data-kind="bug"]').click();
+  await page.locator('#amText').fill(note);
+  await page.locator('#amSend').click();
+  await page.locator('#amNote', { hasText: 'Opened GitHub' }).waitFor({ timeout: 15000 });
+  const said = await page.locator('#amNote').innerText();
+  const [, kept, total] = said.match(/GitHub got only the start \(the first ([\d,]+) of ([\d,]+) characters\); paste the rest from here\./) ?? [];
+  assert.ok(kept, said);
+  const all = Number(total.replaceAll(',', '')), footer = '\n\n---\nSent with Anymouse from P9.'.length;
+  assert.ok(all >= note.length + footer && all <= note.length + footer + 203, all + ' for a ' + note.length + '-character note');
+  assert.ok(Number(kept.replaceAll(',', '')) < all);
+  assert.equal(await page.locator('#amText').inputValue(), note, 'the whole note stays in the box');
+  let url = '';
+  for (const end = Date.now() + 10000; Date.now() < end && !url; await new Promise((r) => setTimeout(r, 100))) url = (await readFile(opened, 'utf8').catch(() => '')).trim();
+  assert.ok(url.startsWith(NEW_ISSUE) && url.length <= 7000, url.length + ' ' + url.slice(0, 60));
+  assert.ok(new URL(url).searchParams.get('body').startsWith(note.slice(0, Number(kept.replaceAll(',', '')))));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT d13-anymouse-cut ' + (await page.locator('#amDlg').screenshot({ type: 'png' })).toString('base64'));
 });
 
 // ---- v0.1.5 chunk 3: the screenshots the owner opens. The run's volume is thrown away, so each PNG is also printed to the log as

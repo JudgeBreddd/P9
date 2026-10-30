@@ -1,4 +1,5 @@
 import { Marked } from 'marked';
+import { artifactInfo, artifactChip } from './artifact.mjs';
 /* Popover helper: toggles [hidden] on a panel anchored under a button; closes on outside click / Esc. */
 export const popover = (btn, panel, onOpen, signal) => {
   const open = () => { document.querySelectorAll('.pop').forEach(p => { if (p !== panel) p.hidden = true; }); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); onOpen && onOpen(); };
@@ -9,6 +10,29 @@ export const popover = (btn, panel, onOpen, signal) => {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); }, { signal });
   return { open, close };
 };
+// Drag and arrow-key resizing for a separator (the terminal grip, the Chat Focus split bar, the side panel's bar).
+// el: the separator. axis: 'x' | 'y'. get(): the size now in px; set(px): apply it. min, max: px or a function of px, the clamp.
+// dir (a number or a function of none): 1 when moving right/down grows the thing (a left pane), -1 when it shrinks it (a right panel, a bottom dock).
+// Keys: the arrow that grows it adds 24 px, the other takes 24 px, Home = min, End = max. done(px) runs once at pointerup
+// or keyup: the place to persist. signal ends the listeners with the page.
+export function dragBar(el, { axis = 'x', dir = 1, get, set, min = 0, max = Infinity, done = () => {}, signal }) {
+  const val = v => typeof v === 'function' ? v() : v, clamp = px => Math.max(val(min), Math.min(val(max), px)), at = e => axis === 'x' ? e.clientX : e.clientY;
+  const d = () => val(dir), grow = () => ({ x: d() > 0 ? 'ArrowRight' : 'ArrowLeft', y: d() > 0 ? 'ArrowDown' : 'ArrowUp' })[axis], shrink = () => ({ x: d() > 0 ? 'ArrowLeft' : 'ArrowRight', y: d() > 0 ? 'ArrowUp' : 'ArrowDown' })[axis];
+  let from = null, size = 0, stepped = false;
+  el.style.touchAction = 'none';
+  // The move and the release are heard on the window, not the bar: the bar's own pointer capture was lost mid-drag in Electron
+  // (the editor view beside it moves with the bar), and the old terminal grip listened on the window too.
+  const move = e => { if (from !== null) set(clamp(size + d() * (at(e) - from))); };
+  const end = () => { if (from === null) return; from = null; removeEventListener('pointermove', move); removeEventListener('pointerup', end); removeEventListener('pointercancel', end); done(get()); };
+  el.addEventListener('pointerdown', e => { if (e.button) return; from = at(e); size = get(); e.preventDefault(); addEventListener('pointermove', move); addEventListener('pointerup', end); addEventListener('pointercancel', end); }, { signal });
+  signal?.addEventListener('abort', end);
+  el.addEventListener('keydown', e => {
+    const to = e.key === grow() ? get() + 24 : e.key === shrink() ? get() - 24 : e.key === 'Home' ? val(min) : e.key === 'End' ? val(max) : null;
+    if (to === null) return;
+    e.preventDefault(); set(clamp(to)); stepped = true;
+  }, { signal });
+  el.addEventListener('keyup', () => { if (stepped) { stepped = false; done(get()); } }, { signal });
+}
 export const svg = {
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
@@ -35,19 +59,97 @@ export const svg = {
   bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
 };
 export const esc = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// The Sprint tracker's times, readable: an ISO time is the device's local time without seconds ("6:53 PM"), with
+// "tomorrow" / "yesterday" or a short date when the day is not today; anything else (the Builder's "07:00") is shown as written.
+const ISO = /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d/;
+export function sprintTime(value, now = new Date()) {
+  const raw = String(value ?? '').trim(), at = new Date(raw);
+  if (!ISO.test(raw) || Number.isNaN(at.getTime())) return raw;
+  const day = date => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const apart = Math.round((day(at) - day(now)) / 86400000);
+  const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (apart === 0) return time;
+  return time + ' ' + (apart === 1 ? 'tomorrow' : apart === -1 ? 'yesterday' : at.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }));
+}
+export const sprintTimes = (d, now) => `Updated ${sprintTime(d.updatedAt, now) || 'unknown'}${d.cutoff ? ' · cutoff ' + sprintTime(d.cutoff, now) : ''}`;
 // HI1: the hover "i" beside a Settings row (T-tracer's .info). Its tip says what the row does; a click opens that guide section.
 export const info = (tip, section) => `<button class="info" type="button" data-docs="${esc(section)}" aria-label="${esc(tip)}" title="${esc(tip)}">i</button>`;
+// An agent program's own warning, out of the reply (the owner, 2026-10-29). codex-acp 2.1.1 (createWarningEvent) sends one,
+// to a client that takes no notices, as a whole reply chunk "Warning: <message>\n\n"; claude-agent-acp sends none.
+// agentWarning gives the message when a chunk is exactly that, and warnHtml draws it as a small grey line above the reply,
+// its "i" opening what it means: a known warning in plain words, any other with the generic line and the raw text.
+// A chat call main could not get an answer to says so in words, not as daemon-unavailable: which P9, for how long when it
+// was a while (a send waits up to 90 s, twice), and for a send that the message is back in the box (liveChat.prompt).
+const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop the turn', create: 'start the chat', stop: 'stop the chat' };
+export function chatFailed(action, body, ms) {
+  if (body?.error !== 'daemon-unavailable') return null;
+  const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);
+  const why = minutes >= 1 ? who + ' did not answer for ' + minutes + (minutes === 1 ? ' minute.' : ' minutes.') : who + ' is not answering.';
+  return 'Could not ' + (CHAT_VERB[action] ?? 'reach the chat') + '. ' + why + (action === 'prompt' ? ' Your message is back in the box.' : ' Try again in a moment.');
+}
+export const agentWarning = text => /^Warning: ([^]*\S)\n\n$/.exec(String(text ?? ''))?.[1] ?? null;
+const WARNINGS = [[/falling back from websockets to https/i, 'Connection dropped · Codex retried', 'The connection to OpenAI dropped mid-reply. Codex retried another way and the reply came through. Nothing to do; if it shows on every message, OpenAI is having trouble.']];
+export const warnHtml = (raw, attrs = '') => {
+  const [, line, say] = WARNINGS.find(([re]) => re.test(raw)) ?? [null, 'Warning: ' + raw, "The agent's program printed this warning. Your reply is not affected unless the reply itself says so."];
+  return `<details class="agent-warn"${attrs}><summary><span>${esc(line)}</span><span class="i" title="What this means">i</span></summary><p>${esc(say)}</p>${line.startsWith('Warning: ') ? `<code>${esc(raw)}</code>` : ''}</details>`;
+};
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed
 // shows "new window": the old figure expired and the new one is not known until the tool records it again.
-// Agent replies are Markdown (threat model row 18): marked escapes text and code; raw HTML shows as text, a link as its
-// text with the address in a tooltip (nothing to click), an image as its alt text. Desktop and phone both use it.
-export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: {
-  html: t => esc(t.text),
-  link(t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; },
-  image: t => esc(t.text),
+// Markdown (threat model row 18): marked escapes text and code; raw HTML shows as text, an image as its alt text. md
+// (notes, pinned cards, file previews): a link is its text with the address in a tooltip (nothing to click). mdReply
+// (agent replies, P9): a link opens outside P9 only when it is one plain http(s) address (webLink); then the host shows
+// after text that is not the address, so a reply cannot dress one site as another; anything else stays as in md.
+// Desktop and phone both use them; the desktop's click goes to main (p9:open-link), which checks the URL again.
+export const webLink = href => {
+  if (typeof href !== 'string' || href.length > 2048 || /[\s\p{Cc}\p{Cf}]/u.test(href)) return null;
+  try { const u = new URL(href); return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password ? u : null; } catch { return null; }
+};
+const textLink = function (t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; };
+const mdText = { html: t => esc(t.text), image: t => esc(t.text) };
+export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText, link: textLink } });
+// Item 19: a fenced block marked as an artifact (artifact.mjs) is a chip that opens it, never the code in place.
+export const mdReply = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText,
+  code(t) { const a = artifactInfo(t.lang); return a ? artifactChip(a, t.text) : false; },
+  link(t) {
+    const u = webLink(t.href); if (!u) return textLink.call(this, t);
+    const same = [t.href, u.href, u.host, u.href.replace(/^https?:\/\//, '')].includes(t.text.trim());
+    return `<a class="link" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${this.parser.parseInline(t.tokens)}</a>` + (same ? '' : ` <span class="link-host">(${esc(u.host)})</span>`);
+  },
 } });
-export const limitLine = (name, limits, now = Date.now()) => {
+// P19: a reply's code blocks get a Copy button (desktop and phone); copy() says Copied or why not on the button.
+export const copyCode = html => html.replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code');
+export const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copied', e => { btn.title = String(e?.message || e); return 'Copy failed'; }).then(said => { const was = btn.textContent; btn.textContent = said; btn.dataset.said = said; setTimeout(() => { btn.textContent = was; delete btn.dataset.said; }, 2000); });
+// Each agent's own mode names (the daemon's allowlist, chat.mjs MODES) and the two loosened ones, which ask first in red
+// (threat model row 25). Desktop and phone (P6).
+export const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
+export const LOOSE = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
+  'Full access': 'Codex runs without a sandbox: it can read and change any file on this computer and use the network, without asking first.' };
+// Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
+// built here; a block's uri is never used. Desktop and phone (P9). ponytail: data: strings are re-diffed each render;
+// blob: needs a CSP change.
+export const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+export const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
+export const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
+export const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
+// An image a person attaches (threat model row 20; the daemon checks the same limits): desktop paperclip, paste and drop,
+// and the phone's + (P8). Over 1568 px or near 2 MB it is scaled to a JPEG; still over 2 MB, refused with the reason.
+export const MAX_IMAGES = 4, MAX_IMAGE = 2 * 1024 * 1024;
+const base64 = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
+export async function readImage(file) {
+  if (!IMG_OK.includes(file.type)) throw new Error('PNG, JPEG, GIF or WebP only');
+  let blob = file, mimeType = file.type;
+  const bmp = await createImageBitmap(file), k = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
+  if (k < 1 || file.size > MAX_IMAGE * 3 / 4) {
+    const c = new OffscreenCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k)); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); mimeType = 'image/jpeg';
+  }
+  const data = await base64(blob);
+  if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
+  return { mimeType, data, name: file.name };
+}
+export const limitLine = (name, limits, now = Date.now(), signedOut = false) => {
+  if (signedOut) return { name, text: name + ' not logged in', stale: true };
   if (!limits) return { name, text: 'no plan limits recorded yet', stale: true };
   const when = at => new Date(at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
   const part = (label, w) => !w ? label + ' n/a' : w.resetsAt && w.resetsAt < now ? label + ' new window' : `${label} ${Math.round(w.usedPercent)}%` + (w.resetsAt ? ` (resets ${when(w.resetsAt)})` : '');
@@ -55,3 +157,11 @@ export const limitLine = (name, limits, now = Date.now()) => {
   const old = age < 15 * 60000 ? 'just now' : hours < 1 ? Math.round(age / 60000) + ' min old' : hours < 48 ? Math.round(hours) + ' h old' : Math.round(hours / 24) + ' d old';
   return { name, text: part('5 h', limits.fiveHour) + ' · ' + part('week', limits.sevenDay) + ' · ' + old, stale: hours >= 1 };
 };
+
+// A workspace image from the Files pane, desktop and phone (rows 23/26/27 adds): read-only, through GET /files/image, which names
+// the type from the bytes. fileImageSrc lets only that type and plain base64 into an img tag; anything else is null.
+export const FILE_IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+export const fileImageError = { 'not-an-image': 'Not a PNG, JPEG, GIF or WebP image. P9 checks the file\'s first bytes, not its name.',
+  'request-refused': 'P9 does not show this file: it is over 6 MB, a link, or a locked name.', 'not-found': 'This file is no longer on disk.' };
+export const fileImageSrc = body => /^image\/(png|jpeg|gif|webp)$/.test(body?.mimeType) && typeof body.data === 'string' && /^[A-Za-z0-9+/]+=*$/.test(body.data)
+  ? 'data:' + body.mimeType + ';base64,' + body.data : null;

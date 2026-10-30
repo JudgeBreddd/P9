@@ -31,6 +31,8 @@ async function open(t, provider, { text = 'hello', done = (e) => e.data?.content
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   await mkdir(path.join(instance.directory, '.codex', 'sessions', '2026', '10', '24'), { recursive: true });
   await rollout(instance, 74);
+  // A signed-in Codex: without its auth.json, Usage (P8) names Codex signed out and drops its figures.
+  await writeFile(path.join(instance.directory, '.codex', 'auth.json'), '{}');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-meters-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
@@ -96,6 +98,30 @@ test('MR2: the cache clock moves on every 15 s without rebuilding the pane', { t
   await page.evaluate(() => { const now = Date.now; Date.now = () => now() + 45 * 60000; });
   await until(async () => (await cache.getAttribute('data-s')) === 'cooling', 'the state moved to cooling', 20000);
   console.log('PASS MR2: the cache clock moved on its own from 60 to 50 min and then cooling, in place');
+});
+
+// An agent working unattended inside one long prompted turn re-warms the cache with every step: the clock follows its
+// output, not the turn end before the prompt (owner, 2026-10-28: the clock never reset for an agent posting 30 min apart).
+test('cache clock claude: a long prompted turn that works on its own starts the clock again from its output', { timeout: 90000 }, async (t) => {
+  const before = async (instance, id) => {
+    await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'long work' });
+    await until(async () => (await call(instance, '/chat/events?after=0&only=' + id)).events.some((e) => e.data?.toolCallId === 'lw-2'), 'long work going');
+    // The last turn end, the prompt and the first steps were half an hour ago; the turn goes on live.
+    const db = new DatabaseSync(path.join(instance.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+    try { db.prepare('UPDATE events SET at = at - 1800000 WHERE conversation = ?').run(id); } finally { db.close(); }
+  };
+  const { page, pane, errors } = await open(t, 'claude', { before });
+  const cache = pane.locator('.meters .cache'), clock = () => cache.evaluate((el) => el.lastChild.textContent);
+  await cache.waitFor({ timeout: 10000 });
+  await until(async () => /^(59|60) min$/.test(await clock()), 'the clock follows the running turn (it read ' + await clock().catch(() => '?') + ')', 20000);
+  assert.equal(await cache.getAttribute('data-s'), 'warm');
+  for (const theme of ['event-horizon-prime', 'daylight']) { // the default dark theme and the light one
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    await shot(pane.locator('.meters'), 'cache-turn-' + theme);
+  }
+  assert.deepEqual(errors, []);
+  console.log('PASS cache clock claude: ' + await clock() + ' during a prompted turn whose start is 30 min back');
 });
 
 // A background task's report wakes the agent with no prompt; that work reads the cache too, so the clock starts again.

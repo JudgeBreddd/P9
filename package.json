@@ -1,6 +1,6 @@
 {
   "name": "p9",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "license": "PolyForm-Shield-1.0.0",
   "bin": {
@@ -21,7 +21,7 @@
     "scan": "node scripts/scan.mjs",
     "start": "node apps/server/main.mjs",
     "teh": "node scripts/teh.mjs",
-    "build": "astro build --root apps/web && vite build --config apps/dev/vite.config.mjs",
+    "build": "astro build --root apps/web && node scripts/frame-runtimes.mjs && vite build --config apps/dev/vite.config.mjs",
     "check": "astro check --root apps/web",
     "desktop": "env -u ELECTRON_RUN_AS_NODE electron apps/desktop/start.cjs",
     "gate:4": "node scripts/with-tmp.mjs node scripts/gate.mjs --phase4",
@@ -46,6 +46,7 @@
     "@agentclientprotocol/codex-acp": "2.1.1",
     "@agentclientprotocol/sdk": "1.8.0",
     "@codingame/monaco-vscode-explorer-service-override": "33.0.9",
+    "@codingame/monaco-vscode-markdown-basics-default-extension": "33.0.9",
     "@hono/node-server": "2.1.4",
     "@simplewebauthn/server": "14.0.3",
     "electron-updater": "6.8.9",
@@ -102,6 +103,7 @@
     "codemirror": "6.0.2",
     "electron": "44.7.2",
     "marked": "14.0.0",
+    "mermaid": "12.2.0",
     "qrcode-generator": "2.0.4",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -130,6 +132,9 @@
       "scripts/teh.mjs",
       "apps/server/process-tree.mjs",
       "apps/server/windows.mjs",
+      "apps/server/deps.mjs",
+      "apps/server/update.mjs",
+      "apps/server/pieces.mjs",
       "package.json",
       "!node_modules/@openai/**",
       "!node_modules/@anthropic-ai/**",
@@ -194,6 +199,14 @@
         {
           "from": ".build/node-linux/bin/node",
           "to": "daemon/node"
+        },
+        {
+          "from": ".build/editor/reh.tar.gz",
+          "to": "editor/reh.tar.gz"
+        },
+        {
+          "from": ".build/tmux/tmux",
+          "to": "tmux/tmux"
         }
       ]
     },

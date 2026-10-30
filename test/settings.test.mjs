@@ -2,13 +2,13 @@
 // file alone) plus each setting surviving an app restart; the agent lock goes through the real daemon.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { deflateSync, crc32 } from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, http, authenticated, root, versionSeen } from './helpers.mjs';
 import { REPO } from '../apps/server/anymouse.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
@@ -47,7 +47,7 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // Case 4: the handler itself, called as the shell's own frame, refuses every other shape and writes nothing.
   const refused = await app.evaluate(async ({ ipcMain, BrowserWindow }, PETS) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, handler = ipcMain._invokeHandlers.get('p9:settings');
-    const event = { sender, senderFrame: sender.mainFrame }, good = { zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS, name: 'Sam', startLast: false };
+    const event = { sender, senderFrame: sender.mainFrame }, good = { zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS, name: 'Sam', startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } };
     const chat = (change) => ({ ...good, pet: { ...good.pet, chat: { ...good.pet.chat, ...change } } });
     const bad = [{ ...good, extra: 1 }, { ...good, zoom: '2' }, { ...good, zoom: 4 }, { ...good, zoom: 0.1 }, { ...good, zoom: NaN },
       { ...good, closeOnSend: 1 }, { ...good, focus: { chat: true, dev: true } }, { ...good, focus: { chat: false, dev: false, mission: false } },
@@ -55,13 +55,16 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
       { ...good, pet: null }, { ...good, pet: 'good-pet' }, { ...good, pet: { claude: null, codex: null, system: null } }, { ...good, pet: { ...good.pet, x: good.pet.chat } },
       { ...good, pet: { chat: good.pet.chat, dev: good.pet.dev } }, chat({ codex: '../x' }), chat({ x: null }), chat({ size: 23 }), chat({ size: 129 }), chat({ size: 48.5 }),
       chat({ on: 1 }), chat({ top: [0.5] }), chat({ top: [2, 0] }), chat({ pane: 'x' }), chat({ pane: [0.1, NaN] }), chat({ top: { 0: 0.1, 1: 0.1, length: 2 } }),
-      { ...good, name: 'x'.repeat(41) }, { ...good, name: 'Sam\u0007' }, { ...good, name: 'Sam\u200b' }, { ...good, name: 7 }, { ...good, startLast: 'yes' }, (({ name, ...rest }) => rest)(good)];
+      { ...good, name: 'x'.repeat(41) }, { ...good, name: 'Sam\u0007' }, { ...good, name: 'Sam\u200b' }, { ...good, name: 7 }, { ...good, startLast: 'yes' }, (({ name, ...rest }) => rest)(good),
+      // Send files' limits (item 23): whole numbers from 1 to each ceiling, all three.
+      { ...good, xfer: { ...good.xfer, fileMiB: 0 } }, { ...good, xfer: { ...good.xfer, fileMiB: 65537 } }, { ...good, xfer: { ...good.xfer, files: 1.5 } },
+      { ...good, xfer: { fileMiB: 512, files: 20000 } }, (({ xfer, ...rest }) => rest)(good)];
     const out = [];
     for (const value of bad) out.push(await handler(event, value).then(() => 'accepted', (error) => error.message));
     out.push(await handler(event, good, good).then(() => 'accepted', (error) => error.message));
     return out;
   }, PETS);
-  assert.deepEqual(refused, [...Array(35).fill('settings-refused'), 'ipc-sender-refused']);
+  assert.deepEqual(refused, [...Array(40).fill('settings-refused'), 'ipc-sender-refused']);
   await assert.rejects(readFile(file), { code: 'ENOENT' });
 
   // Close on send: a chat opened from its card closes once the message is sent.
@@ -74,15 +77,15 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   assert.equal(await page.locator('#setLock').isChecked(), false);
   await page.click('#zIn'); await page.click('#zIn');
   await page.locator('#zVal', { hasText: '120%' }).waitFor();
-  await page.check('#setCloseSend');
-  await page.uncheck('#setF-mission');
-  await page.check('#setLock');
+  await page.click('[data-set-page="Chat Focus"]'); await page.check('#setCloseSend');
+  await page.click('[data-set-page="Mission Control"]'); await page.uncheck('#setF-mission');
+  await page.click('[data-set-page="General"]'); await page.check('#setLock');
   await page.locator('#setLock:checked').waitFor();
   assert.deepEqual(await call(instance, '/agent-lock'), { on: true });
   // The last focus mode left on cannot be turned off.
-  await page.uncheck('#setF-dev');
+  await page.click('[data-set-page="Dev Focus"]'); await page.uncheck('#setF-dev');
   assert.equal(await page.locator('#setF-chat').isDisabled(), true);
-  await page.check('#setF-dev');
+  await page.check('#setF-dev'); await page.click('[data-set-page="General"]');
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'settings.png') }); }
   await page.click('#setDocs');
   let url = '';
@@ -127,15 +130,15 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   // The name is the account's (main.mjs accountName), so the test reads it back rather than guessing it.
   const kept = JSON.parse(await readFile(file, 'utf8'));
   assert.match(kept.name, /^[^\p{Cc}\p{Cf}]{0,40}$/u);
-  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false });
+  assert.deepEqual(kept, { zoom: 1.2, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet: DEFAULT_PETS, name: kept.name, startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } });
   assert.deepEqual(await page.evaluate(() => window.p9.listPets().then((l) => l.pets)), [], 'a removed Skipper is not put back');
   // Phase 18 review: saves in flight together (Ctrl = held down) all succeed, and the file ends on the last one.
   const saves = await page.evaluate((pet) => Promise.allSettled(Array.from({ length: 20 }, (_, i) =>
-    window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false }))), PETS);
+    window.p9.setSettings({ zoom: 1 + (i + 1) / 100, closeOnSend: true, focus: { chat: true, dev: true, mission: false }, pet, name: '', startLast: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 } }))), PETS);
   assert.deepEqual(saves.map((s) => s.status), Array(20).fill('fulfilled'));
   assert.equal(JSON.parse(await readFile(file, 'utf8')).zoom, 1.2);
   assert.equal(await zoomOf(app), 1.2);
-  console.log('PASS settings: 36 bad IPC shapes refused, nothing written; zoom 1.2, close on send, Mission off, agent lock via the daemon, docs and Anymouse; all kept after a restart; 20 saves at once all kept in order');
+  console.log('PASS settings: 41 bad IPC shapes refused, nothing written; zoom 1.2, close on send, Mission off, agent lock via the daemon, docs and Anymouse; all kept after a restart; 20 saves at once all kept in order');
 });
 
 // A petdex-shaped sheet: 8 x 9 frames of 192 x 208, with `filled[row]` opaque frames in each row.
@@ -148,7 +151,15 @@ function sheet(filled) {
 }
 
 test('Pets: crafted folders refused; each waiting agent and each chat shows its own pet, per focus, dragged spots kept; add and remove (threat model row 16)', { timeout: 240000 }, async (t) => {
-  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  // A Mission with files (an existing install): a fresh one opens at its onboarding card with no panels (fresh-install finding 2).
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    const file = path.join(directory, '.config', 'p9', 'settings.json');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ registry: 'mission/registry.json' }));
+    await mkdir(path.join(workspace, 'mission'), { recursive: true });
+    await writeFile(path.join(workspace, 'mission', 'registry.json'), JSON.stringify({ scripts: [], apps: [{ id: 'editor', title: 'Editor', cmd: ['true'] }], pages: [] }));
+    return { args: ['--acp-override', fake] };
+  });
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-pets-')), profile = path.join(home, 'profile'), pets = path.join(profile, 'pets'), src = path.join(home, 'src');
   const pet = async (dir, name, meta, files = {}) => {
     await mkdir(path.join(dir, name), { recursive: true });
@@ -175,6 +186,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await pet(src, 'link-sheet', {}); await symlink(path.join(src, 'new-pet', 'spritesheet.png'), path.join(src, 'link-sheet', 'spritesheet.png'));
   await pet(src, 'no-sheet', {});
   await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: 'dotdot' })); // from before pets per role: one refused pet
+  await versionSeen(profile);
 
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   const launch = async () => {
@@ -196,7 +208,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.equal(seen['good-pet'], process.env.P9_REAL_PET ? 'data:image/webp;base64' : 'data:image/png;base64,');
   for (const name of ['dotdot', 'slash', 'link-image', 'link-folder', 'text', 'huge', 'Bad_Name', '../good-pet']) assert.equal(seen[name], 'pet-refused', name);
 
-  const ev = process.env.P9_EVIDENCE, shot = (name) => ev && page.screenshot({ path: path.join(ev, name) });
+  const ev = process.env.P9_EVIDENCE, shot = async (name) => { if (ev) await page.screenshot({ path: path.join(ev, name) }); else if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name.replace(/\.png$/, '') + ' ' + (await page.screenshot({ type: 'png' })).toString('base64')); } };
   const settingsNow = () => page.evaluate(() => window.p9.getSettings());
   const topPets = () => page.evaluate(() => [...document.querySelectorAll('#indPets canvas')].map((c) => c.dataset.petName + ':' + c.dataset.rows).sort().join());
   const drawn = (sel) => page.waitForFunction((sel) => { const c = [...document.querySelectorAll(sel)]; return c.length && c.every((cv) => cv.getContext('2d').getImageData(96, 104, 1, 1).data[3] > 0); }, sel);
@@ -280,8 +292,9 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // Each chat keeps its own spot, and a chat window's spot is its own (Builder, 2026-10-19).
   const petSpots = () => page.evaluate(() => JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'));
   assert.deepEqual(Object.keys(await petSpots()), ['mdlBody:' + codex], 'only the dragged chat window kept a spot');
+  // D2: the spot is kept from the message box, in px, so it moves with the box.
   const dragged = (await petSpots())['mdlBody:' + codex];
-  assert.ok(Math.abs(dragged[0] - 0.25) < 0.02 && Math.abs(dragged[1] - 1 / 3) < 0.02, String(dragged));
+  assert.ok(Array.isArray(dragged.box) && dragged.box.every(Number.isInteger) && dragged.box[1] < 0, JSON.stringify(dragged));
   // The top pets do not drag (they keep their place in the top bar).
   const top = await page.locator('#indPets canvas').first().boundingBox();
   await page.mouse.move(top.x + top.width / 2, top.y + top.height / 2); await page.mouse.down();
@@ -289,16 +302,33 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.deepEqual(await page.locator('#indPets canvas').first().boundingBox(), top);
   assert.equal((await settingsNow()).pet.chat.top, null);
 
-  // An agent's reply shows as Markdown, and markup in it stays text: no script, image, frame or link (threat model row 18).
+  // An agent's reply shows as Markdown, and markup in it stays text: no script, image or frame (threat model row 18). Only
+  // plain http(s) addresses become links (v0.1.6 P9), opening outside P9, with the real host after text that is not it.
   const md = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
-  const hostile = '\n# Plan\n\n- **one**\n- two\n\n```js\nlet a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2"> <iframe src="https://example.com"></iframe>\n\n[click](javascript:window.pwned=3) <https://example.com> ![x](https://example.com/x.png)';
+  const hostile = '\n# Plan\n\n- **one**\n- two\n\n```js\nlet a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2"> <iframe src="https://example.com"></iframe>\n\n[click](javascript:window.pwned=3) <https://example.com> ![x](https://example.com/x.png)'
+    + ' [github.com](https://docs.example.test/p) [d](data:text/html,hi) [f](file:///etc/passwd) [r](/chat) [u](https://u:p@a.example.test/)';
   await call(instance, `/chat/${md}/prompt`, 'POST', { text: hostile });
   await page.locator(`#tabs .tab[data-id="${md}"]`).click();
   const reply = page.locator(`#chats .pane[data-id="${md}"] .msg.agent`).last();
   await reply.locator('table').waitFor({ timeout: 15000 });
+  assert.deepEqual(await reply.evaluate((m) => [...m.querySelectorAll('a')].map((a) => [a.getAttribute('href'), a.target, a.rel, a.textContent, a.nextElementSibling?.matches('.link-host') ? a.nextElementSibling.textContent : null])),
+    [['https://example.com/', '_blank', 'noopener noreferrer', 'https://example.com', null], ['https://docs.example.test/p', '_blank', 'noopener noreferrer', 'github.com', '(docs.example.test)']]);
+  // A click opens it through main, in the browser and not in a P9 window; main checks the address again and refuses
+  // anything else the page could send.
+  await app.evaluate(({ shell }) => { globalThis.linkSeen = []; shell.openExternal = async (url) => { globalThis.linkSeen.push(url); }; });
+  const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+  await reply.locator('a[href="https://docs.example.test/p"]').click();
+  for (let i = 0; i < 50 && !(await app.evaluate(() => globalThis.linkSeen.length)); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), ['https://docs.example.test/p']);
+  assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), windows);
+  assert.deepEqual(await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
+    const sender = BrowserWindow.getAllWindows()[0].webContents, run = (...args) => ipcMain._invokeHandlers.get('p9:open-link')({ sender, senderFrame: sender.mainFrame }, ...args).then(() => 'accepted', (e) => e.message);
+    return [await run('javascript:alert(1)'), await run('https://u:p@a.test/'), await run('file:///etc/passwd'), await run(42), await run('https://a.test/', 'x'), await run('https://a.test/‮')];
+  }), Array(6).fill('ipc-sender-refused'));
+  assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), ['https://docs.example.test/p']);
   assert.deepEqual(await reply.evaluate((m) => ({
     shape: ['h1', 'ul li strong', 'pre code', 'table td'].map((q) => !!m.querySelector(q)),
-    banned: m.querySelectorAll('script, img, iframe, a, object, embed, svg').length,
+    banned: m.querySelectorAll('script, img, iframe, object, embed, svg').length,
     on: [...m.querySelectorAll('*')].some((el) => [...el.attributes].some((a) => /^on/i.test(a.name))),
     shown: ['<script>', 'onerror', '<iframe'].map((t) => m.textContent.includes(t)), pwned: window.pwned,
   })), { shape: [true, true, true, true], banned: 0, on: false, shown: [true, true, true], pwned: undefined });
@@ -370,6 +400,13 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     }
     await page.click('#mdlX'); await page.locator('#mdl').waitFor({ state: 'hidden' });
   }
+  // History names a chat the way its tab does (the agent's title), not by its first message (P9 0.1.6).
+  await call(instance, `/chat/${md}/prompt`, 'POST', { text: 'title Named by the agent' });
+  await page.locator(`#tabs .tab[data-id="${md}"]`, { hasText: 'Named by the agent' }).waitFor({ timeout: 15000 });
+  // Read before the restart: a restarted chat is a stub with no messages, which hides the difference.
+  await page.click('#histBtn');
+  assert.match(await page.locator('#histPop .item', { has: page.locator(`[data-open="${md}"]`) }).innerText(), /^Named by the agent/, 'History row = tab title, not the first message');
+  await page.keyboard.press('Escape');
   // Its x stops it (Builder, 2026-10-18: "same as vs code"), so its robot head goes too.
   await page.locator(`#tabs .tab[data-id="${md}"] .close`).click();
   await page.locator(`#tabs .tab[data-id="${md}"]`).waitFor({ state: 'detached' });
@@ -529,7 +566,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   await page.click('#setClose');
   await page.click('#setBtn'); await page.click('[data-pet-mode="chat"]'); await page.selectOption('#setPet-system', 'other-pet'); await page.click('#setClose');
   await page.click('[data-focus-btn="mission"]');
-  // Mission #3 (Builder, 2026-10-18): with the sample's 12 apps, the Apps list scrolls and Usage keeps its full height.
+  // Mission #3 (Builder, 2026-10-18): Usage keeps its full height beside the Apps list.
   assert.ok(await page.locator('#fMission [data-panel="musage"] .pscroll').evaluate((p) => p.scrollHeight <= p.clientHeight + 1), 'Usage squeezed by Apps');
   const walkStart = async () => { await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Walkthrough' }).click(); };
   const walkNow = () => page.evaluate((steps) => {
@@ -557,13 +594,13 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
       await shot('walkthrough-9-empty.png');
     }
     if (now.focus === 'dev') {
-      const views = () => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0], z = w.webContents.getZoomFactor(); return w.contentView.children.filter((v) => v.getVisible()).map((v) => { const b = v.getBounds(); return [b.x / z, b.y / z, (b.x + b.width) / z, (b.y + b.height) / z]; }); });
+      const views = () => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0], z = w.webContents.getZoomFactor(); return w.contentView.children.filter((v) => v.getVisible() && !v.webContents.getURL().startsWith('p9://cards')).map((v) => { const b = v.getBounds(); return [b.x / z, b.y / z, (b.x + b.width) / z, (b.y + b.height) / z]; }); });
       const over = (v) => v[0] < now.rect[2] && v[2] > now.rect[0] && v[1] < now.rect[3] && v[3] > now.rect[1];
       let shownViews = await views();
       for (let i = 0; i < 30 && (!shownViews.length || shownViews.some(over)); i++) { await page.waitForTimeout(100); shownViews = await views(); }
       assert.ok(shownViews.length && !shownViews.some(over), 'step ' + n + ': the Dev editor covers the card ' + JSON.stringify([now.rect, shownViews]));
     }
-    if ([1, 2, 7, 9, 10, 11, 13].includes(n)) await shot(`walkthrough-${n}.png`);
+    if ([1, 2, 7, 9, 10, 11, 13, 14, 16].includes(n)) await shot(`walkthrough-${n}.png`);
     if (n === 3) { await page.click('#walk [data-walk="1"]'); assert.equal((await walkNow()).n, 2, 'Back'); await page.click('#walk [data-walk="2"]'); }
     await page.click(`#walk [data-walk="${n}"]`);
   }
@@ -575,7 +612,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   console.log('PASS pets: 8 crafted folders refused, markup name kept as text, old file read into every focus, spinner for an agent without a pet, each active agent its own 52 px pet in the top bar (waving while it waits, running while it works, not draggable), each chat its own agent\'s pet, its dragged spot kept across a restart, a hostile Markdown reply with no script/img/iframe/a, meters in a live chat, stopped and closed chats off the tabs after a restart and back from History, Dev off by default and Chat off shows the spinner, Add copied 1 of 5 folders (2 files only), Remove asks, clears the pet and refuses links and bad names');
 });
 
-test('Theme per focus mode: Chat, Dev and Mission each keep their own look, also after a restart', { timeout: 120000 }, async (t) => {
+test('One look for every focus mode: a pick in Chat or Mission sets Dev Focus too; old per-focus looks still load', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t);
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-looks-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -590,27 +627,37 @@ test('Theme per focus mode: Chat, Dev and Mission each keep their own look, also
   const theme = (page) => page.evaluate(() => document.documentElement.dataset.theme);
   let { app, page } = await launch();
   const ids = await page.locator('[data-theme-pick]').evaluateAll((buttons) => buttons.map((b) => b.dataset.themePick));
-  const before = await theme(page), [chat, dev, mission] = ids.filter((id) => id !== before).slice(0, 3);
+  const before = await theme(page), [first, second, old] = ids.filter((id) => id !== before).slice(0, 3);
   const pick = async (key, id) => {
     await page.keyboard.press(key);
     await page.click('#themeBtn'); await page.click(`[data-theme-pick="${id}"]`); await page.keyboard.press('Escape');
     assert.equal(await theme(page), id);
   };
-  await pick('Control+1', chat); await pick('Control+2', dev); await pick('Control+3', mission);
-  const tour = async (label) => {
-    for (const [key, id] of [['Control+1', chat], ['Control+2', dev], ['Control+3', mission], ['Control+1', chat]]) {
+  const tour = async (id, label) => {
+    for (const key of ['Control+1', 'Control+2', 'Control+3', 'Control+1']) {
       await page.keyboard.press(key);
       assert.equal(await theme(page), id, `${label} ${key}`);
       assert.equal(await page.locator(`[data-theme-pick="${id}"]`).getAttribute('aria-pressed'), 'true', `${label} picker ${key}`);
-      if (process.env.P9_EVIDENCE && label === 'after restart') await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, `look-${key.slice(-1)}.png`) });
     }
   };
-  await tour('before restart');
+  await pick('Control+1', first);
+  await tour(first, 'picked in Chat');
+  await pick('Control+3', second);
+  await tour(second, 'picked in Mission');
+  // Dev Focus's editor is drawn above the page, so the picker is off there; it shows the look picked elsewhere.
+  await page.keyboard.press('Control+2');
+  assert.equal(await page.locator('#themeBtn').isDisabled(), true, 'no theme picker in Dev Focus');
+  assert.equal(await theme(page), second);
+  const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString('base64'));
+  if (process.env.CI !== 'true') console.log('P9_SHOT one-look-dev ' + shot);
+  // A profile from an older version holds a different look per focus: it still loads, with the one look everywhere.
+  await page.evaluate((id) => localStorage.setItem('p9-focus-looks', JSON.stringify({ dev: { theme: id }, mission: { theme: id } })), old);
   await app.close();
   ({ app, page } = await launch());
-  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, chat);
-  await tour('after restart');
-  console.log(`PASS looks: Chat ${chat}, Dev ${dev}, Mission ${mission}, each restored on switch and after a restart`);
+  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, second);
+  await tour(second, 'after restart with old per-focus looks');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-focus-looks')), null, 'the old per-focus looks are dropped');
+  console.log(`PASS looks: ${first} then ${second} in every focus, Dev Focus included; an old per-focus profile loads with the one look`);
 });
 
 test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offered, each repaints the page, its fonts load from P9 itself', { timeout: 120000 }, async (t) => {
@@ -721,31 +768,50 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   const credentials = path.join(instance.directory, '.claude', '.credentials.json'), marker = 'P9-CREDENTIAL-MARKER-' + Date.now();
   const setup = () => call(instance, '/setup');
   let s = await setup();
-  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'codex', 'conflict', 'creates', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
+  assert.deepEqual(Object.keys(s).sort(), ['agentsFile', 'claude', 'claudeCli', 'codex', 'codexCli', 'conflict', 'creates', 'dependencies', 'found', 'proposed', 'registryFile', 'settings', 'settingsError', 'settingsFile',
     'settingsInvalid', 'settingsPresent', 'tmux', 'workspace', 'workspaceEmpty', 'writable']);
   assert.deepEqual([s.settings, s.settingsPresent, s.claude, s.codex, s.writable], [false, false, false, false, true]);
   // Off Linux there is no Terminal screen and tmux counts as done; tmux missing here leaves that one check open.
-  const total = s.tmux === null ? 6 : 7, base = s.tmux === false ? 1 : 2, settingsFile = s.settingsFile;
+  // Item 15: step 3 asks Claude, Codex or both; the card opens there unless a CLI is on PATH already.
+  const total = s.tmux === null ? 7 : 8, first = s.claudeCli || s.codexCli ? [4, 'Sign in to an agent'] : [3, 'Claude, Codex or both?'], rows = s.tmux === null ? 2 : 3, settingsFile = s.settingsFile;
 
   let { app, page } = await launch();
   const card = () => page.locator('#cards [data-key="welcome"]'), body = () => page.locator('#welBody').innerText();
   const at = (n, title) => page.waitForFunction(([n, title, total]) => document.querySelector('#welDlg').open
     && document.querySelector('#welStep').textContent === 'Step ' + n + ' of ' + total && document.querySelector('#welT').textContent === title, [n, title, total]);
   const next = () => page.click('#welFoot [data-act="next"]');
+  // The pick step: Claude unless something is picked already, Install, then the same button is Next.
+  const pickThrough = async () => {
+    await at(3, 'Claude, Codex or both?');
+    if (await page.locator('#welFoot [data-act="install"]').isDisabled()) await page.click('#welBody [data-act="choose:claude"]');
+    if (await page.locator('#welFoot [data-act="install"]').innerText() === 'Install') {
+      await page.click('#welFoot [data-act="install"]'); await page.locator('#welBody [data-installed]').waitFor({ timeout: 10000 });
+    }
+    await page.click('#welFoot [data-act="install"]'); await at(4, 'Sign in to an agent');
+  };
   await card().waitFor({ timeout: 10000 });
-  assert.match(await card().innerText(), new RegExp('Set up · ' + base + ' of 4 done[\\s\\S]*agent sign-in · Mission Control files'));
+  assert.match(await card().innerText(), new RegExp('Set up · ' + (rows - 1 - (s.tmux === false ? 1 : 0)) + ' of ' + rows + ' done[\\s\\S]*agent sign-in$'));
   await shot('setup-card.png');
   // The card opens at the first step not done; Back walks to the start.
   await card().locator('.open').click();
-  await at(3, 'Sign in to an agent');
-  assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits');
+  await at(...first);
+  if (first[0] === 4) { assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits'); await page.click('[data-act="back"]'); }
+  await at(3, 'Claude, Codex or both?');
   await page.click('[data-act="back"]'); await at(2, 'Your workspace');
   assert.equal(await page.locator('#welWs').textContent(), s.workspace);
   assert.match(await body(), /P9 can write here/);
   await shot('wizard-1-workspace.png');
+  // Attempt 2, item 8: card 2 says what the folder is for, and nothing about starter files.
+  assert.match(await body(), /This is your main working folder while you use P9\. You can change it any time in Settings\. If you have no workspace or project folder you prefer, P9 makes one for you\. Changing it restarts P9's background service/);
+  assert.doesNotMatch(await body(), /starter/i);
+  const wizShot = async (name) => { await page.waitForTimeout(400); const png = await page.locator('#welDlg').screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  const wizLight = async (name) => { const was = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await wizShot(name); await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, was); };
+  await wizShot('wizard-card2-dark'); await wizLight('wizard-card2-light');
   await page.click('[data-act="back"]'); await at(1, 'Welcome to Event Horizon');
   await shot('wizard-0-welcome.png');
-  await next(); await at(2, 'Your workspace'); await next(); await at(3, 'Sign in to an agent');
+  await next(); await at(2, 'Your workspace'); await next(); await pickThrough();
+  assert.ok(await page.locator('#welFoot [data-act="next"]').isDisabled(), 'no agent signed in: Next waits');
 
   // Sign-in: the fake CLI prints a claude.com URL and a paste prompt. The page learns only that a URL exists.
   await page.click('[data-act="start:claude"]');
@@ -772,46 +838,17 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.ok(await page.locator('#welFoot [data-act="next"]').isEnabled());
   await shot('wizard-2-agents.png');
 
-  await next(); await at(4, 'Mission Control');
-  assert.match(await body(), /Settings file[\s\S]*Not found[\s\S]*Starter files[\s\S]*Missing/);
-  // RH2: the first sentence names Mission Control; with none of the files yet, the step says what each is and opens the guide.
-  assert.match(await body(), /Mission Control's buttons, apps and pages come from files in your workspace\./);
-  assert.match(await page.locator('#welBody [data-setup-help]').innerText(), /None of these is here yet[\s\S]*Main project file[\s\S]*Buttons, apps and pages file[\s\S]*Folder of items waiting on you/);
-  await page.waitForTimeout(400);
-  // The path rows share one label column and one box column, as in Settings: every box at the same x and width.
-  const wizEdges = await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
-  assert.equal(wizEdges.length, 5);
-  assert.deepEqual(wizEdges, wizEdges.map(() => wizEdges[0]), 'aligned wizard boxes');
-  const rh2 =await page.locator('#welDlg').screenshot({ type: 'png' });
-  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT wizard-mission-empty ' + rh2.toString('base64'));
-  // The desktop passes scripts_root through to the daemon like the other four paths (it was refused as request-refused).
-  const checked = await page.evaluate(async (folder) => {
-    const r = await window.p9.chat('setup', { ...(await window.p9.chat('setup', {})).body.proposed, scripts_root: folder });
-    return [r.status, r.body?.pathsInvalid ?? false, r.body?.proposed?.scripts_root];
-  }, instance.workspace);
-  assert.deepEqual(checked, [200, false, instance.workspace], 'scripts_root checked');
-  await page.click('[data-act="docs"]');
-  await until(async () => (await readFile(opened, 'utf8')).includes('docs/guide.md#buttons-apps-and-pages'), 'the guide opened');
-  assert.equal(await page.locator('#welFile').textContent(), settingsFile);
-  // No settings in a folder with things in it: the paths P9 will use, editable, and exactly what Create adds.
-  assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)), ['AGENTS.md', 'mission/registry.json', 'needs-you', '', '']);
-  assert.equal(await page.locator('#welBody [data-creates]').textContent(), 'AGENTS.md, mission/registry.json, needs-you/AGENTS.md, ' + settingsFile);
-  await shot('wizard-3-mission.png');
-  await page.click('[data-act="starter"]');
-  await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 });
-  await page.locator('#welBody .ok', { hasText: '✓ There' }).waitFor({ timeout: 5000 });
-  assert.match(await body(), /✓ Loaded/);
-  s = await setup();
-  assert.deepEqual([s.settings, s.agentsFile, s.registryFile], [true, true, true]);
-  await shot('wizard-3-mission-done.png');
   await next();
   if (s.tmux !== null) {
-    await at(5, 'Terminal');
-    assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
+    // Item 15: something only an admin can install (the SSH client on a machine without it) turns this step into the admin screen.
+    const admin = s.dependencies.filter((x) => x.admin).map((x) => x.id);
+    await at(5, admin.length ? 'This needs your admin password' : 'Terminal');
+    if (admin.length) assert.deepEqual(await page.locator('#welBody [data-admin]').evaluateAll((all) => all.map((x) => x.dataset.admin)), admin);
+    else assert.match(await body(), s.tmux ? /✓ Found/ : /tmux is not installed/);
     await shot('wizard-4-terminal.png');
     await next();
   }
-  await at(total - 1, 'You');
+  await at(total - 2, 'You');
   await page.fill('#welName', 'Ada');
   await page.waitForTimeout(10500); // across one 10 s poll (BL5)
   assert.equal(await page.locator('#welName').inputValue(), 'Ada');
@@ -821,20 +858,84 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await page.click('#welPetdex');
   await until(async () => (await readFile(opened, 'utf8')).includes(PETDEX_URL), 'petdex opened');
   await shot('wizard-5-you.png');
-  await next(); await at(total, s.tmux === false ? 'Almost there' : 'You are set');
+  await next(); await at(total - 1, s.tmux === false ? 'Almost there' : 'You are set');
   await shot('wizard-6-done.png');
+  // Attempt 2, item 8: no Mission Control check (Mission has no starter files); Mission Control is the last step.
+  assert.doesNotMatch(await body(), /Mission/, 'no Mission Control row');
+  await next(); await at(total, 'Mission Control');
+  assert.equal(await page.locator('#welFoot [data-act="close"]').count(), 1, 'the last step: Close, not Skip');
+  // Fresh-install finding 1: Mission starts empty and is built there. Open Mission Control is the main button, nothing is required, and an
+  // older setup's files sit folded under "I already have Mission files", every path optional and empty (nothing found here).
+  assert.match(await body(), /Last, build Mission Control: your control room for scripts, live numbers, logs, notes and links\. It starts empty\. Open Mission Control takes you to its own wizard/);
+  assert.equal(await page.locator('#welFoot [data-act="mission-open"]').getAttribute('data-variant'), 'default', 'Open Mission Control is the main button');
+  await wizShot('wizard-last-mission-dark'); await wizLight('wizard-last-mission-light');
+  assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), false, 'folded away at first');
+  assert.equal(await page.locator('#welBody [data-act="starter"]').count(), 0, 'no button that makes files');
+  await page.waitForTimeout(400);
+  const step5 = async (name) => { const png = await page.locator('#welDlg').screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  await step5('wizard-mission-dark');
+  await page.click('#welBody [data-have] > summary');
+  assert.match(await page.locator('#welBody [data-have]').innerText(), /Main project folder \(optional\)[\s\S]*Buttons, apps and pages file \(optional\)[\s\S]*Folder of items waiting on you \(optional\)/);
+  assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['', '', ''], 'no starter names filled in');
+  assert.equal(await page.locator('#welBody [data-act="starter"]').count(), 0, 'Use these files waits for a path');
+  // The path rows share one label column and one box column, as in Settings: every box at the same x and width.
+  const wizEdges = await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
+  assert.equal(wizEdges.length, 5);
+  assert.deepEqual(wizEdges, wizEdges.map(() => wizEdges[0]), 'aligned wizard boxes');
+  await page.waitForTimeout(10500); // across one 10 s poll (BL5): the section stays open
+  assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), true, 'still open after a refresh');
+  await step5('wizard-mission-open-dark');
+  // Daylight as the theme picker sets it (the picker sits behind the wizard).
+  const theme = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+  await step5('wizard-mission-open-light');
+  await page.click('#welBody [data-have] > summary');
+  await step5('wizard-mission-light');
+  await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, theme);
+  // The desktop passes scripts_root through to the daemon like the other four paths (it was refused as request-refused).
+  const checked = await page.evaluate(async (folder) => {
+    const r = await window.p9.chat('setup', { ...(await window.p9.chat('setup', {})).body.proposed, scripts_root: folder });
+    return [r.status, r.body?.pathsInvalid ?? false, r.body?.proposed?.scripts_root];
+  }, instance.workspace);
+  assert.deepEqual(checked, [200, false, instance.workspace], 'scripts_root checked');
+  await page.click('#welBody [data-have] > summary');
+  await page.click('[data-act="docs"]');
+  await until(async () => (await readFile(opened, 'utf8')).includes('docs/guide.md#buttons-apps-and-pages'), 'the guide opened');
+  // Typing one path offers Use these files; clearing it takes the button away again.
+  await page.fill('#welBody [data-path="waiting"]', 'needs-you');
+  await page.locator('#welBody [data-path="waiting"]').dispatchEvent('change');
+  await page.locator('#welBody [data-act="starter"]', { hasText: 'Use these files' }).waitFor({ timeout: 10000 });
+  await page.fill('#welBody [data-path="waiting"]', '');
+  await page.locator('#welBody [data-path="waiting"]').dispatchEvent('change');
+  await page.locator('#welBody [data-act="starter"]').waitFor({ state: 'detached', timeout: 10000 });
+  for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
+  await page.click('[data-act="back"]'); await at(total - 1, s.tmux === false ? 'Almost there' : 'You are set');
   if (s.tmux !== false) await card().waitFor({ state: 'detached', timeout: 5000 }); // every check passes: no card anywhere
   await page.click('[data-act="tour"]');
   await page.locator('#walk').waitFor({ timeout: 5000 });
   assert.equal(await page.locator('#welDlg').evaluate((d) => d.open), false);
   await page.keyboard.press('Escape');
 
+  // Fresh-install finding 1: after the wizard, Mission opens at its onboarding card, with no error.
+  await page.evaluate(() => document.querySelector('#welDlg')?.close());
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.doesNotMatch(await page.locator('#fMission').innerText(), /is required|could not be read|not found|error/i);
+  // Fresh-install finding 2: P9 wrote its own settings file and no ICM files; none of the ICM widgets draw.
+  assert.equal(await readFile(settingsFile, 'utf8'), '{}\n');
+  for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
+  assert.equal(await page.locator('#fMission .needs').isVisible(), false, 'no Waiting on you');
+  assert.deepEqual(await page.locator('#fMission [data-panel]').evaluateAll((all) => all.filter((p) => p.checkVisibility()).map((p) => p.dataset.panel)), [], 'no ICM panels');
+  await page.waitForTimeout(400);
+  const mission = await page.screenshot({ type: 'png' });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT mission-after-next ' + mission.toString('base64'));
+  await page.click('#rChat').catch(() => {});
+
   // Signed out again. The x skips: the card leaves the stack for the Notification Center, and stays there after a restart.
   await rm(credentials);
   await app.close();
   ({ app, page } = await launch());
   await card().waitFor({ timeout: 10000 });
-  assert.match(await card().innerText(), new RegExp('Set up · ' + (base + 1) + ' of 4 done'));
+  assert.match(await card().innerText(), new RegExp('Set up · ' + (rows - 1 - (s.tmux === false ? 1 : 0)) + ' of ' + rows + ' done'));
   await card().locator('.x').click();
   assert.equal(await card().count(), 0);
   const centerRow = () => page.locator('#mdlBody [data-i]', { hasText: 'Set up ·' });
@@ -842,7 +943,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await centerRow().waitFor();
   await shot('setup-in-center.png');
   await centerRow().click();
-  await at(3, 'Sign in to an agent');
+  await at(4, 'Sign in to an agent');
   await page.keyboard.press('Escape');
   await app.close();
   ({ app, page } = await launch());
@@ -855,7 +956,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.equal(await page.locator('#setWel').innerText(), 'Setup');
   await shot('settings-setup.png');
   await page.click('#setWel');
-  await at(3, 'Sign in to an agent');
+  await at(4, 'Sign in to an agent');
   await writeFile(credentials, JSON.stringify({ token: marker }));
   await page.locator('#welBody .ok', { hasText: 'Signed in' }).waitFor({ timeout: 12000 }); // the 10 s poll (BL5)
   await page.keyboard.press('Escape');
@@ -869,8 +970,18 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   // "Turn Mission off for now" stays on the Mission Control screen.
   await page.click('#setBtn'); await page.click('#setWel');
   await at(s.tmux === false ? 5 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
-  if (s.tmux === false) { await page.click('[data-act="back"]'); } else { await next(); await next(); await next(); }
-  await at(4, 'Mission Control');
+  if (s.tmux !== false) { await next(); await next(); await pickThrough(); }
+  for (let i = 0; i < 4 && await page.locator('#welT').textContent() !== 'Mission Control'; i++) { await next(); await page.waitForTimeout(300); }
+  await at(total, 'Mission Control');
+  // Its button opens Mission's onboarding card.
+  await page.click('[data-act="mission-open"]');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#welDlg').evaluate((d) => d.open), false);
+  await page.click('#setBtn'); await page.click('#setWel');
+  await at(s.tmux === false ? 5 : 1, s.tmux === false ? 'Terminal' : 'Welcome to Event Horizon');
+  if (s.tmux !== false) { await next(); await next(); await pickThrough(); }
+  for (let i = 0; i < 4 && await page.locator('#welT').textContent() !== 'Mission Control'; i++) { await next(); await page.waitForTimeout(300); }
+  await at(total, 'Mission Control');
   await page.click('[data-act="mission-off"]');
   await page.waitForFunction(() => document.querySelector('[data-focus-btn="mission"]').hidden && !document.querySelector('#welDlg').open);
   console.log('PASS setup wizard UI: card count, resume at the first step not done, sign-in code and open, ended shows Retry, starter files, name and petdex, tour, skip to the Notification Center across a restart, gone when done, Mission off');
@@ -975,7 +1086,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   assert.deepEqual([await sort.inputValue(), ...await needs.allInnerTexts()], ['updated', 'Old question', 'Made by the chat'], 'newest first by default');
   await sort.selectOption('project');
   assert.deepEqual(await needs.allInnerTexts(), ['Made by the chat', 'Old question'], 'by project: new-question.md before old-question.md');
-  if (process.env.P9_EVIDENCE) { await page.waitForTimeout(400); await page.locator('#fMission .needs').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'tyler-sort-project.png') }); }
+  if (process.env.P9_EVIDENCE) { await page.waitForTimeout(400); await page.locator('#fMission .needs').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'sort-project.png') }); }
   await page.reload(); await page.click('#rMission');
   await page.waitForFunction(() => document.querySelector('#fMission .needs [data-list] li .txt')?.textContent === 'Made by the chat', null, { timeout: 10000 });
   assert.equal(await sort.inputValue(), 'project', 'the choice survives a reload');
@@ -1199,7 +1310,8 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await app.close();
   ({ app, page } = await launch()); dlg = page.locator('#looseDlg');
   codex = await chat('codex');
-  assert.equal(await mode(codex).inputValue(), 'Full access', 'a new chat starts in the last mode picked for its agent');
+  // Review #2: "Turn on" was for that chat; a new one does not start in Full access without "don't show again".
+  assert.equal(await mode(codex).inputValue(), 'Auto review', 'a loosened last pick does not carry to a new chat after a plain Turn on');
   claude = await chat('claude');
   await mode(claude).selectOption('Manual'); await mode(claude).selectOption('Bypass permissions');
   await said(claude, 'mode', 'mode:bypassPermissions');
@@ -1207,7 +1319,122 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   codex = await chat('codex'); await mode(codex).selectOption('Read-only'); await mode(codex).selectOption('Full access');
   await dlg.waitFor(); await dlg.getByRole('button', { name: 'Cancel' }).click();
   await settled(codex, 'Read-only', 'Full access still warns: its own don\'t show again was never picked');
-  console.log('PASS loosened modes: Codex starts in Auto review; Full access warns in red, Cancel and Escape keep Auto review, Turn on reaches the agent; Claude bypass with don\'t show again skips the warning after a restart; Full access still warns');
+  console.log('PASS loosened modes: Codex starts in Auto review; Full access warns in red, Cancel and Escape keep Auto review, Turn on reaches the agent but does not carry to the next new chat; Claude bypass with don\'t show again skips the warning after a restart; Full access still warns');
+});
+
+test('D2: Settings > New chats start in sets each agent\'s starting mode; the loosened ones warn first; a chat\'s own pick leaves it (threat model row 25a)', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-d2-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const chat = async (provider) => {
+    const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
+    await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+    const pane = page.locator(`#chats .pane[data-id="${id}"]`);
+    await pane.locator('[data-mode]').waitFor();
+    return pane.locator('[data-mode]');
+  };
+  const pick = page.locator('[data-default-mode="codex"]'), dlg = page.locator('#looseDlg');
+  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
+  const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
+  const kept = () => page.evaluate(() => localStorage.getItem('p9-mode-default:codex'));
+  await settings();
+  assert.equal(await pick.inputValue(), '', 'a fresh install follows the last mode picked');
+  assert.deepEqual(await pick.locator('option').allInnerTexts(), ['Last mode picked', 'Read-only', 'Workspace access', 'Auto review', 'Full access']);
+  // Full access warns in red over Settings; Cancel puts "Last mode picked" back and keeps nothing.
+  await pick.selectOption('Full access');
+  await dlg.waitFor();
+  assert.match(await dlg.innerText(), /Turn on Full access for Codex\?/);
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
+  await dlg.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => document.querySelector('[data-default-mode="codex"]').value === '', null, { timeout: 3000 });
+  assert.equal(await kept(), null);
+  await closeSettings();
+  assert.equal(await (await chat('codex')).inputValue(), 'Auto review', 'Cancel: a new chat still starts in Auto review');
+  // Turn on: every new Codex chat starts in Full access, and a chat's own pick does not change that.
+  await settings();
+  await pick.selectOption('Full access');
+  await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
+  await page.waitForFunction(() => localStorage.getItem('p9-mode-default:codex') === 'Full access', null, { timeout: 3000 });
+  await closeSettings();
+  const first = await chat('codex');
+  assert.equal(await first.inputValue(), 'Full access');
+  await first.selectOption('Read-only');
+  await page.waitForFunction(() => localStorage.getItem('p9-mode:codex') === 'Read-only', null, { timeout: 3000 });
+  assert.equal(await (await chat('codex')).inputValue(), 'Full access', 'a chat\'s own pick left the default alone');
+  assert.equal(await (await chat('claude')).inputValue(), 'Auto', 'Claude has its own default');
+  // Back to "Last mode picked": the last pick (Read-only) wins again.
+  await settings();
+  await pick.selectOption('');
+  assert.equal(await kept(), null);
+  await closeSettings();
+  assert.equal(await (await chat('codex')).inputValue(), 'Read-only');
+});
+
+test('Security settings: one switch per restriction; Unrestricted mode asks once through File protection, turns them all off, new chats start loosened; off puts the defaults back (threat model row 66)', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-sec-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  // main's native warning, answered by the test (file-protection.test.mjs does the same).
+  const answers = (list) => app.evaluate(({ dialog }, list) => {
+    globalThis.asked = [];
+    dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.title); return { response: list.shift() ?? 0 }; };
+  }, list);
+  const asked = () => app.evaluate(() => globalThis.asked);
+  const boxes = () => page.$$eval('#setSecurity input[type=checkbox]', (all) => Object.fromEntries(all.map((b) => [b.id, b.checked])));
+  const settled = (want) => page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#setSecurity input[type=checkbox]')].map((b) => b.checked)) === want, JSON.stringify(want), { timeout: 5000 });
+  const daemonSide = async () => [(await call(instance, '/agent-lock')).on, (await call(instance, '/file-protection')).on];
+  const local = () => page.evaluate(() => ['p9-mode-ok:Full access', 'p9-mode-ok:Bypass permissions', 'p9-mode-default:codex', 'p9-mode-default:claude'].map((k) => localStorage.getItem(k)));
+  await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree').waitFor();
+  assert.match(await page.locator('#setSecurity legend').first().innerText(), /^Security settings/);
+  assert.deepEqual(await page.$$eval('#setSecurity strong', (s) => s.map((x) => x.textContent)), ['Agent lock', 'File protection', 'Warn before Full access and Bypass permissions', 'Unrestricted mode']);
+  assert.deepEqual(await boxes(), { setLock: false, setProtect: true, setWarn: true, setFree: false }, 'the defaults are unchanged');
+  // The warnings switch: off sets "don't show again" for both loosened modes on this computer, on clears it.
+  await page.click('#setWarn'); await settled([false, true, false, false]);
+  assert.deepEqual(await local(), ['1', '1', null, null]);
+  await page.click('#setWarn'); await settled([false, true, true, false]);
+  assert.deepEqual(await local(), [null, null, null, null]);
+  // Unrestricted mode with the lock on: "Keep protection on" changes nothing at all.
+  await page.click('#setLock'); await settled([true, true, true, false]);
+  await answers([0]);
+  await page.click('#setFree'); await settled([true, true, true, false]);
+  assert.deepEqual([await asked(), await daemonSide(), await local()], [['Turn off file protection?'], [true, true], [null, null, null, null]]);
+  // "Turn off protection": every restriction off, and new chats start in Full access and Bypass permissions.
+  await answers([1]);
+  await page.click('#setFree'); await settled([false, false, false, true]);
+  assert.deepEqual([(await asked()).length, await daemonSide(), await local()], [1, [false, false], ['1', '1', 'Full access', 'Bypass permissions']]);
+  assert.equal(await page.locator('[data-default-mode="codex"]').inputValue(), 'Full access', 'New chats start in shows it');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-security-unrestricted ' + (await page.locator('#setDlg').screenshot()).toString('base64'));
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  const id = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
+  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  const mode = page.locator(`#chats .pane[data-id="${id}"] [data-mode]`);
+  await mode.waitFor();
+  assert.equal(await mode.inputValue(), 'Full access');
+  assert.equal(await page.locator('#looseDlg[open]').count(), 0, 'no red warning in Unrestricted mode');
+  // Off: protection back on without asking, the warnings on, new chats in the agents' own modes; the lock stays off.
+  await answers([]);
+  await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree:checked').waitFor();
+  await page.click('#setFree'); await settled([false, true, true, false]);
+  assert.deepEqual([await asked(), await daemonSide(), await local()], [[], [false, true], [null, null, null, null]]);
+  // Protection already off: no native warning comes, so Unrestricted asks once itself; Cancel changes nothing.
+  await answers([1]); await page.click('#setProtect'); await settled([false, false, true, false]);
+  // The page's confirm() is answered in the page: Playwright's dialog events in this Electron window are not reliable.
+  await page.evaluate(() => { window.__confirms = []; window.confirm = (text) => { window.__confirms.push(text); return false; }; });
+  await page.click('#setFree'); await settled([false, false, true, false]);
+  const confirms = await page.evaluate(() => window.__confirms);
+  assert.equal(confirms.length, 1); assert.match(confirms[0], /^Turn on Unrestricted mode\?/);
+  assert.deepEqual([(await asked()).length, await daemonSide(), await local()], [1, [false, false], [null, null, null, null]]);
+  console.log('PASS Security settings: four switches, defaults unchanged; Unrestricted Keep changes nothing, Turn off frees all and a new Codex chat starts in Full access; off restores; with protection already off it asks itself');
 });
 
 test('Chat folder: Start in offers the workspace, recent folders and Choose folder...; a chosen folder reaches the chat, outside picks are refused (threat model row 24)', { timeout: 120000 }, async (t) => {
@@ -1254,7 +1481,7 @@ test('Chat folder: Start in offers the workspace, recent folders and Choose fold
   console.log('PASS chat folder: outside, linked-out and cancelled picks give nothing; a chosen folder reaches the daemon and the welcome; kept as a recent folder after a reload');
 });
 
-test('Chat file browser: each scope lists its real folder, a file opens read-only with its text, ../, links and locked names are refused (threat model row 23)', { timeout: 120000 }, async (t) => {
+test('Chat file browser: each scope lists its real folder, a file opens in the editor with its text, ../, links and locked names are refused (threat model row 23)', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async (paths) => {
     const w = paths.workspace;
     for (const dir of ['_tyler', '_ideas', '_private', 'hub', 'proj/sub']) await mkdir(path.join(w, dir), { recursive: true });
@@ -1286,12 +1513,12 @@ test('Chat file browser: each scope lists its real folder, a file opens read-onl
   await listed('proj'); assert.deepEqual(await names(), ['sub', 'notes.md'], 'main project');
   await page.locator('#tree [data-ldir="proj/sub"]').click();
   await page.locator('#tree [data-lfile="proj/sub/deep.md"]').waitFor({ timeout: 5000 });
-  // A file opens with its text, read-only: no editor and no Make Primary.
+  // A file opens with its text in the editor (Save is tested in file-edit.test.mjs); no Make Primary.
   await page.locator('#tree [data-lfile="proj/notes.md"]').click();
-  await page.locator('#mdlBody .fileview', { hasText: 'line two' }).waitFor({ timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#mdlBody textarea')?.value.includes('line two'), null, { timeout: 5000 });
   if (process.env.P9_EVIDENCE) { await page.waitForTimeout(400); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'chat-files-view.png') }); }
   assert.equal(await page.locator('#mdlT').innerText(), 'proj/notes.md');
-  assert.equal(await page.locator('#mdlBody textarea').count(), 0);
+  assert.equal(await page.locator('#mdlBody textarea').count(), 1);
   assert.equal(await page.locator('#mdlPrimary').isHidden(), true);
   await page.keyboard.press('Escape');
   await scope('Workspace', 'Workspace');
@@ -1306,7 +1533,7 @@ test('Chat file browser: each scope lists its real folder, a file opens read-onl
   await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
   await page.locator('#newPop [data-new="claude"]').first().click();
   await listed('proj/sub'); assert.deepEqual(await names(), ['deep.md']);
-  // Only list and read, one string path each; the daemon refuses ../, links and locked names as on every file route.
+  // List and read take one string path each (save is tested in file-edit.test.mjs); the daemon refuses ../, links and locked names as on every file route.
   const ask = (action, payload) => page.evaluate(([a, p]) => window.p9.mission(a, p), [action, payload]);
   const refused = { status: 400, body: { error: 'request-refused' } };
   for (const [action, payload] of [['list', { path: 7 }], ['read', {}], ['read', { path: ['proj/notes.md'] }], ['list', { path: '../' }], ['list', { path: 'out' }],
@@ -1315,7 +1542,7 @@ test('Chat file browser: each scope lists its real folder, a file opens read-onl
   }
   assert.equal((await ask('read', { path: 'proj/notes.md' })).body.content, 'project notes\nline two\n');
   await assert.rejects(ask('write', { path: 'proj/notes.md', content: 'x' }), /ipc-sender-refused/);
-  console.log('PASS chat file browser: four scopes list their folders, Current project follows the chat shown, files open read-only, bad paths refused');
+  console.log('PASS chat file browser: four scopes list their folders, Current project follows the chat shown, files open in the editor, bad paths refused');
 });
 
 test('Turn finished: a live turn-end nobody watches makes one notice (P9 words only) and a card; opening the chat clears it; replay makes none (threat model row 21)', { timeout: 120000 }, async (t) => {
@@ -1467,6 +1694,7 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   await writeFile(path.join(profile, 'pets', 'land-pet', 'spritesheet.png'), sheet({ 0: 2, 3: 4, 4: 5, 6: 3, 7: 5 }));
   // A file from before the landing page: no name, no startLast. It must load (upgraded), not fall back to the defaults.
   await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1.1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS }));
+  await versionSeen(profile);
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_LANDING;
   // Evidence: the window's own capture. page.screenshot crops a zoomed (1.1) window to its CSS size and cuts off the bottom right.
   const ev = process.env.P9_EVIDENCE, shot = async (name) => ev && await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 300))))) === undefined && writeFile(path.join(ev, name), Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')), 'base64'));
@@ -1504,14 +1732,16 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   // Behind the main page the sky draws at full resolution, not a fraction scaled up (Builder, 2026-10-19: "when it is in the
   // background it looks low quality. as if it lost its quality somehow").
   // Without WebGL (a display with no GPU, such as GitHub's Xvfb) the sky is off by design (landing-sky.mjs), so there is nothing to size.
-  if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
+  // Landing v5 plays a video by default and leaves this canvas hidden; landing-video.test.mjs runs this check with P9_LANDING=original.
+  if (await page.evaluate(() => document.querySelector('#landSky').hidden)) t.diagnostic('landing video on: sky resolution check is in landing-video.test.mjs');
+  else if (!await page.evaluate(() => !!document.createElement('canvas').getContext('webgl'))) t.diagnostic('no WebGL on this display: sky resolution check not run');
   else await page.waitForFunction(() => { const c = document.querySelector('#landSky'); return c.width === Math.round(c.clientWidth * Math.min(devicePixelRatio || 1, 2)); }, null, { timeout: 5000 })
     .catch(async () => assert.fail('main-stage sky below full size: ' + await page.evaluate(() => { const c = document.querySelector('#landSky'); return c.width + ' px for ' + c.clientWidth + ' CSS px at ratio ' + devicePixelRatio; })));
   await page.keyboard.press('2');
   await page.waitForFunction(() => !document.querySelector('#land').open);
   // First login: the setup wizard opens itself while a check fails (no settings here), before the walkthrough (v0.1.3 C1).
   await page.locator('#welDlg[open]').waitFor({ timeout: 5000 });
-  assert.equal(await page.locator('#welStep').textContent(), 'Step 1 of ' + ((await call(instance, '/setup')).tmux === null ? 6 : 7));
+  assert.equal(await page.locator('#welStep').textContent(), 'Step 1 of ' + ((await call(instance, '/setup')).tmux === null ? 7 : 8));
   assert.equal(await page.locator('#walk').count(), 0, 'the walkthrough waits for the wizard');
   await shot('wizard-auto.png');
   await page.click('#welFoot [data-act="skip"]');
@@ -1707,10 +1937,10 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   await app.evaluate(({ dialog }) => { globalThis.asked = []; dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.title); return { response: 0 }; }; });
   await settingsOpen(page);
   // ST3: Docs, Anymouse and Setup come first.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody').firstElementChild.querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
+  assert.deepEqual(await page.evaluate(() => [...document.querySelector('#setBody .set-row').querySelectorAll('a,button:not(.info)')].map((b) => b.id)), ['setDocs', 'setAm', 'setWel']);
   // HI1: every top-level row, every group's legend and every Maintenance row has an "i" with a tip, and each opens a guide
   // section main allows and docs/guide.md has.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > .set-row, #setBody legend, #setBody fieldset:last-child .set-row')]
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#setBody > [data-page="General"] > .set-group:first-child > .set-row, #setBody legend, #setBody > [data-page="General"] > fieldset:last-child .set-row')]
     .filter((row) => !row.querySelector(':scope > .info[title]:not([title=""])')).map((row) => row.textContent.slice(0, 40))), []);
   const sections = await page.evaluate(() => [...new Set([...document.querySelectorAll('#setBody [data-docs]')].map((b) => b.dataset.docs))]);
   const allowed = JSON.parse(/GUIDE_SECTIONS = Object\.freeze\((\[[^\]]*\])\)/.exec(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'))[1].replaceAll("'", '"'));
@@ -1721,7 +1951,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   // A click on an "i" opens its section, and the checkbox in the same row stays as it was.
   const locked = await page.locator('#setLock').isChecked();
   await page.locator('#setLock').locator('xpath=..').locator('.info').click();
-  await page.locator('#setBody fieldset:last-child legend .info').click();
+  await page.locator('#setBody > [data-page="General"] > fieldset:last-child legend .info').click();
   await until(async () => (await lines(opened)).length === 2, 'two guide sections opened');
   assert.deepEqual(await lines(opened), ['https://github.com/' + REPO + '/blob/main/docs/guide.md#agent-lock', 'https://github.com/' + REPO + '/blob/main/docs/guide.md#maintenance']);
   assert.equal(await page.locator('#setLock').isChecked(), locked);
@@ -1732,9 +1962,9 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
     return [link.textDecorationLine, link.color === primary];
   }), ['underline', true]);
   // MT1: the Updates row's Check now (the releases page in a source checkout), then the five buttons (maintenance.test.mjs has the row's states).
-  assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
+  assert.deepEqual(await page.locator('#setBody > [data-page="General"] > fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
   assert.deepEqual([await page.locator('#mtUpdOpen').isEnabled(), await page.locator('#setBody strong', { hasText: /^Updates$/ }).count()], [true, 1], 'updates off: one Updates row, its Check now opens the releases page');
-  await page.locator('#setBody fieldset:last-child').scrollIntoViewIfNeeded();
+  await page.locator('#setBody > [data-page="General"] > fieldset:last-child').scrollIntoViewIfNeeded();
   const png = await page.locator('#setDlg').screenshot({ type: 'png' });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-maintenance ' + png.toString('base64'));
   // The page's own refusals: a section not in the guide's list, a second argument, arguments where none are taken.
@@ -1772,7 +2002,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   const packaged = await launch({ P9_PACKAGED: '1' });
   assert.equal(await packaged.page.evaluate(() => window.p9.source), false);
   await settingsOpen(packaged.page);
-  assert.deepEqual(await packaged.page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
+  assert.deepEqual(await packaged.page.locator('#setBody > [data-page="General"] > fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
   await packaged.page.click('#setClose');
   assert.equal(await (await palette(packaged.page, 'Rebuild')).count(), 0);
   assert.equal(await (await palette(packaged.page, 'Restart daemon')).count(), 1);
@@ -1820,7 +2050,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
     const box = page.locator('#setMission [data-mission="' + key + '"]');
     await box.fill(value); await box.dispatchEvent('change');
   };
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   assert.deepEqual(await boxes(), keys.map((key) => [key, MISSION_FILES[key] ?? '']));
   // Each row has the "i" that opens its guide section, and every path row but scripts_root (a full path) has Pick.
@@ -1853,7 +2083,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   await page.waitForTimeout(300);
   // Plain-words tips: the owner's sentence for primary, and a long path shows its end with the whole path on hover.
   const primaryTip = await page.locator('#setMission [data-mission="primary"] ~ .info').getAttribute('title');
-  assert.equal(primaryTip, 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)');
+  assert.equal(primaryTip, 'Folder of your main project, or a file that names it (for the Mission Control Main Project card and the Chat Focus Files pane)');
   const long = 'personal-projects/workspace-hub/some/long/folder/that/shares/its/start/with/the/rest/registry.json';
   const end = await page.locator('#setMission [data-mission="registry"]').evaluate((box, value) => {
     box.value = value; box.dispatchEvent(new Event('blur'));
@@ -1882,7 +2112,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   // A restart reads them back from the daemon's file.
   await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
   ({ app, page } = await launchOn(t, instance, profile));
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   const saved = { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' };
   assert.deepEqual(await boxes(), keys.map((key) => [key, { page_schemes: 'obsidian, zotero', notes_roots: 'vault = ' + notes }[key] ?? saved[key] ?? '']));
@@ -1900,7 +2130,7 @@ test('Pick: the workspace folder itself and a folder outside get their own refus
   await rm(path.join(instance.workspace, 'mission'), { recursive: true });
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-pick-')), 'profile');
   const { app, page } = await launchOn(t, instance, profile);
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   for (const [pick, text] of [[instance.workspace, 'That is the workspace folder itself.'], [instance.directory, 'That is outside the workspace.']]) {
     await pickNext(app, [pick]);

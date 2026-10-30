@@ -40,6 +40,24 @@ test('dev root: only the desktop sets it, never on home, a drive root, the works
   console.log('PASS dev root refused: home, drive root, workspace, state, recovery, ownership (and inside them), a file, inside the workspace, missing, bad shapes');
 });
 
+// Server mode's Open Folder (rows 41/50 adds): main asks where a typed path really is before it asks the user, so a link inside
+// the workspace that points outside gets the question, as the local picker's realpath gives it. The check sets nothing.
+test('dev root check: a link inside the workspace that points outside is outside, and the check sets no root', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t), dir = instance.directory, outside = path.join(dir, 'elsewhere');
+  await mkdir(outside, { recursive: true }); await mkdir(path.join(instance.workspace, 'src'), { recursive: true });
+  await folderLink(outside, path.join(instance.workspace, 'away'));
+  await folderLink(path.join(instance.workspace, 'src'), path.join(instance.workspace, 'near'));
+  const check = (folder) => call(instance, '/dev/root', 'POST', { path: folder, check: true });
+  const ws = await realpath(instance.workspace), real = await realpath(outside);
+  assert.deepEqual(await check(path.join(instance.workspace, 'away')), { status: 200, body: { root: real, workspace: ws, inside: false } }, 'the link is outside');
+  assert.deepEqual(await call(instance, '/files', 'PUT', { path: 'a.txt', hash: hash(''), content: 'x', root: real }), { status: 409, body: { error: 'dev-root-unset' } }, 'the check set no root');
+  assert.deepEqual(await check(path.join(instance.workspace, 'near')), { status: 200, body: { root: path.join(ws, 'src'), workspace: ws, inside: true } });
+  assert.deepEqual(await check(instance.workspace), { status: 200, body: { root: ws, workspace: ws, inside: true } });
+  assert.deepEqual(await check(dir), { status: 403, body: { error: 'root-refused' } }, 'home is still refused');
+  assert.deepEqual(await check(path.join(dir, 'missing')), { status: 404, body: { error: 'root-not-found' } });
+  for (const body of [{ path: 'relative', check: true }, { path: dir, check: true, extra: 1 }]) assert.equal((await call(instance, '/dev/root', 'POST', body)).status, 400, JSON.stringify(body));
+});
+
 test('dev root: saves stay inside it, through the guarded save, and the workspace keeps its own', { timeout: 60000 }, async (t) => {
   const instance = await daemon(t), dir = instance.directory;
   const outside = path.join(dir, 'outside'), elsewhere = path.join(dir, 'elsewhere');
@@ -81,26 +99,46 @@ test('dev root: saves stay inside it, through the guarded save, and the workspac
   console.log('PASS dev root saves: create and guarded save inside it, conflict kept on disk, .., absolute, link out and locked names refused, unset after Back to workspace');
 });
 
-test('dev root on the phone: no route to set it, and root: \'dev\' is refused', { timeout: 60000, skip: win && 'Windows CI has no Playwright Chromium' }, async (t) => {
-  const server = await remoteDaemon(t), outside = path.join(server.directory, 'outside');
-  await mkdir(outside);
-  await writeFile(path.join(outside, 'a.txt'), 'one\n');
+// P15 (threat model row 41, changed 2026-10-28): the phone sets its own outside folder, with Dev Focus's checks, and reads
+// and saves there through the guarded writer; it never reaches Dev Focus's folder, and the desktop's is never moved by it.
+test('P15: the phone opens its own outside folder (checked as Dev Focus\'s), reads and saves there, and never touches Dev Focus\'s', { timeout: 60000, skip: win && 'Windows CI has no Playwright Chromium' }, async (t) => {
+  const server = await remoteDaemon(t), outside = path.join(server.directory, 'outside'), desk = path.join(server.directory, 'desk');
+  await mkdir(outside); await mkdir(desk);
+  await writeFile(path.join(outside, 'a.txt'), 'one\n'); await writeFile(path.join(desk, 'd.txt'), 'desk\n');
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const session = await enrollDevice(server, await passkeyDevice(browser, server, 'phone'));
-  assert.equal((await server.desk('/dev/root', 'POST', { path: outside })).status, 200);
-  assert.equal((await server.remote('/dev/root', { method: 'POST', session, body: { path: server.directory } })).status, 404);
-  for (const root of ['dev', 'other']) {
-    const result = await server.remote('/files', { method: 'PUT', session, body: { path: 'a.txt', hash: hash('one\n'), content: 'phone\n', root } });
-    assert.deepEqual([result.status, result.body], [403, { error: 'request-refused' }], root);
-  }
-  assert.equal((await server.remote('/files', { method: 'POST', session, body: { path: 'b.txt', content: 'phone\n', root: 'dev' } })).status, 404);
-  assert.equal(await readFile(path.join(outside, 'a.txt'), 'utf8'), 'one\n');
-  assert.deepEqual(await readdir(outside), ['a.txt']);
-  // The phone's own workspace save still works (the control).
-  const own = await server.remote('/files', { method: 'PUT', session, body: { path: 'note.txt', hash: hash('original'), content: 'phone\n' } });
+  const op = () => ({ 'x-p9-op': crypto.randomUUID() });
+  const setRoot = (value) => server.remote('/files/root', { method: 'POST', session, body: { path: value }, headers: op() });
+  const save = (root, file = 'a.txt', from = 'one\n') => server.remote('/files', { method: 'PUT', session, body: { path: file, hash: hash(from), content: 'phone\n', root }, headers: op() });
+  const desktopRoot = (await server.desk('/dev/root', 'POST', { path: desk })).body.root;
+  // Dev Focus's routes stay desktop-only, and its folder is not the phone's.
+  assert.equal((await server.remote('/dev/root', { method: 'POST', session, body: { path: server.directory }, headers: op() })).status, 404);
+  assert.deepEqual([(await save(desktopRoot, 'd.txt', 'desk\n')).status, (await save('dev')).status], [409, 409]);
+  // The same refusals as Dev Focus: the home folder (it holds the workspace and P9's state), a folder in the workspace, a relative path.
+  assert.deepEqual([(await setRoot(server.directory)).body.error, (await setRoot(server.workspace)).body.error, (await setRoot('outside')).status], ['root-refused', 'root-refused', 400]);
+  await mkdir(path.join(server.workspace, 'inner'));
+  assert.equal((await setRoot(path.join(server.workspace, 'inner'))).body.error, 'inside-workspace');
+  // Opened: it lists, reads and saves there, by the path the daemon returned.
+  const opened = await setRoot(outside);
+  assert.deepEqual([opened.status, opened.body.root], [200, await realpath(outside)]);
+  assert.deepEqual((await server.remote('/files/root', { session })).body, { root: opened.body.root });
+  const q = (route, file) => server.remote(route + '?' + new URLSearchParams({ path: file, root: opened.body.root }), { session });
+  assert.deepEqual((await q('/files/list', '')).body.entries.map((entry) => entry.name), ['a.txt']);
+  assert.equal((await q('/files', 'a.txt')).body.content, 'one\n');
+  assert.equal((await save(opened.body.root)).body.kind, 'saved');
+  assert.equal(await readFile(path.join(outside, 'a.txt'), 'utf8'), 'phone\n');
+  // Out of it is refused (.. or a link), another root is dev-root-changed, and Dev Focus's folder is untouched.
+  assert.equal((await server.remote('/files', { method: 'PUT', session, body: { path: '../desk/d.txt', hash: hash('desk\n'), content: 'x\n', root: opened.body.root }, headers: op() })).body.kind === 'saved', false);
+  assert.equal((await save(desktopRoot, 'd.txt', 'desk\n')).body.error, 'dev-root-changed');
+  assert.equal(await readFile(path.join(desk, 'd.txt'), 'utf8'), 'desk\n');
+  assert.equal((await server.desk('/files/root', 'GET')).status, 404, 'the desktop sets its folder through main');
+  // Back to workspace: the root is unset, a save naming it is refused, the workspace save works.
+  assert.deepEqual((await setRoot(null)).body, { root: null });
+  assert.equal((await save(opened.body.root, 'a.txt', 'phone\n')).body.error, 'dev-root-unset');
+  const own = await server.remote('/files', { method: 'PUT', session, body: { path: 'note.txt', hash: hash('original'), content: 'phone\n' }, headers: op() });
   assert.equal(own.body.kind, 'saved', own.text);
-  console.log('PASS dev root on the phone: POST /dev/root 404, PUT root dev 403, POST /files 404, the root\'s files unchanged, its own workspace save works');
+  console.log('PASS P15: the phone opened its own folder (home, workspace, inside-workspace and relative refused), listed, read and saved there; Dev Focus\'s folder untouched; Back to workspace unset it');
 });
 
 // A workspace change shows the new workspace in Dev Focus, whatever folder was open (the change itself runs the installed

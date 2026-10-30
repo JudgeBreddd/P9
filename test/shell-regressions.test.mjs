@@ -68,7 +68,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
     });
     await t.test('answering or declining an agent notification closes its dialog and updates the card', async () => {
       for (const action of ['submit', 'decline', 'approve', 'deny']) {
-        await reset(); await page.click('#rDev');
+        await reset(); await page.click('#rMission'); // K11: the cards show (and have room) outside Dev Focus
         const card = page.locator('#cards [data-key^="asks:"]');
         assert.equal(await card.locator('.n').innerText(), '2');
         await card.locator('.open').click();

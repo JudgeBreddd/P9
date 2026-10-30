@@ -3,7 +3,8 @@
 .shell{display:grid;grid-template-rows:44px 1fr 24px;grid-template-columns:minmax(0,1fr);height:100vh}
 .topbar{position:relative;z-index:50;display:flex;align-items:center;gap:6px;padding:0 10px 0 12px;border-bottom:1px solid var(--border);background:color-mix(in oklch,var(--card) 70%,transparent);backdrop-filter:blur(10px)}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;letter-spacing:-.01em;margin-right:8px}
-.brand .mark{width:20px;height:20px;border-radius:6px;background:linear-gradient(135deg,var(--primary),var(--glow2));box-shadow:0 0 14px color-mix(in oklch,var(--glow) 50%,transparent)}
+/* D12: the P9 mark (public/p9-mark.png: docs/brand/icon-simplified-256.png at 64 px, the brand file that reads at 20 px), the same in every theme; the window's own icon above it is the desktop's title bar */
+.brand .p9mark{width:20px;height:20px;flex:none;display:block;border-radius:5px;box-shadow:0 0 0 1px color-mix(in oklch,var(--foreground) 14%,transparent)}
 .tabs{display:flex;align-items:stretch;align-self:stretch;overflow-x:auto;scrollbar-width:none;mask-image:linear-gradient(90deg,transparent,#000 12px,#000 calc(100% - 12px),transparent)}
 .topbar>:not(.tabs){flex-shrink:0}  /* only the tab strip gives up width; it scrolls */
 .tab{display:flex;align-items:center;gap:7px;padding:0 10px 0 12px;border-bottom:2px solid transparent;color:var(--muted-foreground);font-size:13px;white-space:nowrap;position:relative;transition:color .15s}
@@ -14,7 +15,7 @@
 .tab:hover .close{opacity:.7}.tab .close:hover{opacity:1;background:var(--accent)}
 .tab[data-state="stopped"]{opacity:.6}
 .spacer{flex:1}
-html,body{height:100%;overflow:hidden}
+html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a focused off-screen node scroll the body sideways */
 .body{display:grid;grid-template-columns:40px 1fr;min-height:0}
 /* Focus modes: all three stay mounted in one grid cell and only the active one is visible,
    so drafts, scroll and selection survive switching (Builder 2026-10-14) */
@@ -26,6 +27,7 @@ html,body{height:100%;overflow:hidden}
 #fChat>.content{grid-column:2}
 .shell:not([data-focus="chat"]) [data-in="chat"]{display:none}
 .shell:not([data-focus="dev"]) [data-in="dev"]{display:none}
+.shell:not([data-focus="mission"]) [data-in="mission"]{display:none}
 /* Mission Control: category tiles on top, then one small card per section; a card opens its section in the modal (Builder, 2026-10-17) */
 #fMission{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto;gap:10px;padding:12px;align-content:start;overflow:auto}
 #fMission{grid-template-rows:auto auto minmax(0,1fr)}#fMission:not(:has([data-mission-note])){grid-template-rows:auto minmax(0,1fr)}
@@ -33,8 +35,9 @@ html,body{height:100%;overflow:hidden}
 @media (max-width:900px){#fMission,#fMission:not(:has([data-mission-note])){grid-template-rows:none}.mrow{grid-template-columns:minmax(0,1fr)}.mrow .needs [data-list]{max-height:52vh}}
 .mrow>*{min-height:0}.mrow .needs{display:flex;flex-direction:column}.mrow .needs [data-list]{flex:1;min-height:0;max-height:none}
 .bignum{font:300 40px/1 var(--display,inherit);color:var(--amber,var(--primary));margin:2px 0 8px}.bignum b{font-weight:400}
-[data-card=mprimary]>.win{width:100%}.mcol{display:flex;flex-direction:column;gap:10px;min-height:0}.mcol .wins{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
-.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
+[data-card=mprimary]>.win{width:100%}.mcol{display:flex;flex-direction:column;gap:10px;min-height:0}.mcol[hidden]{display:none}.mcol .wins{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+@media (min-width:901px){.mrow:has(>.mcol[hidden]){grid-template-columns:minmax(260px,1fr) minmax(0,1.2fr)}}
+.mpanel[hidden]{display:none}.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
 .mpanel[data-panel=mlogs]{flex:1}.mpanel[data-panel=musage],.mcol>.wins,.mcol>[data-card]{flex-shrink:0}.mpanel[data-panel=mlaunch]{flex:0 1 auto;min-height:120px}.pscroll{overflow:auto;min-height:0}
 .phead{display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11px;cursor:pointer}.phead h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.phead:hover{color:var(--foreground)}
 .uring{display:flex;flex-direction:column-reverse;align-items:center;gap:4px}.uring[data-stale]{opacity:.55}
@@ -56,7 +59,6 @@ html,body{height:100%;overflow:hidden}
 .win .big{font-size:22px;font-weight:700;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .win .line{font-size:12px;color:var(--muted-foreground);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35}
 #mdl .panel{border:0;background:none}#mdl .panel>h3{display:none}#mdl .pbody{overflow:visible} /* #mdlBody is a window's one scroller (winTop) */
-.stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))}
 .tiles{grid-column:1/-1;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
 .tile{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:6px;padding:8px 10px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent);color:var(--foreground);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;min-width:0}
 .tile:hover{background:var(--accent)}
@@ -83,7 +85,9 @@ html,body{height:100%;overflow:hidden}
 /* Review round 1 (Builder, 2026-10-14) */
 [data-slot="button"].done,[data-slot="button"].done:hover{background:color-mix(in oklch,var(--ok) 26%,transparent);border-color:var(--ok);color:var(--ok);transition:background .2s,color .2s}
 .tile.bad{background:color-mix(in oklab,var(--destructive) 34%,transparent)}
-.plist button.bad,.toast.bad{background:color-mix(in oklab,var(--destructive) 24%,transparent)}
+.plist button.bad{background:color-mix(in oklab,var(--destructive) 24%,transparent)}
+/* Mixed into the popover, not see-through: over the connecting dialog's dark sky a light theme's dark text stays readable. */
+.toast.bad{background:color-mix(in oklab,var(--destructive) 24%,var(--popover))}
 .plist button.bad:hover{background:color-mix(in oklab,var(--destructive) 34%,transparent)}
 .plist li.bad{color:#ff5757;border-radius:17px}
 /* dropdowns: dark picker, and one click on another dropdown opens it (popover light-dismiss lets the click through) */
@@ -97,7 +101,8 @@ html,body{height:100%;overflow:hidden}
 #fMission .kind,#fMission .tint,#mdl .panel .kind,#mdl .panel .tint{color:var(--tint)}
 #fMission .plist .mono b,#mdl .panel .plist .mono b{color:var(--tint)}
 /* Dev Focus: VS Code-shaped mock. Explorer | editor; editor tabs live in the top bar like chat tabs */
-#fDev{grid-template-columns:240px 1fr}
+#fDev{grid-template-columns:240px 1fr;grid-template-rows:auto minmax(0,1fr)}
+#fDev>.explorer,#fDev>.editor{grid-row:2}
 .explorer{display:grid;grid-template-rows:auto 1fr;min-height:0;border-right:1px solid var(--border);background:color-mix(in oklch,var(--card) 40%,transparent)}
 .explorer .hd{padding:10px 12px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground);display:flex;gap:8px}
 .explorer .hd .muted{text-transform:none;letter-spacing:0}
@@ -106,9 +111,9 @@ html,body{height:100%;overflow:hidden}
 .ed{display:grid;grid-template-columns:auto 1fr;min-height:0;min-width:0;background:var(--background)}
 .ed .gut{margin:0;padding:10px 10px 10px 14px;overflow:hidden;text-align:right;color:var(--muted-foreground);user-select:none;font-size:12.5px;line-height:1.6;opacity:.7}
 .ed textarea{margin:0;padding:10px 12px;border:0;outline:0;resize:none;background:none;color:var(--foreground);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;font-size-adjust:none;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;min-width:0;tab-size:2}
-.stage:has(.card) #fDev .ed textarea{padding-right:calc(var(--card-w) + var(--card-gap))}
 .mdl-body[data-kind="file"]{overflow:hidden;align-content:stretch;grid-template-rows:minmax(0,1fr)}
 .mdl-body[data-kind="file"] .ed{height:100%}
+.mdl-body[data-kind="file"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}
 /* Notes (threat model row 34): the list's New note box, the 409 banner, the preview and the editor filling the rest */
 .notes-new,.notes-row{display:flex;gap:8px;align-items:center}.notes-new{padding:10px 14px 4px}.notes-new input{flex:1;min-width:0}
 .mdl-body[data-kind="note"]{align-content:stretch;grid-template-rows:minmax(0,1fr)}.mdl-body[data-kind="note"]:has([data-conflict]){grid-template-rows:auto minmax(0,1fr)}.mdl-body[data-kind="note"] .ed{min-height:320px}
@@ -125,13 +130,16 @@ html,body{height:100%;overflow:hidden}
 .rail .bell b:empty{display:none}
 .soon{display:grid;place-content:center;text-align:center;gap:6px;color:var(--muted-foreground)}
 .soon h2{margin:0;color:var(--foreground);font-size:22px}
-/* Cards float top-right in the blank space beside the chat column, as their own items (Builder 2026-10-14).
-   The single chat column narrows to leave that gutter free; a split chat steps left of it. */
+/* Cards float top-right over the page as their own items (Builder 2026-10-14). They never resize a pane (Builder, 2026-10-27);
+   in Dev Focus the editor is a native view above the page, so there the cards are drawn by their own overlay view instead. */
 .stage{--card-w:208px;--card-gap:24px}
+.stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))} /* K11: the Mission page makes room for the cards */
 .cards{position:absolute;top:50px;right:14px;width:var(--card-w);display:flex;flex-direction:column;gap:8px;z-index:20;pointer-events:none}
 .cards>*{pointer-events:auto}
-#chats[data-split="false"] .col{max-width:min(760px,100% - 2 * (var(--card-w) + var(--card-gap)))}
-.stage:has(.card) #chats[data-split="true"]{margin-right:calc(var(--card-w) + var(--card-gap))}
+/* An artifact in the side panel (any mode, or over the Dev chat): the cards start below its header (the 30 px side head and
+   the artifact bar), so Pin and Full screen stay clickable. ponytail: fixed heights; the artifacts test checks both themes. */
+.stage:has(>.side:not([hidden]) .art)>.cards{top:72px}
+.shell[data-focus=dev] .cards{visibility:hidden} /* Dev Focus: the overlay view draws them above the editor */
 .card{position:relative;border-radius:11px;background:color-mix(in oklch,var(--popover) 95%,transparent);border:1px solid var(--border);backdrop-filter:blur(8px)}
 .card .open{display:grid;grid-template-columns:auto 1fr;gap:3px 9px;align-items:center;width:100%;padding:7px 28px 7px 10px;border:0;background:none;color:var(--foreground);font:inherit;font-size:12px;text-align:left;cursor:pointer;border-radius:inherit}
 .card .open:focus-visible{outline:2px solid var(--ring)}
@@ -149,10 +157,15 @@ html,body{height:100%;overflow:hidden}
 .mdl-head [hidden]{display:none}
 .mdl-body{min-height:0;overflow:auto;display:grid;align-content:start}
 .mdl-body[data-kind="chat"]{overflow:hidden;align-content:stretch;background:#000}
-.mdl-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+.mdl-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
 .mdl-foot:empty{display:none}
 .mdl-foot .spacer{flex:1}
 .mlist{list-style:none;margin:0;padding:8px;display:flex;flex-direction:column;gap:6px}
+#mdlBody>[data-space-text]{margin:12px 20px 0}
+#mdlBody .quick-note{display:grid;gap:8px;margin:12px 20px 4px} /* the cards' inset: .mlist 8px + button 12px */
+#mdlBody .quick-note h3{margin:0;font-size:14px;font-weight:600}
+#mdlBody .quick-note label{display:grid;gap:4px;font-size:12px;color:var(--muted-foreground)}
+#mdlBody .quick-note button{justify-self:start} /* the section's text lines up with the rows' text: .mlist 8px + button 12px */
 .mlist button{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:center;width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:none;color:var(--foreground);font:inherit;font-size:13px;text-align:left;cursor:pointer}
 .mlist button:hover{background:var(--accent)}
 .mlist .sub{grid-column:2;font-size:11.5px;color:var(--muted-foreground)}
@@ -160,6 +173,8 @@ html,body{height:100%;overflow:hidden}
 .kind{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--warn)}
 .review{display:flex;flex-direction:column;gap:10px;padding:16px 18px}
 .review p{margin:0;font-size:14px;line-height:1.5}
+.review.news ul{display:flex;flex-direction:column;gap:7px;margin:2px 0 0;padding-left:20px;font-size:14px;line-height:1.45;max-width:68ch}
+.review.news li::marker{color:var(--primary)}
 .review code,.review .linkish{font-size:12px;color:var(--muted-foreground)}
 .linkish{justify-self:start;padding:0;border:0;background:none;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
 .linkish:hover{color:var(--foreground)}
@@ -178,6 +193,12 @@ html,body{height:100%;overflow:hidden}
 .lvl[data-l="bad"]{background:var(--destructive)}.lvl[data-l="warn"]{background:var(--warn)}.lvl[data-l="ok"]{background:var(--ok)}
 /* Popups: bottom right, under the card gutter; fade unless hovered (D07) */
 .toasts{position:fixed;right:14px;bottom:34px;width:var(--card-w,232px);display:flex;flex-direction:column;gap:8px;z-index:40}
+/* Desktop item 1, D1: a toast shows its whole message, never cut to one line (a click opens it in the panel too) */
+.toast .truncate{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+#mdlBody .review .start{margin-top:10px;color:var(--muted-foreground)}#mdlBody .review .start b{color:var(--foreground);font-weight:600}
+/* D7: a popover so a toast shows above an open modal (a modal sits in the top layer, over any z-index). Open or closed (closed it
+   still shows, display:flex), none of the browser's popover look: closed it drew an empty white bar mid-screen, over the floating Shell */
+.toasts{inset:auto 14px 34px auto;margin:0;padding:0;border:0;background:none;color:inherit;overflow:visible}
 :root{--toast-life:6s}
 .toast{display:grid;grid-template-columns:auto 1fr;gap:2px 9px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--popover) 92%,transparent);backdrop-filter:blur(8px);color:var(--foreground);font:inherit;font-size:12.5px;text-align:left;cursor:pointer;animation:pop .2s ease,toast-out .5s ease var(--toast-life) forwards}
 .toast:hover{animation-play-state:paused}
@@ -208,8 +229,8 @@ html,body{height:100%;overflow:hidden}
 .tree .mod{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--warn)}
 .content{display:grid;grid-template-rows:1fr auto;min-height:0;min-width:0}
 .chats{display:grid;grid-template-columns:1fr;min-height:0}
-.chats[data-split="true"]{grid-template-columns:1fr 1px 1fr}
-.handle-v{background:var(--border);cursor:col-resize;position:relative}
+.chats[data-split="true"]{grid-template-columns:var(--split-l,minmax(0,1fr)) 1px minmax(0,1fr)}
+.handle-v{background:var(--border);cursor:col-resize;position:relative;z-index:2} /* above the panes beside it, so its wider grab area gets the pointer */
 .handle-v::after{content:"";position:absolute;inset:0 -4px}
 .handle-v:hover{background:var(--primary)}
 /* ---- Chat pane ---- */
@@ -247,7 +268,7 @@ dialog.pic{width:fit-content;height:fit-content;max-width:none;max-height:none;b
 .msg.agent pre{overflow-x:auto;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:color-mix(in oklch,var(--background) 70%,black)}.msg.agent pre code{padding:0;background:none}
 .msg.agent pre{position:relative}.msg.agent pre [data-copycode]{position:absolute;top:4px;right:4px;opacity:0;transition:opacity .15s}.msg.agent pre:hover [data-copycode],.msg.agent pre [data-copycode]:focus-visible,.msg.agent pre [data-copycode][data-said]{opacity:1} /* CP5 */
 .msg.agent table{border-collapse:collapse;font-size:13px}.msg.agent :is(th,td){border:1px solid var(--border);padding:3px 8px;text-align:left}
-.msg.agent blockquote{padding-left:10px;border-left:3px solid var(--border);color:var(--muted-foreground)}.msg.agent .link{color:var(--primary);text-decoration:underline dotted}
+.msg.agent blockquote{padding-left:10px;border-left:3px solid var(--border);color:var(--muted-foreground)}.msg.agent .link{color:var(--primary);text-decoration:underline dotted}.msg.agent a.link{text-decoration:underline;text-underline-offset:3px;cursor:pointer}.msg.agent .link-host{color:var(--muted-foreground);font-size:.85em}
 .meter[data-stale]{opacity:.55}
 details.tool{border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--card) 60%,transparent);font-size:12.5px}
 details.tool summary{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;list-style:none;user-select:none}
@@ -264,6 +285,16 @@ details.tool pre{margin:0;padding:8px 12px 10px;border-top:1px solid var(--borde
 details.thought summary{color:var(--muted-foreground);font-size:12px;cursor:pointer;list-style:none}
 details.thought summary::-webkit-details-marker{display:none}
 details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid var(--border);color:var(--muted-foreground);font-size:13px}
+/* An agent program's warning (helpers.mjs warnHtml): one grey line above the reply; its "i" opens what it means. */
+details.agent-warn{font-size:12px;color:var(--muted-foreground)}
+details.agent-warn summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;width:fit-content;max-width:100%}
+details.agent-warn summary::-webkit-details-marker{display:none}
+details.agent-warn summary>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+details.agent-warn .i{flex:none;display:inline-grid;place-items:center;width:15px;height:15px;border:1px solid currentColor;border-radius:50%;font:italic 600 10px/1 Georgia,serif}
+details.agent-warn summary:hover .i,details.agent-warn[open] .i{color:var(--foreground)}
+details.agent-warn summary:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
+details.agent-warn p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid var(--border);font-size:13px;max-width:62ch}
+details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overflow-wrap:anywhere}
 .plan{border:1px solid color-mix(in oklch,var(--glow2) 30%,var(--border));border-radius:calc(var(--radius) - 2px);padding:10px 14px;font-size:13px;background:color-mix(in oklch,var(--glow2) 5%,transparent)}
 .plan .eyebrow{margin-bottom:6px}
 .plan li{list-style:none;display:flex;gap:8px;align-items:baseline;padding:2px 0}
@@ -329,6 +360,7 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 .dock #termView{min-height:0;overflow:hidden;padding:6px 0 0 10px;background:#0d131c}
 .dock #dRefresh[hidden]{display:none}
 .dock.float{position:absolute;left:50%;top:50%;translate:-50% -50%;width:640px;height:360px;border:1px solid color-mix(in oklch,var(--primary) 30%,var(--border));border-radius:var(--radius);box-shadow:0 40px 80px -30px #000,0 0 0 1px color-mix(in oklch,var(--glow) 25%,transparent);z-index:30}
+.dock.float{z-index:16} /* D14: above a full side panel (15); the Dev Focus editor view steps aside in placeDev */
 .dock.float .tb{cursor:move;user-select:none;touch-action:none}
 .dock.float{resize:both;overflow:hidden;min-width:320px;min-height:160px;max-width:100%;max-height:100%}
 .dock.float .grip{display:none}
@@ -337,6 +369,27 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 /* ---- Status bar ---- */
 .statusbar{display:flex;align-items:center;gap:16px;padding:0 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted-foreground);background:color-mix(in oklch,var(--card) 60%,transparent)}
 .statusbar .spacer{flex:1}
+.statusbar .keep-note{display:inline-flex;align-items:center;gap:6px}
+.statusbar .keep-note[hidden]{display:none}
+.statusbar .keep-note button{height:20px;padding:0 8px;font-size:11px}
+.statusbar .keep-note::before{content:"";width:6px;height:6px;border-radius:50%;background:color-mix(in oklch,var(--primary) 70%,var(--muted-foreground))}
+/* Row I1's question: the two answers side by side, each with what it means. */
+.keep-dlg .keep-ways{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0}
+.keep-dlg .keep-ways>div{padding:10px 12px;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--card) 70%,transparent)}
+.keep-dlg dt{font-size:13px;font-weight:600;margin-bottom:4px}
+.keep-dlg dd{margin:0;font-size:12px;line-height:1.45;color:var(--muted-foreground)}
+.keep-dlg .keep-again{display:flex;align-items:center;gap:8px;margin-top:14px}
+.keep-dlg .keep-later{margin:4px 0 0 22px}
+@media (max-width:520px){.keep-dlg .keep-ways{grid-template-columns:1fr}}
+/* Row I2's password window. */
+.admin-dlg .admin-need{margin:0 0 12px;padding:0;list-style:none;display:grid;gap:6px}
+.admin-dlg .admin-need li{font-size:13px;line-height:1.4}
+.admin-dlg .admin-need b{font-family:"JetBrains Mono",ui-monospace,monospace;font-weight:600;font-size:12px;margin-right:6px}
+.admin-dlg .admin-what{margin:0 0 6px;color:var(--muted-foreground)}
+.admin-dlg .admin-cmd{margin:0 0 14px;padding:8px 10px;max-height:7.5em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.45;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:var(--muted);color:var(--foreground)}
+.admin-dlg .admin-pw{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.admin-dlg .admin-err{margin:6px 0 0;color:var(--destructive)}
+.admin-dlg #adminNote{margin:8px 0 0}
 /* ---- Palette ---- */
 #palette .dlg-body{padding:0}
 #palette input{border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;padding:14px 18px;font-size:15px}
@@ -347,7 +400,14 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
 #palette li kbd{margin-left:auto}
 @media (max-width:720px){.body{grid-template-columns:40px 1fr}.files{display:none}.chats[data-split="true"]{grid-template-columns:1fr}.chats[data-split="true"]>:not(:first-child){display:none}.meters{grid-template-columns:1fr 1fr}}
 /* Settings (phase 18) */
-#setDlg .settings{display:grid;gap:12px}
+#setDlg{max-width:min(94vw,1180px);height:min(88vh,860px);margin-block:5vh auto}
+#setDlg[open]{display:grid;grid-template:auto minmax(0,1fr) auto/180px minmax(0,1fr)}#setDlg>.dlg-head,#setDlg>.dlg-foot{grid-column:1/-1}
+#setDlg .settings{display:block;overflow:auto}#setDlg .set-page[hidden]{display:none}
+#setDlg .set-page{columns:340px 2;column-gap:12px}#setDlg .set-page>.set-group{break-inside:avoid;margin-bottom:12px}
+.set-pages{display:flex;flex-direction:column;gap:2px;padding:14px 0 14px 18px;overflow:auto}
+.set-pages button{font:inherit;font-size:13px;text-align:left;padding:7px 10px;border-radius:calc(var(--radius) - 2px);border:1px solid transparent;background:transparent;color:var(--muted-foreground);cursor:pointer}
+.set-pages button:hover{color:var(--foreground)}
+.set-pages button[aria-pressed=true]{background:color-mix(in oklch,var(--primary) 18%,transparent);border-color:color-mix(in oklch,var(--primary) 50%,var(--border));color:var(--foreground)}
 .set-row{display:flex;align-items:center;gap:10px}
 .set-row>span:not(.spacer):not(.mono){display:grid;gap:2px}
 .set-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary);flex:none}
@@ -359,6 +419,10 @@ details.thought p{margin:6px 0 0 12px;padding-left:10px;border-left:2px solid va
    Settings); a refused value's reason under its box. */
 #setMission{grid-template-columns:15rem minmax(0,1fr) auto auto}
 .wiz-paths{display:grid;gap:8px;grid-template-columns:13rem minmax(0,1fr) auto}
+/* Wizard step 5: an older setup's files, folded away until asked for. */
+.wiz-have{display:grid;gap:8px;border-top:1px solid var(--border);padding-top:10px}
+.wiz-have>summary{cursor:pointer;width:fit-content;font-weight:500;color:var(--muted-foreground)}
+.wiz-have>summary:hover,.wiz-have[open]>summary{color:var(--foreground)}
 #setMission>*,.wiz-paths>*{grid-column:1/-1}
 :is(#setMission,.wiz-paths) .set-row{display:grid;grid-template-columns:subgrid}
 :is(#setMission,.wiz-paths) .set-row>.spacer{display:none}
@@ -390,6 +454,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 #welDlg .settings{display:grid;gap:12px}#welBody p{margin:0}
 #welBody .ok{color:var(--ok)}#welBody .warn{color:var(--warn)}#welBody span:is(.ok,.warn){white-space:nowrap}#welBody .mono{word-break:break-all}
 #welPetdex,#petdexLink{color:var(--primary);text-decoration:underline}
+#welBody .wiz-pw-label{display:block;margin-top:8px}
 #welBody .wiz-fail{display:grid;gap:4px;justify-items:start;border:1px solid var(--warn);border-radius:var(--radius);padding:8px 12px}
 #welCode{flex:1}#welFoot{display:flex;align-items:center;gap:8px}
 /* running chats in the rail (renderBots) */
@@ -397,6 +462,7 @@ canvas.pet{image-rendering:pixelated;cursor:grab;touch-action:none;pointer-event
 .rail .bots:empty{display:none}
 .bot[data-agent="claude"]{color:#d97757}.bot[data-agent="codex"]{color:#3b82f6} /* Builder 2026-10-18: Anthropic orange, Codex blue, whatever the look */
 .bot[data-busy] svg{animation:bot-work 1.2s ease-in-out infinite}
+.bot{position:relative}.bot[data-n]::after{content:attr(data-n);position:absolute;right:1px;bottom:1px;min-width:12px;padding:0 3px;border-radius:6px;background:var(--popover,#111);color:inherit;border:1px solid currentColor;font:600 9px/12px system-ui,sans-serif;text-align:center}
 @keyframes bot-work{50%{transform:translateY(-2px)}}
 @media (prefers-reduced-motion:reduce){.bot[data-busy] svg{animation:none}}
 .pane[data-quiet] .hist :is(details.tool,details.thought){display:none}
@@ -480,3 +546,165 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 @media (max-width:760px){.land-bar button{padding:14px 12px;gap:10px}.land-bar kbd{display:none}} /* room for the full description; 1-3 still work */
 @media (max-height:680px){.land-main{bottom:10px}.land-bar{margin-top:16px}.land-pets{margin-top:12px}}
 @media (prefers-reduced-motion:reduce){.land *,.land{animation:none!important;transition:none!important}.land .land-mark .orbit{stroke-dashoffset:0}}
+/* Send to server (item 25): the chat blurs and falls into the black hole drawn over its pane; P9 turns in the hole like the
+   logo, a light runs round its orbit, the bar (theme colour) and its % sit under it. Reduced motion: the bar only. */
+.pane[data-pulled]{animation:move-pull 1.5s cubic-bezier(.55,0,.75,.2) forwards;pointer-events:none}
+@keyframes move-pull{25%{filter:blur(2px);transform:none;opacity:1}100%{filter:blur(12px);opacity:0;transform:scale(.04) rotate(-150deg)}}
+.move-fx{--ink:oklch(0.96 0.01 255);--dim:oklch(0.76 0.03 262);position:fixed;z-index:60;overflow:hidden;color:var(--ink);pointer-events:none}
+.move-fx[hidden]{display:none}
+#moveSky{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity 1.3s .2s ease-in;background:radial-gradient(closest-side circle at 50% 40%,#000 52%,oklch(0.9 0.09 80/.9) 56%,oklch(0.6 0.15 280/.35) 64%,transparent 82%),radial-gradient(120% 80% at 50% 40%,oklch(0.18 0.06 275),#000 70%)}
+.move-fx[data-on] #moveSky{opacity:1}
+.move-mark{position:absolute;left:50%;top:40%;width:min(52%,300px);translate:-50% -50%;overflow:visible;opacity:0;transition:opacity .8s 1.2s;perspective:600px}
+.move-fx[data-on] .move-mark{opacity:1}
+.move-mark text{font:700 124px/1 "Space Grotesk",sans-serif;letter-spacing:-6px;filter:drop-shadow(0 0 14px oklch(0.7 0.14 265/.45))}
+.move-mark .orbit{fill:none;stroke:url(#moveOrbit);stroke-width:2.4;stroke-linecap:round}
+.move-mark .back{opacity:.5}
+.move-p9{transform-box:fill-box;transform-origin:center;animation:move-turn 3.6s cubic-bezier(.6,0,.4,1) infinite}
+@keyframes move-turn{0%{transform:scaleX(1)}25%{transform:scaleX(.08)}50%{transform:scaleX(-1)}75%{transform:scaleX(.08)}100%{transform:scaleX(1)}}
+.move-info{position:absolute;left:50%;bottom:9%;translate:-50% 0;width:min(80%,380px);display:grid;justify-items:center;gap:7px;text-align:center;pointer-events:auto}
+.move-info p{margin:0}
+.move-info [hidden]{display:none}
+#moveWhat{font-weight:600;text-shadow:0 1px 6px #000}
+.move-fx[data-wait] #moveWhat{color:var(--warn)}
+.move-bar{width:100%;height:8px;border-radius:99px;background:color-mix(in oklch,var(--primary) 22%,transparent);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--primary) 40%,transparent);overflow:hidden}
+.move-bar>i{display:block;height:100%;width:var(--p,0%);background:var(--primary);box-shadow:0 0 12px var(--primary);transition:width .4s ease-out}
+.move-pct{font-variant-numeric:tabular-nums;color:var(--dim)}.move-pct b{color:var(--ink);font-size:15px}
+#moveNeverRow{padding-top:0}
+@media (prefers-reduced-motion:reduce){
+  .pane[data-pulled]{animation:none;filter:blur(6px)}
+  #moveSky,.move-mark{display:none}
+  .move-fx{color:var(--foreground);--ink:var(--foreground);--dim:var(--muted-foreground)}
+  .move-info{top:50%;bottom:auto;translate:-50% -50%;padding:16px;border-radius:12px;background:var(--card);box-shadow:0 0 0 1px var(--border)}
+  #moveWhat{text-shadow:none}.move-bar>i{transition:none}
+}
+/* Sprint tracker: one ring per chunk; the colour is the chunk's state (green merged, amber waiting, blue running, red blocked). */
+.springs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.spr{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
+.spr .spt{display:flex;flex-direction:column;gap:2px;min-width:0}.spr .spt b{font-size:13px;font-weight:600}
+.spr .st{color:var(--ring-c)}.spr .wait{color:var(--muted-foreground);overflow-wrap:anywhere}
+.spr{--ring-c:var(--muted-foreground)}.spr .ring{--ring-c:inherit}
+.spall{display:flex;align-items:center;gap:12px;margin:8px 0 12px}.spall .ring{width:72px;height:72px}.spall .ring b{font-size:15px}.spall .spt{display:flex;flex-direction:column;gap:2px}
+.spr [data-activity]{color:var(--foreground)}.spr [data-activity="needs you"]{color:var(--warn)}.spr [data-steps]{color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.spr[data-state="merged"]{--ring-c:var(--ok)}.spr[data-state="waiting"]{--ring-c:var(--warn)}
+.spr[data-state="running"]{--ring-c:oklch(0.68 0.15 245)}.spr[data-state="blocked"]{--ring-c:var(--destructive)}
+@media (max-width:520px){.springs{grid-template-columns:minmax(0,1fr)}}
+
+/* Side panel (specs/side-panel.md): a column beside .focuses, on the right or, swapped, on the left. The terminal dock spans both. */
+.stage[data-side=right]{grid-template-columns:minmax(0,1fr) var(--side-w)}
+.stage[data-side=left]{grid-template-columns:var(--side-w) minmax(0,1fr)}
+.stage[data-side=left]>.focuses{grid-column:2}
+.stage[data-side=left]>.side{grid-column:1;grid-row:1}
+.stage[data-side=right]>.side{grid-column:2;grid-row:1}
+.stage[data-side]>.dock{grid-column:1/-1}
+.side{display:flex;min-width:0;min-height:0;background:var(--background);overflow:hidden}
+.side[hidden]{display:none}
+.stage[data-side=left]>.side .handle-v{order:2}
+.side .handle-v{flex:none;width:1px}
+.side .handle-v::after{inset:0 -4px}
+.sidebox{flex:1;min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr)}
+.shead{display:flex;align-items:center;gap:4px;height:30px;padding:0 6px 0 0;border-bottom:1px solid var(--border);font-size:12px}
+.stab,.dtab .stab{display:inline-flex;align-items:center;gap:6px;height:100%;padding:0 12px;border-right:1px solid var(--border);cursor:grab;user-select:none;touch-action:none;color:var(--foreground);font-size:12px}
+.shead .spacer{flex:1}
+.sbody{min-height:0;min-width:0;overflow:hidden;display:grid}
+.sbody>.chats{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+.dtab{grid-column:1/-1;display:flex;align-items:center;height:30px;border-bottom:1px solid var(--border)}
+#fDev .dtab{display:none}
+.stage[data-side] #fDev .dtab{display:flex}
+.stage.tabdrag{cursor:grabbing;user-select:none}
+.stage[data-side-mode=full]{grid-template-columns:minmax(0,1fr)}
+.stage[data-side-mode=full]>.side{grid-area:1/1;z-index:15}
+.stage[data-side-mode=full]>.focuses{visibility:hidden;grid-area:1/1} /* both in row 1: the dock keeps its own row and the side gets the 1fr */
+/* Chat Focus full: the artifact ends above the chat's text box, which stays visible and usable (side-panel answer 2). Only .bottom
+   of each chat shows, and in it only the box (not the plan card, pinned cards or meters); --chat-bottom is its height (controller.mjs,
+   renderChats). Dev Focus full keeps its box inside the side. */
+.stage[data-side-mode=full]>.focuses>#fChat.on{visibility:visible}
+.stage[data-side-mode=full]>.focuses>#fChat.on :is(.files,.pane>:not(.bottom)){visibility:hidden}
+.stage[data-side-mode=full]>.focuses>#fChat.on .bottom :is(.pinned,.meters){display:none}
+.stage[data-side-mode=full]:has(#fChat.on)>.side{margin-bottom:var(--chat-bottom,0px)}
+/* D20: connecting to a remote. The P9 black hole (black-hole.css), the window's own words under it. */
+dialog.connecting{inset:0;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;border:0;padding:0;background:radial-gradient(90% 70% at 50% 42%,oklch(0.18 0.06 275),#000 70%);color:oklch(0.96 0.01 255);flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center}
+dialog.connecting[open]{display:flex}
+dialog.connecting::backdrop{background:#000}
+.conn-hole{margin-bottom:10px}
+dialog.connecting h2{margin:0;font:500 20px/1.2 "Space Grotesk",sans-serif;letter-spacing:.02em}
+dialog.connecting p{margin:0;max-width:46ch;color:oklch(0.76 0.03 262)}
+dialog.connecting>button{margin-top:12px}
+dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
+/* D15a: the install in progress (a spinner, the last line, the time so far) and, if it stopped, its last lines. */
+.conn-progress{display:flex;align-items:center;gap:10px;max-width:46ch;margin-top:12px;font-size:13px;color:oklch(0.86 0.03 262)}
+.conn-progress[hidden],.conn-log[hidden]{display:none}
+.conn-spin{flex:none;width:14px;height:14px;border-radius:50%;border:2px solid oklch(0.9 0.09 80/.25);border-top-color:oklch(0.9 0.09 80);animation:conn-turn .8s linear infinite}
+#connTime{flex:none;font-variant-numeric:tabular-nums;color:oklch(0.7 0.03 262)}
+.conn-steps{max-width:min(72ch,90vw);margin:12px 0 0;padding-left:1.4em;text-align:left;font-size:13px;line-height:1.5}
+.conn-steps li{margin:0 0 10px}
+.conn-steps code{display:block;margin-top:4px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;user-select:all;overflow-wrap:anywhere}
+.conn-log{max-width:min(72ch,90vw);max-height:30vh;overflow:auto;margin:12px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:oklch(0.12 0.02 262);font:12px/1.45 ui-monospace,monospace;white-space:pre-wrap;text-align:left;color:oklch(0.82 0.03 262)}
+#connInstall{min-width:16ch}
+@keyframes conn-turn{to{rotate:360deg}}
+.remote-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.remote-list [data-slot="select"]{width:auto;flex:none}
+#setRemoteAdd input{flex:1;min-width:0}
+
+/* Mission data tiles and links (M3): a script's JSON drawn as text. */
+.dtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;padding:0 8px 8px}
+.dtile{border:1px solid var(--border);border-radius:11px;padding:10px 12px;min-width:0}
+.dcard{grid-column:1/-1}.card-frame .art-frame{display:block;height:200px;background:transparent;color-scheme:light}.dark .card-frame .art-frame{color-scheme:dark}
+.dtile h3{margin:0 0 6px;font-size:11.5px;font-weight:600;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.04em}
+.tile-note{margin:0;font-size:12px;color:var(--muted-foreground)}
+.tile-stat{margin:0;display:flex;align-items:baseline;gap:6px}.tile-stat b{font-size:28px;font-weight:650;color:var(--foreground);font-variant-numeric:tabular-nums}.tile-stat span{font-size:12px;color:var(--muted-foreground)}
+.tile-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.tile-list li{display:grid;grid-template-columns:1fr auto;gap:0 8px;min-width:0}.tile-list li>:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--foreground)}
+.tile-list a{color:var(--primary);text-decoration:none}.tile-list a:hover{text-decoration:underline}
+.tile-list em{font-style:normal;font-size:10.5px;padding:0 6px;border-radius:999px;background:var(--accent);color:var(--foreground);align-self:center}
+.tile-list small{grid-column:1/-1;font-size:11px;color:var(--muted-foreground)}
+.tile-table{overflow:auto}.tile-table table{border-collapse:collapse;width:100%;font-size:12px}
+.tile-table th{text-align:left;font-weight:600;color:var(--muted-foreground);border-bottom:1px solid var(--border);padding:2px 8px 4px 0}.tile-table td{padding:3px 8px 3px 0;color:var(--foreground);font-variant-numeric:tabular-nums}
+.tile-rings{display:flex;flex-wrap:wrap;gap:10px}.tile-rings figure{margin:0;display:grid;justify-items:center;position:relative;width:64px}
+.tile-rings svg{width:56px;height:56px;transform:rotate(-90deg)}.tile-rings circle{fill:none;stroke:var(--border);stroke-width:3.2}.tile-rings circle+circle{stroke:var(--primary);stroke-linecap:round}
+.tile-rings b{position:absolute;top:19px;font-size:12px;font-variant-numeric:tabular-nums;color:var(--foreground)}.tile-rings figcaption{font-size:11px;color:var(--muted-foreground);text-align:center}
+.tile-printed{margin:6px 0 0;max-height:120px;overflow:auto;padding:6px 8px;border-radius:7px;background:var(--accent);color:var(--foreground);font-size:11px;white-space:pre-wrap;word-break:break-all}
+.tile-allow{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.tile-link{display:grid;align-content:center;gap:2px;border:1px solid var(--border);border-radius:11px;padding:10px 12px;color:var(--foreground);text-decoration:none;font-size:13px;min-width:0}
+.tile-link:hover{background:var(--accent)}.tile-link small{font-size:11px;color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis}
+
+/* Mission checklists (M4): a row's marks are one segmented group; the pressed one is the mark on disk. */
+.cks{display:grid;gap:8px;padding:0 8px 8px}
+.ck{border:1px solid var(--border);border-radius:11px;padding:10px 12px;min-width:0}
+.ck h3{margin:0 0 6px;font-size:11.5px;font-weight:600;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.04em}
+.ck-file+.ck-file{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.ck-name{margin:0 0 6px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;font-size:12.5px}.ck-name b{font-weight:600;color:var(--foreground)}
+.ck-state{font-size:11.5px;color:var(--muted-foreground)}
+.ck-rows{list-style:none;margin:0;padding:0}
+.ck-rows li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:6px 0;border-top:1px solid var(--border)}.ck-rows li:first-child{border-top:0}
+.ck-rows p{margin:0;font-size:12.5px;line-height:1.4;color:var(--foreground);overflow-wrap:anywhere}
+.ck-marks{display:inline-flex;flex-wrap:wrap;gap:2px;padding:2px;border:1px solid var(--border);border-radius:999px;justify-self:start}
+.ck-marks button{border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11.5px;padding:3px 10px;border-radius:999px;cursor:pointer}
+.ck-marks button:hover{color:var(--foreground);background:var(--accent)}.ck-marks button:focus-visible,.ck-apply:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
+.ck-marks button[aria-pressed=true]{background:var(--primary);color:var(--primary-foreground);font-weight:600}
+.ck-apply{margin-top:8px;padding:5px 14px;border:0;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.ck-apply[data-armed]{outline:2px solid var(--primary);outline-offset:2px}
+.ck-note{margin-bottom:6px;color:var(--foreground)}
+/* M4 onboarding card on an empty Mission, and the space picker (onboarding.mjs) */
+.onboard{max-width:760px;margin:24px auto;padding:22px 24px;display:grid;gap:12px;border:1px solid var(--border);border-radius:14px;background:color-mix(in oklch,var(--card) 70%,transparent);color:var(--foreground)}
+.onboard h3{margin:0;font-size:20px;font-weight:600}.onboard h4{margin:8px 0 0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground)}
+.onboard p{margin:0;line-height:1.5}.onboard .muted{color:var(--muted-foreground)}
+.onboard-protect{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 14px;padding:10px 14px;border:1px solid color-mix(in oklch,var(--primary) 30%,var(--border));background:color-mix(in oklch,var(--primary) 5%,transparent);border-radius:10px}.onboard-protect p{grid-column:1}.onboard-protect [data-open-protect]{grid-column:2;grid-row:1/3}
+.onboard-go{display:flex;flex-wrap:wrap;gap:10px}
+.onboard-tpls{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px 12px;border:1px solid var(--border);border-radius:11px;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
+.onboard-tpl:hover,.onboard-tpl:focus-visible{border-color:var(--primary)}.onboard-tpl span{font-size:12px;color:var(--muted-foreground);line-height:1.4}
+.onboard-tpl[data-armed]{border-color:var(--primary)}
+div.onboard-tpl{cursor:default}div.onboard-tpl:hover{border-color:var(--border)} /* a preview's sections: shown, not clicked */
+.onboard-back{max-width:760px;margin:-12px auto 0}
+#spacePop{background:linear-gradient(var(--popover),var(--popover)),var(--background)}#spacePop .item{display:flex}#spacePop .space-del{color:var(--destructive)}
+.space-form{display:grid;gap:8px;padding:8px 10px;width:260px}.space-form p{margin:0}.space-form label{display:grid;gap:4px;font-size:12px}.space-form .space-hint{font-size:11px;margin-top:-4px}.space-form-go{display:flex;gap:8px;flex-wrap:wrap}.space-form-go[hidden]{display:none}#spacePop .item[aria-checked="true"]::after{content:"\2713";margin-left:auto;padding-left:12px;color:var(--primary)}
+#spaceBtn{align-self:center;gap:4px;max-width:220px}#spaceBtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2}
+.space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
+/* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */
+.tiles>.space-pick{grid-column:span 2;align-self:center;padding:0 4px}.tiles>.space-pick select{flex:1;min-width:0}
+/* A workspace image in the Chat Focus file window: whole, centred, on a quiet surface so a transparent PNG still reads. */
+#mdlBody .file-image{display:grid;place-items:center;padding:16px 20px;background:color-mix(in oklab,var(--muted) 45%,transparent)}
+#mdlBody .file-image img{display:block;max-width:100%;max-height:70vh;object-fit:contain;border-radius:var(--radius-sm,6px)}
+#mdlBody .file-image-note{margin:16px 20px}
+/* History lists every chat a message was sent in: past the window it scrolls, or the last ones cannot be reached. */
+#histPop{max-height:calc(100vh - 60px);overflow-y:auto;overscroll-behavior:contain}

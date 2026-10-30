@@ -1,6 +1,7 @@
 // Remove P9's per-user daemon unit (Linux). Only the named p9-* unit and its drop-ins are touched: other apps
 // (agent-first-workspace, workspace-hub) and P9's state folder stay. The state holds chat history; delete it by hand.
-// Usage: node scripts/uninstall-service.mjs [--unit p9-foundation.service] [--force]
+// Usage: node scripts/uninstall-service.mjs [--unit p9-foundation.service] [--force] [--keep-menu]
+// The source install's menu entry goes too, unless --keep-menu (Setup's Change the folder installs the unit again).
 import { existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -8,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { daemonRequest } from './teh.mjs';
 
-const { values } = parseArgs({ options: { unit: { type: 'string', default: 'p9-foundation.service' }, force: { type: 'boolean', default: false } } });
+const { values } = parseArgs({ options: { unit: { type: 'string', default: 'p9-foundation.service' }, force: { type: 'boolean', default: false }, 'keep-menu': { type: 'boolean', default: false } } });
 if (!/^p9-[a-z0-9-]+\.service$/.test(values.unit)) throw new Error('p9-unit-required');
 const directory = path.join(os.homedir(), '.config', 'systemd', 'user');
 // Removing the installed daemon: Stop All first, so its chats, scripts and tmux terminals (their own units) do not
@@ -32,5 +33,11 @@ if (!stopped && !values.force) {
 rmSync(path.join(directory, values.unit), { force: true });
 rmSync(path.join(directory, values.unit + '.d'), { recursive: true, force: true });
 execFileSync('systemctl', ['--user', 'daemon-reload']);
+// Only an entry install.sh wrote (its open script is there): a p9-event-horizon.desktop P9 did not write stays.
+const data = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), open = path.join(data, 'p9-event-horizon', 'open');
+if (values.unit === 'p9-foundation.service' && !values['keep-menu'] && existsSync(open)) {
+  rmSync(path.join(data, 'applications', 'p9-event-horizon.desktop'), { force: true });
+  rmSync(path.dirname(open), { recursive: true, force: true });
+}
 const state = path.join(os.homedir(), '.local', 'state', 'p9-foundation');
 console.log('P9_SERVICE_REMOVED ' + values.unit + (existsSync(state) ? '; state kept at ' + state : ''));

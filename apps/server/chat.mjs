@@ -4,6 +4,7 @@
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFile, lstat, mkdir, readdir, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -11,9 +12,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { childEnv } from './child-env.mjs';
+import { imageType } from '../../packages/files/index.mjs';
 import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
+import { createMove, movedNote } from './move.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -24,6 +27,22 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp
 const imagesOk = (images) => Array.isArray(images) && images.length <= MAX_IMAGES && images.every((image) => image && typeof image === 'object'
   && IMAGE_TYPES.has(image.mimeType) && typeof image.data === 'string' && image.data.length > 0 && image.data.length <= MAX_IMAGE && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data));
 const EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' }, MAX_STORED = 200 * 1024 * 1024;
+// Item 26: before it, photos were kept in <state>/images. The Windows state folder (%LOCALAPPDATA%\P9\runtime) is never
+// emptied, so that folder made every later start refuse (state-directory-not-empty, main.mjs). Called before that check:
+// the photos (plain files named <sha256>.<ext>) move to <ownership>/images; anything else stays and the start still refuses.
+export async function keepOldPhotos(state, ownership) {
+  const old = path.join(state, 'images');
+  if (!(await lstat(old).catch(() => null))?.isDirectory()) return;
+  const dir = path.join(ownership, 'images');
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  for (const name of await readdir(old)) {
+    const from = path.join(old, name), to = path.join(dir, name);
+    if (!/^[0-9a-f]{64}\.(?:png|jpg|gif|webp)$/.test(name) || !(await lstat(from)).isFile()) continue;
+    // A state folder on another disk (Linux's RAM one): copy, then delete. The same name is the same photo.
+    await rename(from, to).catch(async (error) => { if (error.code !== 'EXDEV') throw error; await copyFile(from, to); await unlink(from); });
+  }
+  await rmdir(old).catch(() => {});
+}
 // A start holds the Stop All barrier, so an adapter that never answers the handshake must not hold it forever.
 const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -150,11 +169,6 @@ const MAX_AGENT_IMAGE = 8 * 1024 * 1024, IMAGE_NOTE = '\n\n[image not shown: onl
 // An image the agent opened from disk arrives as a resource_link naming only its path (Codex's view_image). The daemon
 // reads that file once, here, and keeps it only when it is a regular file of at most 6 MiB whose first bytes say PNG,
 // JPEG, GIF or WebP (threat model row 27); anything else stays a plain link and nothing is read.
-const imageType = (bytes) => {
-  const head = bytes.toString('latin1', 0, 12);
-  return head.startsWith('\x89PNG\r\n\x1a\n') ? 'image/png' : head.startsWith('\xff\xd8\xff') ? 'image/jpeg'
-    : /^GIF8[79]a/.test(head) ? 'image/gif' : head.startsWith('RIFF') && head.endsWith('WEBP') ? 'image/webp' : null;
-};
 function fileImage(block) {
   let file = typeof block.uri === 'string' ? block.uri : '', fd;
   try {
@@ -192,16 +206,36 @@ function trim(update) {
 }
 
 // socketPath: the desktop socket the P9 MCP relay calls; without it (tests that never start the daemon) chats get no MCP server.
-export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath, state }) {
+export function createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath, state, ownership }) {
   const db = ledger.db;
   const live = new Map(); // conversation -> { proc, agent, sessionId, exited, turn, pending: Map }
   const listeners = new Set();
   const stops = new Map(); // conversation -> the Stop in progress
   const failed = new Map(); // conversation -> the adapter whose cleanup could not be confirmed; the next Stop retries it
+  // preview: the list's second line for a chat whose events the phone has not read, by its own rule (digest() in phone.ts):
+  // the newest prompt or reply, the reply being its run of chunks since the prompt or tool call before it, warnings left
+  // out. Each read walks the events_conversation index back from the chat's end, as used does.
+  const said = db.prepare(`SELECT cursor, type, data FROM events WHERE conversation = ? AND (type = 'user' OR (type = 'update'
+    AND json_extract(data, '$.sessionUpdate') = 'agent_message_chunk' AND json_extract(data, '$.content.text') NOT LIKE 'Warning: %'))
+    ORDER BY cursor DESC LIMIT 1`);
+  const runFrom = db.prepare(`SELECT cursor FROM events WHERE conversation = ? AND cursor < ? AND (type = 'user' OR (type = 'update'
+    AND json_extract(data, '$.sessionUpdate') = 'tool_call')) ORDER BY cursor DESC LIMIT 1`);
+  // ponytail: the first 80 chunks of the reply; a first line longer than that is cut anyway.
+  const replyText = db.prepare(`SELECT group_concat(text, '') AS text FROM (SELECT json_extract(data, '$.content.text') AS text FROM events
+    WHERE conversation = ? AND cursor > ? AND cursor <= ? AND type = 'update' AND json_extract(data, '$.sessionUpdate') = 'agent_message_chunk'
+    AND text NOT LIKE 'Warning: %' ORDER BY cursor LIMIT 80)`);
+  const preview = (id) => {
+    const last = said.get(id);
+    if (!last) return '';
+    const text = last.type === 'user' ? JSON.parse(last.data).text : replyText.get(id, runFrom.get(id, last.cursor)?.cursor ?? 0, last.cursor).text;
+    const line = String(text ?? '').trim().split('\n')[0].trim();
+    return line.length > 100 ? line.slice(0, 99) + '…' : line;
+  };
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
-  // CP3 (threat model row 43): a sent photo is kept as <state>/images/<sha256>.<ext>, so the chat can show it again; the
+  // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
   // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. Chats are never deleted, so nothing else removes them.
-  const imageDir = state && path.join(state, 'images');
+  // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
+  const imageDir = (ownership || state) && path.join(ownership || state, 'images');
   const keep = (images) => images.map(({ mimeType, data }) => {
     const bytes = Buffer.from(data, 'base64'), hash = createHash('sha256').update(bytes).digest('hex');
     if (imageDir) {
@@ -223,7 +257,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
   const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
-    .then((result) => { session.mode = value; return result; });
+    .then((result) => { session.mode = value; emit(session.id, 'mode', { mode: value, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === value) ?? value, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
   // The chat's Mode picker, sent with each desktop prompt (Builder, 2026-10-17: Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   const MODES = { claude: { Auto: 'auto', Manual: 'default', Plan: 'plan', 'Accept edits': 'acceptEdits', 'Bypass permissions': 'bypassPermissions' },
@@ -256,8 +290,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // The paste box's code goes to its stdin only. One login per agent; ended after 10 minutes, on Stop or at shutdown.
   // ponytail: Stop ends the CLI's whole process group (Windows: its job), so a browser the CLI started itself, not
   // handed to one already running, closes with it.
-  const LOGIN = { claude: ['--cli', 'auth', 'login', '--claudeai'], codex: ['cli', 'login'] };
-  const logins = new Map(); // agent -> { tree, url, exit, timer }
+  // D8: Codex signs in with its device code (a hidden flag in the codex P9 ships, pinned in the lockfile): it prints a
+  // page and a one-time code and listens on no port, so it works when the daemon runs on another computer.
+  const LOGIN = { claude: ['--cli', 'auth', 'login', '--claudeai'], codex: ['cli', 'login', '--device-auth'] };
+  const logins = new Map(); // agent -> { tree, url, code, unsupported, exit, timer }
   const agentName = (value) => typeof value === 'string' && Object.hasOwn(LOGIN, value); // never ['claude'], which hasOwn reads as 'claude'
   const endLogin = async (agent) => {
     const login = logins.get(agent);
@@ -270,7 +306,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const loginRoutes = {
     state: () => ({ status: 200, ...Object.fromEntries(Object.keys(LOGIN).map((agent) => {
       const login = logins.get(agent);
-      return [agent, { running: Boolean(login && login.exit === undefined), url: login?.url ?? null, exit: login?.exit ?? null }];
+      return [agent, { running: Boolean(login && login.exit === undefined), url: login?.url ?? null, code: login?.code ?? null, unsupported: login?.unsupported ?? false, exit: login?.exit ?? null }];
     })) }),
     async start(body) {
       if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'agent' || !agentName(body.agent)) return refused(400, 'request-refused');
@@ -279,19 +315,26 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (logins.has(agent) && logins.get(agent).exit === undefined) return refused(409, 'login-running');
       const [program, ...entry] = adapterOverride ? [process.execPath, adapterOverride, agent] : [process.execPath, adapterEntry(agent)];
       const tree = launchTree([program, ...entry, ...LOGIN[agent]], workspace);
-      const login = { tree, url: null, exit: undefined, timer: setTimeout(() => endLogin(agent), 10 * 60 * 1000) };
+      const login = { tree, url: null, code: null, unsupported: false, exit: undefined, timer: setTimeout(() => endLogin(agent), 10 * 60 * 1000) };
       logins.set(agent, login);
       let seen = '';
       const read = (chunk) => {
-        if (login.url || seen.length > 65536) return;
+        if ((login.url && (agent !== 'codex' || login.code)) || seen.length > 65536) return;
         seen += chunk;
-        login.url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(seen)?.[0] ?? null;
+        const text = seen.replace(/\x1b\[[0-9;]*m/g, '');
+        login.url = /https:\/\/[^\s"'<>\x1b]{1,4096}/.exec(text)?.[0] ?? null;
+        // Codex's one-time code: the first code-shaped word after its page, nothing else of the output.
+        if (agent === 'codex' && login.url) login.code = /(?<![\w-])[A-Z0-9]{4,8}-[A-Z0-9]{4,8}(?![\w-])/.exec(text.slice(text.indexOf(login.url) + login.url.length))?.[0] ?? null;
       };
       tree.child.stdout.on('data', read);
       tree.child.stderr.on('data', read);
       tree.child.stdin.on('error', () => {});
       tree.child.on('error', () => { login.exit = -1; clearTimeout(login.timer); });
-      tree.child.on('exit', (code) => { login.exit = code ?? -1; clearTimeout(login.timer); });
+      tree.child.on('exit', (code) => {
+        login.exit = code ?? -1; clearTimeout(login.timer);
+        // A later codex without the flag: named, so the wizard says why and offers its terminal sign-in.
+        login.unsupported = agent === 'codex' && code !== 0 && !login.url && seen.includes('--device-auth');
+      });
       return { status: 202, started: agent };
     },
     code(body) {
@@ -353,7 +396,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
     // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.
-    const session = { proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
+    const session = { id: conversation.id, proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
     const mcpServers = socketPath ? [{ name: 'p9', command: process.execPath, args: [mcpRelay],
       env: [{ name: 'P9_MCP_SOCKET', value: socketPath }, { name: 'P9_MCP_TOKEN', value: session.mcpToken }] }] : [];
     session.exited = new Promise((resolve) => {
@@ -633,12 +676,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return { status: 200, on: locked };
     },
     // Most recently used first, for the desktop's History and the phone (owner, 2026-10-25). used: the chat's newest event,
-    // not counting the stops a close, an exit or a daemon restart write; sent: a message was ever sent (History leaves out
+    // not counting the stops a close, an exit or a daemon restart write, nor the created event (its time is a later Date.now()
+    // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
-        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
-        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent
-      FROM conversations c ORDER BY used DESC, created DESC`).all().map((c) => ({ ...c, sent: c.sent === 1 })),
+        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
+        EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
+        EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
+          AND a.cursor > COALESCE((SELECT cursor FROM events WHERE conversation = c.id AND type IN ('turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error') ORDER BY cursor DESC LIMIT 1), 0)
+          AND NOT EXISTS (SELECT 1 FROM events b WHERE b.conversation = c.id AND b.type = 'answered' AND b.cursor > a.cursor
+            AND json_extract(b.data, '$.request') = json_extract(a.data, '$.request'))) AS waiting
+      FROM conversations c ORDER BY used DESC, created DESC`).all()
+      // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
+      // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
+      .map((c) => ({ ...c, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id) })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     async create(body) {
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
@@ -653,7 +704,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     async prompt(id, body, held) {
       await recovered;
       const release = lifecycle.begin();
-      if (!release) return refused(503, 'stop-all-running');
+      if (!release) return refused(503, lifecycle.refusal());
       const conversation = ID.test(id) && row(id);
       if (!conversation) { release(); return refused(404, 'unknown-conversation'); }
       const images = body?.images ?? [];
@@ -675,7 +726,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!['idle', 'running', 'stopped'].includes(conversation.state)) { release(); return refused(409, conversation.state); }
       if (closing) { release(); return refused(503, 'shutting-down'); }
       setState(id, 'turn');
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }) }); // hash and type only: events stay small
+      const note = movedNote(db, id); // read before this message's own user event
+      // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
       release();
@@ -718,7 +771,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const turn = session.turn = randomUUID();
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       let ended;
-      const prompt = blocks(body.text, images);
+      const prompt = [...(note ? [{ type: 'text', text: note }] : []), ...blocks(body.text, images)];
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
@@ -768,6 +821,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       await recovered;
       if (!ID.test(id) || !row(id)) return refused(404, 'unknown-conversation');
       if (body?.close !== undefined && body.close !== true) return refused(400, 'request-refused');
+      // Send to server (move.mjs): a frozen or moved chat is already stopped, and a Stop would make it runnable here again.
+      if (['moving', 'moved'].includes(row(id).state)) { if (body?.close) emit(id, 'closed'); return { status: 200, result: 'stopped' }; }
       const result = await stopConversation(id);
       if (body?.close) emit(id, 'closed');
       return { status: result === 'stopped' ? 200 : 500, result };
@@ -779,7 +834,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       await recovered;
       const conversation = ID.test(id) && row(id);
       if (!conversation) return refused(404, 'unknown-conversation');
-      if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '')) return refused(409, 'handoff-unavailable');
+      if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '') || ['moving', 'moved'].includes(conversation.state)) return refused(409, 'handoff-unavailable');
       if (!await listDirectory(workspace, conversation.folder ?? '').then(() => true, () => false)) return refused(409, 'folder-unavailable');
       const result = await stopConversation(id);
       if (result !== 'stopped') return { status: 500, result };
@@ -788,14 +843,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,
+    ...createMove({ db, workspace, ownership, row, emit, stopConversation, recovered }),
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).
-    async events(after, waitMs, only, until) {
+    // tail (P20, with only): the newest tail blocks of each chat instead (ledger.tail), for the phone.
+    async events(after, waitMs, only, until, tail) {
       if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(waitMs) || waitMs < 0) return refused(400, 'request-refused');
-      if (only !== undefined || until !== undefined) {
-        if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))) return refused(400, 'request-refused');
-        return { status: 200, ...ledger.of(only, after, until) };
+      if (only !== undefined || until !== undefined || tail !== undefined) {
+        if (!Array.isArray(only) || only.length > 100 || !only.every((id) => ID.test(id)) || (until !== undefined && (!Number.isSafeInteger(until) || until < after))
+          || (tail !== undefined && (!Number.isSafeInteger(tail) || tail < 1 || tail > 200))) return refused(400, 'request-refused');
+        return { status: 200, ...(tail === undefined ? ledger.of(only, after, until) : ledger.tail(only, until, tail)) };
       }
       let events = ledger.after(after);
       if (!events.length && waitMs) {

@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from './child-env.mjs';
 import { stillAuthorized } from './authority.mjs';
-import { readFile } from '../../packages/files/index.mjs';
+import { readFile, HEAVY } from '../../packages/files/index.mjs';
 
 const HOST = /^[\w.-]{1,64}$/;
 const LOG = /^(?:[\w-]+\/)?[\w.-]+\.log$/; // <host>/<job>.log = a log another machine sends here
@@ -24,8 +24,8 @@ const INC_FILE = /^\d{4}-\d\d-\d\d-(.+?)(?:-\d{6})?\.md$/;
 const STAMP = /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/;
 const AUDIT_RUN = /^\d{4}-\d{2}-\d{2}$/;
 const BREAK = /\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/; // the line breaks Python's splitlines() knows
-// Folders the hub's queue never looks in (mission_control.py SKIP).
-const SKIP = new Set(['_archive', '_private', 'node_modules', '.venv', 'recommended-delete', '_intake', '_templates', 'templates']);
+// Folders the hub's queue never looks in (mission_control.py SKIP, plus the HEAVY dependency and build folders).
+const SKIP = new Set([...HEAVY, '_archive', '_private', 'recommended-delete', '_intake', '_templates', 'templates']);
 // One ssh call each: every server log's name, change time and last line; every server incident's name, first line and
 // Resolved line (tabs in a line become spaces).
 const SERVER_LS = "cd ~/icm-logs 2>/dev/null && for f in *.log; do [ -f \"$f\" ] && printf '%s\\t%s\\t%s\\n' \"$f\" "
@@ -264,8 +264,10 @@ export function createHub({ workspace, settings }) {
   const fast = cached(fastSections, FAST_TTL);
   const noticeCache = cached(notices, NOTICES_TTL);
 
+  // With a space file the space is Mission (threat model row M4-b): the built-in layer reads, runs and writes nothing.
+  const off = () => (settings?.space ? { status: 404, error: 'space-set' } : !folder ? { status: 404, error: 'hub-not-set' } : null);
   async function overview() {
-    if (!folder) return { status: 404, error: 'hub-not-set' };
+    if (off()) return off();
     const f = fast(), n = noticeCache();
     // The first call, or the first after five idle minutes, waits for fresh quick sections; never for doctor.
     if (f.pending && (!f.value || Date.now() - f.at > 5 * FAST_TTL)) await f.pending;
@@ -273,7 +275,7 @@ export function createHub({ workspace, settings }) {
     return { status: 200, ...f.value, notices: n.value, checkedAt: n.at || null, unchecked: await unchecked() };
   }
   async function text({ kind, host: machine, name } = {}) {
-    if (!folder) return { status: 404, error: 'hub-not-set' };
+    if (off()) return off();
     // A handoff is a workspace file: P9's own reader opens it, with its locked-path and symlink rules.
     if (kind === 'handoff' && PROJECT.test(name ?? '')) {
       try { return { status: 200, text: (await readFile(workspace, name + '/HANDOFF.md')).content }; } catch { return { status: 404, error: 'not-found' }; }
@@ -286,7 +288,7 @@ export function createHub({ workspace, settings }) {
     try { return { status: 200, text: String(await read()) }; } catch (error) { return { status: error.status ?? 502, error: 'hub-failed' }; }
   }
   async function decide({ name, choice } = {}) {
-    if (!folder) return { status: 404, error: 'hub-not-set' };
+    if (off()) return off();
     if (!BRANCH.test(name ?? '') || !['merge', 'reject', 'pending'].includes(choice)) return { status: 400, error: 'request-refused' };
     if (!inboxDir) return { status: 404, error: 'hub-failed' };
     const file = path.join(inboxDir, name, '_decision.md');
@@ -306,5 +308,21 @@ export function createHub({ workspace, settings }) {
     fast().at = 0; // the next overview reads the new decision
     return { status: 200 };
   }
-  return { overview, text, decide, folder, sections: fastSections, notices };
+  // Everything the built-in layer shows or counts, as absolute files with what shows them (migrate_mission's before list).
+  // Never doctor or ssh: the server's logs and incidents and the notifications are named as losses instead.
+  async function items() {
+    const [flight, solo, batches, weekly, logRows] = await Promise.all([handoffs(), lastSolo(), inbox(), audit(), logs()]);
+    const md = async (what, dir) => (await entries(dir)).filter((entry) => entry.name.endsWith('.md') && entry.name !== 'CLAUDE.md')
+      .map((entry) => ({ what, name: entry.name, path: path.join(dir, entry.name) }));
+    return [
+      ...flight.map((row) => ({ what: 'Work in flight', name: path.relative(workspace, row.path).split(path.sep).join('/'), path: row.path })),
+      ...await md('Ideas', path.join(workspace, '_ideas')), ...await md('Needs done', path.join(workspace, '_ideas', 'needs-done')),
+      ...(solo.path ? [{ what: 'Last solo run', name: solo.name, path: solo.path }] : []),
+      ...batches.map((batch) => ({ what: 'Wiki review inbox', name: batch.branch, path: batch.path })),
+      ...(weekly.run ? [{ what: 'Weekly Wiki audit', name: weekly.run, path: weekly.path }] : []),
+      ...logRows.filter((row) => row.host === host).map((row) => ({ what: 'Logs on this machine', name: row.name, path: path.join(logsDir, row.name) })),
+      ...await md('Incidents', path.join(logsDir, 'incidents')),
+    ];
+  }
+  return { overview, text, decide, folder, sections: fastSections, notices, items, remote };
 }

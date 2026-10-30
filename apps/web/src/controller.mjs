@@ -1,17 +1,31 @@
-import { popover as createPopover, svg, esc, limitLine, md, info } from './helpers.mjs';
+import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileImageSrc, dragBar, svg, esc, agentWarning, warnHtml, sprintTimes, limitLine, md, mdReply, info, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE, copy, copyCode } from './helpers.mjs';
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
-import { applyLook, onLookChange } from './lib/theme';
 import { WALKTHROUGH } from './walkthrough.mjs';
+import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
 import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
+import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
+import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
+import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
+import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
+import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
+import { mountLandingVideo } from './components/landing-v5/playback.mjs';
+import landPoster from './components/landing-v5/black-hole.webp?url';
+import landLoop from './components/landing-v5/rendered/horizon-loop.mp4?url';
+import './components/landing-v5/background.css';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
+import { createSide } from './side.mjs';
+import { artifactView, artifactsIn, chipArtifact, mountCard } from './artifact.mjs';
 
-export function mountShell() {
+// The admin password window (Shell.tsx, row I2), for row 61 on a remote.
+let adminAsk = null;
+export function mountShell({ askAdmin } = {}) {
+  adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
 // empty and fill from the daemon (GitHub issue #4: a fresh Windows install showed the sample items, and so did a dead daemon).
@@ -20,6 +34,8 @@ const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], histo
   audit: { run: 'none yet', ticked: 0, total: 0, contradictions: 0 }, logs: { host: '', incidents: [], rows: [] }, solo: { when: 'none yet', txt: '' },
   stats: [['Work in flight (HANDOFF.md)', 0], ['Ideas not researched', 0], ['Punch-list items', 0]], apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
 const lifetime = new AbortController(), timers = new Set(), observers = [];
+// The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
+const SP = { on: false, data: null, error: '', timer: 0 };
 const addEventListener = (type, listener) => window.addEventListener(type, listener, { signal: lifetime.signal });
 const removeEventListener = (type, listener) => window.removeEventListener(type, listener);
 const setTimeout = (fn, delay) => { const id = window.setTimeout(() => { timers.delete(id); fn(); }, delay); timers.add(id); return id; };
@@ -83,10 +99,11 @@ function pickerSelects(s) {
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
 // picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
-const modes = { claude: ['Auto', 'Manual', 'Plan', 'Accept edits', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access'] };
-const LOOSE = { 'Bypass permissions': 'Claude runs every command and edits any file it can reach, without asking first.',
-  'Full access': 'Codex runs without a sandbox: it can read and change any file on this computer and use the network, without asking first.' };
-const startMode = agent => { const m = localStorage.getItem('p9-mode:' + agent); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
+// D2 (row 25a): Settings > New chats start in, once set, wins over the last pick; a chat's own pick does not change it.
+const defaultMode = agent => { const m = localStorage.getItem('p9-mode-default:' + agent); return modes[agent].includes(m) ? m : ''; };
+// A loosened last pick carries to a new chat only after "don't show again" (review #2): a plain "Turn on" was for that chat.
+// The D2 default was confirmed in Settings for new chats, so it holds as set.
+const startMode = agent => { const last = localStorage.getItem('p9-mode:' + agent), m = defaultMode(agent) || (!LOOSE[last] || localStorage.getItem('p9-mode-ok:' + last) ? last : ''); return modes[agent].includes(m) ? m : agent === 'codex' ? 'Auto review' : 'Auto'; };
 const looseOk = (agent, m) => new Promise(done => {
   const d = $('#looseDlg'); $('#looseT').textContent = `Turn on ${m} for ${names[agent]}?`; $('#looseP').textContent = LOOSE[m]; d.returnValue = '';
   d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-mode-ok:' + m, '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
@@ -96,7 +113,80 @@ const S = { sessions: structuredClone(M.sessions).map(s => ({ ...s, mode: startM
   focus: 'chat', termOpen: { chat: false, dev: false, mission: false }, termMode: { chat: 'float', dev: 'drawer', mission: 'float' },
   snoozed: new Set(), quiet: new Set(), setup: null, reviews: structuredClone(M.queue), alerts: [], modal: null, resume: {},
   docs: {}, dev: { tabs: [], active: null } };
+// Send to server's drawing (items 24, 25; below with the black hole): pull is the pane pulled into it.
+const FX = { id: null, pull: null, host: '', pct: 0, at: 0, t0: 0, raf: 0, tick: 0, drawn: 0, spin: 0, dist: 30 };
 const names = { claude: 'Claude', codex: 'Codex' };
+// The side panel (side.mjs). Dev Focus: the chat beside the editor (item 18), on by default, on the right until its tab is dragged across.
+const side = createSide({ el: $('#side'), stage: $('.stage'), focus: () => S.focus, signal: lifetime.signal });
+const chatOn = () => localStorage.getItem('eh-dan-chat:dev') === 'on'; // off until turned on (the owner, attempt 2 item 4)
+const sideSession = () => S.sessions.find(s => s.id === S.sideId && !s.hidden) ?? S.sessions.find(s => s.id === S.open[0]) ?? S.sessions.find(s => !s.hidden);
+function renderSideChat(only) {
+  const box = $('#sideChats'); if (!box || side.current()?.slot !== 'dan-chat') return;
+  const s = sideSession(), pick = $('#sidePick'), list = S.sessions.filter(x => !x.hidden);
+  pick.hidden = list.length < 2; pick.innerHTML = list.map(x => `<option value="${esc(x.id)}"${x.id === s?.id ? ' selected' : ''}>${esc(x.title || x.name || x.id)}</option>`).join('');
+  if (!s) { box.innerHTML = '<p class="empty">No chat yet. Start one in Chat Focus.</p>'; return; }
+  if (s.stub) history(s);
+  paint(box, [s], only); keepBox();
+}
+const danChat = { title: 'Chat', focuses: ['dev'], defaultWidth: w => w / 2,
+  render: b => { b.innerHTML = '<select data-slot="select" id="sidePick" aria-label="Chat shown here" hidden></select><div class="chats" id="sideChats" data-split="false"></div>'; $('#sidePick').onchange = e => { S.sideId = e.target.value; renderSideChat(); }; renderSideChat(); },
+  onClose: why => { if (why === 'close') localStorage.setItem('eh-dan-chat:dev', 'off'); } };
+function setSideChat(on) { localStorage.setItem('eh-dan-chat:dev', on ? 'on' : 'off'); if (on) side.open('dan-chat', danChat); else side.close('dan-chat'); }
+side.onResize(() => { const on = side.current()?.slot === 'dan-chat'; $('#sideToggle').setAttribute('aria-pressed', String(on)); placeDev(); });
+$('#sideToggle').onclick = () => setSideChat(side.current()?.slot !== 'dan-chat');
+side.tab($('#devTab .stab'), 'main');
+if (sampleView) window.__side = side; // ponytail: the UI test's door to the panel (sample data is handed in only by tests, never in a packaged build)
+// Item 19 (threat model row 65): an artifact (artifact.mjs) in the side panel's 'artifact' slot, in the mode the agent
+// picked; its chip in the chat reopens it. Answer 2 in specs/side-panel.md: in Dev Focus with the chat beside the
+// editor it shows on top of that chat, above its text box, which stays usable. Comments go to the chat it came from,
+// through the composer's own send (sendText); the composer's draft and attached images stay where they are.
+const FRAME = { page: 'p9://frame/', base: new URL('frame/', location.href).href };
+const ART = { state: null, mode: 'panel' };
+const artSession = () => S.sessions.find(s => s.id === ART.state?.sid);
+function artSend(text) {
+  const s = artSession();
+  if (!canSend(s, text, false)) { toast({ kind: 'comments not sent', txt: 'That chat takes no messages now.', level: 'warn' }, true); return false; }
+  const images = s.images; s.images = []; sendText(s, text, false); s.images = images;
+  return true;
+}
+const artOverlay = () => side.body.querySelector(':scope > .art-over');
+function keepBox() { // the overlay ends where the side chat's text box starts
+  const over = artOverlay(), b = side.body.querySelector('#sideChats .pane .bottom');
+  if (over) over.style.bottom = b ? Math.max(0, side.body.getBoundingClientRect().bottom - b.getBoundingClientRect().top) + 'px' : '0px';
+}
+function openArtifact(art) {
+  if (!ART.state || ['kind', 'src', 'sid'].some(k => ART.state.art[k] !== art[k])) ART.state = { art, sid: art.sid };
+  ART.mode = art.mode ?? 'panel';
+  const full = { label: 'Full screen', on: () => side.current()?.mode === 'full', go: () => side.current()?.mode === 'full' ? side.back() : side.mode('full') };
+  if (S.focus === 'dev' && side.current()?.slot === 'dan-chat') {
+    let over = artOverlay(); if (!over) { over = document.createElement('div'); over.className = 'art-over'; side.body.append(over); } over.replaceChildren();
+    artifactView(over.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [full, { label: 'Close', go: () => over.remove() }] });
+    if (ART.mode === 'full') side.mode('full');
+    return keepBox();
+  }
+  side.open('artifact', { title: art.title, mode: ART.mode, focuses: [S.focus], defaultWidth: w => w / 2, // it goes with its chat's focus: hidden in another, back (still pinned) on return
+    render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [
+      { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; side.mode(ART.mode); } }, full] }),
+    onClose: why => { if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
+}
+// Plan view: Claude's plan-mode plan (an "Approve Plan" call or approval), or the agent's plan entries, as Markdown.
+function openPlan(s, which) {
+  const e = s.events[+which], entries = s.events.find(x => x.t === 'plan')?.entries ?? [];
+  const src = e?.plan ?? entries.map(([st, t]) => `- [${st === 'completed' ? 'x' : ' '}] ${t}${st === 'in_progress' ? ' *(in progress)*' : ''}`).join('\n');
+  openArtifact({ kind: 'markdown', lang: 'md', mode: 'panel', title: 'Plan', src, sid: s.id });
+}
+// A turn ended: the newest artifact of its reply opens by itself when that chat is on screen (else its chip waits).
+function autoArtifact(s) {
+  const from = s.events.findLastIndex(e => e.t === 'user') + 1, found = [];
+  for (const e of s.events.slice(from)) if (e.t === 'agent' && !e.artSeen) { e.artSeen = true; found.push(...artifactsIn(e.text)); }
+  const onScreen = S.focus === 'chat' ? (S.split ? S.open.slice(0, 2) : S.open.slice(0, 1)).includes(s.id) : S.focus === 'dev' && sideSession()?.id === s.id;
+  if (found.length && onScreen) openArtifact({ ...found.at(-1), sid: s.id });
+}
+side.onResize(() => { ART.state?.refresh?.(); keepBox(); });
+if (sampleView) { // the test door: an agent reply arrives whole and its turn ends (reply() streams 3 characters per 18 ms)
+  const at = id => S.sessions.find(s => s.id === (id ?? (S.focus === 'dev' ? sideSession()?.id : S.open[0])));
+  window.__artifact = { reply: (text, id) => { const s = at(id); s.events.push({ t: 'agent', text }); renderChats(); turnEnd(s); }, render: () => renderChats(), state: () => ART.state, events: id => at(id).events };
+}
 const focusNames = { chat: 'Chat Focus', dev: 'Dev Focus', mission: 'Mission Control' };
 /* icons */
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
@@ -108,7 +198,7 @@ Object.assign(svg, {
   bell: ic('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
   bot: ic('<path d="M12 4v3"/><circle cx="12" cy="3" r="1"/><rect x="4" y="7" width="16" height="13" rx="3"/><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/><path d="M9.5 17h5M2 12v3M22 12v3"/>'),
 });
-for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rSearch','search'],['rFiles','files'],['rSplit','split'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x']]) $('#'+id).innerHTML = svg[k];
+for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rSearch','search'],['rFiles','files'],['rSplit','split'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x'],['sideToggle','chat']]) $('#'+id).innerHTML = svg[k];
 
 /* ---------- tabs ---------- */
 function renderTabs() {
@@ -132,7 +222,7 @@ function cardList(all) {
   if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
   for (const s of S.sessions.filter(x => x.done)) cards.push({ key: 'done:' + s.id, id: s.id, halo: true, agent: s.agent, title: names[s.agent] + ' finished', sub: s.title, open: { kind: 'chat', id: s.id } });
-  if (S.setup) { const d = setupDone(S.setup), left = Object.keys(d).filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${4 - left.length} of 4 done`, sub: left.map(k => STEP_NAMES[k]).join(' · ') }); }
+  if (S.setup) { const d = setupDone(S.setup), rows = Object.keys(d).filter(k => k !== 'pick' && k !== 'mission' && (k !== 'terminal' || S.setup.tmux !== null)), left = rows.filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${rows.length - left.length} of ${rows.length} done`, sub: [...left.map(k => STEP_NAMES[k]), ...(d.mission ? [] : ['Mission Control'])].join(' · ') }); }
   return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
 }
 const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.key)).length + S.alerts.length;
@@ -143,7 +233,7 @@ const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.
 // 192 x 208: row 0 idle, 3 wave, 4 jump, 6 waiting, 7 running; each row's frame count is read from the sheet.
 const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, top: [], drag: null };
 const PET_ROLES = ['system', 'claude', 'codex'];
-const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> [x, y], see petHome
+const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> { box: [x, y] }, see petHome
 const DEFAULT_PET ={ on: true, size: 48, claude: null, codex: null, system: null, top: null, pane: null };
 async function petLook(name) {
   const pet = await window.p9.loadPet(name).catch(() => null), img = new Image();
@@ -195,8 +285,12 @@ function tickPets() {
     let cv = p.querySelector(':scope > canvas.pet');
     if (!name) return cv?.remove();
     if (!cv || cv.dataset.petName !== name || cv.dataset.rows !== rows || cv.style.height !== f.size + 'px') { cv?.remove(); p.insertAdjacentHTML('beforeend', petCanvas(name, rows, f.size)); cv = p.lastElementChild; }
-    const key = p.parentElement.id + ':' + s.id, at = IND.drag?.key === key && IND.drag.at || petSpots[key] || petHome(p, cv);
-    cv.style.left = at[0] * 100 + '%'; cv.style.top = at[1] * 100 + '%';
+    const key = p.parentElement.id + ':' + s.id, r = p.getBoundingClientRect(), b = petBox(p);
+    if (!r.width || !b) { cv.style.left = '10%'; cv.style.top = '70%'; return; }
+    // A spot saved before D2 was a share of the pane: kept where it is now, from the box.
+    if (Array.isArray(petSpots[key])) { petSpots[key] = { box: [r.left + petSpots[key][0] * r.width - b.left, r.top + petSpots[key][1] * r.height - b.top].map(Math.round) }; localStorage.setItem('p9-pet-spots', JSON.stringify(petSpots)); }
+    const [x, y] = (IND.drag?.key === key && IND.drag.at || petSpots[key])?.box || petHome(p, cv, r, b);
+    cv.style.left = Math.min(r.width, Math.max(0, b.left - r.left + x)) + 'px'; cv.style.top = Math.min(r.height, Math.max(0, b.top - r.top + y)) + 'px';
   });
   document.querySelectorAll('canvas.pet').forEach(drawPet);
 }
@@ -206,12 +300,15 @@ setInterval(() => { if (!document.hidden) { IND.frame++; tickPets(); } }, 125);
 // ponytail: localStorage (petSpots, top of this section), last 200 dragged chats; move it into the settings file if spots should follow a profile copy.
 // Until dragged, a chat's pet stands left of its message box, standing on the box's top edge (Builder, 2026-10-20: moved from
 // the right side to where the owner dragged his); with no room there, just above the box's left end.
-function petHome(p, cv) {
-  const r = p.getBoundingClientRect(), c = p.querySelector('.bottom .col')?.getBoundingClientRect(), b = p.querySelector('.composer')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
-  if (!r.width || !r.height || !c || !b) return [0.1, 0.7];
+// D2 (Builder, 2026-10-28: "Make the pets position reletive to the chat box"): a spot is px from the message box's top-left
+// corner, not a share of the pane, so a side panel, split view or the editor that moves the box moves the pet with it.
+function petHome(p, cv, r, b) {
+  const c = p.querySelector('.bottom .col')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
+  if (!c) return [-w, -h / 2];
   const beside = c.left - r.left >= w + 16;
-  return [((beside ? c.left - 8 - w / 2 : c.left + w / 2) - r.left) / r.width, ((beside ? b.top - h / 2 : c.top - h / 2 - 4) - r.top) / r.height];
+  return [(beside ? c.left - 8 - w / 2 : c.left + w / 2) - b.left, (beside ? b.top - h / 2 : c.top - h / 2 - 4) - b.top];
 }
+const petBox = p => p.querySelector('.composer')?.getBoundingClientRect();
 // Drag a chat's pet within its chat; the spot is saved for that chat on release. The top bar's pets stay put.
 document.addEventListener('pointerdown', e => {
   const cv = e.target.closest?.('.pane canvas.pet'); if (!cv || e.button) return;
@@ -219,8 +316,9 @@ document.addEventListener('pointerdown', e => {
   const pane = cv.closest('.pane'), where = `#${pane.parentElement.id} .pane[data-id="${CSS.escape(pane.dataset.id)}"]`;
   IND.drag = { key: pane.parentElement.id + ':' + pane.dataset.id, at: null };
   const move = ev => {
-    const r = document.querySelector(where)?.getBoundingClientRect(); if (!r) return;
-    IND.drag.at = [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height].map(n => Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000);
+    const pane = document.querySelector(where), r = pane?.getBoundingClientRect(), b = pane && petBox(pane); if (!b) return;
+    const x = Math.min(r.right, Math.max(r.left, ev.clientX)), y = Math.min(r.bottom, Math.max(r.top, ev.clientY));
+    IND.drag.at = { box: [Math.round(x - b.left), Math.round(y - b.top)] };
     tickPets();
   };
   const up = () => {
@@ -235,21 +333,41 @@ document.addEventListener('pointerdown', e => {
 });
 // Running chats not waiting on you, as robot heads in the rail (Builder, 2026-10-17); a click opens the chat. Waiting ones stay cards.
 function renderBots() {
+  // D10: each head carries its chat's number (its place among the tabs) and the title, so several look different.
   const bots = S.sessions.filter(s => s.state === 'running' && !s.pending), say = s => names[s.agent] + ' · ' + (busy(s) ? 'working' : 'idle');
-  setHTML($('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${busy(s) ? ' data-busy' : ''} title="${esc(s.title)} · ${esc(say(s))}" aria-label="${esc(s.title)} · ${esc(say(s))}">${svg.bot}</button>`).join(''));
+  const num = s => S.sessions.filter(x => !x.hidden).findIndex(x => x.id === s.id) + 1, label = s => (num(s) ? '#' + num(s) + ' ' : '') + s.title + ' · ' + say(s);
+  setHTML($('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${num(s) ? ` data-n="${num(s)}"` : ''}${busy(s) ? ' data-busy' : ''} title="${esc(label(s))}" aria-label="${esc(label(s))}">${svg.bot}</button>`).join(''));
   $('#rBots').querySelectorAll('[data-bot]').forEach(b => b.onclick = () => { const k = 'run' + b.dataset.bot; openModal(S.resume[k] || { kind: 'chat', id: b.dataset.bot }, k); });
 }
+// The x and the body of a card: from the card itself, or from the Dev Focus overlay (main passes the clicked card's key).
+function cardAct(c, what) {
+  if (!c) return;
+  if (c.key === 'welcome') return what === 'x' ? skipWelcome() : welcome();
+  if (what === 'x') { S.snoozed.add(c.key); renderCards(); return; }
+  // D10-6: a card reopens where you left it, unless that item is already handled
+  const k = c.key.split(':')[0] + (c.id || ''), r = S.resume[k]; openModal(r && !(k === 'asks' && !S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k);
+}
+// Dev Focus: the editor is a native view above this page, so the cards are drawn by their own overlay view (apps/desktop/cards-page.mjs).
+// This page's own stack stays in the layout, hidden, so the overlay lands where the stack would be.
+function cardsOverlay() {
+  if (!window.p9?.cards) return;
+  const cards = cardList(), r = $('#cards').getBoundingClientRect(), on = S.focus === 'dev' && cards.length > 0 && !document.querySelector('dialog[open]') && r.width > 0;
+  const items = cards.slice(0, 8).map(c => ({ key: c.key.slice(0, 300), title: String(c.title).slice(0, 200), sub: String(c.sub ?? '').slice(0, 300), ...(c.n ? { n: Math.min(Number(c.n) || 0, 99999) } : {}) }));
+  const next = on ? { visible: true, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), items } : { visible: false }, json = JSON.stringify(next);
+  if (json === lastCards) return; // renderCards runs on every event; main hears only a change
+  lastCards = json; window.p9.cards(next).catch(() => { lastCards = ''; });
+}
+let lastCards = '';
+window.p9?.onCardAct?.(({ key, action }) => cardAct(cardList().find(c => c.key === key), action));
 function renderCards() {
   renderIndicator(); renderBots();
   const cards = cardList();
   morph($('#cards'), cards.map(c => `<article class="card${c.halo ? ' fx-halo' : ''}" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
   $('#cards').querySelectorAll('.card').forEach((el, i) => {
-    const c = cards[i];
-    if (c.key === 'welcome') { el.querySelector('.x').onclick = skipWelcome; el.querySelector('.open').onclick = () => welcome(); return; }
-    el.querySelector('.x').onclick = () => { S.snoozed.add(c.key); renderCards(); };
-    // D10-6: a card reopens where you left it, unless that item is already handled
-    el.querySelector('.open').onclick = () => { const k = c.key.split(':')[0] + (c.id || ''), r = S.resume[k]; openModal(r && !(k === 'asks' && !S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k); };
+    el.querySelector('.x').onclick = () => cardAct(cards[i], 'x');
+    el.querySelector('.open').onclick = () => cardAct(cards[i], 'open');
   });
+  cardsOverlay();
   const n = centerCount();
   $('#rBell').innerHTML = svg.bell + `<b>${n || ''}</b>`;
   $('#rBell').title = 'Notification Center' + (n ? ` (${n})` : '') + ' · Ctrl Shift N';
@@ -262,14 +380,14 @@ function renderCards() {
 // nothing: drafts live on the session or item, S.resume remembers the card view, and list scroll is kept.
 // Closing puts the caret back in the field you were typing in before the card took you away.
 const mdl = $('#mdl');
-const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560] }; // defaults; your resize wins, per type
-const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script' })[k] || 'list';
+const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560], sprint: [760, 560] }; // defaults; your resize wins, per type
+const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script', sprint: 'sprint' })[k] || 'list';
 let lastEdit = null;
 addEventListener('focusout', e => { const t = e.target; if (t.matches?.('textarea, input[type=text]') && !t.closest('dialog')) lastEdit = { pane: t.closest('.pane')?.dataset.id, id: t.id, sel: [t.selectionStart, t.selectionEnd] }; });
 addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .rail') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
 // A chat opens at its newest message (Builder, 2026-10-17: it opened at the first); paint ran while the dialog was closed.
 function openModal(m, card) { const seen = m.kind === 'chat' && S.sessions.find(s => s.id === m.id && s.done); if (seen) seen.done = false; m.card = card || m.card || m.back?.card; if (m.card) S.resume[m.card] = m; S.modal = m; if (m.kind === 'chat') delete view['mdlBody:' + m.id]; renderModal();
-  if (!mdl.open && S.modal) { mdl.showModal(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
+  if (!mdl.open && S.modal) { mdl.showModal(); raiseToasts(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
   if (m.kind === 'chat') $('#mdlBody .hist')?.scrollTo({ top: 1e6, behavior: 'instant' });
   if (seen) renderCards(); }
 function renderModal() {
@@ -287,11 +405,7 @@ function renderModal() {
     const s = S.sessions.find(x => x.id === m.id); if (!s) return closeModal();
     $('#mdlT').textContent = s.title; paint(body, [s]);
   } else if (m.kind === 'file' && m.live) {
-    // A real file from the Chat Focus browser, read-only (threat model row 23).
-    $('#mdlT').textContent = m.name;
-    if (m.text === undefined && !m.loading) { m.loading = true; window.p9.mission('read', { path: m.name }).then(r => { m.text = r.status === 200 ? r.body.content : null; m.error = r.body?.error || String(r.status); if (S.modal === m) renderModal(); }); }
-    body.innerHTML = m.text === undefined ? '<p class="sm muted">Loading…</p>' : m.text === null ? `<p class="sm muted">Not readable: ${esc(m.error)}</p>` : `<pre class="fileview">${esc(m.text)}</pre>`;
-    $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only · edit in Dev Focus</span>`;
+    liveFileModal(m, body);
   } else if (m.kind === 'file') {
     // D03: one file at a time, explicit Save; the draft lives in S.docs, so closing loses nothing
     const d = doc(m.name); $('#mdlT').textContent = m.name;
@@ -326,9 +440,18 @@ function renderModal() {
     body.innerHTML = !snoozed.length && !S.alerts.length ? '<p class="empty">Nothing waiting on you.</p>'
       : `<ul class="mlist">${snoozed.map((c, i) => row('c' + i, c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}"></span>`, esc(c.title), (c.quiet ? '' : 'snoozed · ') + esc(c.sub))).join('')}${S.alerts.map((a, i) => row('a' + i, `<span class="lvl" data-l="${esc(a.level)}"></span>`, esc(a.txt), esc(a.kind))).join('')}</ul>`;
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const k = b.dataset.i, c = snoozed[+k.slice(1)]; if (c?.key === 'welcome') { closeModal(); welcome(); } else if (k[0] === 'c') { S.snoozed.delete(c.key); renderCards(); openModal({ ...c.open, back: m }); } else openModal({ kind: 'alert', a: S.alerts[+k.slice(1)], back: m }); });
+  } else if (m.kind === 'whats-new') {
+    // D13: after an update. The list ships with the app; the full list is the release commit's message.
+    const w = m.w, changes = WHATS_NEW.version === w.version ? WHATS_NEW.changes : [];
+    $('#mdlT').textContent = 'Updated to ' + w.version;
+    body.innerHTML = `<div class="review news"><p>P9 went from ${w.from ? esc(w.from) : 'an earlier version'} to ${esc(w.version)}.${changes.length ? ' What changed:' : ''}</p>`
+      + (changes.length ? '<ul>' + changes.map(c => '<li>' + esc(c) + '</li>').join('') + '</ul>' : '') + '</div>';
+    $('#mdlFoot').innerHTML = `<button data-slot="button" data-variant="outline" data-full>Full list of changes</button><span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Close</button>`;
+    $('#mdlFoot [data-full]').onclick = () => window.p9.openLink(w.link);
+    $('#mdlFoot [data-dismiss]').onclick = () => closeModal();
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p><p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}${a.start ? '<p class="start"><b>Where to start:</b> ' + esc(a.start) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps || m.done ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Dismiss</button>`;
     $('#mdlFoot [data-dismiss]').onclick = () => { S.alerts = S.alerts.filter(x => x !== a); if (H.notices) H.notices = H.notices.filter(x => x !== a); renderCards(); missionLive(); m.back ? openModal(m.back) : closeModal(); };
   } else missionModal(m, body, row);
@@ -368,15 +491,27 @@ function askNow(id = 's-codex-1') {
 // System events pop up bottom right and fade after --toast-life; hovering holds them. The item
 // stays in the Notification Center until it is dismissed there (a toast only for things already done).
 // Copy buttons (Builder, 2026-10-17: Copy on doctor's output did nothing). The button says how it went: toasts sit under an open dialog.
-const copy = (text, btn) => navigator.clipboard.writeText(text).then(() => 'Copied', e => { btn.title = String(e?.message || e); return 'Copy failed'; }).then(said => { const was = btn.textContent; btn.textContent = said; btn.dataset.said = said; setTimeout(() => { btn.textContent = was; delete btn.dataset.said; }, 2000); });
 function toast(a, done) {
   if (!done) S.alerts.push(a);
   const el = document.createElement('button');
   el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
-  el.onclick = () => { el.remove(); if (!done) openModal({ kind: 'alert', a }); };
+  // D1 (Builder, 2026-10-28: "if i click it, it goes away"): every toast opens its whole message, and where to start, in the panel.
+  el.onclick = () => openModal({ kind: 'alert', a, done });
   el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
-  $('#toasts').append(el); renderCards();
+  $('#toasts').append(el); raiseToasts(); renderCards();
 }
+// D7: a modal sits in the top layer over any z-index and makes the page outside it inert, so the toast list (a popover) lives
+// in the topmost open modal, or the page when none is open, and is put back on top after each toast and each modal opened or
+// closed anywhere (Settings, the connecting screen, a confirm): above it and clickable.
+if (sampleView) window.__toast = toast; // ponytail: the UI test's door, as window.__side
+const raiseToasts = () => {
+  const box = $('#toasts'), into = modals.filter(d => d.matches(':modal')).pop() ?? document.body;
+  if (box.parentElement !== into) into.append(box);
+  if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); }
+};
+const showModal = HTMLDialogElement.prototype.showModal, modals = []; // in the order opened: the top layer's, not the page's
+HTMLDialogElement.prototype.showModal = function () { showModal.call(this); modals.splice(modals.indexOf(this) >>> 0, 1); modals.push(this); raiseToasts(); };
+document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElement) raiseToasts(); }, true);
 function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
@@ -427,7 +562,7 @@ $('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { new
 // History: with the daemon, every live chat a message was sent in, most recently used first (owner, 2026-10-25; Open
 // gives it a tab again); without it, the sample list.
 const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(asks[0]?.text || s.title)}</div><div class="xs muted">${names[s.agent]}${s.created ? ' · ' + esc(when(s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
+const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(s.title || asks[0]?.text)}</div><div class="xs muted">${names[s.agent]}${s.used || s.created ? ' · ' + esc(when(s.used || s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
 const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
 const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
 $('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
@@ -435,7 +570,7 @@ DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
 // CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
-const mdOf = e => { if (e.mdFor !== e.text) { e.md = md.parse(e.text).replaceAll('<pre><code', '<pre><button data-slot="button" data-variant="ghost" data-size="sm" data-copycode>Copy</button><code'); e.mdFor = e.text; } return e.md; };
+const mdOf = e => { if (e.mdFor !== e.text) { e.md = copyCode(mdReply.parse(e.text)); e.mdFor = e.text; } return e.md; };
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
@@ -472,16 +607,17 @@ function event(e, s) {
   switch (e.t) {
     case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${chatImgs.get(i.hash) ? ` src="${chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
     case 'agent': return `<div class="msg agent"><div class="who">${names[s.agent]}</div>${mdOf(e)}${agentImgs(e.images, names[s.agent])}</div>`;
+    case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
     case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
-    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${agentImgs(e.images, names[s.agent])}`;
+    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, names[s.agent])}`;
     case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
-    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}</div>`;
+    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/^(Claude Code|Codex) is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
   }
   return '';
 }
 const diff = rows => `<div class="diff">${rows.map(([k, l]) => `<div class="${esc(k)}">${k === 'add' ? '+' : k === 'del' ? '−' : ' '} ${esc(l)}</div>`).join('')}</div>`;
 function pending(s) {
-  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}${s.live ? '<p class="hint">Sending a message declines this and sends the message instead.</p>' : ''}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
+  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}${a.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" data-open-plan="${s.events.indexOf(a)}">Open plan</button>` : ''}${s.live ? '<p class="hint">Sending a message declines this and sends the message instead.</p>' : ''}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
   if (s.pending === 'question') { const q = s.events.find(e => e.t === 'question'); return `<form class="pending fx-halo" data-question><div class="eyebrow">${names[s.agent]} asks</div><h4>${esc(q.title)}</h4>${q.unsupported ? '<p class="hint">P9 cannot show this form faithfully. Decline, or answer in a message.</p>' : ''}${s.live ? '<p class="hint">Sending a message declines this question and sends the message instead.</p>' : ''}${q.fields.map((f, i) => { const head = `<span>${esc(f.label)}${f.required ? ' *' : ''}</span>${f.hint ? `<small>${esc(f.hint)}</small>` : ''}`; return f.kind === 'radio' ? `<div class="field">${head}${f.options.map(opt).map(([v, l]) => `<label><input type="radio" name="f${i}" value="${esc(v)}" ${(q.vals?.['f' + i] ?? ('def' in f ? f.def : opt(f.options[0])[0])) === v ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>`
     : f.kind === 'multi' ? `<div class="field">${head}${f.options.map(opt).map(([v, l], j) => `<label><input type="checkbox" name="f${i}~${j}" value="${esc(v)}" ${q.vals?.[`f${i}~${j}`] !== undefined ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>` : `<div class="field">${head}<input data-slot="input" name="f${i}" value="${esc(q.vals?.['f' + i] || '')}"></div>`; }).join('')}<div class="acts">${q.unsupported ? '' : '<button data-slot="button" data-variant="default" data-size="sm" type="submit">Submit answer</button>'}<button data-slot="button" data-variant="outline" data-size="sm" type="button" data-decline>Decline</button></div></form>`; }
   return '';
@@ -493,16 +629,18 @@ const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : 
 const TAIL = 200;
 function shown(s) {
   const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), from = Math.max(0, list.length - (s.tail || TAIL));
-  return (from ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier (${from.toLocaleString()} more)</button>` : '')
+  return (from || s.more !== undefined ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier${from ? ` (${from.toLocaleString()} more)` : ''}</button>` : '')
     + list.slice(from).map(e => event(e, s)).join('');
 }
 function pane(s, i, bare) {
   const working = busy(s);
-  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…' }[s.state];
+  // D14: a chat on its way to the server, or gone there, takes no messages here.
+  const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away;
+  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to the remote…', moved: 'Moved to ' + (s.movedTo || 'the remote') }[s.state];
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   const pick = s.modeNext || s.mode;
-  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''} aria-label="${names[s.agent]} chat">
+  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''}${FX.pull === s.id ? ' data-pulled' : ''} aria-label="${names[s.agent]} chat">
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span><span class="name">${names[s.agent]}</span>
       <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
       <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
@@ -511,18 +649,21 @@ function pane(s, i, bare) {
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
-      ${s.live && s.agent === 'claude' && s.session ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
+      ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
+      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
       ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
     <div class="hist">${body}</div>
-    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${names[s.agent]} is working…</div>` : ''}${s.readonly ? '' : meters(s)}
+    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${working ? names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${s.readonly ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !s.readonly ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
 // state a person owns lives in S or is carried across: draft in s.draft, images in s.images,
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
-const view = {}; // 'container:session id' -> { top, pinned, selection }
+const bottoms = observe(() => $('.stage').style.setProperty('--chat-bottom', Math.max(0, ...[...$('#chats').querySelectorAll(':scope > .pane > .bottom')].map(b => b.offsetHeight)) + 'px')); // Chat Focus full: the artifact ends above the text box
+const wiredBars = new WeakSet(), view = {}; // 'container:session id' -> { top, pinned, selection }
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
 function renderChats(only) {
   const ids = S.split ? S.open.slice(0, 2) : S.open.slice(0, 1);
@@ -531,7 +672,10 @@ function renderChats(only) {
   $('#chats').dataset.split = String(S.split && ss.length > 1);
   for (const s of [...ss, mdl.open && S.modal?.kind === 'chat' && S.sessions.find(x => x.id === S.modal.id)]) if (s?.stub) history(s);
   paint($('#chats'), ss, only);
+  bottoms.disconnect(); $('#chats').querySelectorAll(':scope > .pane > .bottom').forEach(b => bottoms.observe(b));
   if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
+  renderSideChat(only);
+  if (side.current()?.slot === 'artifact' && ART.mode === 'panel' && S.focus === 'chat' && ![...ids, mdl.open && S.modal?.kind === 'chat' && S.modal.id].includes(ART.state?.sid)) side.close('artifact'); // item 19: a panel artifact goes with its chat; a pinned one stays
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
@@ -545,7 +689,9 @@ function paint(root, ss, only) {
   panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
   const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
   if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); addHalos(t.content); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
-  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical"></div>'));
+  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the two chats (arrow keys)"></div>'));
+  const split = root.id === 'chats' && root.querySelector(':scope > .handle-v'); // morph keeps the bar by position; wire it once
+  if (split && !wiredBars.has(split)) { wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: lifetime.signal }); }
   (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
     const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
     const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
@@ -571,7 +717,7 @@ function paint(root, ss, only) {
     // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
     // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
     // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
-    const go = (now, when) => { const t = ta.value.trim(); if ((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly) return; const mid = !now && busy(s); s.draft = ''; if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); if (bare && settings.closeOnSend) closeModal(); return; } (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined); if (bare && settings.closeOnSend) closeModal(); };
+    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; sendText(s, t, now, when); if (bare && settings.closeOnSend) closeModal(); };
     const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
     ta.onkeydown = e => {
       if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
@@ -590,11 +736,16 @@ function paint(root, ss, only) {
       b.disabled = true;
       const r = await liveChat.call('handoff', { id: s.id });
       if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
-      const shown = dockTerm?.open;
-      S.termOpen[S.focus] = true; showTerm();
-      if (shown) { dockTerm.attach(r.body.terminal); dockTerm.focus(); }
+      showTerminal(r.body.terminal);
     });
+    // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
+    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = async () => { b.disabled = true; await sendAway(s); b.disabled = false; });
+    // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
+    // Item 15: by name (the pick step now comes first), with the chat's own agent on the step even when it was not picked.
+    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude', true));
     p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
+    p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
+    p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
     p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
@@ -612,7 +763,12 @@ function paint(root, ss, only) {
     p.ondragover = e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); };
     p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
     p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
-    const more = p.querySelector('[data-earlier]'); if (more) more.onclick = () => { const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop; s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below; };
+    const more = p.querySelector('[data-earlier]'); if (more) more.onclick = async () => {
+      if (s.fetching) return;
+      const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
+      if (s.more !== undefined && s.events.filter(e => e.t !== 'approval' && e.t !== 'question').length < (s.tail || TAIL) + TAIL) { s.fetching = true; try { await earlier(s); } finally { s.fetching = false; } }
+      s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
+    };
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); renderTabs(); renderChats(); };
     const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => { if (s.live) return liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); renderTabs(); renderChats(); };
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); renderTabs(); renderChats(); };
@@ -626,31 +782,26 @@ function answered(s) {
   renderTabs(); renderChats(new Set([s.id]));
 }
 // Paperclip (Builder, 2026-10-17: it only drew a blue square). Threat model row 20; the daemon checks the same limits.
-const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], MAX_IMAGE = 2 * 1024 * 1024;
-const base64 = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
 function pickImages(s) {
-  const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMAGE_TYPES.join(','), multiple: true });
+  const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMG_OK.join(','), multiple: true });
   input.onchange = () => addImages(s, input.files);
   input.click();
 }
 // The paperclip, a pasted screenshot and dropped files all come through here (Builder, 2026-10-18: "not paste the screenshots").
 async function addImages(s, files) {
   for (const file of files) {
-    if ((s.images ||= []).length >= 4) { toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
-    if (!IMAGE_TYPES.includes(file.type)) { toast({ kind: 'not attached', txt: file.name + ': PNG, JPEG, GIF or WebP only.', level: 'warn' }, true); continue; }
-    try {
-      let blob = file, mimeType = file.type;
-      const bmp = await createImageBitmap(file), k = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
-      if (k < 1 || file.size > MAX_IMAGE * 3 / 4) {
-        const c = new OffscreenCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k)); c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-        blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 }); mimeType = 'image/jpeg';
-      }
-      const data = await base64(blob);
-      if (data.length > MAX_IMAGE) throw new Error('still over 2 MB after scaling');
-      s.images.push({ mimeType, data, name: file.name });
-    } catch (e) { toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e), level: 'warn' }, true); }
+    if ((s.images ||= []).length >= MAX_IMAGES) { toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
+    try { s.images.push(await readImage(file)); }
+    catch (e) { toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
   }
   renderChats();
+}
+// The composer's send (go) and an artifact's Send comments (item 19) share it: queued behind a running turn, or sent.
+const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved');
+function sendText(s, t, now, when) {
+  const mid = !now && busy(s);
+  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); return; }
+  (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined);
 }
 function startTurn(s, t, when) {
   const images = s.images || []; s.images = [];
@@ -688,6 +839,7 @@ function finished(s) {
   if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
 }
 function turnEnd(s) {
+  autoArtifact(s);
   if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
   if (s.queue.length) { const t = s.queue.shift(); keepQueue(s); startTurn(s, t); } else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
@@ -735,11 +887,81 @@ function renderTree() {
     $('#tree').innerHTML = `<p class="where muted mono truncate" title="${esc(root || 'Workspace')}">${esc(root || 'Workspace')}</p>${liveTree(root, 0, q, cur)}`;
     $('#tree').querySelectorAll('[data-ldir]').forEach(b => b.onclick = () => { const p = b.dataset.ldir; files.open.has(p) ? files.open.delete(p) : files.open.add(p); renderTree(); });
     $('#tree').querySelectorAll('[data-lfile]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.lfile, live: true }));
+    $('#xferBtn').hidden = !window.p9?.xferPlan || !!serverInfo?.host;
+    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
     return;
   }
   $('#tree').innerHTML = tree(M.files, 0, q, S.modal?.kind === 'file' && mdl.open ? S.modal.name : null);
   $('#tree').querySelectorAll('[data-file]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.file }));
 }
+// Send files (item 23; main's p9:xfer, desktop/xfer.mjs): the files panel's folder goes to the same folder on the server.
+// Main plans and keeps the plan; this asks what the plan cannot settle alone (Builder, 2026-10-27: one choice for the whole
+// list; a delete is asked; a Syncthing folder warns; a limit names its Setting), then shows the send. A plan with nothing
+// to ask sends at once: one button press.
+const XFER_SETTINGS = { fileMiB: ['Largest file to send', 'MiB', 65536], files: ['Most files in one send', 'files', 200000], sendGiB: ['Most data in one send', 'GiB', 1024] }; // desktop/xfer.mjs XFER_LIMITS
+const bytes = n => n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GiB' : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(1) + ' MiB' : Math.ceil(n / 1024) + ' KiB';
+const xfer = { id: null };
+window.p9?.onXfer?.(p => { if (p.id !== xfer.id || !$('#xferDlg').open) return; const bar = $('#xferBar'); if (bar) { bar.max = p.total || 1; bar.value = p.sent; $('#xferNum').textContent = bytes(p.sent) + ' of ' + bytes(p.total); } });
+function xferShow(title, note, body, foot) {
+  $('#xferT').textContent = title; $('#xferP').textContent = note; $('#xferBody').innerHTML = body; $('#xferFoot').innerHTML = foot;
+  if (!$('#xferDlg').open) $('#xferDlg').showModal();
+}
+const xferClose = '<button data-slot="button" data-variant="outline" data-xfer-close>Close</button>';
+function xferWire() { $('#xferDlg').querySelectorAll('[data-xfer-close]').forEach(b => b.onclick = () => { xfer.id = null; $('#xferDlg').close(); }); }
+// A refusal: a limit links its Setting.
+function xferRefused(r) {
+  xferShow('Not sent', r.message || r.error || 'No answer.', '', (r.setting ? '<button data-slot="button" data-variant="default" id="xferSetting">Open Settings</button>' : '') + xferClose);
+  xferWire();
+  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); settingsAt(input); input?.focus(); };
+}
+async function sendFiles() {
+  const folder = fileRoot(), b = $('#xferBtn');
+  b.disabled = true; b.textContent = 'Checking…';
+  const p = await window.p9.xferPlan(folder).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+  b.disabled = false; b.textContent = 'Send files to remote';
+  if (p.error) return xferRefused(p);
+  xfer.id = p.id;
+  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
+  if (!p.asked && !p.deletes && !sync.length) {
+    if (!p.send) return xferShow('Nothing to send', where + ' already matches this computer (' + p.same.toLocaleString() + ' files the same).', '', xferClose), xferWire();
+    return xferGo(p, null, false);
+  }
+  xferAsk(p, (choice, deleteToo) => xferGo(p, choice, deleteToo));
+}
+// The prompt for a plan that asks: a Syncthing warning, the files that differ, the deletes. go(choice, deleteToo) runs on a choice;
+// moving: Send to server's prompt for the chat's folder, before the chat is frozen.
+function xferAsk(p, go, moving) {
+  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
+  const list = (items, more) => '<ul class="mono sm" style="max-height:30vh;overflow:auto;margin:0;padding-left:18px">' + items.join('') + (more > 0 ? '<li class="muted">and ' + more.toLocaleString() + ' more</li>' : '') + '</ul>';
+  const warn = sync.length ? '<div class="set-row" data-xfer-syncthing><span><strong>Syncthing already syncs this folder</strong><span class="muted sm">Two copiers on one folder fight: each undoes the other. Found .stfolder at '
+    + sync.map(([side, d]) => esc(d === '..' ? 'a folder above the workspace' : d || 'the workspace') + ' (' + side + ')').join(', ') + '. Send only if Syncthing is off for it.</span></span></div>' : '';
+  const asked = p.asked ? '<div data-xfer-asked><p><strong>' + (p.kind === 'first' ? 'Nothing was sent to this folder from here before, and ' + p.asked.toLocaleString() + ' file' + (p.asked === 1 ? ' differs' : 's differ') + ' between the two.'
+    : p.asked.toLocaleString() + ' file' + (p.asked === 1 ? '' : 's') + ' changed on both sides since your last send.') + '</strong><br><span class="muted sm">'
+    + p.summary.laptopNewer.toLocaleString() + ' newer on the laptop, ' + p.summary.serverNewer.toLocaleString() + ' newer on the remote.</span></p>'
+    + list(p.list.map(i => '<li><span>' + esc(i.path) + '</span> <span class="muted">' + esc(i.text) + '</span></li>'), p.asked - p.list.length) + '</div>' : '';
+  const gone = p.deletes ? '<label class="set-row" data-xfer-deletes><input type="checkbox" id="xferDel"><span><strong>Delete on the remote too</strong><span class="muted sm">' + p.deletes.toLocaleString() + ' file'
+    + (p.deletes === 1 ? ' was' : 's were') + ' deleted on the laptop since your last send. Unticked, the remote keeps ' + (p.deletes === 1 ? 'it' : 'them') + '.</span></span></label>' + list(p.deleteList.map(d => '<li>' + esc(d) + '</li>'), p.deletes - p.deleteList.length) : '';
+  const choices = !p.asked ? [['go', 'default', 'Send']] : p.kind === 'first' ? [['laptop', 'default', 'Laptop wins'], ['newer', 'outline', 'Keep the newer of each']]
+    : [['laptop', 'default', 'Keep the laptop\'s'], ['server', 'outline', 'Keep the remote\'s'], ['newer', 'outline', 'Keep the newer of each']];
+  xferShow(p.kind === 'first' ? 'First send to ' + p.host : p.kind === 'conflict' ? 'Files changed on both sides' : 'Send files to ' + p.host,
+    where + ': ' + p.send.toLocaleString() + ' file' + (p.send === 1 ? '' : 's') + ' to send (' + bytes(p.sendBytes) + ').' + (moving ? ' The chat moves once they are there.' : ''),
+    warn + asked + gone + '<p class="muted sm">Every file replaced or deleted, on either side, is kept in that computer\'s P9 recovery folder.</p>',
+    '<button data-slot="button" data-variant="outline" data-xfer-close autofocus>Cancel</button>' + choices.map(([v, look, label]) => '<button data-slot="button" data-variant="' + look + '" data-xfer-choice="' + v + '">' + label + '</button>').join(''));
+  xferWire();
+  $('#xferDlg').querySelectorAll('[data-xfer-choice]').forEach(c => c.onclick = () => go(c.dataset.xferChoice === 'go' ? null : c.dataset.xferChoice, !!$('#xferDel')?.checked));
+}
+async function xferGo(p, choice, deleteToo) {
+  xferShow('Sending to ' + p.host, (p.folder || 'The workspace') + '. Closing this leaves the send running.', '<progress id="xferBar" value="0" max="1" style="width:100%"></progress><p class="muted sm mono" id="xferNum"></p>', xferClose);
+  xferWire();
+  const r = await window.p9.xferRun(p.id, choice, deleteToo).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+  if (r.error === 'limit' || r.error && !r.sent && !r.received && !r.deletedOnServer && !r.deletedHere) return xferRefused(r);
+  const said = [r.sent && r.sent.toLocaleString() + ' sent', r.received && r.received.toLocaleString() + ' taken from the remote', r.deletedOnServer && r.deletedOnServer.toLocaleString() + ' deleted on the remote',
+    r.deletedHere && r.deletedHere.toLocaleString() + ' deleted here', r.kept && r.kept.toLocaleString() + ' old cop' + (r.kept === 1 ? 'y' : 'ies') + ' kept in recovery'].filter(Boolean);
+  xferShow(r.error ? 'Partly sent' : 'Sent', (said.join(', ') || 'Nothing needed sending') + '.', r.message ? '<p>' + esc(r.message) + '</p>' : '', xferClose);
+  xferWire();
+  files.dirs = {}; renderTree();
+}
+$('#xferBtn').onclick = sendFiles;
 // One doc per file, shared by the Chat file modal and Dev Focus. text is the draft, saved is what
 // is on disk; they differ until an explicit Save (D04: a draft never silently overwrites the file).
 function doc(name) {
@@ -776,7 +998,27 @@ function wireEditor(root, name, after, save = () => saveDoc(name)) {
   ta.onscroll = () => { d.top = gut.scrollTop = ta.scrollTop; };
   observe(() => fitGut(ta, gut)).observe(ta);
   ta.onselect = ta.onkeyup = ta.onclick = () => { d.sel = [ta.selectionStart, ta.selectionEnd]; };
-  ta.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); after(); } };
+  edSave = { root, save, after };
+}
+// D7: Ctrl+S saves the editor on screen wherever the focus is in its window: a Save click re-renders the modal and drops the
+// focus to the page, which used to leave Ctrl+S doing nothing at all.
+let edSave = null;
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's' || !edSave?.root.isConnected) return;
+  const host = edSave.root.closest('dialog') || edSave.root, at = document.activeElement;
+  if (!host.checkVisibility() || (at && at !== document.body && !host.contains(at))) return; // a closed modal never saves
+  e.preventDefault(); edSave.save(); edSave.after();
+});
+// D7: why a save failed, in words; the daemon's code word stays at the end for a bug report.
+function saveWhy(r) {
+  const code = r.body?.error || r.body?.code || String(r.status);
+  const words = { 'registry-read-only': 'P9 keeps this file read-only (it holds Mission Control button commands)',
+    'request-refused': 'P9 refused it: a locked or protected name, or not a text file',
+    'daemon-unavailable': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' did not answer; check the connection and try again',
+    'daemon-outdated': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' is older than this app; update it, then try again',
+    EACCES: 'no permission to write it', EPERM: 'no permission to write it', EROFS: 'the disk is read-only', ENOSPC: 'the disk is full',
+    EDQUOT: 'the disk quota is full', EBUSY: 'the file is busy; try again', ENOENT: 'its folder is gone' }[code];
+  return (words || 'P9 could not write it') + ' (' + code + ')';
 }
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
@@ -807,7 +1049,10 @@ async function loadUsage() {
 }
 // The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
 // ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
-const pollUsage = () => { loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+// Not while the window is hidden: each read tells the daemon someone is looking, which keeps its Claude usage poll (and the
+// claude process behind it) going; with no reads it stops after 2 min (claude-usage.mjs). Shown again, it reads at once.
+const pollUsage = () => { if (!document.hidden) loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadUsage().then(renderChats); });
 let usageSoon = 0;
 // Panes are redrawn only when the figures moved, so a turn end in one chat does not rebuild the others (E2).
 const usageNow = () => { clearTimeout(usageSoon); usageSoon = setTimeout(() => { const was = JSON.stringify(usage.limits); loadUsage().then(() => { if (JSON.stringify(usage.limits) !== was) renderChats(); }); }, 300); };
@@ -822,7 +1067,7 @@ async function restartP9(button, repair) {
   if (button) button.disabled = false;
   if (r.cancelled) return;
   const done = repair ? 'repaired' : 'restarted';
-  toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
+  toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : WIZ_ERR[r.error]?.join(' ') ?? 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
   if (r.restarted) loadMission();
 }
 async function loadMission() {
@@ -841,8 +1086,26 @@ async function loadMission() {
     return renderMission();
   }
   applyOverview(r.body);
-  renderMission(); renderTabs(); loadHub(); loadArt();
+  renderMission(); renderTabs(); loadHub(); loadArt(); loadSprint();
 }
+// Sprint tracker: the button shows while the connected machine has a sprint status file (the sprint skill writes it each
+// wake-up). 404 = no sprint; any other answer keeps the button and the window says why.
+async function loadSprint() {
+  clearTimeout(SP.timer);
+  const r = await window.p9.mission('sprint').catch(() => ({ status: 503 }));
+  if (lifetime.signal.aborted) return;
+  const on = r.status !== 404 && r.status !== 503, before = JSON.stringify([SP.on, SP.data]);
+  SP.on = on; SP.data = r.status === 200 ? r.body : null; SP.error = on && r.status !== 200 ? (r.body?.reason || r.body?.error || String(r.status)) : '';
+  if (before !== JSON.stringify([SP.on, SP.data])) renderMission(); // the tile shows merged/total
+  if (mdl.open && S.modal?.kind === 'sprint') { if (on) renderModal(); else closeModal(); }
+  SP.timer = setTimeout(loadSprint, 30000);
+}
+const SPRINT_STATE = { running: 'running', waiting: 'waiting', merged: 'merged', blocked: 'blocked', unknown: 'unknown' };
+const sprintOverall = d => Number.isFinite(d.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${d.overall}%" style="--p:${d.overall}" data-overall><b>${d.overall}%</b></div><div class="spt"><b>Whole sprint</b><span class="sm muted">${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</span></div></div>` : '';
+const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}${c.activity ? ` · <span data-activity="${esc(c.activity)}">${esc(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${esc(c.steps)}</span>` : ''}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
+// The modal's buttons: each is a registry script (asks first, like any script), found by its fixed id.
+const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
+const scriptById = id => Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
 let lastArt = '';
 async function loadArt() {
@@ -853,14 +1116,15 @@ async function loadArt() {
 }
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
-  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting.split('/').pop();
+  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting?.split('/').pop() ?? null; // no waiting folder on a fresh install
   M.scripts = {}; M.tools = [];
   for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
-  M.space = o.space || [];
-  for (const s of M.space) M.scripts[s.title] ||= [];
+  M.space = o.space || []; M.icmFiles = !!o.icmFiles;
+  live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null; live.mainFile = o.mainFile === true;
+  for (const s of M.space) if (!s.widget) M.scripts[s.title] ||= []; // a widget section is its panel, not a tile
   applyQueue(o);
 }
 // M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
@@ -880,11 +1144,13 @@ const pollMission = () => { refreshMission(); setTimeout(pollMission, 20000); };
 // _tyler/ items a chat makes get their card when its turn ends (Builder, 2026-10-17); otherwise the queue is read at start.
 let queueTimer = 0;
 const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { lastOverview = JSON.stringify(r.body); applyOverview(r.body); renderMission(); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
+// D4 / #14: the chip on a waiting item says who it waits on: the owner's own name from Settings, else "needs you".
+const needsLabel = () => settings.name ? 'needs ' + settings.name : 'needs you';
 function applyQueue(o) {
   const drafts = Object.fromEntries(S.reviews.filter(x => x.live).map(x => [x.name, x]));
   const kept = S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
   S.reviews = o.queue.map(q => { const file = live.waiting + '/' + q.name; if (S.docs[file]?.saved !== q.content) S.docs[file] = { text: q.content, saved: q.content, sel: [0, 0], top: 0 };
-    return { proj: q.project, kind: 'tyler', txt: q.title, file, age: q.age, updated: q.updated, name: q.name, hash: q.hash, live: true, draft: drafts[q.name]?.draft, sel: drafts[q.name]?.sel }; });
+    return { proj: q.project, kind: needsLabel(), txt: q.title, file, age: q.age, updated: q.updated, name: q.name, hash: q.hash, live: true, draft: drafts[q.name]?.draft, sel: drafts[q.name]?.sel }; });
   // ponytail: "already waiting" means present at the first load, so a reload also quiets items a chat made before it.
   if (!S.queueSeen) { S.queueSeen = true; for (const r of S.reviews) S.quiet.add(r.file); }
   // Someone else answered (or removed) an item Builder was writing: keep his text visible, marked, so nothing is lost.
@@ -899,7 +1165,10 @@ function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'p
 const H = { on: false, notices: [], handoffs: [], timer: 0, hint: '', unchecked: null };
 // Why no job was checked: an empty list then never reads as "every job reported in" (finding 8).
 const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings' };
-const noticeLine = () => (H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
+// A space file owns Mission (row M4-b): scheduled-job checks are a built-in item, so there is nothing to report.
+const noticeLine = () => (H.unchecked === 'space-set' ? 'No notifications.' : H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
+// A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
+const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function loadHub() {
   clearTimeout(H.timer);
@@ -908,8 +1177,9 @@ async function loadHub() {
   // No hub in the settings: the sections stay off and the page says why. Asked again, as the settings load live; any other
   // failure is asked again sooner.
   if (r.status !== 200) {
-    const off = r.body?.error === 'hub-not-set', hint = off ? 'Logs, incidents and work in flight are off: set hub in the Mission settings file.' : '';
-    if (off) H.unchecked = 'hub-not-set';
+    // A space file turns the built-in layer off for good (row M4-b): no hint, its windows go.
+    const off = ['hub-not-set', 'space-set'].includes(r.body?.error), hint = r.body?.error === 'hub-not-set' ? 'Logs, incidents and work in flight are off: P9 found no hub folder in this workspace.' : '';
+    if (off) { H.unchecked = r.body.error; H.on = false; }
     if (hint !== H.hint) { H.hint = hint; renderMission(); }
     H.timer = setTimeout(loadHub, off ? 60000 : 15000);
     return;
@@ -936,7 +1206,7 @@ async function answerLive(r) {
   // Builder, 2026-10-21: an item with Q1:/Q2: lines and no A. line said "changed on disk" for days, so he kept retrying
   else if (res.body?.error === 'no-empty-answer-line') toast({ kind: 'not saved', txt: r.file + ' has no empty A. line, so P9 cannot write your answer. Ask an agent to add one; your answer is still here.', level: 'bad' }, true);
   else if (res.status === 409) toast({ kind: 'not saved', txt: r.file + ' changed on disk since you opened it. Reloaded it; your answer is still here.', level: 'warn' }, true);
-  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ' (' + (res.body?.error || res.status) + ')', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ': ' + saveWhy(res) + '. Your answer is still here.', level: 'bad' }, true);
   await loadMission();
   if (S.modal?.kind === 'review') { if (S.reviews.length) renderModal(); else closeModal(); }
 }
@@ -959,25 +1229,31 @@ async function runLive(m, id) {
 // section in the modal window (Builder, 2026-10-17: "hard to navigate because its so long ... group everything so
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
+// Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
+// names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
+// written. A fresh install has neither, so it gets none.
+const widgetOn = w => sampleView || M.space.some(s => s.widget === w) || (M.icmFiles && !M.space.some(s => s.widget));
+// + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
+const icmSpace = () => sampleView || M.space.some(s => s.widget) || M.icmFiles && !M.space.some(s => s.widget);
 const allNotes = () => [...(H.notices || []), ...S.alerts];
-const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex)].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
+const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`);
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
 const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
-  mnotes: { title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
+  mnotes: { show: () => widgetOn('notifications'), title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
   minbox: { show: () => sampleView || H.on, title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
   mlogs: { show: () => sampleView || H.on, title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
     body: () => `<ul class="plist">${M.logs.incidents.map((i, n) => `<li><button data-inc="${n}"${i.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(i.level)}"></span><span class="txt">${esc(i.txt)}</span></button></li>`).join('')}${M.logs.rows.map((r, n) => `<li class="mono sm"${tint(r[0])}><button data-log="${n}"><b>${esc(r[0])}</b><span class="muted">${esc(r[1])}</span><span class="truncate">${esc(r[2])}</span></button></li>`).join('')}</ul>` },
   mwork: { show: () => sampleView || H.on, title: () => 'Workspace' + sample(), card: () => [M.stats[0][1], `${M.stats[1][1]} ideas · ${M.stats[2][1]} punch-list · solo ${M.solo.when}`, 'ok'],
     body: () => `<div class="stats">${M.stats.map(([k, v], n) => `<div${n === 0 && H.on ? ' data-handoffs role="button" tabindex="0"' : ''}><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div><p class="sm"><span class="kind"${tint('audit')}>audit</span> ${esc(M.audit.run)}: ${esc(M.audit.ticked)} of ${esc(M.audit.total)} ticked, ${esc(M.audit.contradictions)} contradictions</p><p class="sm"${M.solo.live ? ' data-solo role="button" tabindex="0"' : ''}><span class="kind"${tint('last solo run')}>last solo run</span> ${esc(M.solo.when)}: ${esc(M.solo.txt)}</p>` },
-  mlaunch: { title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
+  mlaunch: { show: () => widgetOn('apps'), title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
-    body: () => `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
-  musage: { title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
+    body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
+  musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
     // On the page: each agent's 5 h and week as rings
     inline: () => { const rows = usageRings();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
@@ -993,23 +1269,201 @@ const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
 // opens the full window.
 const PANELS = ['mlogs', 'musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
+// D9: an empty Mission (no buttons, apps, pages or waiting items yet) says what it is and how to set it up.
+const missionEmpty = () => window.p9?.mission && !sampleView && !Object.keys(M.scripts).length && !M.apps.length && !M.pages.length && !S.reviews.length
+  && (live.on || /not set up/.test(live.note));
+const missionIntro = () => '<div class="sm" data-mission-intro role="note"><h4>What is Mission Control?</h4>'
+  + '<p>Your control room: one place for the buttons that run your scripts, shortcuts to your apps and pages, and a list of what is waiting on you.</p>'
+  + '<p class="muted">It reads three things from your workspace: a main project file, a file of buttons, apps and pages, and a folder with one .md file for each item waiting on you. Settings → Mission Control files points P9 at the ones you already have.</p>'
+  + '<div class="set-row">' + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
+// M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
+let guide = null;
+async function loadGuide() {
+  const r = await window.p9.mission('guide', {});
+  if (r.status !== 200) return;
+  guide = r.body;
+  if (live.empty || live.adding) renderMission();
+  if (mdl.open && S.modal?.kind === 'guide') renderModal();
+}
+// Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Switching sets
+// settings.space_name through the space route and writes no space file; only Delete, after its confirm, removes one.
+let spacePop = null, spaceForm = null; // spaceForm: the Delete confirm or the Save as template form, kept through polls
+function renderSpaceBtn() {
+  const b = $('#spaceBtn'), pop = $('#spacePop');
+  b.hidden = !live.on;
+  b.dataset.spaceCurrent = live.spaceName || '';
+  b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
+  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); });
+  if (!pop.hidden && !spaceForm) renderSpaceMenu();
+}
+function renderSpaceMenu() {
+  const pop = $('#spacePop'), now = live.spaceName || '';
+  pop.innerHTML = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
+    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button><button class="item" role="menuitem" data-space-save>Save as template…</button>'
+    + (now ? `<button class="item space-del" role="menuitem" data-space-del>Delete ${esc(now)}…</button>` : '');
+  pop.querySelector('[data-space-save]').onclick = () => spaceSave();
+  pop.querySelector('[data-space-del]')?.addEventListener('click', spaceDelete);
+  pop.querySelectorAll('[data-space]').forEach(b => b.onclick = async () => {
+    spacePop.close(); live.adding = false; live.preview = null;
+    const r = await window.p9.mission('space', { name: b.dataset.space || null });
+    if (r.status !== 200) toast({ kind: 'not saved', txt: 'Space: ' + (r.body?.error || r.status), level: 'bad' }, true);
+    refreshMission();
+  });
+  pop.querySelector('[data-space-add]').onclick = () => { spacePop.close(); live.adding = true; live.preview = null; renderMission(); };
+}
+// Finding 4 adds: Delete removes the shown space's file after a confirm that names it; the last space is kept and + Add offered.
+const formGo = (...buttons) => '<div class="space-form-go">' + buttons.join('') + '</div>';
+const formBtn = (variant, attr, label, type = 'button') => `<button type="${type}" data-slot="button" data-variant="${variant}" data-size="sm" ${attr}>${label}</button>`;
+function spaceDelete() {
+  const pop = $('#spacePop'), name = live.spaceName, last = !live.mainFile && (live.spaces || []).length <= 1;
+  spaceForm = 'delete';
+  pop.innerHTML = last
+    ? `<div class="space-form" data-space-confirm role="alertdialog" aria-labelledby="spaceDelHd"><p id="spaceDelHd"><b>${esc(name)}</b> is your only space, so P9 keeps it.</p><p class="muted">Add another space first.</p>`
+      + formGo(formBtn('default', 'data-space-add', '+ Add'), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</div>'
+    : `<div class="space-form" data-space-confirm role="alertdialog" aria-labelledby="spaceDelHd"><p id="spaceDelHd">Delete <b>${esc(name)}</b>?</p><p class="muted">This removes its file. It can't be undone.</p><p class="muted" data-space-note role="status"></p>`
+      + formGo(formBtn('destructive', 'data-space-del-go', 'Delete ' + esc(name)), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</div>';
+  bindSpaceForm(pop);
+  const go = pop.querySelector('[data-space-del-go]');
+  if (!go) return pop.querySelector('[data-space-add]').focus();
+  go.focus();
+  go.onclick = async () => {
+    go.disabled = true;
+    const r = await window.p9.mission('deleteSpace', { name, ...(go.dataset.armed ? { confirm: true } : {}) });
+    go.disabled = false;
+    if (r.status === 403 && !go.dataset.armed) { go.dataset.armed = '1'; pop.querySelector('[data-space-note]').textContent = 'File protection is on. Click Delete again to delete it.'; return; }
+    if (r.status !== 200) { pop.querySelector('[data-space-note]').textContent = 'Not deleted: ' + (r.body?.detail || r.body?.error || r.status); return; }
+    spaceForm = null; spacePop.close();
+    toast({ kind: 'saved', txt: 'Space ' + name + ' deleted.', level: 'ok' }, true);
+    refreshMission();
+  };
+}
+// Save as template: a name (the scratch-space rule) and an optional one-line about. A clash asks Replace or Rename.
+function spaceSave() {
+  const pop = $('#spacePop');
+  spaceForm = 'save';
+  pop.innerHTML = '<form class="space-form" data-space-save-form aria-labelledby="spaceSaveHd"><p id="spaceSaveHd"><b>Save as template</b></p>'
+    + `<label>Name<input data-slot="input" name="name" required maxlength="32" pattern="[a-z0-9][a-z0-9\\-]{0,31}" autocomplete="off" spellcheck="false" value="${esc(live.spaceName || 'main')}"></label>`
+    + '<span class="muted space-hint">Lowercase letters, digits and -</span>'
+    + '<label><span>About <span class="muted">(optional)</span></span><input data-slot="input" name="about" maxlength="200" autocomplete="off"></label>'
+    + '<p class="muted" data-space-note role="status"></p>'
+    + '<div class="space-form-go" data-space-clash hidden>' + formBtn('default', 'data-space-replace', 'Replace') + formBtn('outline', 'data-space-rename', 'Rename') + '</div>'
+    + formGo(formBtn('default', 'data-space-save-go', 'Save template', 'submit'), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</form>';
+  bindSpaceForm(pop);
+  const form = pop.querySelector('form'), note = form.querySelector('[data-space-note]'), clash = form.querySelector('[data-space-clash]');
+  form.elements.name.select();
+  const save = async (replace) => {
+    const name = form.elements.name.value.trim(), r = await window.p9.mission('saveTemplate', { name, about: form.elements.about.value.trim(), ...(replace ? { replace: true } : {}) });
+    clash.hidden = r.body?.error !== 'template-exists';
+    if (r.status === 201) {
+      spaceForm = null; spacePop.close(); guide = null; loadGuide();
+      return toast({ kind: 'saved', txt: 'Template ' + name + ' saved. It shows under + Add.', level: 'ok' }, true);
+    }
+    note.textContent = r.body?.error === 'template-exists' ? 'A template named ' + name + ' exists. Replace it, or rename this one.'
+      : r.body?.error === 'builtin-template' ? name + ' is a built-in template. Pick another name.'
+        : 'Not saved: ' + (r.body?.detail || r.body?.error || r.status);
+  };
+  form.onsubmit = (event) => { event.preventDefault(); save(false); };
+  form.querySelector('[data-space-replace]').onclick = () => save(true);
+  form.querySelector('[data-space-rename]').onclick = () => { clash.hidden = true; note.textContent = ''; form.elements.name.select(); };
+}
+function bindSpaceForm(pop) {
+  pop.querySelectorAll('[data-space-cancel]').forEach((b) => b.onclick = () => { spaceForm = null; renderSpaceMenu(); });
+  pop.querySelector('[data-space-add]')?.addEventListener('click', () => { spaceForm = null; spacePop.close(); live.adding = true; live.preview = null; renderMission(); });
+}
+function bindOnboard(root) {
+  root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72).
+    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(live.adding ? { space: freeName('new-space', live.spaces || []) } : {}) });
+    b.disabled = false;
+    if (r.status === 201 && r.body.space) {
+      live.adding = false; renderMission();
+      toast({ kind: 'chat', txt: (b.dataset.build === 'codex' ? 'Codex' : 'Claude') + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
+    }
+    if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation });
+    else toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  });
+  root.querySelectorAll('[data-yourself]').forEach(b => b.onclick = () => openModal({ kind: 'guide' }));
+  root.querySelectorAll('[data-open-protect]').forEach(b => b.onclick = async () => { await $('#setBtn').onclick(); const input = $('#setProtect'); input?.scrollIntoView({ block: 'center' }); input?.focus(); });
+  root.querySelectorAll('[data-template]').forEach(b => b.onclick = () => { live.preview = b.dataset.template; renderMission(); });
+  root.querySelectorAll('[data-preview-back]').forEach(b => b.onclick = () => { live.preview = null; renderMission(); });
+  root.querySelectorAll('[data-add-cancel]').forEach(b => b.onclick = () => { live.adding = false; renderMission(); });
+  // Choose: the template into a new scratch space under a free name (the route also refuses a space with sections), then shown.
+  // File protection answers the first click 403 and arms the button; the second click sends the user's confirmation, as the edit form does.
+  root.querySelectorAll('[data-choose]').forEach(b => b.onclick = async () => {
+    const name = b.dataset.choose, note = root.querySelector('[data-onboard-note]');
+    const space = freeName(name, live.spaces || []);
+    b.disabled = true;
+    const r = await window.p9.mission('template', { name, space, ...(b.dataset.armed ? { confirm: true } : {}) });
+    const shown = r.status === 201 && (await window.p9.mission('space', { name: space })).status === 200;
+    b.disabled = false;
+    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; note.textContent = 'File protection is on. Click Choose template again to add it.'; return; }
+    toast({ kind: r.status === 201 ? 'saved' : 'not saved', level: r.status === 201 ? 'ok' : 'bad',
+      txt: r.status !== 201 ? templateWords(r.status, r.body) : shown ? 'Space ' + space + ' added. Rename and fill its sections.' : 'Space ' + space + ' added. Pick it in the Space menu.' }, true);
+    if (r.status !== 201) return;
+    live.adding = false; live.preview = null; refreshMission();
+    // ponytail: the one template that needs a folder asks for it as it is added; a template field for this is out of scope.
+    if (name === 'obsidian' && window.p9.pickVault) await pickVault();
+  });
+}
+// The Obsidian vault folder (threat model row 73): desktop only. Main shows the native picker and a confirm, then tells the daemon.
+// On a remote the vault is the remote's folder (finding 3b, answer A): the setup chat opens with the ask typed, not sent,
+// and adds the folder with allow_folder once the user confirms there.
+async function vaultChat() {
+  const r = await window.p9.mission('build', { provider: wizPicked()[0] || 'claude' });
+  if (r.status !== 201) { toast({ kind: 'chat', level: 'bad', txt: 'Setup chat not started (' + (r.body?.error || r.status) + ').' }, true); return false; }
+  const id = r.body.conversation;
+  openModal({ kind: 'chat', id });
+  for (let i = 0; i < 50 && !S.sessions.some(s => s.id === id); i++) await new Promise(res => setTimeout(res, 100));
+  const s = S.sessions.find(x => x.id === id);
+  if (s && !s.draft) { s.draft = 'Add my Obsidian vault folder'; if (S.modal?.id === id) renderModal(); }
+  toast({ kind: 'chat', level: 'ok', txt: 'P9 runs on the remote, so the setup chat adds the folder there.' }, true);
+  return false;
+}
+async function pickVault() {
+  const r = await window.p9.pickVault();
+  if (r.body?.canceled) return false;
+  const ok = r.status === 201, e = r.body?.error;
+  if (e === 'server-mode-local-only') return vaultChat();
+  toast({ kind: ok ? 'saved' : 'not saved', level: ok ? 'ok' : 'bad', txt: ok ? 'Vault folder set: ' + r.body.vault
+      : e === 'name-taken' ? 'A vault folder is already set: ' + r.body.folder : e === 'root-refused' ? 'Mission does not use this folder: it holds the workspace, the home folder or P9\'s own files.'
+        : 'Vault folder not set (' + (e || r.status) + ').' }, true);
+  if (ok) refreshMission();
+  return ok;
+}
 function renderMission() {
+  renderSpaceBtn();
+  // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet. + Add shows it too (finding 4);
+  // a template click shows its preview.
+  if ((live.empty || live.adding) && !sampleView) {
+    const t = live.preview && guide?.templates?.find(x => x.name === live.preview);
+    setHTML($('#fMission'), t ? previewCard(t, esc) : onboardCard({ templates: guide?.templates, protect: live.fileProtection }, esc)
+      + (live.adding ? `<p class="onboard-back"><button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-add-cancel>Back to ${esc(live.spaceName || 'Main')}</button></p>` : ''));
+    bindOnboard($('#fMission'));
+    if (!guide) loadGuide();
+    return;
+  }
   const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${l.length}</span></button>`).join('')}${live.on ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button><button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
-    + (live.on && H.hint ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
+    + (missionEmpty() ? missionIntro() : '')
+    + (live.on && H.hint && icmSpace() ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
-    + '<div class="mrow"><section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>'
+    + '<div class="mrow">' + (widgetOn('waiting') ? '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>' : '')
     + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
     + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
-  const sort = $('#fMission [data-sort]'); sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); };
+  $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
+  const sort = $('#fMission [data-sort]'); // only where Waiting on you is drawn (finding 3a)
+  if (sort) { sort.value = reviewSort(); sort.onchange = () => { try { localStorage.setItem('eh-review-sort', sort.value); } catch {} reviewSort(); missionLive(); }; }
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
+  $('#fMission').querySelectorAll('[data-sprint]').forEach(b => b.onclick = () => openModal({ kind: 'sprint' }));
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
 }
@@ -1039,7 +1493,9 @@ function missionLive() {
   if (box) {
     setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
     setHTML($('#fMission [data-card="mprimary"]'), wins.mprimary.show() ? winCard('mprimary') : '');
-    for (const id of PANELS) { const p = $(`#fMission [data-panel="${id}"]`); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); }
+    for (const id of PANELS) { const p = $(`#fMission [data-panel="${id}"]`); p.hidden = !!wins[id].show && !wins[id].show(); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); }
+    // With a space file the built-in layer is off, so Main project and Logs are gone: an empty column hides and the others widen.
+    $('#fMission').querySelectorAll('.mcol').forEach(col => { col.hidden = ![...col.children].some(k => !k.hidden && k.innerHTML.trim()); });
     $('#fMission').querySelectorAll('[data-win]').forEach(b => b.onclick = () => openModal({ kind: 'win', id: b.dataset.win }));
   }
   const set = (id, html) => { const b = $(`#mdl #${id} .pbody`); if (!b) return { querySelectorAll: () => [] }; return setHTML(b, html); };
@@ -1079,6 +1535,64 @@ function notesModal(m, body, row) {
   };
   body.querySelector('[data-create]').onclick = create;
   input.onkeydown = e => { if (e.key === 'Enter') create(); };
+}
+// A real file from the Chat Focus browser (threat model rows 23, 4, 7): the same editor as Dev Focus's fallback; Save is the one "save"
+// action, the daemon's guarded PUT /files, so a changed file answers 409 and the draft stays (like a Mission note).
+const liveKey = name => 'live:' + name;
+function liveFileModal(m, body) {
+  if (FILE_IMAGE.test(m.name)) return imageModal(m, body);
+  const key = liveKey(m.name);
+  $('#mdlT').textContent = m.name;
+  if (!m.asked && !dirty(key)) {
+    m.asked = true;
+    window.p9.mission('read', { path: m.name }).then(r => {
+      if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
+      else if (r.status !== 200) m.error = r.body?.error || String(r.status);
+      if (S.modal === m) renderModal();
+    }).catch(() => { m.error = 'daemon-unavailable'; if (S.modal === m) renderModal(); });
+  }
+  const d = S.docs[key];
+  if (!d) { body.innerHTML = `<p class="sm muted">${m.error ? 'Not readable: ' + esc(m.error) : 'Loading…'}</p>`; $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span>`; return; }
+  const c = m.conflict;
+  body.innerHTML = (c ? `<div class="review notes-conflict" data-conflict>${c.diskHash !== undefined
+    ? `<p>Changed on disk since you opened it. Your text is still here.</p><div class="notes-row"><button data-slot="button" data-variant="outline" data-size="sm" data-disk>Load disk version</button><button data-slot="button" data-size="sm" data-mine>Save mine over it</button></div>`
+    : `<p>This file is no longer on disk (moved, renamed or deleted elsewhere). Your text is still here: copy it before you close.</p><div class="notes-row"><button data-slot="button" data-size="sm" data-copytext>Copy my text</button></div>`}</div>` : '')
+    + editorHtml(key, 'mdlEd');
+  wireEditor(body, key, () => liveFoot(m), () => saveLive(m));
+  body.querySelector('[data-disk]')?.addEventListener('click', () => { Object.assign(d, { text: c.diskContent, saved: c.diskContent, hash: c.diskHash }); m.conflict = null; renderModal(); });
+  body.querySelector('[data-mine]')?.addEventListener('click', () => saveLive(m, c.diskHash));
+  body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
+  liveFoot(m);
+}
+// An image from the Files pane (rows 23/26/27 adds): read-only; the words and the check are helpers.mjs's, shared with the phone.
+function imageModal(m, body) {
+  $('#mdlT').textContent = m.name;
+  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
+  if (m.image === undefined) {
+    m.image = null;
+    window.p9.mission('image', { path: m.name }).then(r => {
+      const src = r.status === 200 && fileImageSrc(r.body);
+      m.image = src ? { src } : { error: r.status === 200 ? 'not-an-image' : r.body?.error || String(r.status) };
+      if (S.modal === m) renderModal();
+    }).catch(() => { m.image = { error: 'daemon-unavailable' }; if (S.modal === m) renderModal(); });
+  }
+  const i = m.image;
+  body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
+    : `<div class="file-image"><img src="${i.src}" alt="${esc(m.name)}"></div>`;
+}
+function liveFoot(m) {
+  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${saveBtn(liveKey(m.name))}`;
+  const b = $('#mdlFoot [data-savefile]'); if (b) b.onclick = () => saveLive(m);
+}
+async function saveLive(m, hash) {
+  const key = liveKey(m.name), d = S.docs[key]; if (!d || m.saving || (!hash && !dirty(key))) return;
+  m.saving = true; const text = d.text;
+  const r = await window.p9.mission('save', { path: m.name, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
+  m.saving = false;
+  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
+  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
+  if (S.modal === m) renderModal();
 }
 // One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
 function noteModal(m, body) {
@@ -1141,7 +1655,7 @@ async function saveNote(m, hash) {
   m.saving = false;
   if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
   else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ' (' + (r.body?.error || r.status) + '). Your text is still here.', level: 'bad' }, true);
+  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
   if (S.modal === m) renderModal();
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
@@ -1155,12 +1669,99 @@ function missionModal(m, body, row) {
   } else if (m.kind === 'scripts') {
     if (!M.scripts[m.g]) return closeModal();
     const l = M.scripts[m.g], tools = m.g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === m.g);
-    $('#mdlT').textContent = `${m.g} · ${l.length} script${l.length === 1 ? '' : 's'}`;
-    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
+    const n = sectionRows(m.g, l), word = n > l.length ? 'item' : 'script';
+    $('#mdlT').textContent = `${m.g} · ${n} ${word}${n === 1 ? '' : 's'}`;
+    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join('')}${(sp?.refs || []).map((r, i) => r.missing
+      ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
+      : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
+    // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is open on screen, every 30 s.
+    // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
+    // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
+    m.tiles ||= {}; m.cardHtml ||= {};
+    const runs = [...(sp?.data || []), ...(sp?.cards || [])];
+    const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
+    if (runs.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
+    // ponytail: the modal draws whole, so a card's frame is made again on each draw (a tile's answer, a checklist press) and
+    // gets the last JSON again; a card keeps no state of its own across draws.
+    for (const c of sp?.cards || []) {
+      const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html;
+      if (typeof html !== 'string') continue;
+      const frame = mountCard(box.querySelector('.card-frame'), c.title, html, { ...FRAME, onState: (kind, text) => {
+        box.dataset.rendered = kind;
+        if (kind === 'rendered' && m.tiles[c.id]?.json !== undefined) frame.contentWindow?.postMessage({ p9: 'data', json: m.tiles[c.id].json }, '*');
+        if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
+      } });
+    }
+    if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
+      m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => S.modal === m && renderModal()); }
+    // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
+    m.ck ||= {};
+    if (sp?.checklists?.length) body.insertAdjacentHTML('beforeend', `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>`);
+    const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });
+    if (sp?.checklists?.length && !m.ckRead) { m.ckRead = true; Promise.all(sp.checklists.map(c => ckLoad(c.id))).then(() => S.modal === m && renderModal()); }
+    body.querySelectorAll('[data-ck] button').forEach(b => b.onclick = async () => {
+      const id = b.closest('[data-ck]').dataset.ck, act = checklistAction(b, m.ck[id], m.armed);
+      if (!act) return;
+      m.armed = act.arm || '';
+      if (act.arm) return renderModal();
+      b.disabled = true;
+      const r = await window.p9.mission('checklistSet', act.body);
+      await ckLoad(id);
+      if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
+      if (S.modal === m) renderModal();
+    });
+    const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (S.modal === m) renderModal(); });
+    if (runs.length && !m.pulling) { runs.forEach(pull); m.pulling = setInterval(() => { if (S.modal !== m) return clearInterval(m.pulling); if (!document.hidden) runs.forEach(pull); }, 30000); }
+    body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
+      window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
+    body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
+    if (sp?.quick_note) {
+      // Row 76: typed text lives on the modal, so a tile answering (renderModal) does not wipe it. It sits under the
+      // section's text, so Save shows without scrolling.
+      const qn = sp.quick_note, lead = body.querySelector(':scope>[data-space-text]'); m.qn ||= {};
+      (lead || body).insertAdjacentHTML(lead ? 'afterend' : 'afterbegin', quickNoteHtml(esc, qn, m.qn, true));
+      const form = body.querySelector('[data-quicknote]');
+      form.oninput = () => { m.qn.title = form.elements.title.value; m.qn.body = form.elements.body.value; };
+      form.onsubmit = async e => {
+        e.preventDefault();
+        const file = quickNotePath(qn.path, m.qn.title || '');
+        const r = file ? await window.p9.mission('noteCreate', { root: qn.root, path: file, content: (m.qn.body || '').replace(/\s+$/, '') + '\n' }) : null;
+        m.qn = r?.status === 201 ? { status: quickNoteWords(r, file, qn) } : { ...m.qn, status: r ? quickNoteWords(r, file, qn) : 'Type a title first.' };
+        renderModal();
+      };
+    }
+    body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back: m }));
     body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
     body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
     body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
     body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: m.g, back: m }));
+    // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section.
+    m.counts ||= {};
+    for (const f of sp?.folders || []) if (!(f.id in m.counts)) {
+      m.counts[f.id] = null;
+      window.p9.mission('folder', { id: f.id }).then(r => { m.counts[f.id] = r.status === 200 ? r.body.total : '?'; if (S.modal === m) renderModal(); });
+    }
+    body.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => openModal({ kind: 'folder', f: sp.folders[+b.dataset.folder], back: m }));
+    // A reference (M2) opens what it names, the way its own tile does.
+    body.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => {
+      const r = sp.refs[+b.dataset.ref];
+      if (r.kind === 'scripts') { const s = Object.values(M.scripts).flat().find(x => x[0] === r.id); return s && openModal({ kind: 'script', s, back: m }); }
+      if (!live.on) return toast({ kind: 'launched', txt: r.title + ' (mock: nothing opens)', level: 'ok' }, true);
+      const page = r.kind === 'pages' ? M.pages.find(x => x[2] === r.id) : null;
+      if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back: m });
+      launchLive(r.title, { kind: r.kind, id: r.id });
+    });
+  } else if (m.kind === 'folder') {
+    $('#mdlT').textContent = m.f.title;
+    if (m.list === undefined) { m.list = null; window.p9.mission('folder', { id: m.f.id }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
+    const l = m.list, now = Date.now();
+    body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error === 'unknown-root' && m.f.root === 'vault' ? (window.p9.pickVault
+      ? '<div class="review"><p class="sm">Mission lists this once it knows your vault folder.</p><button data-slot="button" data-variant="outline" data-pick-vault>Pick the vault folder</button></div>'
+      : '<div class="review"><p class="sm">Pick the vault folder in the P9 desktop app.</p></div>') : l.error ? `<p class="sm muted">Could not list this folder (${esc(l.error)})</p>`
+      : l.files.length ? `<ul class="mlist">${l.files.map((f, i) => row(i, '<span class="kind">file</span>', esc(f.name), esc(ago(Math.max(0, Math.round((now - f.modified) / 60000)))) + ' ago')).join('')}</ul>` : '<p class="empty">No files match.</p>';
+    $('#mdlFoot').innerHTML = l && !l.error ? `<span class="muted sm" data-folder-count>${l.total} file${l.total === 1 ? '' : 's'}${l.files.length < l.total ? ', the newest ' + l.files.length + ' shown' : ''}${l.partial ? ' · a very big folder: not every file was looked at' : ''}</span>` : '';
+    const pv = body.querySelector('[data-pick-vault]'); if (pv) pv.onclick = async () => { if (await pickVault()) { m.list = undefined; renderModal(); } };
+    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const f = l.files[+b.dataset.i]; openModal({ kind: 'hubtext', title: f.name, req: { id: m.f.id, path: f.path }, call: 'folderFile', back: m }); });
   } else if (m.kind === 'notes') notesModal(m, body, row);
   else if (m.kind === 'note') noteModal(m, body);
   else if (m.kind === 'link') {
@@ -1169,6 +1770,25 @@ function missionModal(m, body, row) {
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open link</button>`;
     $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
     $('#mdlFoot [data-open]').onclick = () => { launchLive(m.page[0], { kind: 'pages', id: m.page[2], confirm: true }); m.back ? openModal(m.back) : closeModal(); };
+  } else if (m.kind === 'weblink') {
+    // Rows 74, 75: the typed text is URL-encoded as the daemon does it, so the link shown is the link that opens.
+    const link = () => m.l.url + (m.l.ask ? encodeURIComponent((m.text || '').trim()) : ''), scheme = m.l.url.split(':')[0];
+    $('#mdlT').textContent = m.l.title;
+    body.innerHTML = `<div class="review">${m.l.ask ? `<label>${esc(m.l.ask)}<input data-slot="input" data-weblink-text maxlength="200" value="${esc(m.text || '')}"></label>` : ''}`
+      + `<p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(link())}</pre>`
+      + (m.error ? `<p class="sm" role="status" data-weblink-error>${esc(m.error)}</p>` : '') + '</div>';
+    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open</button>';
+    const input = body.querySelector('[data-weblink-text]');
+    if (input) { input.oninput = () => { m.text = input.value; body.querySelector('[data-link]').textContent = link(); }; input.focus(); }
+    $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
+    $('#mdlFoot [data-open]').onclick = async () => {
+      if (m.l.ask && !(m.text || '').trim()) { m.error = 'Type the ' + m.l.ask.toLowerCase() + ' first.'; return renderModal(); }
+      const r = await window.p9.mission('link', { id: m.l.id, ...(m.l.ask ? { text: m.text } : {}), confirm: true });
+      if (r.status === 200) return m.back ? openModal(m.back) : closeModal();
+      m.error = r.body?.error === 'scheme-not-allowed' ? `${scheme} links are not allowed yet.${scheme === 'obsidian' ? ' Picking the vault folder allows them.' : ' Add ' + scheme + ' to page_schemes in the Mission settings file.'}`
+        : 'Not opened (' + (r.body?.error || r.status) + ').';
+      renderModal();
+    };
   } else if (m.kind === 'script') {
     const [id, name, desc, lvl, last, dur, x = {}] = m.s;
     m.args ||= (x.args || []).map(() => '');
@@ -1185,7 +1805,7 @@ function missionModal(m, body, row) {
     if (m.out) $('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
   } else if (m.kind === 'hubtext') {
     $('#mdlT').textContent = m.title;
-    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission('hubText', m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; if (S.modal === m) renderModal(); }); }
+    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call || 'hubText', m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; if (S.modal === m) renderModal(); }); }
     body.innerHTML = `<div class="review"><pre class="out">${esc(m.text)}</pre></div>`;
     const fix = m.req?.kind === 'incident' && liveChat.on;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span>${fix ? '<button data-slot="button" data-fix>Fix with Claude</button>' : ''}<button data-slot="button" data-variant="outline" data-copy>Copy</button>`;
@@ -1195,6 +1815,19 @@ function missionModal(m, body, row) {
       const r = await window.p9.mission('fix', { host: m.req.host, name: m.req.name });
       if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation, back: m });
       else toast({ kind: 'chat', txt: 'Fix with Claude: ' + (r.body?.error || r.status), level: 'bad' }, true);
+    };
+  } else if (m.kind === 'sprint') {
+    const d = SP.data;
+    $('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
+    body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
+      : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
+    $('#mdlFoot').innerHTML = SPRINT_SCRIPTS.map(([id, label]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${id}"${scriptById(id) ? '' : ` disabled title="Add a ${id} button to the registry"`}>${label}</button>`).join('')
+      + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
+    $('#mdlFoot').querySelectorAll('[data-sprint-run]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: scriptById(b.dataset.sprintRun), back: m }));
+    $('#mdlFoot [data-sprint-tmux]').onclick = async () => {
+      const r = await window.p9.mission('sprintTmux');
+      if (r.status === 201) { closeModal(); showTerminal(r.body.terminal); }
+      else { m.hint = 'Open tmux: ' + (r.body?.error || r.status); renderModal(); }
     };
   } else if (m.kind === 'idea') {
     // workspace-hub's New idea box: the daemon names the file and refuses to replace one.
@@ -1209,6 +1842,13 @@ function missionModal(m, body, row) {
       toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: r.status === 201 ? r.body.path : 'New idea: ' + (r.body?.error || r.status), level: r.status === 201 ? 'ok' : 'bad' }, true);
       if (r.status === 201) { closeModal(); loadHub(); }
     };
+  } else if (m.kind === 'guide') {
+    // "Build it yourself" (M4): the shipped guide, and the way to the edit form.
+    $('#mdlT').textContent = 'Build it yourself';
+    body.innerHTML = `<div class="msg agent notes-md" data-guide>${guide ? md.parse(guide.guide) : '<p class="muted">Loading the guide…</p>'}</div>`;
+    if (!guide) loadGuide();
+    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-guide-edit>Open the edit form</button>';
+    $('#mdlFoot [data-guide-edit]').onclick = () => openModal({ kind: 'medit', items: editItems(M) });
   } else if (m.kind === 'medit') {
     $('#mdlT').textContent = 'Edit names and icons';
     editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => M.art, esc, toast, again: () => S.modal === m && renderModal(),
@@ -1271,19 +1911,28 @@ $('#rTerm').onclick = () => toggleTerm();
 $('#rSearch').onclick = () => { if (!S.files) $('#rFiles').click(); $('#fileSearch').focus(); };
 // One shared shell; each focus remembers whether it shows it and how (Builder 2026-10-14):
 // Dev opens it as a drawer, Chat and Mission as a pop-out. dFloat flips the mode for that focus.
+// Dev Focus docks it only: the editor is a separate view drawn above this page, so a floating terminal went behind it.
 function showTerm() {
-  const f = S.focus, open = S.termOpen[f];
-  dock.hidden = !open; dock.classList.toggle('float', S.termMode[f] === 'float');
+  const f = S.focus, open = S.termOpen[f], float = f !== 'dev' && S.termMode[f] === 'float';
+  if (dock.classList.contains('float') && !float) dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = '';
+  dock.hidden = !open; dock.classList.toggle('float', float);
+  $('#dFloat').hidden = f === 'dev';
   $('#rTerm').setAttribute('aria-pressed', open);
   if (open && dockTerm && !dockTerm.open) openDock();
+}
+// A terminal the daemon just made (Hand off, the wizard's agent commands): the dock opens on it.
+function showTerminal(id) {
+  const shown = dockTerm?.open;
+  S.termOpen[S.focus] = true; showTerm();
+  if (shown) { dockTerm.attach(id); dockTerm.focus(); }
 }
 function toggleTerm() { S.termOpen[S.focus] = !S.termOpen[S.focus]; showTerm(); }
 $('#dHide').onclick = toggleTerm;
 
 /* ---------- focus modes ---------- */
-// Theme per focus mode (phase 18): each focus keeps the look last picked while it showed; a focus with none keeps the current look.
-const focusLooks = (() => { try { return JSON.parse(localStorage.getItem('p9-focus-looks')) ?? {}; } catch { return {}; } })();
-onLookChange(look => { focusLooks[S.focus] = look; try { localStorage.setItem('p9-focus-looks', JSON.stringify(focusLooks)); } catch {} });
+// One look for every focus mode (v0.1.6): the picker in Chat or Mission Control also sets Dev Focus. The per-focus looks
+// an older version saved are dropped; the look itself is saved on its own, so it still loads.
+try { localStorage.removeItem('p9-focus-looks'); } catch {}
 // All three focus panes stay in the DOM; switching only flips visibility, so nothing re-renders.
 // A pick (rail, keys, CLI, landing) leaves the landing page and is kept as the last focus; `stay` is the app's own switching.
 function setFocus(f, stay = false) {
@@ -1291,32 +1940,48 @@ function setFocus(f, stay = false) {
   S.focus = f;
   if (f === 'mission') refreshMission();
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
-  if (focusLooks[f]?.theme) { applyLook(focusLooks[f]); DUWOP.init(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
   document.querySelectorAll('[data-focus-btn]').forEach(b => b.setAttribute('aria-pressed', b.dataset.focusBtn === f));
   renderIndicator(); // each focus has its own pets
   $('#focusTitle').textContent = focusNames[f];
+  // In the desktop the Dev Focus editor is drawn above this page, so the theme picker would open behind it.
+  const behind = f === 'dev' && Boolean(window.p9);
+  $('#themeBtn').disabled = behind;
+  $('#themeBtn').title = behind ? 'Look: pick it in Chat or Mission Control, where it applies to Dev Focus too (the editor here would cover the picker)' : 'Look: the theme of every focus mode';
   showTerm();
+  side.focus();
   placeDev();
+  cardsOverlay();
 }
 // In the desktop, Dev Focus is the real editor: a separate view (p9://dev) laid over this pane. In a browser the sample editor stays.
 // The view draws above this page, so it steps aside: hidden while a dialog is open, and short of the cards' column while a card shows.
 function placeDev() {
   if (!window.p9?.devView) return;
-  const r = $('#fDev').getBoundingClientRect(), c = $('#cards').getBoundingClientRect();
-  const visible = S.focus === 'dev' && r.width > 0 && r.height > 0 && !document.querySelector('dialog[open]');
-  let x = r.x, y = r.y, right = c.height > 0 && c.left < r.right ? c.left - 8 : r.right;
+  const r = $('#fDev').getBoundingClientRect(), now = side.current();
+  const visible = S.focus === 'dev' && r.width > 0 && r.height > 0 && !document.querySelector('dialog[open]') && now?.mode !== 'full';
+  let x = r.x, y = r.y, right = r.right;
+  // The side panel and its drag bar stay clear of the view (8 px), on whichever side the swap put it. The cards are not reserved for: they float over it (their own overlay view).
+  if (now) { const s = $('#side').getBoundingClientRect(); if (s.left > r.x) right = Math.min(right, s.left - 8); else x = Math.max(x, s.right + 8); }
+  const tab = $('#devTab').getBoundingClientRect(); if (tab.height) y = Math.max(y, tab.bottom);
   // The walkthrough card is on this page too: the editor starts right of it or below it, whichever leaves more editor.
   const k = $('#walk')?.getBoundingClientRect();
   if (k && k.right > x && k.left < right && k.bottom > y && k.top < r.bottom) {
     if ((right - k.right) * (r.bottom - y) >= (right - x) * (r.bottom - k.bottom)) x = k.right + 8; else y = k.bottom + 8;
   }
-  window.p9.devView(visible ? { visible, x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, r.bottom - y)) } : { visible });
+  // D14 (Builder, 2026-10-28: "It should never be hidden behind any panel"): the view draws above the page, so it keeps clear of a
+  // floating terminal: the editor takes the biggest of the room left of it, right of it, above it or below it.
+  let bottom = r.bottom;
+  const d = $('#dock'), t = !d.hidden && d.classList.contains('float') ? d.getBoundingClientRect() : null; // $: placeDev runs before const dock
+  if (t && t.right > x && t.left < right && t.bottom > y && t.top < bottom) {
+    const room = ([a, b, c, d]) => Math.max(0, c - a) * Math.max(0, d - b);
+    [x, y, right, bottom] = [[t.right + 8, y, right, bottom], [x, y, t.left - 8, bottom], [x, t.bottom + 8, right, bottom], [x, y, right, t.top - 8]].reduce((m, o) => room(o) > room(m) ? o : m);
+  }
+  window.p9.devView(visible ? { visible, x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) } : { visible });
 }
 new ResizeObserver(placeDev).observe($('#fDev'));
-new ResizeObserver(placeDev).observe($('#cards'));
-new MutationObserver(placeDev).observe(document.body, { subtree: true, attributeFilter: ['open'] });
+new ResizeObserver(cardsOverlay).observe($('.stage'));
+new MutationObserver(() => { placeDev(); cardsOverlay(); }).observe(document.body, { subtree: true, attributeFilter: ['open'] });
 window.p9?.onFocus?.(f => { if (Object.hasOwn(focusNames, f)) setFocus(f); });
 document.querySelectorAll('[data-focus-btn]').forEach(b => b.onclick = () => setFocus(b.dataset.focusBtn));
 // Ctrl+1/2/3 is what Builder asked for; Chrome keeps Ctrl+1-8 for its own tabs, so Alt+1/2/3 works in a browser too.
@@ -1370,10 +2035,10 @@ const openDock = () => docking ??= (async () => {
   }
   dockTerm.attach(id); dockTerm.focus();
 })().finally(() => { docking = null; });
-if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING, unavailableText: text }) => {
+if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TMUX_MISSING_HERE, unavailableText: text }) => {
   if (lifetime.signal.aborted) return;
-  tmuxMissing = TMUX_MISSING; unavailableText = text;
-  dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, state: (text, on) => {
+  tmuxMissing = TMUX_MISSING_HERE; unavailableText = text;
+  dockTerm = createTerminal({ screen: $('#termView'), connect: relaySocket, open: url => window.p9.openLink(url).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true)), state: (text, on) => {
     $('#dState').textContent = text; $('#dBadge').textContent = on ? 'running' : 'closed'; $('#dBadge').dataset.variant = on ? 'ok' : 'warn'; $('#dRefresh').hidden = on; } });
   $('#term').hidden = true; $('#termView').hidden = false;
   dockTerm.show('No terminal open');
@@ -1382,9 +2047,8 @@ if (window.p9?.terminalOpen) import('./terminal.mjs').then(({ createTerminal, TM
   lifetime.signal.addEventListener('abort', () => dockTerm.close());
   showTerm();
 });
-let dragY = null; const dock = $('#dock');
-$('#grip').onpointerdown = e => { dragY = e.clientY; const h0 = dock.offsetHeight; const mv = ev => { dock.style.height = Math.max(120, Math.min(innerHeight * .7, h0 + (dragY - ev.clientY))) + 'px'; }; const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); }; addEventListener('pointermove', mv); addEventListener('pointerup', up); };
-$('#grip').onkeydown = e => { if (e.key === 'ArrowUp') dock.style.height = dock.offsetHeight + 24 + 'px'; if (e.key === 'ArrowDown') dock.style.height = Math.max(120, dock.offsetHeight - 24) + 'px'; };
+const dock = $('#dock');
+dragBar($('#grip'), { axis: 'y', dir: -1, get: () => dock.offsetHeight, set: px => { dock.style.height = px + 'px'; }, min: 120, max: () => innerHeight * .7, signal: lifetime.signal });
 $('#dFloat').onclick = () => { S.termMode[S.focus] = S.termMode[S.focus] === 'float' ? 'drawer' : 'float'; dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = ''; showTerm(); };
 // Floating terminal (Builder, 2026-10-17: "wigs out on click and drag to move, highlights all the stuff below it, and wont resize").
 // left/top are relative to the dock's parent, not the viewport (the jump); pointer capture and preventDefault stop the selection;
@@ -1395,8 +2059,9 @@ dock.querySelector('.tb').onpointerdown = e => {
   const r = dock.getBoundingClientRect(), pr = dock.offsetParent.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
   dock.style.translate = 'none';
   const place = ev => { dock.style.left = Math.max(0, Math.min(pr.width - 80, ev.clientX - dx - pr.left)) + 'px'; dock.style.top = Math.max(0, Math.min(pr.height - 30, ev.clientY - dy - pr.top)) + 'px'; };
-  place(e); tb.onpointermove = place; tb.onpointerup = tb.onpointercancel = () => { tb.onpointermove = tb.onpointerup = tb.onpointercancel = null; };
+  place(e); tb.onpointermove = place; tb.onpointerup = tb.onpointercancel = () => { tb.onpointermove = tb.onpointerup = tb.onpointercancel = null; placeDev(); };
 };
+new ResizeObserver(() => placeDev()).observe(dock); // D14: opened, closed (display none), floated, docked or resized
 
 /* ---------- stop all + palette ---------- */
 $('#stopAll').onclick = () => $('#stopDlg').showModal();
@@ -1431,7 +2096,7 @@ function walkthrough(i = 0, from = S.focus) {
   const r = at?.getBoundingClientRect(), clamp = (v, max) => Math.min(Math.max(12, v), max - 12);
   if (!r?.width || !r.height) { at?.classList.remove('walk-at'); Object.assign(el.style, { left: (innerWidth - w) / 2 + 'px', top: (innerHeight - h) / 2 + 'px' }); }
   else {
-    if (r.left < 80) Object.assign(el.style, { left: r.right + 14 + 'px', top: clamp(r.top - 8, innerHeight - h) + 'px' }); // the rail: beside it
+    if (r.right < 80) Object.assign(el.style, { left: r.right + 14 + 'px', top: clamp(r.top - 8, innerHeight - h) + 'px' }); // the rail: beside it
     else Object.assign(el.style, { left: clamp(r.left, innerWidth - w) + 'px', top: (r.bottom + 14 + h < innerHeight ? r.bottom + 14 : clamp(r.top - 14 - h, innerHeight - h)) + 'px' });
   }
   el.querySelectorAll('[data-walk]').forEach(b => b.onclick = () => walkthrough(+b.dataset.walk, from));
@@ -1469,7 +2134,7 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
+let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 async function saveSettings(next) {
   try { settings = window.p9?.setSettings ? await window.p9.setSettings(next) : (localStorage.setItem('p9-settings', JSON.stringify(next)), next); }
   catch { toast({ kind: 'settings', txt: 'Settings not saved', level: 'bad' }, true); }
@@ -1537,26 +2202,6 @@ function wirePetSettings() {
 // editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
-const MISSION_TIPS = { primary: 'File that names your main project (for the Mission Control Main Project card and the Chat Focus Files pane)',
-  registry: "JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card)",
-  waiting: 'Folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane\'s Needs you view)',
-  hub: "Folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it)",
-  scripts_root: 'Full path of the folder your buttons and apps run in, and the one ~/workspace stands for (for the Mission Control buttons). Empty: the workspace' };
-// A function: PATH_KEYS is declared further down, with the wizard.
-const missionKeys = () => [...PATH_KEYS.map(([k, name, kind]) => [k, name, kind, MISSION_TIPS[k]]),
-  ['space', 'Extra sections file (optional)', 'setup-file', 'JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page)'],
-  ['server_host', 'Server host name (optional)', '', "Network name of your server, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that server's logs over ssh)"],
-  ['page_schemes', 'Extra link types for pages (optional, comma-separated)', '', 'Link types besides http and https that a Mission Control page may open, for example obsidian (a page link of that type asks before it opens)'],
-  ['notes_roots', 'Notes folders (optional, one name = /full/path per line)', '', 'Named folders of .md notes (for the notes an extra Mission Control section shows, by that name)']];
-const missionShown = (k, v) => v === undefined ? '' : k === 'page_schemes' ? v.join(', ') : k === 'notes_roots' ? Object.entries(v).map(([n, f]) => n + ' = ' + f).join('\n') : v;
-// The box's text as the settings value; empty removes the key. No checks here: the daemon's are the rules.
-const missionValue = (k, text) => {
-  text = text.trim();
-  if (!text) return null;
-  if (k === 'page_schemes') return text.split(/[\s,]+/).filter(Boolean);
-  if (k === 'notes_roots') return Object.fromEntries(text.split('\n').filter(l => l.trim()).map(l => { const i = l.indexOf('='); return i < 0 ? [l.trim(), ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
-  return text;
-};
 function missionGroup() {
   const s = missionFiles.settings;
   return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The files and folders Mission Control reads, from its settings file (for the Mission Control focus). Each row saves when you leave it.', 'mission-control-files')}</legend>`
@@ -1592,6 +2237,77 @@ function wireMission() {
     saveMission({ [k]: picked });
   }; });
 }
+// Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
+// lists them). Nothing is built in; Add remote takes a Host name or user@address.
+function serverRow() {
+  const { host, connected, error, hosts, remotes = [], keep = {}, noKey = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
+  // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
+  const keepPick = h => window.p9?.remoteKeepSetting ? '<select data-slot="select" data-remote-keep="' + esc(h) + '" aria-label="P9 on ' + esc(h) + ' when you disconnect" title="What P9 on ' + esc(h) + ' does when you disconnect">'
+    + [['', 'Ask'], ['keep', 'Keeps running'], ['stop', 'Stops']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
+  const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
+    : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
+  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>' + keepPick(h)
+    + (noKey.includes(h) && window.p9?.sshKeySetting ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-key-again="' + esc(h) + '" title="After the next password login to ' + esc(h) + ', P9 asks again whether to add its own key">Offer a P9 key again</button>' : '')
+    + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
+    + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
+  return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. If ssh needs a password, P9 asks for it in its own window and can add its own key so it stops asking. Folder pickers, Open in VS Code and Repair stay on this computer.', 'server-mode-send-to-server-and-send-files') + '</legend>'
+    + '<p class="muted sm">' + esc(note) + '</p>' + (rows ? '<ul class="remote-list">' + rows + '</ul>' : '')
+    + '<form class="set-row" id="setRemoteAdd"><input data-slot="input" id="setRemoteName" placeholder="Host name or user@address" aria-label="Remote to add" maxlength="253" autocomplete="off" spellcheck="false"><button data-slot="button" data-variant="default">Add remote</button></form>'
+    + '<p class="warn sm" id="setRemoteErr" role="alert" hidden></p>'
+    + (host ? '<div class="set-row"><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setServerLocal">Use this computer</button></div>' : '') + '</fieldset>';
+}
+// c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
+const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
+function securityGroup(box) {
+  const [lock, protect, warn, free] = [SECURITY.lock, SECURITY.protect, SECURITY.warn, SECURITY.unrestricted], both = window.p9?.chat && window.p9?.fileProtection;
+  return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way. The phone has the same four.', 'security-settings')}</legend>`
+    + (window.p9?.chat ? box('setLock', lock[0], agentLock === true, agentLock === null ? SECURITY.unknown : lock[1], agentLock === null, lock[2], 'agent-lock') : '')
+    + (window.p9?.fileProtection ? box('setProtect', protect[0], fileProtect !== false, fileProtect === null ? SECURITY.unknown : fileProtect ? protect[1] : SECURITY.protectOff, fileProtect === null, protect[2], 'file-protection') : '')
+    + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
+    + (both ? box('setFree', free[0], unrestricted(agentLock, fileProtect, START), free[1], agentLock === null || fileProtect === null, free[2], 'security-settings') : '')
+    + '</fieldset>';
+}
+// On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
+// protection already off that warning never shows, so Unrestricted asks once itself (row 25a: no silent loosened default).
+async function setUnrestricted(on) {
+  if (on && fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1])) return renderSettings();
+  const r = fileProtect === !on ? null : await window.p9.fileProtection(!on).catch(() => null);
+  fileProtect = r?.status === 200 ? r.body.on : fileProtect;
+  if (fileProtect !== !on) return renderSettings();
+  if (on && agentLock) { const l = await liveChat.call('setLock', { on: false }); agentLock = l.status === 200 ? l.body.on : agentLock; }
+  setWarnsLoose(!on); setStarts(on, START);
+  renderSettings();
+}
+// Attempt 2 items 6 and 7 (the owner): five pages, picked on the left; every row moves, unchanged, to the page it mainly
+// affects. The wiring below finds rows by id in #setBody, so it does not care which page holds them.
+const SET_PAGES = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
+const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
+let setPage = 'General';
+// Settings opened at one row (Add a machine, a send limit): show the page that holds it, then the row.
+const settingsAt = el => { if (!el) return; $('[data-set-page="' + el.closest('.set-page').dataset.page + '"]').click(); el.scrollIntoView({ block: 'center' }); };
+function settingsPages() {
+  const body = $('#setBody'), legend = g => g.querySelector('legend')?.firstChild?.textContent.trim() || '';
+  const pages = Object.fromEntries(SET_PAGES.map(n => { const p = document.createElement('section'); p.className = 'set-page'; p.dataset.page = n; p.setAttribute('aria-label', n); return [n, p]; }));
+  const group = (page, title, tip, rows) => { const g = document.createElement('fieldset'); g.className = 'set-group'; g.innerHTML = '<legend>' + title + ' ' + tip + '</legend>'; g.append(...rows); pages[page].append(g); };
+  const loose = [...body.children].filter(c => c.tagName !== 'FIELDSET'), chatRows = loose.filter(c => c.querySelector('#setCloseSend'));
+  group('General', 'General', info('The docs, zoom, your name, and how P9 opens.', 'settings'), loose.filter(c => !chatRows.includes(c)));
+  if (chatRows.length) group('Chat Focus', 'Chat windows', info('How a chat window opened from a card or the Notification Center behaves.', 'settings'), chatRows);
+  for (const g of [...body.children]) {
+    // Focus modes: each mode's on/off row goes to that mode's page, under the same heading and tip.
+    if (legend(g) === 'Focus modes') { for (const row of [...g.querySelectorAll('.set-row')]) { const one = g.cloneNode(false); one.append(g.querySelector('legend').cloneNode(true), row); pages[focusNames[row.querySelector('input').id.slice(5)]].append(one); } continue; }
+    pages[SET_PAGE_OF[legend(g)] ?? 'General'].append(g);
+  }
+  for (const p of Object.values(pages)) if (!p.children.length) p.innerHTML = '<p class="muted sm">Nothing to set here in this window.</p>';
+  body.replaceChildren(...Object.values(pages));
+  $('#setDlg .set-pages')?.remove();
+  const nav = document.createElement('nav'); nav.className = 'set-pages'; nav.setAttribute('aria-label', 'Settings pages');
+  const show = () => { for (const p of Object.values(pages)) p.hidden = p.dataset.page !== setPage; nav.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.setPage === setPage)); };
+  for (const n of SET_PAGES) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = n; b.dataset.setPage = n;
+    b.onclick = () => { setPage = n; show(); body.scrollTop = 0; }; nav.append(b);
+  }
+  show(); $('#setDlg .dlg-head').after(nav);
+}
 function renderSettings() {
   const on = Object.values(settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -1600,24 +2316,58 @@ function renderSettings() {
     + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
     + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
     + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
+    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
-    + (window.p9?.chat ? box('setLock', 'Agent lock', agentLock === true, agentLock === null ? 'Unknown: the daemon did not answer.' : 'Agents can read and answer, but cannot edit files or run anything that asks permission. Enforced by the daemon.', agentLock === null, 'On: agents in every chat can read and answer but cannot edit files or run anything that asks permission.', 'agent-lock') : '')
-    + (window.p9?.fileProtection ? box('setProtect', 'File protection', fileProtect !== false, fileProtect === null ? 'Unknown: the daemon did not answer.' : fileProtect ? 'The editor, here and on your phone, cannot open or change secrets, .env files, _private, .git or P9\'s own files. Turning it off asks first.' : 'Off: the editor, here and on your phone, can open and change any file, including secrets and .git.', fileProtect === null, 'On: the editor (Dev Focus, here and on your phone) cannot open secrets, .env files, _private or .git.', 'file-protection') : '')
+    + securityGroup(box)
     + (missionFiles?.settings ? missionGroup() : '')
+    + (serverInfo ? serverRow() : '')
+    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to remote (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
     + maintenanceGroup(updates);
+  settingsPages();
   const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
   if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
   $('#setName').value = settings.name || '';
   $('#setName').onchange = e => saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) });
   $('#setStartLast').onchange = e => saveSettings({ ...settings, startLast: e.target.checked });
+  $('#setBody').querySelectorAll('[data-xfer-limit]').forEach(el => { el.onchange = () => { const k = el.dataset.xferLimit, n = Math.round(Number(el.value));
+    if (!Number.isFinite(n)) { el.value = settings.xfer[k]; return; }
+    saveSettings({ ...settings, xfer: { ...settings.xfer, [k]: Math.min(XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
+  $('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
+    const a = el.dataset.defaultMode, m = el.value;
+    if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await looseOk(a, m)) { el.value = defaultMode(a); return; }
+    m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
+  }; });
   if (pets) wirePetSettings();
   if (missionFiles?.settings) wireMission();
+  // Main reloads the window onto the chosen daemon, so nothing here re-renders.
+  $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
+  const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); serverMenu(); };
+  $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
+  $('#setBody').querySelectorAll('[data-remote-keep]').forEach(s => { s.onchange = async () => {
+    const r = await window.p9.remoteKeepSetting(s.dataset.remoteKeep, s.value === 'keep' ? true : s.value === 'stop' ? false : null).catch(() => null);
+    if (r) serverInfo.keep = r.keep;
+  }; });
+  // Row 79: a remote's key offer said Don't ask again; this offers it again after the next password login.
+  $('#setBody').querySelectorAll('[data-key-again]').forEach(b => { b.onclick = async () => {
+    const r = await window.p9.sshKeySetting(b.dataset.keyAgain).catch(() => null);
+    if (r) { serverInfo.noKey = r.noKey; renderSettings(); }
+  }; });
+  if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
+    e.preventDefault();
+    const name = $('#setRemoteName').value.trim(), err = $('#setRemoteErr');
+    // The same rule as main's (desktop/remote.mjs HOST); main checks again.
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(name)) { err.hidden = false; err.textContent = 'A remote is a Host name from ~/.ssh/config or user@address: letters, digits and . _ - @, starting with a letter or digit.'; return; }
+    remotesNow('add', name);
+  };
+  if ($('#setServerLocal')) $('#setServerLocal').onclick = () => window.p9.server(null);
   Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
   if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
   if ($('#setProtect')) $('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); fileProtect = r?.status === 200 ? r.body.on : fileProtect; renderSettings(); };
+  $('#setWarn').onchange = e => { setWarnsLoose(e.target.checked); renderSettings(); };
+  if ($('#setFree')) $('#setFree').onchange = e => setUnrestricted(e.target.checked);
   $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
   $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };
   if ($('#setWel')) $('#setWel').onclick = () => { $('#setDlg').close(); welcome(); };
@@ -1638,6 +2388,7 @@ $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
   if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
   if (window.p9?.fileProtection) { const r = await window.p9.fileProtection().catch(() => null); fileProtect = r?.status === 200 ? r.body.on : null; }
+  serverInfo = window.p9?.server ? await window.p9.server().catch(() => null) : null;
   if (window.p9?.chat) { const r = await window.p9.chat('missionFiles', {}).catch(() => null); missionFiles = r?.status === 200 ? r.body : null; }
   updates = window.p9?.updates ? await window.p9.updates().catch(() => null) : null;
   petMode = null; renderSettings(); $('#setDlg').showModal();
@@ -1663,7 +2414,22 @@ setTimeout(landingStart, 3000); // settings never answered: open anyway rather t
 // focus. Settings' "Start in my last focus mode" skips it, and so does a reload of the same window (hot reload).
 // The test runs turn it off (P9_LANDING=off, scripts/with-tmp.mjs): it covers the shell they click.
 const land = $('#land'), landOn = window.p9?.landing !== false, still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const sky = createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
+// The one rollback switch (landing v5, approved 2026-10-29): 'video' plays the rendered loop over its poster; 'original'
+// brings back the WebGL sky below. P9_LANDING=original sets it for a run; the default is the video. Send-to-server keeps
+// its own createSky (#moveSky) either way. The phone has its own page and never loads this.
+const LAND_BG = window.p9?.landingBg === 'original' ? 'original' : 'video';
+const NO_SKY = { ok: false, set() {}, frame() {}, size() {} };
+let landVideo = null;
+if (LAND_BG === 'video') {
+  const cosmos = land.querySelector('.p9-cosmos');
+  cosmos.querySelector('img').src = landPoster;
+  Object.assign(cosmos.querySelector('video'), { poster: landPoster, src: landLoop });
+  cosmos.hidden = false; $('#landSky').hidden = true;
+  // Plays only while the landing is open (its dialog is shown) and the window is not hidden; reduced motion, a blocked
+  // play or a failed load leave the poster (playback.mjs).
+  landVideo = mountLandingVideo(cosmos);
+}
+const sky = LAND_BG === 'video' ? NO_SKY : createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
 const LAND = { started: false, raf: 0, v: { ...SKY_MAIN }, from: null, to: null, t0: 0, ms: 0, drawn: 0, spin: 0 };
 if (!landOn) land.removeAttribute('data-pending');
 const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return settings.focus[f] ? f : Object.keys(focusNames).find(k => settings.focus[k]); };
@@ -1791,14 +2557,29 @@ async function landPets() {
 // Skip, or the Set up card's x, moves the card into the Notification Center until all four checks pass ("4 auto and if its
 // skipped, add it to notifications that goes away when its completed"). Nothing is stored but the skip: an open re-reads
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
+// The last status's mode: the wizard's in-app admin password is for this computer only (row 61).
+let setupMode = '';
 async function loadSetup(paths) {
   if (!window.p9?.chat) return null;
+  // D15a: a remote that is not answering (no P9 there yet) has no setup to read: none is asked, and no toast.
+  const st = await window.p9.getStatus?.().catch(() => null);
+  setupMode = st?.mode ?? '';
+  if (st?.mode === 'server' && st.status !== 'ok') return null;
   const r = await liveChat.call('setup', paths || {}).catch(() => null);
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
-function setupDone(s) { return { workspace: s.writable, agents: s.claude || s.codex, mission: s.settings && s.agentsFile && s.registryFile, terminal: s.tmux !== false }; }
+// pick (item 15): an agent installed or signed in; while it is false the wizard asks Claude, Codex or both first. The
+// card leaves it out: a missing pick is a missing sign-in too.
+function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: (!s.settingsPresent && !s.found?.registry && !s.found?.waiting) || s.settings && s.agentsFile !== false && s.registryFile !== false && !(s.agentsFile === null && s.registryFile === null && (s.found?.registry || s.found?.waiting)), terminal: s.tmux !== false }; }
 function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
+// Item 15: the agents the wizard offers, each with the one line that says what it needs.
+const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
+// What the pick step shows as picked: this run's choice, else what is installed or signed in already.
+const wizPicked = () => W.picked || AGENTS_PICK.filter(([a]) => W.s?.[a + 'Cli'] || W.s?.[a]).map(([a]) => a);
+const wizReady = () => { const on = wizPicked(); return on.length > 0 && on.every(a => W.s?.[a + 'Cli']); };
+// The admin screen's name for each system item /setup can report missing (deps.mjs wizardDependencies).
+const ADMIN_NAMES = { tmux: 'tmux', ssh: 'SSH client' };
 const STEP_NAMES = { workspace: 'workspace folder', agents: 'agent sign-in', mission: 'Mission Control files', terminal: 'terminal' };
 async function checkSetup() {
   const s = await loadSetup();
@@ -1813,19 +2594,23 @@ async function firstRun() {
   if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
   W.then = tour; welcome(0);
 }
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null };
+const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null, have: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
 // starter paths). Empty fields are left out; hub is optional.
-const PATH_KEYS = [['primary', 'Main project file', 'setup-file'], ['registry', 'Buttons, apps and pages file', 'setup-file'], ['waiting', 'Folder of items waiting on you', 'setup-folder'], ['hub', 'workspace-hub folder (optional)', 'setup-folder'], ['scripts_root', 'Folder your buttons run in (optional, full path)', '']];
-const wizPaths = () => Object.fromEntries(Object.entries(W.paths || W.s?.proposed || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
-const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict);
-const wizSteps = () => ['welcome', 'workspace', 'agents', 'mission', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done'];
-async function welcome(at) {
+const wizPaths = () => Object.fromEntries(Object.entries(W.paths || (W.s?.conflict ? W.s.proposed : W.s?.found) || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
+const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict || (s.settings && s.agentsFile === null && s.registryFile === null));
+// Fresh-install attempt 2, item 8: Mission Control is the last step, once everything else is set up; its button opens
+// Mission's own onboarding card.
+const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done', 'mission'];
+// D17: stale = the chat said this agent is not signed in. Its login file can outlive the login, so /setup still says
+// signed in; the step believes the chat until a sign-in started here ends well.
+async function welcome(at, agent, stale) {
   if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null });
+  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, have: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
   W.s = await loadSetup();
+  if (agent) W.picked = [...new Set([...wizPicked(), agent])];
   const d = W.s && setupDone(W.s);
-  W.i = at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
+  W.i = typeof at === 'string' ? Math.max(0, wizSteps().indexOf(at)) : at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
   // BL5: every 10 s (was 2 s) while a check fails or a sign-in runs; wizRefresh stops it once neither is so, and starts it again.
   clearInterval(W.timer); W.timer = setInterval(wizRefresh, 10000);
   await wizRefresh();
@@ -1834,6 +2619,8 @@ async function welcome(at) {
 async function wizRefresh() {
   const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
   W.s = s; W.login = l?.status === 200 ? l.body : {};
+  const began = W.login[W.began];
+  if (began && !began.running) { if (began.exit === 0 && W.stale === W.began) W.stale = null; W.began = null; }
   if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
   if (s && !S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
   else if (!W.timer && $('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
@@ -1842,13 +2629,26 @@ async function wizRefresh() {
 // Each error a step can get back, as [cause, fix].
 const WIZ_ERR = {
   'daemon-unavailable': ["P9's background service is not answering.", 'It restarts on its own. Retry in a few seconds.'],
+  'daemon-outdated': ["P9's background service is older than this app, so it does not have this step.", 'Update P9 where its background service runs (or restart that service after an update), then try again.'],
   'workspace-change-unsupported': ["On this system the folder can't be changed from here.", 'P9 changes it on Linux and Windows.'],
   'workspace-refused': ["That folder can't be the workspace.", "Pick a folder of your own: not your home folder itself, a drive's root or P9's own state folder."],
   'service-missing': ["P9's background service is not installed.", "Run P9's installer again (the README's Install section), then Retry."],
   'stop-all-failed': ['Something running would not stop, so the folder stayed the same.', 'Stop it in Chat or the terminal dock, then Change the folder again.'],
   'workspace-not-started': ['P9 could not start in that folder, so it went back to the one it was on.', 'Pick another folder.'],
   'workspace-unwritable': ['P9 cannot write to this folder.', 'Change the folder, or give your user write access to this one, then Retry.'],
-  'tmux-not-found': ['tmux is not installed.', 'Install it with your package manager (sudo apt install tmux, sudo dnf install tmux or sudo pacman -S tmux), then Retry. The rest of P9 works without it.'],
+  'terminal-start-failed': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
+  'terminal-unavailable': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
+  'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
+  updating: ['P9 is updating and restarts in a moment.', 'Send again in a minute.'],
+  'tmux-not-found': ['tmux is not installed.', 'P9 does not know this system\'s package manager, so someone who administers it must install tmux, then Retry. The rest of P9 works without it.'],
+  'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Continue without it goes on: chats still work, they use the agent P9 ships.'],
+  'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
+  'wrong-password': ['That password did not work.', 'Check it and press Install again.'],
+  'not-allowed': ['Your account cannot install software on this computer.', 'Someone who administers it must install it, then Retry.'],
+  'remote-deps-failed': ['P9 on this remote could not check what it needs.', 'Update P9 there, then Retry.'],
+  'remote-not-allowed': ['Your account on this remote cannot install software.', 'Someone who administers it must install it, then Retry.'],
+  'admin-failed': ['The install did not finish.', 'Retry. If it stops again, your package manager may be busy or offline.'],
+  'password-empty': ['Type your admin password first.', 'It is the one you use to sign in to this computer.'],
   'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
   'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
   'no-sign-in-page': ['The sign-in has not shown its page yet.', 'Wait a few seconds, then try again.'],
@@ -1862,86 +2662,141 @@ const WIZ_ERR = {
   'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
   'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
   'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
+  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a remote.", 'Switch to Local (the top-bar badge or Settings > Remote Connect), then try again.'],
   'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
 };
+// The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
+// Attempt 2 items 1-2: the wizard connects itself. One field: a remote already used, a Host from ~/.ssh/config, or a new
+// user@address (kept in Settings > Remote's list too). A password, if ssh needs one, is asked in its own window (row 78).
+function wizRemote(btn) {
+  const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"></option>').join('');
+  return '<div data-wiz-remote>'
+    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || hosts[0] || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
+    + (W.note.remote?.error ? `<p class="warn sm" role="alert">${W.note.remote.error === 'host' ? 'Type a Host name or user@address, with no spaces.' : 'Could not connect (' + esc(W.note.remote.error) + ').'}</p>` : '') + '</div>';
+}
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
   W.i = steps.indexOf(key);
   const yes = (ok, good, bad) => `<span class="${ok ? 'ok' : 'warn'}">${ok ? '✓ ' + good : bad}</span>`;
   const btn = (act, label, variant = 'outline') => `<button data-slot="button" data-variant="${variant}" data-act="${act}"${W.busy ? ' disabled' : ''}>${label}</button>`;
-  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${btn('retry', 'Retry')}</div>`; };
+  const PW_ERR = ['wrong-password', 'password-empty']; // fixed by Install again, not Retry
+  const fail = (error, detail = '') => { const [cause, fix] = WIZ_ERR[error] || ['That did not work (' + error + ').', 'Retry.']; return `<div class="wiz-fail" role="alert"><strong>${esc(cause)}</strong>${detail ? `<span class="mono sm">${esc(detail)}</span>` : ''}<span class="muted sm">${esc(fix)}</span>${PW_ERR.includes(error) ? '' : btn('retry', 'Retry')}</div>`; };
   const row = (name, note, status, actions = '') => `<div class="set-row"><span><strong>${name}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span><span class="spacer"></span>${status}${actions}</div>`;
   const note = W.note[key];
   let title, body, next = btn('next', 'Next', 'default');
   if (!s && key !== 'welcome') { title = 'Setup'; body = fail('daemon-unavailable'); }
   else if (key === 'welcome') {
-    title = 'Welcome to Event Horizon'; next = btn('next', 'Start', 'default');
-    body = `<p>Four checks make P9 yours: a workspace folder it can write to, an agent you are signed in to, Mission Control's starter files${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`;
+    title = 'Welcome to Event Horizon'; next = btn('next', window.p9?.server ? 'Set up this computer' : 'Start', 'default');
+    // D1: P9 can also be this window onto a P9 that runs on another machine (Server mode, Settings > Server).
+    body = `<p>A few checks make P9 yours: a workspace folder it can write to${s?.tmux === null ? ' and' : ','} an agent you are signed in to${s?.tmux === null ? '' : ' and the terminal'}. About five minutes.</p><p class="muted sm">Skip any time. The Set up card then waits in the Notification Center until every check passes.</p>`
+      + (window.p9?.server ? row('Work on a remote over ssh?', 'This window can use P9 on another machine. Once connected, you choose how P9 runs there: kept running, so your phone and this desktop reach it any time, or only while you are connected, the way VS Code Remote-SSH works. A remote with no P9 yet gets it installed when you say so.', '', btn('remote', W.remote ? 'Hide' : 'Connect to a remote')) : '')
+      + (W.remote ? wizRemote(btn) : '');
   } else if (key === 'workspace') {
     title = 'Your workspace';
     body = row('Folder', `<span class="mono" id="welWs">${esc(s.workspace)}</span>`, yes(s.writable, 'P9 can write here', 'P9 cannot write here'))
-      + `<p class="muted sm">${s.workspaceEmpty ? 'It is empty; the Mission Control step adds starter files. ' : ''}Changing it restarts P9's background service: running chats, scripts and terminals stop.</p>`
+      + `<p class="muted sm">This is your main working folder while you use P9. You can change it any time in Settings. If you have no workspace or project folder you prefer, P9 makes one for you. Changing it restarts P9's background service: running chats, scripts and terminals stop.</p>`
       + (window.p9.workspaceChange ? `<div class="set-row">${btn('change', 'Change the folder')}</div>` : '')
       + (s.writable ? '' : fail('workspace-unwritable'))
       + (note?.error ? fail(note.error, note.detail) : '');
+  } else if (key === 'pick') {
+    // Item 15: which agent, why P9 asks, then Continue puts the CLI P9 ships where its terminals find it (no download, no
+    // admin password; a no-op when it is there) and goes on to sign in to the ones picked. D16: always Continue, since a CLI the
+    // owner installed may be outside the background service's PATH; when setting up fails, the reason shows and the button
+    // goes on without it (chats run on the CLI the adapter ships; only P9 terminals need the launcher).
+    title = 'Claude, Codex or both?';
+    const on = wizPicked();
+    body = '<p data-why>P9\'s chats run on an agent, and you need an account with the one you pick: pick the one you already have.</p>'
+      + AGENTS_PICK.map(([a, name, sub]) => row(name, sub, on.includes(a) ? yes(true, 'Picked') : '', btn('choose:' + a, on.includes(a) ? 'Remove' : 'Pick', on.includes(a) ? 'outline' : 'default'))).join('')
+      + `<p class="muted sm">Continue sets up ${on.length === 2 ? 'both' : on.length ? AGENTS_PICK.find(([a]) => a === on[0])[1] : 'the one you pick'} from the copy that comes with P9: nothing is downloaded and no admin password is needed. You can add the other one later in Settings → Setup.</p>`
+      + (note?.error ? fail(note.error, note.detail) : '');
+    next = on.length ? btn('install', note?.error ? 'Continue without it' : 'Continue', 'default') : '<span class="muted sm">Pick one to go on, or Skip.</span>' + btn('install', 'Continue', 'default').replace('<button', '<button disabled');
   } else if (key === 'agents') {
     title = 'Sign in to an agent';
-    body = '<p class="muted sm">Chats run on Claude Code or Codex; at least one has to be signed in. Sign in opens your browser at its sign-in page.</p>'
-      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account.']].map(([a, name, sub]) => {
-        const l = W.login[a] || {}, ended = !s[a] && !l.running && l.exit !== null && l.exit !== undefined;
-        return row(name, sub, s[a] ? yes(true, 'Signed in') : l.running ? '<span class="muted sm">Waiting for the browser…</span>' : yes(false, '', 'Not signed in'),
-          s[a] ? '' : l.running ? (l.url ? btn('open:' + a, "Browser didn't open?") : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : 'Sign in', 'default'))
+    const shown = W.picked || (AGENTS_PICK.some(([a]) => s[a + 'Cli'] || s[a]) ? wizPicked() : ['claude', 'codex']);
+    body = '<p class="muted sm">Chats need at least one agent signed in. Sign in starts the agent\'s own sign-in; in a terminal types the agent\'s own command into a P9 terminal for you to run.</p>'
+      + [['claude', 'Claude', 'A Claude account. After you sign in the browser shows a code: paste it here.'], ['codex', 'Codex', 'A ChatGPT account. P9 shows a one-time code to enter on OpenAI\'s sign-in page.']].filter(([a]) => shown.includes(a)).map(([a, name, sub]) => {
+        const l = W.login[a] || {}, on = s[a] && W.stale !== a, ended = !on && !l.running && l.exit !== null && l.exit !== undefined;
+        // D17: a login that expired still reads as signed in here, so Sign in again is always offered.
+        // D8: Codex signs in with a one-time code on OpenAI's page, which P9 opens when asked (nothing opens by itself).
+        const device = a === 'codex';
+        return row(name, sub, l.running ? `<span class="muted sm">${device ? (l.code ? '' : 'Getting a code…') : 'Waiting for the browser…'}</span>` : on ? yes(true, 'Signed in') : yes(false, '', s[a] ? 'Sign-in expired' : 'Not signed in'),
+          l.running ? (l.url ? btn('open:' + a, device ? 'Open the sign-in page' : "Browser didn't open?", device ? 'default' : undefined) : '') + btn('stop:' + a, 'Cancel') : btn('start:' + a, ended ? 'Retry' : on ? 'Sign in again' : 'Sign in', on ? undefined : 'default'))
+          + (l.running && device && l.code ? `<div class="set-row" data-device-code><span class="muted sm">Your one-time code, for 15 minutes</span><span class="spacer"></span><code style="font:600 18px ui-monospace,monospace;letter-spacing:.08em;user-select:all">${esc(l.code)}</code></div>` : '')
+          + (l.running && W.note[a]?.info ? `<p class="muted sm">${esc(W.note[a].info)}</p>` : '')
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
-          + (ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
-          + (W.note[a]?.error ? fail(W.note[a].error) : '');
+          + (l.unsupported && !l.running ? '<p class="warn sm">This Codex has no sign-in with a code (P9 was built with Codex 0.159.3, which has one). Use Sign in in a terminal below and follow what Codex prints there.</p>'
+            : ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
+          // D8: its own sign-in command in a P9 terminal, run by the CLI P9 ships (item 15). Nothing runs before Enter.
+          + (s[a + 'Cli'] && !on && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')
+          + (W.note[a]?.error ? fail(W.note[a].error, W.note[a].detail) : '');
       }).join('');
-    if (!d.agents) next = `<span class="muted sm">Sign in to one to go on, or Skip.</span>` + btn('next', 'Next', 'default').replace('<button', '<button disabled');
+    if (!d.agents) next = '<span class="muted sm">Sign in to one to go on, or Skip.</span>' + btn('next', 'Next', 'default').replace('<button', '<button disabled');
   } else if (key === 'mission') {
-    title = 'Mission Control';
-    // A folder with things in it keeps them (needs-done p9-wizard-respects-existing-workspace): the paths are what P9 found
-    // there, shown and editable, and the list says exactly what Create adds. Nothing that is there is replaced.
-    const choosing = wizChoosing(s), paths = wizPaths(), found = Object.keys(s.found || {}).length;
-    const creates = d.mission ? [] : [...(s.creates || []), ...(s.settingsPresent ? [] : [s.settingsFile])].filter(Boolean);
-    // RH2 (the owner, 2026-10-24: B, and how to set them up when there are none yet).
-    const none = choosing && !found && !s.settingsPresent;
-    body = `<p class="muted sm">Mission Control's buttons, apps and pages come from files in your workspace. ${choosing ? (found ? 'P9 found these in your workspace and will use them; change any path first if you like.' : 'These are the paths P9 will use; change any first if you like.') : 'The paths come from your settings file.'} Nothing that is already there is replaced.</p>`
-      + (none ? '<div class="sm" data-setup-help><p>None of these is here yet. Create these makes a starter set you can change any time:</p><ul>'
-        + '<li><strong>Main project file</strong>: names your main project, in plain words. Your agents read it; Mission Control shows it as the Main Project card.</li>'
-        + '<li><strong>Buttons, apps and pages file</strong>: your buttons, apps and pages, each a title and the command or link it opens. Your agent can write it for you.</li>'
-        + '<li><strong>Folder of items waiting on you</strong>: one .md file for each thing waiting on you.</li></ul>'
-        + (window.p9.openDocs ? `<div class="set-row">${btn('docs', 'How to add buttons')}</div>` : '') + '</div>' : '')
-      + (choosing ? '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
-        + (s.pathsInvalid ? fail('paths-invalid') : '') : '')
-      + row('Settings file', `<span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>`, yes(s.settings, 'Loaded', s.settingsInvalid ? 'Has an error' : s.settingsPresent ? 'Found, not loaded yet' : 'Not found'))
-      + row('Starter files', 'AGENTS.md and the registry, where the settings file says', yes(s.agentsFile && s.registryFile, 'There', 'Missing'))
-      + (creates.length ? `<p class="sm">Create adds: <span class="mono" data-creates>${creates.map(esc).join(', ')}</span></p>` : '')
-      + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then Use these. Your old settings file is kept as settings.json.bak.</p>` : '')
-      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : d.mission || (choosing && s.pathsInvalid) ? '' : `<div class="set-row">${btn('starter', creates.length ? 'Create these' : 'Use these', 'default')}</div>`)
-      + (note?.created?.length ? `<p class="ok sm">Created: ${note.created.map(esc).join(', ')}</p>` : '')
+    title = 'Mission Control'; next = settings.focus.mission ? btn('mission-open', 'Open Mission Control', 'default') : '';
+    // Fresh-install findings 1 and 2: Mission starts empty and is built there; the daemon writes its own empty settings file
+    // (a finished step, unless the workspace already has a registry or a waiting folder: then this step opens with them filled in), from its onboarding card (with an agent or a
+    // template). Files from an older setup sit under "I already have Mission files", every path optional. A folder with
+    // things in it keeps them (needs-done p9-wizard-respects-existing-workspace): Use these files writes only settings.json,
+    // plus any path typed here that is not there yet, listed first.
+    const choosing = wizChoosing(s), paths = wizPaths(), open = W.have ?? Boolean(s.found?.registry || s.found?.waiting || (s.conflict && (s.agentsFile !== null || s.registryFile !== null)));
+    body = '<p data-mission-empty>Last, build Mission Control: your control room for scripts, live numbers, logs, notes and links. It starts empty. Open Mission Control takes you to its own wizard, where an agent builds it with you or you start from a template.</p>'
+      + (s.settings && !(s.agentsFile === null && s.registryFile === null) ? `<p class="muted sm">Mission already uses your settings file, <span class="mono" id="welFile">${esc(s.settingsFile || '')}</span>.</p>` : '')
+      + (choosing ? `<details class="wiz-have" data-have${open ? ' open' : ''}><summary>I already have Mission files</summary>`
+        + `<div class="set-row"><span class="muted sm">Point P9 at the files you already have. Every path is optional: leave out any you do not use.</span>${btn('docs', 'How these files work')}</div>`
+        + '<div class="wiz-paths">' + PATH_KEYS.map(([k, name, kind]) =>`<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span><input data-slot="input" class="mono" data-path="${k}" value="${esc(paths[k] || '')}" maxlength="400" autocomplete="off" spellcheck="false">${window.p9.pickFolder && kind ? btn('pick:' + k + ':' + kind, 'Pick') : ''}</label>`).join('') + '</div>'
+        + (s.pathsInvalid ? fail('paths-invalid') : '')
+        + (s.conflict ? `<p class="sm" data-conflict>This folder has its own files (${Object.values(s.found).map(esc).join(', ')}) that your settings file does not name. The paths above are what P9 found; change any, then press Use these files. Your old settings file is kept as settings.json.bak.</p>` : '')
+        + (W.paths && s.creates?.length ? `<p class="sm">These are not there yet, and Use these files makes them empty: <span class="mono" data-creates>${s.creates.map(esc).join(', ')}</span></p>` : '')
+        + (Object.keys(paths).length && !s.pathsInvalid ? `<div class="set-row">${btn('starter', 'Use these files')}<span class="muted sm">Saves these paths in your settings file.</span></div>` : '')
+        + '</details>' : '')
+      + (s.settingsInvalid ? fail('settings-invalid', s.settingsError) : '')
+      + (note?.created ? `<p class="ok sm">Saved.${note.created.length ? ' Created: ' + note.created.map(esc).join(', ') : ''}</p>` : '')
       + (note?.error ? fail(note.error, note.detail) : '')
       + (settings.focus.mission && (settings.focus.chat || settings.focus.dev) ? `<div class="set-row">${btn('mission-off', 'Turn Mission off for now')}</div>` : '');
   } else if (key === 'terminal') {
-    title = 'Terminal';
-    body = row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found'))
-      + (s.tmux ? '' : fail('tmux-not-found'));
+    // Item 15 (threat model row 61): what P9 cannot carry. The reason comes first, then why it needs the admin password,
+    // then the command. In the desktop app on its own computer, the admin password field and Install run it (desktop main,
+    // p9:admin-install); elsewhere Run in a terminal types it into a P9 terminal and sudo asks there (tmux: Copy, since P9's terminals are tmux).
+    const admin = (s.dependencies || []).filter(x => x.admin), here = !!window.p9?.adminInstall && setupMode !== 'server',
+      there = !!window.p9?.remoteDeps && !!adminAsk && setupMode === 'server', fixable = admin.some(x => ['tmux', 'ssh'].includes(x.id));
+    title = admin.length ? 'This needs your admin password' : 'Terminal';
+    body = admin.length ? admin.map(x => `<div class="wiz-admin" data-admin="${esc(x.id)}">${row(ADMIN_NAMES[x.id] || esc(x.id), esc(x.why), yes(false, '', 'Not installed'))}`
+        + `<p class="sm" data-admin-why>Everything else P9 needs comes with it or goes into your own folders. This one goes into the system itself, and only an admin can change that, so ${there ? 'the remote asks for your admin password there' : 'your computer asks for your password'}.</p>`
+        + (x.command && here && ['tmux', 'ssh'].includes(x.id) ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code></div>`
+          + `<label class="sm wiz-pw-label" for="wizPw-${esc(x.id)}">Admin password for your account on this computer</label>`
+          + `<div class="set-row"><input data-slot="input" type="password" id="wizPw-${esc(x.id)}" data-admin-pw="${esc(x.id)}" autocomplete="off" spellcheck="false" maxlength="1024">${btn('pw:' + x.id, 'Install', 'default')}</div>`
+          + '<p class="muted sm">P9 runs the command above as admin with it. It goes once to sudo on this computer; never saved, never shown in any log.</p>'
+        : there && ['tmux', 'ssh'].includes(x.id) ? '' : x.command ? `<div class="set-row"><code class="mono" data-command>${esc(x.command)}</code><span class="spacer"></span>`
+          + (x.id === 'tmux' ? btn('copy:' + x.id, 'Copy') + '</div><p class="muted sm">P9\'s terminals need tmux, so run it in your own terminal app, then Retry.</p>'
+            : btn('admin:' + x.id, 'Run in a terminal') + '</div><p class="muted sm">Types it into a P9 terminal. Read it, press Enter, then type your password there.</p>')
+          : '<p class="muted sm">Install it with your system\'s package manager, then Retry.</p>')
+        + (W.note[x.id]?.error ? fail(W.note[x.id].error, W.note[x.id].detail) : '') + '</div>').join('')
+        // Row 61 on a remote: one button for all of it; the remote computes the command and the admin window shows it.
+        + (there && fixable ? `<div class="set-row">${btn('rdeps', 'Install with admin password', 'default')}</div>`
+          + '<p class="muted sm">P9 asks for your admin password on this remote and shows the command it runs there. Never saved, never shown in any log.</p>'
+          + (W.note.rdeps?.error ? fail(W.note.rdeps.error) : '') : '')
+        + `<div class="set-row">${btn('retry', 'Retry')}</div>`
+      : row('tmux', 'The terminal dock runs real shells in tmux.', yes(s.tmux, 'Found', 'Not found')) + (s.tmux ? '' : fail('tmux-not-found'));
   } else if (key === 'you') {
     title = 'You';
     body = `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="welName" maxlength="40" autocomplete="off" spellcheck="false" value="${esc(W.name ?? settings.name ?? '')}"></label>`
       // Issue #4 item 4, option C (the owner, 2026-10-20): Skipper ships as the default; petdex.dev has more.
       + row('Pets', 'Skipper is your System pet. Find more at <a id="welPetdex" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, then add them in Settings → Pets.', '', btn('pets', 'Open Settings → Pets'));
   } else {
-    title = Object.values(d).includes(false) ? 'Almost there' : 'You are set'; next = btn('tour', 'Take the tour', 'default');
-    body = Object.entries(STEP_NAMES).filter(([k]) => k !== 'terminal' || s.tmux !== null).map(([k, name]) => row(name[0].toUpperCase() + name.slice(1), '', yes(d[k], 'Done', 'Not done yet'))).join('')
-      + '<p class="muted sm">The tour shows each focus in about two minutes. Settings → Setup opens this again.</p>';
+    title = Object.values(d).includes(false) ? 'Almost there' : 'You are set';
+    body = Object.entries(STEP_NAMES).filter(([k]) => k !== 'mission' && (k !== 'terminal' || s.tmux !== null)).map(([k, name]) => row(name[0].toUpperCase() + name.slice(1), '', yes(d[k], 'Done', 'Not done yet'))).join('')
+      + row('Tour', 'Each focus in about two minutes.', '', btn('tour', 'Take the tour'))
+      + '<p class="muted sm">Settings → Setup opens this again.</p>';
   }
   $('#welT').textContent = title;
   $('#welStep').textContent = `Step ${W.i + 1} of ${steps.length}`;
   morph($('#welBody'), body);
-  morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (key === 'done' ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
+  morph($('#welFoot'), (W.i ? btn('back', 'Back') : '') + '<span class="spacer"></span>' + (W.i === steps.length - 1 ? btn('close', 'Close') : btn('skip', 'Skip')) + next);
 }
 $('#welDlg').addEventListener('input', e => { if (e.target.id === 'welCode') W.code = e.target.value; if (e.target.id === 'welName') W.name = e.target.value;
   if (e.target.dataset.path) W.paths = { ...wizPaths(), [e.target.dataset.path]: e.target.value.trim() }; });
 $('#welDlg').addEventListener('change', e => { if (e.target.dataset.path) wizRefresh(); });
+$('#welDlg').addEventListener('toggle', e => { if (e.target.matches?.('[data-have]')) W.have = e.target.open; }, true);
 $('#welDlg').addEventListener('change', e => { if (e.target.id === 'welName') saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) }); });
 $('#welDlg').addEventListener('click', async e => {
   if (e.target.id === 'welPetdex' && window.p9?.openPetdex) { e.preventDefault(); return window.p9.openPetdex(); }
@@ -1954,14 +2809,24 @@ $('#welDlg').addEventListener('click', async e => {
     skipWelcome(); return $('#welDlg').close();
   }
   if (act === 'close') return $('#welDlg').close();
+  if (act === 'mission-open') { $('#welDlg').close(); setFocus('mission'); if (!live.empty) { live.adding = true; live.preview = null; } return renderMission(); }
   if (act === 'docs') return window.p9.openDocs('buttons-apps-and-pages').catch(() => {}); // RH2
+  if (act === 'remote' || act === 'remote-retry') { W.remote = act === 'remote-retry' || !W.remote; if (W.remote) W.hosts = await window.p9.server().catch(() => null); return wizRender(); }
+  if (act === 'connect') {
+    const host = $('#welHost')?.value.trim() ?? '';
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(host)) { W.note.remote = { error: 'host' }; return wizRender(); } // remote.mjs HOST
+    // A new name joins the remote list first, as Settings > Remote's Add remote does; then main reloads the window onto it.
+    const r = await run(() => (W.hosts?.remotes?.includes(host) ? Promise.resolve() : window.p9.remotes('add', host)).then(() => window.p9.server(host)).catch(() => ({ error: 'ipc-refused' })));
+    W.note.remote = r?.ok ? null : { error: r?.error || 'refused' };
+    return wizRender();
+  }
   if (act === 'tour') { W.then = tour; return $('#welDlg').close(); }
   if (act === 'pets') { W.then = null; $('#welDlg').close(); await $('#setBtn').onclick(); return [...$('#setBody').querySelectorAll('legend')].find(l => l.textContent === 'Pets')?.scrollIntoView(); }
   if (act === 'retry') W.note = {};
   if (act === 'change') {
     const r = await run(() => window.p9.workspaceChange().catch(() => ({ error: 'daemon-unavailable' })));
     W.note.workspace = r.error ? r : null;
-    if (!r.error) { files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder
+    if (!r.error) { W.paths = null; files.dirs = {}; renderTree(); loadMission(); } // the tree and Mission show the new folder; paths typed for the old folder are dropped
   }
   if (act === 'pick') {
     const picked = await window.p9.pickFolder(kind).catch(() => undefined);
@@ -1974,10 +2839,52 @@ $('#welDlg').addEventListener('click', async e => {
     W.note.mission = r.status === 201 ? { created: r.body.created } : { error: r.body?.error || String(r.status), detail: r.body?.detail };
     if (r.status === 201) { files.dirs = {}; renderTree(); loadMission(); }
   }
+  // choose, not pick: pick is the folder picker's.
+  if (act === 'choose') { const on = wizPicked(); W.picked = on.includes(agent) ? on.filter(a => a !== agent) : [...on, agent]; W.note.pick = null; return wizRender(); }
+  if (act === 'install') {
+    if (W.note.pick?.error || wizReady()) { W.note.pick = null; W.i += 1; return wizRender(); }
+    const on = wizPicked();
+    const r = await run(() => liveChat.call('installAgents', { claude: on.includes('claude'), codex: on.includes('codex') }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    W.picked = on;
+    W.note.pick = r.status === 200 ? null : { error: r.body?.error || String(r.status), detail: r.body?.detail };
+    if (r.status === 200) W.i += 1;
+  }
+  // Row 61: the password goes to desktop main once; the field is emptied first.
+  if (act === 'pw') {
+    const field = $('#welDlg').querySelector(`[data-admin-pw="${agent}"]`), password = field?.value ?? '';
+    if (field) field.value = '';
+    const r = password ? await run(() => window.p9.adminInstall(agent, password).catch(() => ({ error: 'admin-failed' }))) : { error: 'password-empty' };
+    W.note[agent] = r?.ok ? null : { error: r?.error || 'admin-failed' };
+  }
+  if (act === 'rdeps') {
+    // Row 61 on a remote: the remote computes the command (its start script's deps); the admin window shows it and takes only the password.
+    const host = serverInfo?.host || 'this remote', need = (W.s?.dependencies || []).filter(x => x.admin && ['tmux', 'ssh'].includes(x.id)).map(x => (ADMIN_NAMES[x.id] || x.id) + ': ' + x.why);
+    const ask = async (error = '') => {
+      const r = await run(() => window.p9.remoteDepsCheck().catch(() => ({ error: 'remote-deps-failed' })));
+      if (!r?.command) { W.note.rdeps = { error: r?.error || 'remote-deps-failed' }; return wizRefresh(); }
+      adminAsk(host, 'Install what P9 needs on ' + host, host + ' is missing what P9 needs, and only an admin can add it:', need, r.command, 'Install', error,
+        res => { if (res?.error === 'wrong-password') return void ask('That password did not work. Check it and try again.'); W.note.rdeps = res?.ok ? null : { error: res?.error || 'admin-failed' }; void wizRefresh(); }, window.p9.remoteDeps);
+    };
+    W.note.rdeps = null;
+    await ask();
+  }
+  if (act === 'copy') { const x = W.s?.dependencies?.find(d => d.id === agent); if (x?.command) copy(x.command, b); return; }
+  if (act === 'admin') {
+    const r = await run(() => liveChat.call('adminTerminal', { id: agent }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    if (r.body?.terminal) { W.then = () => showTerminal(r.body.terminal); return $('#welDlg').close(); }
+    W.note[agent] = { error: r.body?.error || String(r.status), detail: r.body?.command ? 'Run it yourself in a terminal: ' + r.body.command : '' };
+  }
+  if (act === 'term') {
+    const r = await run(() => liveChat.call('agentTerminal', { agent, action: kind }).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
+    if (r.body?.terminal) { W.then = () => showTerminal(r.body.terminal); return $('#welDlg').close(); }
+    W.note[agent] = { error: r.body?.error || String(r.status), detail: r.body?.command ? 'Run it yourself in a terminal: ' + r.body.command : '' };
+  }
   if (['start', 'open', 'code', 'stop'].includes(act)) {
     const r = await run(() => (act === 'code' ? window.p9.agentLogin('code', agent, W.code.trim()) : window.p9.agentLogin(act, agent)).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } })));
-    W.note[agent] = r.status >= 400 ? { error: r.body?.error || String(r.status) } : null;
+    // D8: the window says a page opened only when main opened it.
+    W.note[agent] = r.status >= 400 ? { error: r.body?.error || String(r.status) } : act === 'open' && r.body?.opened ? { info: 'Opened the sign-in page in your browser. Sign in there, then enter the code.' } : null;
     if (act === 'code' && r.status < 400) W.code = '';
+    if (act === 'start' && r.status < 400) { W.began = agent; for (const ms of [1500, 4000]) setTimeout(wizRefresh, ms); } // the page and code come a moment after
   }
   await wizRefresh();
 });
@@ -1990,11 +2897,12 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 const liveChat = { on: false, cursor: 0 };
 const dataNote = () => { $('#dataNote').textContent = [live.on && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 liveChat.call = async (action, payload = {}) => {
-  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() };
+  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
-  if (r.status >= 400 && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
+  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {
@@ -2004,7 +2912,9 @@ liveChat.create = async (agent, folder = '') => {
 };
 // Builder, 2026-10-21: a refused prompt puts its text back in the box as well as its images, so nothing typed is lost.
 // 2026-10-24: one refused because a turn runs is queued instead, and shown and kept as queued.
-liveChat.prompt = async (s, text, images = [], when) => { s.working = true; s.done = false; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }); if (r.status === 202) return; s.images = [...images, ...(s.images || [])].slice(0, 4);
+// D20: a send waits where it was made: Sending… in the chat's working row until the daemon takes it (a slow remote shows
+// nothing else). Cleared on any answer.
+liveChat.prompt = async (s, text, images = [], when) => { s.working = true; s.done = false; s.sending = true; renderTabs(); renderChats(); const r = await liveChat.call('prompt', { id: s.id, text, mode: s.mode, ...(when && { when }),...(s.modelPick && { model: s.modelPick }), ...(Object.keys(s.pick || {}).length && { config: s.pick }), ...(images.length && { images: images.map(({ mimeType, data }) => ({ mimeType, data })) }) }).finally(() => { s.sending = false; }); if (r.status === 202) return renderChats(); s.images = [...images, ...(s.images || [])].slice(0, 4);
   // Refused mid-turn (an adapter without steering, or the turn ending meanwhile): queued for the turn's end, and sent a
   // second later if that end came already. ponytail: a turn that never reports its end holds it (no adapter does now).
   if (r.status === 409 && r.body?.error === 'turn-running') { s.queue.unshift(text); keepQueue(s); setTimeout(() => { if (!s.prompted && s.queue.length) turnEnd(s); }, 1000); renderChats(); return; }
@@ -2028,12 +2938,6 @@ liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(
 const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
 const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
 const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
-// Images an agent sent with their own data (threat model row 26): the type and alphabet checked again, the data: address
-// built here; a block's uri is never used. ponytail: data: strings are re-diffed each render; blob: needs a CSP change.
-const IMG_OK = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-const imgSrc = b => b?.type === 'image' && IMG_OK.includes(b.mimeType) && typeof b.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(b.data) ? `data:${b.mimeType};base64,${b.data}` : null;
-const toolImages = content => (content || []).map(c => imgSrc(c?.type === 'content' ? c.content : c)).filter(Boolean).slice(0, 4);
-const agentImgs = (list, who) => list?.length ? `<div class="agent-imgs">${list.map(src => `<img src="${src}" alt="Image from ${esc(who)}">`).join('')}</div>` : '';
 // PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
 async function continueOnPhone(s) {
   const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
@@ -2047,7 +2951,14 @@ addEventListener('click', e => {
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();
+// A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser.
+addEventListener('click', e => {
+  const a = e.target.closest?.('a.link[href]'); if (!a || !window.p9?.openLink) return; // a browser preview follows the link
+  e.preventDefault(); window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
+});
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
+// Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
+const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
 // A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
@@ -2058,28 +2969,47 @@ const liveSession = (id, provider, title, folder, created) => ({ id, agent: prov
 function history(s, until = liveChat.cursor) {
   return s.loading ||= (async () => {
     for (let after = 0; !lifetime.signal.aborted;) {
-      const r = await window.p9.chat('events', { after, only: [s.id], until });
+      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) });
       // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
       if (r.status === 400) break;
       if (r.status !== 200) { await new Promise(res => setTimeout(res, 2000)); continue; }
       for (const ev of r.body.events) try { applyChat(ev); } catch {}
+      if (r.body.more) { tailed(s, r.body); break; }
       after = r.body.cursor;
       if (r.body.events.length < 500) break;
     }
     s.stub = false; renderTabs(); renderChats();
   })();
 }
-// Applies one daemon event to S; returns the session when a turn ended (so queued messages can go).
-function applyChat(ev) {
+// P20 on the desktop: a chat loads with its newest TAIL blocks (the daemon's ledger.tail), not its whole history, which
+// over a remote's ssh link took minutes. s.more is the first cursor loaded when older events were left out; s.early, the
+// older events that came along anyway (cards, the latest mode, plan and commands), so Show earlier does not add them twice.
+// A daemon without tail sends no more, and the chat loads whole, as before.
+// ponytail: those early events show above the loaded blocks, not in their place, as on the phone.
+function tailed(s, body) {
+  const from = body.more?.[s.id];
+  s.more = from;
+  s.early = new Set([...(s.early ?? []), ...(from === undefined ? [] : body.events.filter(e => e.conversation === s.id && e.cursor < from).map(e => e.cursor))]);
+}
+async function earlier(s) {
+  const r = await window.p9.chat('events', { after: 0, only: [s.id], until: s.more - 1, tail: TAIL });
+  if (r.status !== 200) return;
+  const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
+  for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
+  s.events = [...old.events, ...s.events];
+  tailed(s, r.body);
+}
+// Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
+function applyChat(ev, into) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
-  const s = S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
+  if (ev.type === 'created') { if (!into && !S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
+  const s = into ?? S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -2087,6 +3017,10 @@ function applyChat(ev) {
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
+    case 'moving': settle(); s.state = 'moving'; notice('Moving to the remote: this chat is paused here.'); break;
+    case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Remote mode (the title-bar badge) and open it.'); break;
+    case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;
+    case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
     case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
@@ -2097,20 +3031,22 @@ function applyChat(ev) {
       // usage_update (the one with a cost) marks it done.
       if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
       else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
-      // Such a turn reads the prompt cache too, so the cache clock starts again from its output (owner, 2026-10-25: a
-      // background task's wake-up left the clock at 57 min); a prompted turn's clock starts at its turn-end.
-      if (!s.prompted && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
+      // Every agent request reads and re-warms the prompt cache, so the cache clock starts again from any agent output: a
+      // turn nobody prompted (owner, 2026-10-25: a background task's wake-up left the clock at 57 min) and a long prompted
+      // turn alike (an agent working on its own for hours inside one turn left it cold); turn-end sets it once more.
+      if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
       if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
-        const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content);
-        if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
-      } else if (d.sessionUpdate === 'tool_call') s.events.push({ t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content) });
+        const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
+        if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
+        else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
+      } else if (d.sessionUpdate === 'tool_call') s.events.push({ t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) });
       else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
       else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) usageNow(); }
       else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
       break;
-    case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]) }); s.pending = 'approval'; break;
+    case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]), plan: planText(d.toolCall) }); s.pending = 'approval'; break;
     case 'question': {
       // The daemon's form (formSpec in chat.mjs) is the one P9 renders and checks; null means P9 cannot show it faithfully.
       // A required choice starts unpicked; an optional one starts on "No answer" (left out of the reply).
@@ -2138,16 +3074,20 @@ async function loadChat() {
   if (!window.p9?.chat) return;
   // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
   // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
-  let replaying = true, scope = null;
+  let replaying = true, scope = null, listed = [];
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
   while (!lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { const ids = l.body.conversations.filter(c => c.state !== 'stopped').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
-    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? scope : { wait: 8000 }) }) : l;
+    if (l?.status === 200) { listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    // P20: the first replay reads each open chat's newest blocks only (tailed, above).
+    const tail = replaying && scope?.only && !liveChat.cursor ? { tail: TAIL } : {};
+    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
     // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
     if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
     if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
     if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
+    // A tail can leave out a chat's created event, so its tab comes from the list.
+    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !S.sessions.some(s => s.id === c.id)) S.sessions.push(liveSession(c.id, c.provider, c.title, c.folder, c.created));
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
@@ -2165,18 +3105,20 @@ async function loadChat() {
       if (closed) { closed.hidden = true; untab(closed.id); }
     }
     liveChat.cursor = r.body.cursor;
-    if (replaying && r.body.events.length < 500) {
+    if (r.body.more) for (const s of S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
+    if (replaying && (r.body.more || r.body.events.length < 500)) {
       replaying = false;
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(S.sessions.map(s => [s.id, s]));
       S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
       // running (the phone may have resumed it) and gets its tab back.
-      for (const s of S.sessions) { s.hidden = s.state === 'stopped'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
+      for (const s of S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
       closedChats.clear(); localStorage.removeItem('eh-closed-chats');
       if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
       // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
       for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
+      moveReloaded();
     }
     // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
     else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
@@ -2184,7 +3126,196 @@ async function loadChat() {
   }
 }
 
+/* ---------- Send to server: the black hole and the switch (items 24, 25, specs/move-progress-events.md) ---------- */
+// Drawn from main's p9:move stream only; the ledger's moving, moved and move-failed events stay the record. The overlay sits
+// over the moving chat's pane, not in it (panes are morphed on every paint), and in its dialog when the pane is in one.
+// ponytail: one move drawn at a time; another chat's events while one is drawn are not drawn (its ledger events still show).
+const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
+const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending ' + (fxFiles === FX.id ? 'the files and the chat' : 'the chat') + ' to ' + h,
+  landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
+const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+// The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
+// is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
+let fxFiles = null; // the chat whose move sends its folder first, for the uploading words
+async function sendAway(s) {
+  let files = [];
+  if (window.p9.xferPlan) {
+    const p = await window.p9.xferPlan(s.folder || '').catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+    if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (p.message || p.error) }); return renderChats(); }
+    if (!p.syncthing.laptop.length && !p.syncthing.server.length) {
+      const answer = !p.asked && !p.deletes ? [null, false] : await new Promise(done => {
+        xfer.id = p.id;
+        xferAsk(p, (choice, deleteToo) => { done([choice, deleteToo]); $('#xferDlg').close(); }, true);
+        $('#xferDlg').addEventListener('close', () => done(null), { once: true });
+      });
+      xfer.id = null;
+      if (!answer) return; // Cancel: nothing frozen, nothing sent
+      files = [p.id, ...answer];
+    }
+  }
+  fxFiles = files.length ? s.id : null;
+  const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
+  if (r.body?.error === 'limit') return xferRefused(r.body);
+  // busy: main is moving it already (a window reloaded mid-move); its events draw it.
+  if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
+}
+function fxPlace() {
+  const pane = [...document.querySelectorAll('.pane[data-id]')].find(p => p.dataset.id === FX.id);
+  if (!pane) return;
+  // The pull scales and turns the pane about its centre: the centre stays, the size is its layout size (not the shrunk box).
+  const home = pane.closest('dialog') || document.body, r = pane.getBoundingClientRect(), w = pane.offsetWidth, h = pane.offsetHeight;
+  if (fx.parentElement !== home) home.append(fx);
+  Object.assign(fx.style, { left: r.left + r.width / 2 - w / 2 + 'px', top: r.top + r.height / 2 - h / 2 + 'px', width: w + 'px', height: h + 'px' });
+}
+function fxFrame(now) {
+  FX.raf = requestAnimationFrame(fxFrame);
+  if (now - FX.drawn < 33) return;
+  const dt = FX.drawn ? Math.min(0.1, (now - FX.drawn) / 1000) : 0, k = Math.min(1, (now - FX.t0) / 2400), e = 1 - (1 - k) ** 5;
+  FX.drawn = now;
+  // The landing intro's ignition (30 -> 22), here driven by the move's percent: the hole draws closer as the chat goes in.
+  FX.dist += (30 - 8 * FX.pct / 100 - FX.dist) * Math.min(1, dt * 2);
+  FX.spin += dt * (0.8 + FX.pct / 100);
+  fxPlace();
+  fxSky.size(0.6);
+  fxSky.set({ uDist: FX.dist, uShift: 0, uIgnite: e, uStars: e, uDim: 1 - 0.38 * e, uSpin: FX.spin, uTime: now / 1000 });
+  fxSky.frame();
+}
+function fxStart(m) {
+  Object.assign(FX, { id: m.id, pull: m.id, host: m.host, t0: performance.now(), drawn: 0, spin: 0, dist: 30, pct: 0 });
+  renderChats();
+  fx.hidden = false; fxPlace();
+  requestAnimationFrame(() => fx.toggleAttribute('data-on', true));
+  if (!still && fxSky.ok) FX.raf = requestAnimationFrame(fxFrame);
+  // Three missed heartbeats (5 s each): the move is not touched, the label says so.
+  FX.tick = setInterval(() => { fxPlace(); if (performance.now() - FX.at > 15000 && !fx.hasAttribute('data-wait')) { fx.toggleAttribute('data-wait', true); $('#moveWhat').textContent = 'Waiting for the remote…'; } }, 1000);
+}
+function fxEnd() {
+  cancelAnimationFrame(FX.raf); clearInterval(FX.tick);
+  fx.hidden = true; fx.removeAttribute('data-on'); fx.removeAttribute('data-wait');
+  Object.assign(FX, { id: null, pull: null, raf: 0, tick: 0 });
+  renderChats();
+}
+function onMove(m) {
+  if (!m?.id || (FX.id && FX.id !== m.id)) return;
+  if (!FX.id) fxStart(m);
+  FX.at = performance.now(); fx.removeAttribute('data-wait');
+  if (Number.isFinite(m.percent)) FX.pct = m.percent;
+  $('#moveWhat').textContent = FX_WHAT[m.phase]?.(m.host) || 'Moving the chat to ' + m.host;
+  $('.move-bar').style.setProperty('--p', FX.pct + '%'); $('.move-bar').setAttribute('aria-valuenow', FX.pct);
+  $('#movePct').textContent = FX.pct + '%';
+  $('#moveBytes').textContent = m.bytes?.total ? ' · ' + mb(m.bytes.sent) + ' of ' + mb(m.bytes.total) : '';
+  $('#moveCancel').hidden = !['stopping', 'connecting', 'uploading'].includes(m.phase);
+  if (m.phase === 'done') afterMove(m);
+  // failed: the ledger's move-failed notice says why. unknown: the pane's "press to finish" button stays, with main's words.
+  if (m.phase === 'failed') fxEnd();
+  if (m.phase === 'unknown') { const s = S.sessions.find(x => x.id === m.id); if (s && m.message) s.events.push({ t: 'notice', text: m.message }); fxEnd(); }
+}
+$('#moveCancel').onclick = () => { $('#moveCancel').hidden = true; $('#moveWhat').textContent = 'Cancelling…'; window.p9.cancelMove(FX.id).catch(() => {}); };
+window.p9?.onMove?.(onMove);
+// The server updates itself on connect (item 14, apps/desktop/server-update.mjs): each step as a toast; the end, and a
+// server newer than this app, as an alert that stays until opened.
+function onServerUpdate(u) {
+  if (!u) return;
+  const on = 'P9 on ' + u.host, missing = (u.missing ?? []).map(m => m.id + ' (' + m.why + '): ' + m.command).join('; ');
+  const why = { 'turn-never-ended': 'a chat\'s turn did not end within 2 hours' }[u.error] ?? u.error;
+  const say = {
+    downloading: [on + ' is downloading ' + u.version + ' from GitHub Releases.', 'ok'],
+    building: [on + ' is building ' + u.version + ' beside the running copy.', 'ok'],
+    'waiting-turns': [on + ' will update to ' + u.version + ': waiting for ' + u.turns + ' chat' + (u.turns === 1 ? '' : 's') + ' to finish ' + (u.turns === 1 ? 'its' : 'their') + ' turn.', 'ok'],
+    restarting: [on + ' is restarting on ' + u.version + '.', 'ok'],
+    done: [on + ' is now ' + u.version + '.', 'ok', true],
+    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote.'), 'bad', true],
+    failed: [on + ' was not updated to ' + u.version + ' (' + why + '). It runs on as before.', 'bad', true],
+    'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
+    'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],
+    'app-older': ['The remote runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
+    unsupported: [on + ' cannot update itself (it is not a source checkout run by systemd). It stays on ' + u.server + '.', 'bad', true],
+  }[u.phase];
+  if (!say) return;
+  // A remote before 0.1.6 (K1): the steps in a dialog at once, then connect again and it updates itself from then on.
+  const steps = u.phase === 'too-old' ? ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'bash scripts/install.sh', 'systemctl --user restart p9-foundation'] : null;
+  const a = { kind: 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1], ...(steps ? { steps, after: 'Then connect again: from 0.1.6 on, it updates itself when you connect.' } : {}) };
+  toast(a, !say[2]);
+  if (steps) openModal({ kind: 'alert', a });
+}
+window.p9?.onServerUpdate?.(onServerUpdate);
+window.p9?.whatsNew?.().then(w => { if (w) openModal({ kind: 'whats-new', w }); }, () => {});
+window.p9?.serverUpdate?.().then(onServerUpdate, () => {});
+// "Open it on <host>?" and "Finish the move?": Enter takes the switch from anywhere in the box (a form's Enter would take
+// its first button, Stay); Esc is no.
+function moveAsk({ title, text, yes, no, never }) {
+  $('#moveT').textContent = title; $('#moveP').textContent = text; $('#moveYes').textContent = yes; $('#moveNo').textContent = no;
+  $('#moveNeverRow').hidden = !never; $('#moveNever').checked = false;
+  moveDlg.returnValue = '';
+  moveDlg.showModal();
+  return new Promise(done => moveDlg.addEventListener('close', () => done({ yes: moveDlg.returnValue === 'yes', never: !!never && $('#moveNever').checked }), { once: true }));
+}
+moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.matches('button')) { e.preventDefault(); moveDlg.close('yes'); } });
+// Item 24. "Don't show again" keeps the answer it was ticked with: always open on the server, or always stay.
+async function afterMove(m) {
+  let kept = null; try { kept = localStorage.getItem('p9-after-move-ask'); } catch {}
+  const pick = kept === 'open' || kept === 'stay' ? { yes: kept === 'open' } : await moveAsk({ title: 'Open it on ' + m.host + '?', yes: 'Open it', no: 'Stay here', never: true,
+    text: 'The chat is on ' + m.host + ' now. Opening it switches this window to the remote; your chats on this computer stay here for when you switch back.' });
+  if (pick.never) localStorage.setItem('p9-after-move-ask', pick.yes ? 'open' : 'stay');
+  if (!pick.yes) return fxEnd();
+  localStorage.setItem('p9-after-move', JSON.stringify({ id: m.id }));
+  const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the remote's P9
+  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Remote Connect switches by hand.' }); renderChats(); }
+}
+// After the first replay. The chat a move took here opens in the pane (on the server it is stopped, here it is moved).
+// A chat left moving by a reload: no stream event within 6 s means main is not moving it, so ask to finish.
+function moveReloaded() {
+  let after = null; try { after = JSON.parse(localStorage.getItem('p9-after-move'))?.id; localStorage.removeItem('p9-after-move'); } catch {}
+  const landed = after && S.sessions.find(s => s.id === after && s.state !== 'moved');
+  if (landed) focus(landed.id);
+  const left = S.sessions.find(s => s.live && s.state === 'moving');
+  if (!left || !window.p9?.sendToServer) return;
+  setTimeout(async () => {
+    if (FX.id || left.state !== 'moving' || serverInfo?.host || moveDlg.open) return;
+    const r = await moveAsk({ title: 'Finish the move?', yes: 'Finish the move', no: 'Not now',
+      text: '"' + (left.title || 'This chat') + '" was moving to ' + (serverInfo?.last || 'the remote') + ' when the window closed. It stays paused here until the move finishes; its Send to remote button finishes it later.' });
+    if (r.yes) sendAway(left);
+  }, 6000);
+}
+
 addEventListener('focus', () => renderChats());
+// Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); }, () => {});
+// The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
+// each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
+// the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
+// probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
+// ~/.ssh/config hosts never saved or used are not asked.
+const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
+const PROBE_STATE = { p9: ['ok', 'P9 running'], 'no-p9': ['warn', 'P9 not running'], unreachable: ['bad', 'Unreachable'] };
+// The remote in use and the last one used come first, even when neither list holds them (the old badge's one click went to last).
+const machines = () => { const { host = null, last = null, hosts = [], remotes = [] } = serverInfo ?? {}; return { host, last, remotes, all: [...new Set([host, last, ...remotes, ...hosts])].filter(Boolean) }; };
+let serverPop = null;
+function serverMenu() {
+  const badge = $('#serverBadge'), { host, all } = machines();
+  if (!badge || !all.length) return;
+  badge.hidden = false; badge.setAttribute('aria-haspopup', 'menu');
+  badge.innerHTML = esc(host ? 'Remote · ' + host : 'Local') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+  badge.title = 'This window works on ' + (host || 'this computer') + '. Click to pick another machine.';
+  serverPop ??= popover(badge, $('#serverPop'), () => { const pop = $('#serverPop'); pop.style.left = Math.max(8, Math.min(badge.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; renderServerMenu(); });
+}
+async function renderServerMenu() {
+  const pop = $('#serverPop'), { host, last, remotes, all } = machines(), probed = h => h !== host && (remotes.includes(h) || h === last), s = host ? await window.p9.getStatus().catch(() => ({})) : {};
+  const row = (h, [dot, say], current) => '<div class="srv-row"><button class="item" role="menuitem" data-server-go="' + esc(h ?? '') + '"' + (current ? ' aria-current="true"' : '')
+    + '><span class="srv-dot" data-s="' + dot + '"></span>' + esc(h ?? 'This computer') + '<span class="muted">' + say + '</span></button>'
+    + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
+  pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
+    + all.map(h => row(h, h === host ? SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable'] : probed(h) ? ['wait', 'Checking…'] : ['off', 'Not connected'], h === host)).join('')
+    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
+  pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
+  pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
+  all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => {
+    const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
+    if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
+  }, () => {}));
+  $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
+}
+if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
@@ -2220,12 +3351,12 @@ const amSendNote = async (browser) => {
     if (r.status !== 200) throw new Error(r.body?.error ?? "couldn't send (" + r.status + ')');
     // Opened in the browser: the note stays to copy until the issue is filed there (GitHub issue #4 item 6).
     if (!r.body.opened) amText.value = '';
-    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
+    amNote.textContent = r.body.opened ? 'Opened GitHub in your browser: finish the issue there. Your note is still here to copy.' + (r.body.cut ? ' It was too long for a link, so GitHub got only the start' + (r.body.kept ? ' (the first ' + r.body.kept.toLocaleString('en-US') + ' of ' + r.body.total.toLocaleString('en-US') + ' characters)' : '') + '; paste the rest from here.' : '') : 'Sent as issue #' + r.body.number + '. Thanks.';
   } catch (err) { amNote.textContent = err.message; }
   finally { amCheck(); }
 };
 $('#amForm').onsubmit = (e) => { e.preventDefault(); amSendNote(false); };
 amWeb.onclick = () => amSendNote(true);
 
-return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); };
+return () => { lifetime.abort(); timers.forEach(window.clearTimeout); observers.forEach(o => o.disconnect()); landVideo?.destroy(); };
 }

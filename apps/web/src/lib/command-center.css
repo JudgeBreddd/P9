@@ -1,5 +1,5 @@
 /* Command Center (@duwop/command-center): an add-on theme pack carrying three looks from Builder's design suite,
-   converted exactly from its hex tokens (tyler-design.css, 2026-10-11) to oklch.
+   converted exactly from its hex tokens (the design file, 2026-10-11) to oklch.
      Redline        true black, gunmetal surfaces, signature red glow, JetBrains Mono
      Night Drive    blue on night indigo (the Tokyo Night palette by enkia, MIT licence)
      Event Horizon  near-black, steel blue, Space Grotesk; glow only on interaction
@@ -147,7 +147,11 @@
   mask: radial-gradient(circle at 50% 120px, #000 0 136px, #000a 149px, #0006 204px, transparent 317px);
   filter: blur(3px);
 }
-[data-theme="event-horizon-prime"] .focuses { position: relative; z-index: 1; }
+/* The glow hangs 190 px past the stage's right edge: clipped there, or the page is 190 px wider than the window and a focused
+   node (the theme card picked again) scrolls it sideways. */
+[data-theme="event-horizon-prime"] .stage { overflow-x: clip; }
+/* The panes and the side panel (a pinned artifact too) sit above the black hole; full mode keeps its own 15 (shell.css). */
+[data-theme="event-horizon-prime"] :is(.focuses, .side) { position: relative; z-index: 1; }
 [data-theme="event-horizon-prime"] :is(.topbar, .statusbar) { background: color-mix(in oklch, var(--card) 30%, transparent); }
 [data-theme="event-horizon-prime"] .shell::after { content: ""; position: fixed; inset: 0 0 auto; height: 1px; background: var(--ring-line); pointer-events: none; z-index: 50; }
 

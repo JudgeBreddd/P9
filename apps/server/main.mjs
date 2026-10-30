@@ -14,12 +14,20 @@ import { createHash } from 'node:crypto';
 import { parseSettings } from './mission.mjs';
 import { drainSaves } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
+import { AGENTS, placeAgents } from './deps.mjs';
 import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+import { keepOldPhotos } from './chat.mjs';
+import { createClaudeUsage, openQuery } from './claude-usage.mjs';
+import { watchIdle } from './idle.mjs';
 
 const windowsHost = fileURLToPath(new URL('../../scripts/windows-host.ps1', import.meta.url));
 
-const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
-  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' } } });
+const { values } = parseArgs({ options: { workspace: { type: 'string' }, state: { type: 'string' }, recovery: { type: 'string' }, settings: { type: 'string' }, 'acp-override': { type: 'string' }, 'usage-sdk': { type: 'string' }, 'tmux-socket': { type: 'string' }, 'terminal-platform': { type: 'string' },
+  'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' }, ownership: { type: 'string' },
+  // The checkout a server update rebuilds, and where a packaged app's version is downloaded from (update.mjs); tests point them elsewhere.
+  'update-root': { type: 'string' }, 'update-archive': { type: 'string' }, 'update-turn-ms': { type: 'string' },
+  // Background mode only (install.sh's start script, row I1): stop after this many seconds with nobody using P9.
+  'idle-exit': { type: 'string' } } });
 if (['workspace', 'state', 'recovery'].some((key) => !values[key] || !path.isAbsolute(values[key]))) {
   throw new Error('absolute-workspace-state-and-recovery-required');
 }
@@ -58,7 +66,14 @@ for (const directory of [values.state, values.recovery]) {
 const state = await realpath(values.state), recovery = await realpath(values.recovery);
 if (inside(state, recovery) || inside(recovery, state)) throw new Error('state-and-recovery-must-be-separate');
 const socketPath = internalEndpoint(state);
-const ownershipDirectory = windows ? windowsStateRoot() : path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+// Linux keeps a Unix socket's path in 108 bytes, ending NUL: a longer one fails at listen with no reason given.
+if (!windows && Buffer.byteLength(socketPath) > 107) throw new Error('socket-path-too-long: ' + socketPath);
+const idleSeconds = values['idle-exit'] === undefined ? null : Number(values['idle-exit']);
+if (idleSeconds !== null && !(Number.isInteger(idleSeconds) && idleSeconds >= 1 && idleSeconds <= 86400)) throw new Error('invalid-idle-exit');
+// ponytail: --ownership gives a second Linux daemon (the dev build's p9-dev unit) its own ledger, lock and tmux socket;
+// only a unit's ExecStart passes it. Without it, the one folder every install uses.
+if (values.ownership !== undefined && !path.isAbsolute(values.ownership)) throw new Error('absolute-ownership-required');
+const ownershipDirectory = windows ? windowsStateRoot() : values.ownership ?? path.join(os.homedir(), '.local', 'state', 'p9-foundation');
 if (inside(workspace, await canonicalDestination(ownershipDirectory))) throw new Error('private-directory-inside-workspace');
 await mkdir(ownershipDirectory, { recursive: true, mode: 0o700 });
 const ownershipStat = await lstat(ownershipDirectory);
@@ -95,13 +110,15 @@ if (windows) {
     throw new Error(ownership.status === 1 ? 'daemon-already-running' : 'workspace-lock-unavailable');
   }
 }
+await keepOldPhotos(state, ownershipDirectory);
 const stateEntries = await readdir(state);
 if (windows) {
   if (stateEntries.some((name) => name !== 'desktop.json')) throw new Error('state-directory-not-empty');
   await unlink(path.join(state, 'desktop.json')).catch((error) => { if (error.code !== 'ENOENT') throw error; });
 } else {
   const socketName = path.basename(socketPath);
-  if (stateEntries.some((name) => !['desktop.json', socketName].includes(name))) throw new Error('state-directory-not-empty');
+  // editor.sock: Server mode's Dev Focus editor (server.mjs /dev/editor), left by a daemon that died; the next start replaces it.
+  if (stateEntries.some((name) => !['desktop.json', socketName, 'editor.sock'].includes(name))) throw new Error('state-directory-not-empty');
   await unlink(path.join(state, 'desktop.json')).catch((error) => { if (error.code !== 'ENOENT') throw error; });
   await unlink(socketPath).catch((error) => { if (error.code !== 'ENOENT') throw error; });
 }
@@ -119,6 +136,9 @@ const ledger = openLedger(path.join(ownershipDirectory, 'p9.db'));
 // ponytail: --acp-override swaps the real adapters for a test or recording shim; only the unit's ExecStart can pass it.
 const adapterOverride = values['acp-override'];
 if (adapterOverride !== undefined && !path.isAbsolute(adapterOverride)) throw new Error('absolute-acp-override-required');
+// ponytail: --usage-sdk, with --acp-override only, swaps the SDK the live Claude usage poll loads for a test stand-in.
+const usageSdk = values['usage-sdk'];
+if (usageSdk !== undefined && !path.isAbsolute(usageSdk)) throw new Error('absolute-usage-sdk-required');
 const instance = createHash('sha256').update(ownershipDirectory).digest('hex').slice(0, 8);
 const tmuxSocket = values['tmux-socket'] ?? `p9-${instance}`;
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tmuxSocket)) throw new Error('invalid-tmux-socket');
@@ -126,6 +146,9 @@ if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tmuxSocket)) throw new Error('invalid-tmux-soc
 // BL4: honoured only under the test home (test/helpers.mjs sets P9_TEST_HOME), so a shipped unit never takes it.
 const terminalPlatform = values['terminal-platform'];
 if (terminalPlatform !== undefined && (!process.env.P9_TEST_HOME || !['darwin', process.platform].includes(terminalPlatform))) throw new Error('invalid-terminal-platform');
+// The update's stand-ins (another checkout, a loopback archive, a short turn limit) are test flags too: refused the same way.
+const updateFlag = ['update-root', 'update-archive', 'update-turn-ms'].find((name) => values[name] !== undefined);
+if (updateFlag && !process.env.P9_TEST_HOME) throw new Error('invalid-test-flag --' + updateFlag);
 // Remote logins (phase 10) are off unless both flags are given: the port binds 127.0.0.1 only, for tailscale serve to
 // proxy, and the origin pins the passkey RP ID and the Host header (https, or http://localhost for tests).
 let remote;
@@ -141,7 +164,9 @@ delete process.env.P9_GITHUB_TOKEN;
 // ponytail: P9_GITHUB_API points the API at a loopback stand-in for tests; nothing else is accepted, so the token cannot be sent elsewhere.
 const githubApi = /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.P9_GITHUB_API ?? '') ? process.env.P9_GITHUB_API : undefined;
 delete process.env.P9_GITHUB_API;
-const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }) });
+const server = createListener({ workspace, savedWorkspace, recovery, state, credentials, transport: windows ? 'pipe' : 'unix', settings, settingsInvalid, settingsFile, ledger, adapterOverride, claudeUsage: adapterOverride === undefined ? createClaudeUsage() : usageSdk && createClaudeUsage({ open: () => openQuery(usageSdk) }), instance, tmuxSocket, terminalPlatform, ownership: ownershipDirectory, remote, anymouse: createAnymouse({ token: githubToken, api: githubApi }),
+  ...(values['update-root'] ? { updateRoot: path.resolve(values['update-root']) } : {}), updateArchive: values['update-archive'],
+  ...(values['update-turn-ms'] ? { updateTurnMs: Number(values['update-turn-ms']) } : {}) });
 try {
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -167,6 +192,8 @@ try {
   console.error('P9_START_FAILED');
   process.exit(1);
 }
+// Item 15: an update moved the CLIs P9 ships; the launchers the owner installed are rewritten to point at this version's.
+placeAgents(AGENTS, { refresh: true }).catch((error) => console.error('P9_AGENT_LAUNCHERS_NOT_UPDATED ' + (error.code ?? error.message)));
 let stopping = false;
 function stop() {
   if (stopping) return;
@@ -174,6 +201,7 @@ function stop() {
   // A stuck request or filesystem must not keep systemctl stop waiting indefinitely.
   setTimeout(() => { server.closeAllConnections(); process.exit(1); }, 10000).unref();
   if (server.remote) { server.remote.close(); server.remote.closeAllConnections(); }
+  server.editor?.stop(); // Server mode's editor runs in its own systemd scope, so it would outlive the daemon
   // Agents stop first, alongside the request drain: an open long poll would otherwise hold server.close for 8 s.
   // The woken polls answer, then sit idle on keep-alive; close them once the agents are down.
   const work = Promise.all([server.chat.shutdown(), server.mission.stopAll()]).then((result) => { server.closeIdleConnections(); return result; });
@@ -191,4 +219,5 @@ function stop() {
 }
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
+if (idleSeconds) watchIdle({ seconds: idleSeconds, servers: [server, server.remote].filter(Boolean), turns: () => server.chat.list().some((c) => c.state === 'turn'), stop });
 console.log('P9_READY');

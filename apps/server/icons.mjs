@@ -28,6 +28,9 @@ export function sniff(bytes) {
 const uri = (ext, bytes) => `data:${MIME[ext]};base64,${bytes.toString('base64')}`;
 // Shells, interpreters and env, by base name without .exe or a version (python3.12 is python).
 const INTERPRETERS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'env', 'node', 'python', 'perl', 'ruby', 'pnpm', 'npm', 'npx', 'cmd', 'powershell', 'pwsh']);
+// Terminal wrappers (konsole -e python run.py): with a url the tile is that site's; without one it keeps the terminal's own icon.
+const TERMINALS = new Set(['konsole', 'gnome-terminal', 'xterm', 'xfce4-terminal', 'alacritty', 'kitty', 'wezterm', 'x-terminal-emulator']);
+const terminal = (program) => TERMINALS.has(path.basename(program).toLowerCase().replace(/\.exe$/, ''));
 const interpreter = (program) => INTERPRETERS.has(path.basename(program).toLowerCase().replace(/\.exe$/, '').replace(/[\d.]+$/, ''));
 
 // Loopback, link-local, private, carrier-grade and multicast addresses: a site (not the user) must not aim the daemon at these.
@@ -180,7 +183,7 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
 
   // The icons folder under the workspace; null when the registry's folder is not really inside the workspace.
   const folder = async (make) => {
-    const root = await realpath(workspace), beside = path.join(root, path.dirname(registry()));
+    const root = await realpath(workspace), beside = path.join(root, path.dirname(registry() ?? 'registry.json')); // no registry set: icons/ at the workspace root
     const real = await realpath(beside).catch(() => null);
     if (!real || (real !== root && !real.startsWith(root + path.sep))) return null;
     const icons = path.join(real, 'icons');
@@ -231,7 +234,7 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
         // A browser's --app window is the site it opens, and an interpreter runs someone else's script: neither program's
         // icon is the tile's. The site's icon (the --app link, else the link the tile names), else the letter tile.
         const link = item.cmd.map((arg) => arg.match(/^--app=(https?:\/\/.+)/)?.[1]).find(Boolean);
-        if (link || item.cmd.some((arg) => arg.startsWith('--app=')) || interpreter(item.cmd[0])) { put('apps', item.id, 'auto', await site(link ?? item.url)); return; }
+        if (link || item.cmd.some((arg) => arg.startsWith('--app=')) || interpreter(item.cmd[0]) || item.url && terminal(item.cmd[0])) { put('apps', item.id, 'auto', await site(link ?? item.url)); return; }
         if (platform !== 'linux') { programs.push({ id: item.id, program: item.cmd[0] }); return; }
         const found = await programIcon(item.cmd[0], env);
         if (found) put('apps', item.id, 'auto', uri(found.ext, found.bytes));

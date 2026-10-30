@@ -2,27 +2,40 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, We
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { appendFileSync, constants, openSync, watch } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, appImageService, answered, AGENT_START_MS } from '../../scripts/teh.mjs';
-import { ORIGIN } from '../../packages/protocol/index.mjs';
+import net from 'node:net';
+import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
+import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
+import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
+import { updateServer } from './server-update.mjs';
+import { installRemote, sourceArchive, adminLocal, adminArgs } from './remote-install.mjs';
+import { adminCommand } from '../server/deps.mjs';
+import { createKeeper } from './keep.mjs';
+import { sendToServer } from './move.mjs';
+import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
+import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
-import { startEditorHost, stopEditorHost, openInCode, hostWritable } from './editor-host.mjs';
+import { startEditorHost, stopEditorHost, openInCode, hostWritable, installEditorHost, editorDownload, editorProblem, EDITOR_DIR, EDITOR_COMMIT, EDITOR_DOWNLOADS } from './editor-host.mjs';
 import { offReason, startUpdater, updateAction } from './updater.mjs';
 import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, startHealthy, launcherCommand, promoteLauncher, readRollback, markShown,
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
+import { updatedFrom } from './whats-new.mjs';
+import { serverPath } from './dev-folder.mjs';
+import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
+const FRAME_URL = 'p9://frame/'; // item 19: the artifact frame's page (row 65)
 export const DEV_URL = 'p9://dev/';
 export const WEBVIEW_URL = 'p9://webview/';
 export const DOCS_URL = 'https://github.com/' + REPO + '#readme';
 // HI1: a Settings row's "i" opens its part of the guide (docs/guide.md headings); any other section is refused.
 export const GUIDE_URL = 'https://github.com/' + REPO + '/blob/main/docs/guide.md#';
-export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance', 'mission-control-files', 'buttons-apps-and-pages']);
+export const GUIDE_SECTIONS = Object.freeze(['settings', 'focus-modes', 'pets', 'agent-lock', 'file-protection', 'updates', 'maintenance', 'mission-control-files', 'buttons-apps-and-pages', 'security-settings', 'server-mode-send-to-server-and-send-files', 'send-files']);
 // Check for updates (threat model row 28): the newest release page; GitHub's sign-in and the download happen in the browser.
 export const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 // Settings → Pets: where pets come from (GitHub issue #4 follow-up, the owner 2026-10-20: the petdex.dev text needs a link).
@@ -30,18 +43,18 @@ export const PETDEX_URL = 'https://petdex.dev';
 // placeholder: SECURITY.md § File protection exists on GitHub only once the PR merges; confirm or replace this URL then
 // (the builder's needs-done list tracks it).
 export const FILE_PROTECTION_DOCS = 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection';
-export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here and on your paired phone, from opening or changing your secrets '
-  + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons.\n\n'
-  + 'With it off, one wrong save can break those files, and anyone holding your unlocked, paired phone can read or change them, keys included.\n\n'
-  + 'Agents, terminals and editor extensions are not affected: they can already change any file you can. You can turn protection back on any time in Settings.';
+export { FILE_PROTECTION_RISK }; // the warning's words, in protocol so the phone's Settings asks with them too (c18)
 // The Settings page's UI settings (threat model row 15): one fixed shape, checked here, kept in the profile folder.
 // pet: each focus mode's own pet settings: shown or not, size in pixels, a petdex pet per agent (system when the agent has
 // none), and where the user dragged the top pets (top) and the in-chat pets (pane), as fractions of the window and the chat.
 // Skipper is the System pet a new profile starts with (the owner, 2026-10-20: "the pet we will ship as the system default").
 const petLook = on => Object.freeze({ on, size: 48, claude: null, codex: null, system: 'skipper', top: null, pane: null });
 // name: the landing page's greeting ('' greets with no name); startLast: open in the last used focus instead of the landing page.
+// xfer: Send files' limits (apps/desktop/xfer.mjs), each a whole number from 1 to its ceiling.
+const XFER_DEFAULTS = Object.freeze(Object.fromEntries(Object.entries(XFER_LIMITS).map(([key, limit]) => [key, limit.default])));
+const checkXfer = x => exactly(x, 'fileMiB,files,sendGiB') && Object.entries(XFER_LIMITS).every(([key, limit]) => Number.isInteger(x[key]) && x[key] >= 1 && x[key] <= limit.max);
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
-  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false });
+  pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false, xfer: XFER_DEFAULTS });
 const NAME = /^[^\p{Cc}\p{Cf}]{0,40}$/u;
 const PET_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/, PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const exactly = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === keys;
@@ -51,13 +64,14 @@ const checkPet = p => exactly(p, 'claude,codex,on,pane,size,system,top') && type
   && [p.claude, p.codex, p.system].every(petName) && spot(p.top) && spot(p.pane)
   && { on: p.on, size: p.size, claude: p.claude, codex: p.codex, system: p.system, top: p.top && [...p.top], pane: p.pane && [...p.pane] };
 export function checkSettings(value) {
-  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,zoom') || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
+  if (!exactly(value, 'closeOnSend,focus,name,pet,startLast,xfer,zoom') || !checkXfer(value.xfer) || typeof value.closeOnSend !== 'boolean' || !Number.isFinite(value.zoom)
       || typeof value.name !== 'string' || !NAME.test(value.name) || typeof value.startLast !== 'boolean'
       || value.zoom < 0.5 || value.zoom > 3 || !exactly(value.focus, 'chat,dev,mission') || !exactly(value.pet, 'chat,dev,mission')) return null;
   const focus = value.focus, pet = { chat: checkPet(value.pet.chat), dev: checkPet(value.pet.dev), mission: checkPet(value.pet.mission) };
   if (![focus.chat, focus.dev, focus.mission].every(on => typeof on === 'boolean') || !(focus.chat || focus.dev || focus.mission)) return null;
   if (!pet.chat || !pet.dev || !pet.mission) return null;
-  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast };
+  return { zoom: value.zoom, closeOnSend: value.closeOnSend, focus: { chat: focus.chat, dev: focus.dev, mission: focus.mission }, pet, name: value.name, startLast: value.startLast,
+    xfer: { fileMiB: value.xfer.fileMiB, files: value.xfer.files, sendGiB: value.xfer.sendGiB } };
 }
 // Older files: no pet, one pet name, or one pet per agent ({ claude, codex, system }) become every focus's pets, shown in Chat only.
 // Files from before the landing page get its name (the account's, below) and startLast off.
@@ -67,7 +81,7 @@ export function upgradeSettings(file, name = '') {
     const roles = typeof old === 'string' || old == null ? { claude: null, codex: null, system: old ?? null } : old; // an older file keeps its own (no) pet
     file = { ...file, pet: Object.fromEntries(['chat', 'dev', 'mission'].map(f => [f, { ...petLook(f === 'chat'), ...roles }])) };
   }
-  return { name, startLast: false, ...file };
+  return { name, startLast: false, xfer: XFER_DEFAULTS, ...file };
 }
 // Windows keeps the full name in the output of "net user <login>"; the label is localized, so another language falls back to the login name.
 // ponytail: local accounts only (a work-domain full name needs "net user /domain"); a Microsoft account with no full name set also falls back.
@@ -125,6 +139,46 @@ async function addPet(pets, folder) {
 // The Dev Focus page itself (query and hash aside); any other p9://dev/ file is an asset, never a page with IPC.
 const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
 
+// D5: the page Dev Focus shows when it cannot start. It names the cause; a missing editor server or another release of it
+// gets one button, Install, which asks main (p9dev:install-editor, no arguments) for the pinned download (threat model row 52).
+const html = text => String(text).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+const INSTALL_SCRIPT = "const b = document.getElementById('install'), n = document.getElementById('note');\n"
+  + "b.onclick = async () => { b.disabled = true; n.textContent = 'Installing and checking it. This takes a minute or two.';\n"
+  + "  const r = await window.p9dev.installEditor().catch(() => ({ error: 'The install did not answer. Try again.' }));\n"
+  + "  if (r.error) { n.textContent = r.error; b.disabled = false; } else n.textContent = 'Installed. Starting Dev Focus.'; };";
+// Issue #14: a start that failed says what is missing and what to do, for the causes seen on real installs.
+const AGAIN = ' Switch to another focus and back to Dev Focus to try again.';
+const failedText = (message, where) => /spawn systemd-run ENOENT/.test(message)
+  ? 'Dev Focus is unavailable: ' + where + ' has no systemd-run. P9 runs the editor server in a systemd user scope (part of systemd), so it needs a Linux with systemd.'
+  : /Failed to connect to .*bus|Failed to create bus connection/i.test(message)
+    ? 'Dev Focus is unavailable: ' + where + ' has no systemd user session for the editor server (systemd-run --user could not reach the user bus). Log in there normally (not with su or sudo); on a remote, run "loginctl enable-linger" as you once, then restart P9.' + AGAIN
+    : message === 'editor-host-timeout' ? 'Dev Focus is unavailable: the editor server on ' + where + ' did not say it was ready within 30 seconds.' + AGAIN
+      : 'Dev Focus is unavailable: the editor server on ' + where + ' did not start (' + message.slice(0, 300) + '). Installing it again replaces a damaged copy.';
+function devErrorPage(error, download = editorDownload()) {
+  const plain = ['daemon-unavailable', 'server-old'].includes(error.message);
+  const problem = plain ? error.message : error.problem ?? editorProblem(error);
+  // error.server: Server mode, where the daemon there answered (POST /dev/editor) with the cause, its folder and its download.
+  const remote = typeof error.server === 'string', where = remote ? 'the remote ' + error.server : 'this computer';
+  const host = remote ? error.place : process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
+  if (remote) download = error.download;
+  const text = {
+    'daemon-unavailable': remote ? 'Dev Focus is unavailable: the remote ' + error.server + ' is not answering through the tunnel. P9 reconnects on its own; open Dev Focus again in a few seconds.'
+      : 'Dev Focus is unavailable: P9\'s background service is not answering. It restarts on its own; open Dev Focus again in a few seconds.',
+    'server-old': 'Dev Focus is unavailable: the P9 on the remote ' + error.server + ' is older than 0.1.6 and cannot run the editor for this window. Update P9 on the remote, then open Dev Focus again.',
+    missing: 'Dev Focus needs VSCodium\'s editor server (release 1.121.03429), and it is not installed on ' + where + '. It belongs in ' + host + '.',
+    'other-release': 'Dev Focus needs VSCodium\'s editor server release 1.121.03429; ' + host + ' on ' + where + ' holds a different release.',
+    failed: failedText(String(error.message), where),
+  }[problem];
+  const fixable = problem === 'missing' || problem === 'other-release' || (problem === 'failed' && / did not start \(/.test(text));
+  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server' + (remote ? ' on the remote' : '') + '</button></p>'
+      + '<p id="note" style="color:#8b97ad">' + (!remote && path.isAbsolute(download[0]) ? 'Takes the copy this AppImage carries' : 'Downloads about 83 MB from VSCodium\'s GitHub releases' + (remote ? ' onto ' + html(error.server) : ''))
+      + ', checks its SHA-256 against the one P9 pins, and installs it there.'
+      + (problem !== 'missing' ? ' The copy there now is kept beside it.' : '') + '</p><script>' + INSTALL_SCRIPT + '</script>'
+    : '<p style="color:#8b97ad">P9 has no download of it for ' + html(remote ? 'that remote' : 'this computer (' + process.platform + '-' + process.arch + ')') + '. The README\'s Requirements say how to install it by hand.</p>';
+  const page = '<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px"><p id="cause">' + html(text) + '</p>' + fix + '</body>';
+  return { files: new Map([['/index.html', Buffer.from(page)]]), csp: "default-src 'none'; style-src 'unsafe-inline'; script-src " + (inlineHashes(page).join(' ') || "'none'") };
+}
+
 // CSP hashes of a page's inline scripts (the ones without src).
 const inlineHashes = html => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
   .filter(match => !/\bsrc\s*=/.test(match[1]))
@@ -157,7 +211,7 @@ export async function createDesktop({ state, open } = {}) {
   // old folder and the change rolled back (Fable review finding 3).
   let reason = 'not-answering', woke = 0, repaired = false, changing = false, rebuilding = false;
   const wake = async () => {
-    if (changing || Date.now() - woke < 30000) return;
+    if (changing || serverHost || Date.now() - woke < 30000) return;
     woke = Date.now();
     const task = await windowsTask();
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
@@ -167,21 +221,33 @@ export async function createDesktop({ state, open } = {}) {
     }
     if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
   };
-  if (process.platform === 'win32' && state) health(state).catch(wake);
   // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
   // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
-  if (process.platform === 'linux' && app.isPackaged && process.env.APPIMAGE) appImageService(process.resourcesPath);
+  const appImage = process.platform === 'linux' && app.isPackaged && Boolean(process.env.APPIMAGE);
+  if (appImage) appImageService(process.resourcesPath);
+  // Item 16 (threat model row 52): the AppImage carries the pinned editor server (package-linux.mjs) and installs it from that
+  // copy, checked against the same SHA-256 as the download, when ~/.local/share/p9's is missing or another release (a first
+  // start, or an update that moved the pin). Dev Focus's Install uses the copy too, so no network is needed. Logs, never throws.
+  const editorCopy = appImage ? [path.join(process.resourcesPath, 'editor', 'reh.tar.gz'), EDITOR_DOWNLOADS.x64[1]] : undefined;
+  let editorInstall = null;
+  const installEditor = () => editorInstall ??= installEditorHost({ download: editorCopy }).finally(() => { editorInstall = null; });
+  if (editorCopy) readFile(path.join(EDITOR_DIR, 'codium-server', 'product.json'), 'utf8').then(text => JSON.parse(text).commit, () => null)
+    .then(commit => commit === EDITOR_COMMIT || installEditor().then(() => console.log('P9: editor server installed from the AppImage'),
+      error => console.error('P9: the editor server was not installed from the AppImage: ' + error.message)));
   const webDist = fileURLToPath(new URL('../web/dist/', import.meta.url));
   const appSite = async () => {
     const files = await assets(webDist);
     const html = files.get('/index.html').toString('utf8');
-    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'` };
+    return { files, csp: `default-src 'none'; script-src 'self' ${inlineHashes(html).join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src ${FRAME_URL}; frame-ancestors 'none'` };
   };
   const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2',
-    '.woff': 'font/woff', '.ttf': 'font/ttf', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg' };
+    '.woff': 'font/woff', '.ttf': 'font/ttf', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp3': 'audio/mpeg',
+    '.webp': 'image/webp', '.mp4': 'video/mp4' };
   // Three origins: p9://app (the shell), p9://dev (Dev Focus, filled once the editor host is up) and p9://webview (its
   // extension pages). Each gets its own CSP, and each session serves only its own origins.
   const sites = { app: await appSite() };
+  // Item 19 (threat model row 65): the artifact frame's page on its own origin, p9://frame/, with nothing else there.
+  sites.frame = { get files() { return new Map([['/index.html', sites.app.files.get('/frame/index.html')]]); }, csp: FRAME_CSP + '; frame-ancestors p9://app' };
   const serve = (...hosts) => request => {
     const url = new URL(request.url);
     const key = url.pathname === '/' ? '/index.html' : url.pathname;
@@ -189,19 +255,103 @@ export async function createDesktop({ state, open } = {}) {
     if (request.method !== 'GET' || url.username || url.password || url.port || !data) return new Response('Not found', { status: 404 });
     return new Response(data, { headers: { 'Content-Type': types[path.extname(key)] ?? 'application/octet-stream', 'Content-Security-Policy': site.csp, 'X-Content-Type-Options': 'nosniff', 'Document-Policy': 'include-js-call-stacks-in-crash-reports' } });
   };
-  protocol.handle('p9', serve('app'));
+  protocol.handle('p9', serve('app', 'frame'));
   const settingsFile = path.join(app.getPath('userData'), 'p9-settings.json');
   const name = await accountName();
   let settings = checkSettings(await readFile(settingsFile, 'utf8').then(text => upgradeSettings(JSON.parse(text), name)).catch(() => null)) ?? { ...structuredClone(DEFAULT_SETTINGS), name };
   let settingsSaving = Promise.resolve();
+  // Server mode (remote.mjs, threat model row 50): while a host is chosen, state is that server's forward, else this machine's
+  // daemon. Both daemons keep running; switching reloads the window onto the other. The choice is kept in p9-server.json.
+  const localState = state, serverFile = path.join(app.getPath('userData'), 'p9-server.json');
+  const sshCommand = (!app.isPackaged && process.env.P9_SSH) || 'ssh'; // P9_SSH: the tests' stand-in, source checkouts only
+  // last: the host used before, so Local can show a one-click way back.
+  const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
+  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
+  // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
+  let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
+  // Row 79: P9's own ssh key, in its data folder; noKey: the remotes whose key offer got Don't ask again.
+  const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
+  useKey(sshKeyFile);
+  let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
+  // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
+  const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action, password) => remoteMode(h, action, sshCommand, password), save: () => keepServer() });
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey }), { mode: 0o600 });
+  // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
+  // pointed at the window once it exists.
+  let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
+  // D15a (remote-install.mjs, threat model row 67): the asked-first install on this remote, its last event for the status poll.
+  let remoteInstall = null;
+  // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
+  const ownVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
+  // One attempt chain per choice (serverTry): retried 1 s, then doubling to 30 s; a drop starts it again.
+  // Row 78: the ssh login waiting on the password window: { id, prompt, again, resolve }. One at a time; a new connect ends it.
+  // dropped: the connection was up and fell (said in the password window). keyOffer: { host, id }, after a password login.
+  let sshAsk = null, sshAsks = 0, dropped = false, keyOffer = null;
+  const connect = async (attempt, wait = 1000, loggedIn = false) => {
+    if (attempt !== serverTry || !serverHost) return;
+    try {
+      const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; dropped = true; connect(attempt); } } });
+      if (attempt !== serverTry) return void s.close();
+      server = s; serverError = null; dropped = false;
+      keeper.connected(serverHost, !!s.background);
+      if (!serverUpdating) {
+        // Item 14 (server-update.mjs): an older server is updated from this app; a newer one only says to update this app.
+        serverUpdating = true;
+        updateServer({ state: s.state, check: s.check, version: ownVersion, host: serverHost, live: () => attempt === serverTry,
+          checkout: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? fileURLToPath(new URL('../../', import.meta.url)) : null,
+          tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
+      }
+    } catch (error) {
+      serverError = error.message; knownHosts = error.knownHosts ?? null;
+      if (attempt !== serverTry) return;
+      // Row 78: a changed host key, or a remote that needs a key from this Windows computer, stops here until the person's
+      // Try again: no password window, no timed retry.
+      if (serverError === 'ssh-host-key-changed' || serverError === 'ssh-key-needed') return;
+      // Row 78: key-only ssh refused. One login with the password window, then connect over it. Never retried on a timer:
+      // a refused or cancelled login waits for the person's Try again.
+      if (serverError === 'ssh-login-needed' && !loggedIn) {
+        const r = await sshLogin({ host: serverHost, ssh: sshCommand, ask: a => new Promise(resolve => { sshAsk = { ...a, id: ++sshAsks, dropped, resolve }; }) });
+        sshAsk?.resolve(null); sshAsk = null;
+        if (attempt !== serverTry) return;
+        // Row 79: the offer comes after every password login (a refused key included) unless this remote said Don't ask again.
+        if (r === 'ok' && !noKey.includes(serverHost)) keyOffer = { host: serverHost, id: ++sshAsks };
+        if (r === 'ok') return connect(attempt, wait, true);
+        if (r?.changed !== undefined) { serverError = 'ssh-host-key-changed'; knownHosts = r.changed; return; }
+        serverError = 'ssh-' + r;
+        return;
+      }
+      if (serverError === 'ssh-login-needed') { serverError = 'ssh-failed'; return; }
+      setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
+    }
+  };
+  const useServer = async host => {
+    const attempt = ++serverTry, old = server;
+    // A finished install stays for its own remote while it reconnects, so the window says installed, not Install again.
+    serverUpdate = null; if (remoteInstall?.phase !== 'running' && !(remoteInstall?.phase === 'done' && host === serverHost)) remoteInstall = null;
+    sshAsk?.resolve(null); sshAsk = null; dropped = false; if (keyOffer?.host !== host) keyOffer = null;
+    server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
+    state = host ? serverFolder(host) : localState;
+    await old?.close().catch(() => {});
+    await keepServer();
+    connect(attempt);
+  };
+  if (serverHost) { state = serverFolder(serverHost); connect(++serverTry); }
+  // Here, not beside wake(): wake() reads serverHost, which does not exist before this point.
+  if (process.platform === 'win32' && localState) health(localState).catch(wake);
+  app.on('will-quit', () => { serverTry++; server?.close().catch(() => {}); });
   const petsFolder = path.join(app.getPath('userData'), 'pets');
   // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
   if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);
   // Copy buttons write plain text (threat model row 19) and turn-finished notices show (row 21); everything else, clipboard read included, stays refused.
-  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write' || permission === 'notifications'));
-  session.defaultSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write' || permission === 'notifications');
-  // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
-  const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
+  // Only for the shell itself: an artifact's frame (item 19, row 65) gets neither.
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => callback(details?.isMainFrame !== false && (permission === 'clipboard-sanitized-write' || permission === 'notifications')));
+  session.defaultSession.setPermissionCheckHandler((_contents, permission, _origin, details) => details?.isMainFrame !== false && (permission === 'clipboard-sanitized-write' || permission === 'notifications'));
+  // Item 19 (row 65), behind the frame's CSP: the window's session refuses every request a subframe makes; only the frame's page loads.
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    let sub = false; try { sub = !!details.frame?.parent; } catch {} // no frame (a worker, a frame already gone): the CSP alone decides
+    callback({ cancel: sub && !(details.resourceType === 'subFrame' && details.url === FRAME_URL) });
+  });
+  const version = ownVersion;
   // Auto-update's lines (threat model row 39) and the rollback's (row 40) go to p9-update.log in the profile folder.
   // ponytail: never rotated, a few lines per check.
   const updateLog = line => appendFile(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {});
@@ -209,6 +359,8 @@ export async function createDesktop({ state, open } = {}) {
   // that has failed 2 starts goes back to the newest healthy one, through the launcher outside the install, and quits.
   const watched = offReason({ packaged: app.isPackaged, resources: process.resourcesPath, platform: process.platform, env: process.env }) === null;
   const startFile = path.join(app.getPath('userData'), 'update-state.json'), share = shareRoot();
+  // D13: once per start, read before the window asks: the version this profile ran before, when this start is an update.
+  let whatsNew = (from => from === null ? null : { version: ownVersion, from, link: 'https://github.com/' + REPO + '/commit/v' + ownVersion })(updatedFrom(app.getPath('userData'), ownVersion));
   const goBack = (start, to) => {
     // Sync lines, and the exit only once the launcher's start is known: app.exit drops pending writes.
     const line = text => { try { appendFileSync(path.join(app.getPath('userData'), 'p9-update.log'), new Date().toISOString() + ' ' + text + '\n'); } catch {} };
@@ -271,9 +423,11 @@ export async function createDesktop({ state, open } = {}) {
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
-      additionalArguments: ['--p9-version=' + version, ...(process.env.P9_LANDING === 'off' ? ['--p9-landing=off'] : []), // the test runs click the shell straight away
+      additionalArguments: ['--p9-version=' + version, ...(['off', 'original'].includes(process.env.P9_LANDING) ? ['--p9-landing=' + process.env.P9_LANDING] : []), // the test runs click the shell straight away
         ...(source ? ['--p9-source'] : [])] } });
   window.removeMenu();
+  // D13.5: opens maximised every time. ponytail: a later un-maximise is not remembered; a saved flag if people ask.
+  window.maximize();
   if (watched) {
     window.on('session-end', quitting);
     const ready = new Promise(resolve => window.once('ready-to-show', resolve));
@@ -317,7 +471,7 @@ export async function createDesktop({ state, open } = {}) {
     if (menu.length) Menu.buildFromTemplate(menu).popup({ window });
   });
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
-  window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame) event.preventDefault(); });
+  window.webContents.on('will-frame-navigate', event => { if (!event.isMainFrame && event.url !== FRAME_URL) event.preventDefault(); }); // item 19: only the artifact frame's page
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   // Freeze record (Builder, 2026-10-20: the window freezes "and i just need to close and reopen the app"): when the window
   // stops answering, the JavaScript it is stuck in goes to p9-freeze.log in the profile folder, then how long it lasted.
@@ -340,7 +494,8 @@ export async function createDesktop({ state, open } = {}) {
     return { ok: true };
   });
   app.on('before-quit', (event) => {
-    if (persistent || stoppingBeforeQuit || !state) return;
+    // Server mode: quitting this window never stops the server's chats (the owner, 2026-10-26); the phone may be in one.
+    if (persistent || stoppingBeforeQuit || !state || serverHost) return;
     event.preventDefault();
     stoppingBeforeQuit = true;
     daemonRequest(state, 'POST', '/stop-all', {}, randomBytes(16).toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5'))
@@ -349,6 +504,13 @@ export async function createDesktop({ state, open } = {}) {
   ipcMain.handle('p9:get-status', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
     // savedWorkspace: the saved folder was not there at the daemon's start, so it runs on the default (apps/server/main.mjs).
+    // Server mode: mode and host for the title-bar badge; error says why it is not connected yet (remote.mjs codes).
+    if (serverHost) {
+      const h = await server?.check().catch(() => null);
+      // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
+      const there = { ...keeper.status(serverHost, !!server?.background), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
+      return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
+    }
     try {
       const h = state && await health(state);
       if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
@@ -378,13 +540,12 @@ export async function createDesktop({ state, open } = {}) {
     if (typeof open !== 'string' || !open.startsWith(NEW_ISSUE) || /[\s]/.test(open)) return { status: 502, body: { error: 'request-refused' } };
     if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
     else await shell.openExternal(open);
-    return { status: 200, body: { opened: true, cut: result.body.cut === true } };
+    const cut = result.body.cut === true, counts = cut && Number.isSafeInteger(result.body.kept) && Number.isSafeInteger(result.body.total);
+    return { status: 200, body: { opened: true, cut, ...(counts ? { kept: result.body.kept, total: result.body.total } : {}) } };
   });
   // Wizard sign-in (threat model row 31): the daemon runs the agent's own login CLI. "Browser didn't open?" opens the
-  // URL the CLI printed only if its parsed origin is that vendor's sign-in page (no prefix match: claude.com.evil.example
-  // and claude.com@evil.example fail). The page sees whether a URL exists, never the URL or any other output.
-  const SIGN_IN_ORIGINS = { claude: ['https://claude.com', 'https://claude.ai', 'https://console.anthropic.com'], codex: ['https://auth.openai.com'] };
-  const vendorUrl = (agent, text) => { try { const url = new URL(text); return SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; } };
+  // URL the CLI printed only after signInUrl's origin check. The page sees whether a URL exists, never the URL or any other
+  // output; D8: Codex's one-time code is shown, and only when it has exactly a code's shape.
   ipcMain.handle('p9:agent-login', async (event, ...args) => {
     const [action, agent, code] = args;
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -398,9 +559,10 @@ export async function createDesktop({ state, open } = {}) {
       const result = await daemonRequest(state, 'GET', '/setup/login');
       if (result.status !== 200) return result;
       if (action === 'state') return { status: 200, body: Object.fromEntries(Object.keys(SIGN_IN_ORIGINS).map(name => [name,
-        { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && vendorUrl(name, result.body[name].url) !== null,
-          exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
-      const open = typeof result.body[agent]?.url === 'string' ? vendorUrl(agent, result.body[agent].url) : null;
+        { running: result.body[name]?.running === true, url: typeof result.body[name]?.url === 'string' && signInUrl(name, result.body[name].url) !== null,
+          code: name === 'codex' && typeof result.body[name]?.code === 'string' && DEVICE_CODE.test(result.body[name].code) ? result.body[name].code : null,
+          unsupported: result.body[name]?.unsupported === true, exit: Number.isInteger(result.body[name]?.exit) ? result.body[name].exit : null }])) };
+      const open = typeof result.body[agent]?.url === 'string' ? signInUrl(agent, result.body[agent].url) : null;
       if (!open) return { status: 409, body: { error: 'no-sign-in-page' } };
       if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [open], { shell: false, stdio: 'ignore' }).on('error', () => {});
       else await shell.openExternal(open);
@@ -414,19 +576,44 @@ export async function createDesktop({ state, open } = {}) {
     run: ({ id: script, ...body }) => id(script) && ['POST', `/scripts/${script}/run`, body],
     output: ({ run, from }) => /^[0-9a-f-]{36}$/.test(run ?? '') && Number.isSafeInteger(from) && from >= 0 && ['GET', `/runs/${run}?from=${from}`],
     launch: ({ kind, id: target, ...body }) => ['apps', 'pages'].includes(kind) && id(target) && ['POST', `/${kind}/${target}/launch`, body],
+    link: body => ['POST', '/mission/link', body], // rows 74, 75: opened below, on this computer
     answer: body => ['POST', '/mission/answer', body],
     hub: () => ['GET', '/mission/hub'],
+    // Data tiles (threat model row 70): one tile's last answer, and the user's Allow for it.
+    data: ({ id: tile }) => id(tile) && ['GET', '/mission/data?' + new URLSearchParams({ id: tile })],
+    card: ({ id: card }) => id(card) && ['GET', '/mission/card?' + new URLSearchParams({ id: card })], // a card's HTML (row M5)
+    dataAllow: ({ id: tile }) => id(tile) && ['POST', '/mission/data/allow', { id: tile }],
     hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
     hubDecide: body => ['POST', '/mission/hub/decide', body],
     fix: ({ host, name }) => [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
-    idea: ({ name, text, needs_done }) => [name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
+    // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
+    guide: () => ['GET', '/mission/guide'],
+    template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
+    build: ({ provider, space }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}) }],
+    space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
+    deleteSpace: ({ name, confirm }) => typeof name === 'string' && ['POST', '/mission/space/delete', { name, ...(confirm !== undefined ? { confirm } : {}) }],
+    saveTemplate: ({ name, about, replace }) => typeof name === 'string' && ['POST', '/mission/template/save', { name, ...(about !== undefined ? { about } : {}), ...(replace !== undefined ? { replace } : {}) }],
+    // Sprint tracker: the connected machine's status file, and a terminal attached to its sprint tmux session (no body).
+    sprint: () => ['GET', '/mission/sprint'],
+    sprintTmux: () => ['POST', '/mission/sprint/tmux', {}],
+    idea: ({ name, text, needs_done }) =>[name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
+    image: ({ path: file }) => typeof file === 'string' && ['GET', '/files/image?' + new URLSearchParams({ path: file })],
+    // The Chat Focus file window's Save (row 23): exactly the guarded PUT /files, which re-checks the path, locked names and the hash.
+    save: ({ path: file, hash, content, ...rest }) => !Object.keys(rest).length && typeof file === 'string' && file.length <= 1000 && typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash)
+      && typeof content === 'string' && Buffer.byteLength(content) <= 2 * 1024 * 1024 && ['PUT', '/files', { path: file, hash, content }],
     // Notes (threat model row 34): the daemon checks the root name against settings, the path, .md and File protection.
     notes: ({ root }) => id(root) && ['GET', '/mission/notes?' + new URLSearchParams({ root })],
     noteRead: ({ root, path: file }) => id(root) && typeof file === 'string' && ['GET', '/mission/notes/file?' + new URLSearchParams({ root, path: file })],
     noteSave: body => ['POST', '/mission/notes/save', body],
+    // Folder lists (row 68): read-only; the daemon lists again and opens only a file its own list holds.
+    folder: ({ id: item }) => id(item) && ['GET', '/mission/folder?' + new URLSearchParams({ id: item })],
+    folderFile: ({ id: item, path: file }) => id(item) && typeof file === 'string' && ['GET', '/mission/folder/file?' + new URLSearchParams({ id: item, path: file })],
+    // Checklists (row M4-a): the daemon lists the item's files again and writes one mark or one review line over the hash read.
+    checklist: ({ id: item }) => id(item) && ['GET', '/mission/checklist?' + new URLSearchParams({ id: item })],
+    checklistSet: body => ['POST', '/mission/checklist', body],
     noteCreate: body => ['POST', '/mission/notes/create', body],
     noteRename: body => ['POST', '/mission/notes/rename', body],
     // The Mission edit form (names and icons): the daemon checks the kind, fields, hash and File protection.
@@ -456,6 +643,15 @@ export async function createDesktop({ state, open } = {}) {
     if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
     try {
       const result = await daemonRequest(state, route[0], route[1], route[2], undefined, action === 'fix' ? AGENT_START_MS : undefined);
+      if (action === 'link' && result.status === 200) {
+        // The daemon checked page_schemes; main checks the never list again before another program gets the link.
+        let url = null;
+        try { url = typeof result.body?.open === 'string' && result.body.open.length <= 2400 && !/[\s\p{Cc}\p{Cf}]/u.test(result.body.open) ? new URL(result.body.open) : null; } catch {}
+        if (!url || ['javascript:', 'file:', 'data:', 'vbscript:', 'blob:'].includes(url.protocol) || url.username || url.password) return { status: 502, body: { error: 'request-refused' } };
+        if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url.href], { shell: false, stdio: 'ignore' }).on('error', () => {});
+        else await shell.openExternal(url.href);
+        return { status: 200, body: { opened: true } };
+      }
       if (action === 'icons' && result.status === 200) {
         const { programs = [], ...art } = result.body;
         for (const { id: app_id, program } of programs) {
@@ -497,9 +693,11 @@ export async function createDesktop({ state, open } = {}) {
   const chatRoutes = {
     list: () => ['GET', '/chat'],
     // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
-    events: ({ after = 0, wait = 0, only, until }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000
+    // tail (P20, with only): the newest tail blocks of each of those chats.
+    events: ({ after = 0, wait = 0, only, until, tail }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000
       && (only === undefined || Array.isArray(only) && only.length <= 100 && only.every(uuid)) && (until === undefined || Number.isSafeInteger(until) && until >= 0)
-      && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}`],
+      && (tail === undefined || only !== undefined && Number.isSafeInteger(tail) && tail >= 1 && tail <= 200)
+      && ['GET', `/chat/events?after=${after}&wait=${wait}${only ? '&only=' + only.join(',') : ''}${until === undefined ? '' : '&until=' + until}${tail === undefined ? '' : '&tail=' + tail}`],
     create: body => ['POST', '/chat', body],
     prompt: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/prompt`, body],
     answer: ({ id: chat, ...body }) => uuid(chat) && ['POST', `/chat/${chat}/answer`, body],
@@ -507,6 +705,14 @@ export async function createDesktop({ state, open } = {}) {
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
+    // D7/D8: an agent's sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
+    agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && action === 'login' && !Object.keys(rest).length
+      && ['POST', '/setup/agent-terminal', { agent, action }],
+    // Item 15: the wizard's Install of the agents picked (launchers for the CLIs P9 ships), and a system package's admin
+    // command typed into a terminal (row 61); the daemon holds the commands, the page only names a dependency.
+    installAgents: ({ claude, codex, ...rest }) => typeof claude === 'boolean' && typeof codex === 'boolean' && !Object.keys(rest).length
+      && ['POST', '/setup/agents', { claude, codex }],
+    adminTerminal: ({ id, ...rest }) => ['tmux', 'ssh'].includes(id) && !Object.keys(rest).length && ['POST', '/setup/admin-terminal', { id }],
     image: ({ id: chat, hash }) => uuid(chat) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && ['GET', `/chat/${chat}/images/${hash}`],
     lock: () => ['GET', '/agent-lock'],
     // The wizard's paths ride as plain text (the daemon parses them as settings.json would): GET /setup's plan for them, and
@@ -525,9 +731,11 @@ export async function createDesktop({ state, open } = {}) {
     const { op, ...rest } = payload;
     const route = (op === undefined || uuid(op)) && chatRoutes[action](rest);
     if (!route) return { status: 400, body: { error: 'request-refused' } };
-    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    // host: which P9 did not answer, so the page can say so in words (chatFailed in helpers.mjs).
+    const where = serverHost ? { host: serverHost } : {};
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable', ...where } };
     try { return await daemonRequest(state, route[0], route[1], route[2], op, action === 'prompt' ? AGENT_START_MS : undefined); }
-    catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+    catch (error) { const reply = failedReply(error); return { ...reply, body: { ...reply.body, ...where } }; }
   });
   // Terminal dock (Builder, 2026-10-18: a real shell in the dock; threat model row 13): one of P9's own tmux sessions, the same
   // routes and socket the phone uses, over the daemon's desktop socket with the desktop's credentials, which the page never
@@ -550,6 +758,231 @@ export async function createDesktop({ state, open } = {}) {
   });
   let dockSocket = null, dockSerial = 0;
   const endDock = () => { dockSerial++; dockSocket?.terminate(); dockSocket = null; };
+  // Settings > Server: no argument reads the mode and the ~/.ssh/config hosts; null is Local; a host name connects there, and
+  // the window reloads onto that daemon. Neither daemon is stopped.
+  ipcMain.handle('p9:server', async (event, ...args) => {
+    if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey };
+    endDock();
+    await useServer(args[0]);
+    // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
+    devFolder = null; devServing = null;
+    if (devView) reopenDev();
+    setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
+    return { ok: true };
+  });
+  // D15a: the connecting screen's Install P9 there, after the person said yes. Only this window's remote, only while it
+  // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
+  // download its version. started: when it began, for the window's elapsed time; a throw ends it failed, never stuck running.
+  // admin: row I2's password, after the install stopped at an admin step; passed to installRemote once, kept nowhere.
+  const runInstall = (admin = null) => {
+    const host = serverHost, started = Date.now(), asked = remoteInstall;
+    remoteInstall = { phase: 'running', line: '', started };
+    try {
+      const archive = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null;
+      // A wrong password keeps what the window showed: the same list and command, asked again.
+      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, keep: keeper.keep[host] === true, admin,
+        tell: e => { if (serverHost === host) remoteInstall = { ...(/^(wrong-password|not-allowed)$/.test(e.error ?? '') && { need: asked?.need, command: asked?.command }), ...e, started }; } })
+        .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
+    } catch (error) {
+      remoteInstall = { phase: 'failed', error: error.message, started };
+    }
+    return { ok: true };
+  };
+  ipcMain.handle('p9:remote-install', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
+    return runInstall();
+  });
+  // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's
+  // (what it showed: P9_ADMIN need and command) or Keep it running's linger. One string, one line; never stored or logged.
+  ipcMain.handle('p9:remote-admin', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !PASSWORD(args[0])) throw new Error('ipc-sender-refused');
+    if (serverHost && serverError === 'server-no-p9' && remoteInstall?.phase === 'admin' && remoteInstall.command) return runInstall(args[0]);
+    if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
+    return { error: 'remote-admin-refused' };
+  });
+  // Row 78: the password window's answer for the ssh login waiting on it: a password, 'yes' for a host key, or null (Cancel).
+  // Handed to the login once and kept nowhere.
+  ipcMain.handle('p9:ssh-answer', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || (args[0] !== null && !PASSWORD(args[0]))) throw new Error('ipc-sender-refused');
+    if (!sshAsk) return { error: 'nothing-asked' };
+    const { resolve } = sshAsk;
+    sshAsk = null;
+    resolve(args[0]);
+    return { ok: true };
+  });
+  // Row 79: the answer to the key offer for this window's remote, only while main's own password login left one open. yes makes
+  // P9's key (if it has none) and adds it there; never: Don't ask again for that remote. Nothing is made or sent without yes.
+  ipcMain.handle('p9:ssh-key', async (event, ...args) => {
+    const [yes, never] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof yes !== 'boolean' || typeof never !== 'boolean') throw new Error('ipc-sender-refused');
+    if (!keyOffer || keyOffer.host !== serverHost) return { error: 'nothing-offered' };
+    const { host } = keyOffer;
+    keyOffer = null;
+    if (never) { noKey = [...new Set([...noKey, host])].slice(-50); await keepServer(); }
+    if (!yes) return { ok: true };
+    if (!await makeKey(sshKeyFile, sshCommand)) return { error: 'key-not-made' };
+    const r = await installKey({ host, ssh: sshCommand, file: sshKeyFile });
+    return r === 'ok' ? { ok: true } : { error: 'key-' + r };
+  });
+  // Settings > Remote's Offer a P9 key again: the remote's Don't ask again is gone.
+  ipcMain.handle('p9:ssh-key-setting', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || typeof args[0] !== 'string' || !HOST.test(args[0])) throw new Error('ipc-sender-refused');
+    noKey = noKey.filter(h => h !== args[0]);
+    await keepServer();
+    return { noKey };
+  });
+  // Row 61 on a remote: tmux or ssh missing on this window's remote. The check asks the remote for its own command (the
+  // admin window shows it); the password then runs that remote's command, computed there again. One check, one password.
+  let depsChecked = null;
+  ipcMain.handle('p9:remote-deps-check', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || !server) return { error: 'not-connected' };
+    const host = serverHost, r = await remoteDeps(host, sshCommand);
+    depsChecked = r.phase === 'admin' && serverHost === host ? host : null;
+    return depsChecked ? { command: r.command } : { error: r.phase === 'none' ? 'nothing-to-install' : 'remote-deps-failed' };
+  });
+  ipcMain.handle('p9:remote-deps', async (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !PASSWORD(args[0])) throw new Error('ipc-sender-refused');
+    if (!serverHost || !server || depsChecked !== serverHost) return { error: 'remote-deps-refused' };
+    depsChecked = null;
+    const { phase } = await remoteDeps(serverHost, sshCommand, args[0]);
+    return phase === 'ok' ? { ok: true } : { error: phase === 'wrong-password' ? phase : phase === 'not-allowed' ? 'remote-not-allowed' : 'admin-failed' };
+  });
+  // Row 61 (commit C): the wizard's Install for tmux or ssh on this computer, with the admin password typed there. The page
+  // names the package only; the command is deps.mjs's own for a package missing now. Not in remote mode: that list is the remote's.
+  ipcMain.handle('p9:admin-install', async (event, ...args) => {
+    if (!fromApp(event) || !adminArgs(args)) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'admin-remote' };
+    const command = await adminCommand(args[0]);
+    return command ? adminLocal(command, args[1]) : { error: 'nothing-to-install' };
+  });
+  // Start P9 there: this window's remote answered without a running P9 (row I1: never a terminal command). ok connects now.
+  ipcMain.handle('p9:remote-start', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (!serverHost || server || remoteInstall?.phase === 'running') return { error: 'remote-start-refused' };
+    const host = serverHost, result = await startServer(host, sshCommand);
+    if (result === 'ok' && serverHost === host) await useServer(host);
+    return { result };
+  });
+  // The machine menu's live state (threat model row 50, c23 adds): only a remote saved here or used last, one probe per host
+  // per 30 s, shared by calls in flight. ponytail: the cache is never pruned; at most 51 hosts can be in it.
+  const probes = new Map();
+  ipcMain.handle('p9:remote-state', async (event, ...args) => {
+    const [host] = args;
+    if (!fromApp(event) || args.length !== 1 || typeof host !== 'string' || !HOST.test(host) || !(remotes.includes(host) || host === serverLast)) throw new Error('ipc-sender-refused');
+    const hit = probes.get(host);
+    if (hit && Date.now() - hit.at < 30000) return hit.state;
+    const state = probeServer(host, sshCommand);
+    probes.set(host, { at: Date.now(), state });
+    return state;
+  });
+  // Row I1: the answer to Keep P9 running on this window's remote (yes: boolean), stored when remember is true, applied now.
+  ipcMain.handle('p9:remote-keep', async (event, ...args) => {
+    const [yes, remember] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof yes !== 'boolean' || typeof remember !== 'boolean') throw new Error('ipc-sender-refused');
+    if (!serverHost || !server) return { error: 'not-connected' };
+    await keeper.answer(serverHost, !!server.background, yes, remember);
+    return { ok: true, keep: keeper.keep };
+  });
+  // Settings > Remote: the stored choice for one remote (true, false, or null: ask). This window's remote gets it now.
+  ipcMain.handle('p9:remote-keep-setting', async (event, ...args) => {
+    const [host, choice] = args;
+    if (!fromApp(event) || args.length !== 2 || typeof host !== 'string' || !HOST.test(host) || ![true, false, null].includes(choice)) throw new Error('ipc-sender-refused');
+    await keeper.set(host, host === serverHost && server ? !!server.background : null, choice);
+    return { keep: keeper.keep };
+  });
+  // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
+  ipcMain.handle('p9:remotes', async (event, ...args) => {
+    const [action, host] = args;
+    if (!fromApp(event) || args.length !== 2 || !['add', 'remove'].includes(action) || typeof host !== 'string' || !HOST.test(host)) throw new Error('ipc-sender-refused');
+    remotes = action === 'add' ? [...new Set([...remotes, host])].slice(-50) : remotes.filter(h => h !== host); // ponytail: 50 kept, the oldest go
+    if (action === 'remove') noKey = noKey.filter(h => h !== host); // row 79: a removed remote's Don't ask again goes with it
+    await keepServer();
+    return { remotes };
+  });
+  // Send to server (D14, move.mjs): this computer's chat moves to the server used last. From Local only: in Server mode the
+  // chats are on the server already. One move per chat at a time; each has its Cancel.
+  // Its progress goes to the window on p9:move (specs/move-progress-events.md, threat row 3): phase, percent, bytes and the
+  // host main chose, never a path or a credential. Only for drawing; the ledger events stay the record.
+  // With a Send files plan (item 23): id, plan id, choice, deleteToo, as the page answered the prompt for the chat's folder. The
+  // folder goes over first, a Syncthing folder's not at all (Builder, 2026-10-27: "Keep today's wait"). Limits refuse before the freeze.
+  const sending = new Map();
+  let xferPlan = null, xferBusy = false; // Send files' plan and its one-at-a-time, below; a move with files takes them too
+  ipcMain.handle('p9:send-to-server', async (event, ...args) => {
+    const [id, planId, choice, deleteToo] = args;
+    const ok = uuid(id) && (args.length === 1 || args.length === 4 && uuid(planId) && (choice === null || ['laptop', 'server', 'newer'].includes(choice)) && typeof deleteToo === 'boolean');
+    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
+    if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the remote already.' } };
+    if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No remote yet: add one in Settings > Remote Connect first.' } };
+    if (!localState || sending.has(id)) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
+    let files = null;
+    if (planId) {
+      if (xferBusy) return { status: 409, body: { error: 'busy', message: 'A send is running already.' } };
+      if (xferPlan?.id !== planId || xferPlan.host !== serverLast) return { status: 409, body: { error: 'stale', message: 'That check of the files is gone: press Send to remote again.' } };
+      const { plan: p } = xferPlan, work = resolveXfer(p, choice, deleteToo);
+      if (!work) return { status: 409, body: { error: 'choice', message: 'Pick how to settle the files that differ.' } };
+      const limit = overLimit(work, settings.xfer, p.truncated);
+      if (limit) return { status: 409, body: limit };
+      xferPlan = null;
+      if (!p.syncthing.laptop.length && !p.syncthing.server.length) files = { userData: app.getPath('userData'), plan: p, work };
+    }
+    const stop = new AbortController();
+    sending.set(id, stop);
+    if (files) xferBusy = true;
+    const onProgress = move => { if (!window.isDestroyed()) window.webContents.send('p9:move', move); };
+    try { return await sendToServer({ local: localState, id, host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal, files }); }
+    catch (error) { return { status: 503, body: { error: 'daemon-unavailable', message: noAnswer(error, serverLast) } }; }
+    finally { sending.delete(id); if (files) xferBusy = false; }
+  });
+  ipcMain.handle('p9:move-cancel', (event, ...args) => {
+    if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
+    sending.get(args[0])?.abort();
+    return { cancelling: sending.has(args[0]) };
+  });
+  // Item 14: the server update's progress (server-update.mjs), and its last event for a window that loads after it.
+  tellUpdate = event => { if (!window.isDestroyed()) window.webContents.send('p9:server-update', event); };
+  ipcMain.handle('p9:server-update', event => { if (!fromApp(event)) throw new Error('ipc-sender-refused'); return serverUpdate; });
+  // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
+  // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
+  // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
+  const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
+  ipcMain.handle('p9:xfer', async (event, ...args) => {
+    const [action, a, b, c] = args;
+    const ok = action === 'plan' ? args.length === 2 && typeof a === 'string' && a.length <= 4096 && XFER_FOLDER.test(a) && !a.split('/').some(p => p === '.' || p === '..')
+      : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
+    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Remote Connect to Local first: Send files copies this computer\'s files to the remote.' };
+    if (!serverLast) return { error: 'no-server', message: 'No remote yet: add one in Settings > Remote Connect first.' };
+    if (!localState) return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' };
+    if (xferBusy) return { error: 'busy', message: 'A send is running already.' };
+    xferBusy = true;
+    try {
+      if (action === 'plan') {
+        const got = await planFolder({ local: localState, host: serverLast, folder: a, userData: app.getPath('userData'), ssh: sshCommand });
+        if (got.error) return got;
+        const p = got.plan, record = !p.first.length; // first: nothing sent to this folder yet
+        xferPlan = { id: randomUUID(), host: serverLast, plan: p };
+        const asked = [...p.conflicts, ...p.first];
+        return { id: xferPlan.id, host: serverLast, folder: a, send: p.send.length, same: p.same.length, sendBytes: p.send.reduce((n, i) => n + i.laptop.size, 0),
+          kind: p.first.length ? 'first' : p.conflicts.length ? 'conflict' : null, summary: p.summary, asked: asked.length,
+          list: asked.slice(0, SHOWN).map(item => ({ path: item.path, text: describeXfer(item, record) })),
+          deletes: p.deletes.length, deleteList: p.deletes.slice(0, SHOWN).map(item => item.path), skipped: p.skipped, syncthing: p.syncthing };
+      }
+      if (xferPlan?.id !== a) return { error: 'stale', message: 'That plan is gone: press Send files again.' };
+      const { host, plan: p } = xferPlan, work = resolveXfer(p, b, c);
+      if (!work) return { error: 'choice', message: 'Pick how to settle the files that differ.' };
+      const limit = overLimit(work, settings.xfer, p.truncated);
+      if (limit) return limit;
+      xferPlan = null; // used once: sending again plans again (Builder, 2026-10-27: that is the resync)
+      const r = await runPlan({ local: localState, host, userData: app.getPath('userData'), plan: p, work, ssh: sshCommand,
+        onProgress: progress => { if (!window.isDestroyed()) window.webContents.send('p9:xfer', { id: a, ...progress }); } });
+      return { ...r, sent: r.sent?.length ?? 0, received: r.received?.length ?? 0, deletedOnServer: r.deletedOnServer?.length ?? 0, deletedHere: r.deletedHere?.length ?? 0,
+        kept: (r.recovery?.server.length ?? 0) + (r.recovery?.laptop.length ?? 0), recovery: undefined, changed: r.changed?.length ?? 0 };
+    } catch (error) { return { error: 'daemon-unavailable', message: noAnswer(error, serverLast) }; }
+    finally { xferBusy = false; }
+  });
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
     endDock();
@@ -580,7 +1013,8 @@ export async function createDesktop({ state, open } = {}) {
   // A failed start or a crashed page is rebuilt on the next open; the editor host, once up, is kept.
   // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
   // devServing: the folder the loaded page was given (its saves go there).
-  let dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
+  let cardsView = null, cardsItems = [], cardsHide = null;
+  let devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   const startHost = () => editorHost ??= (async () => {
     // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
@@ -588,8 +1022,33 @@ export async function createDesktop({ state, open } = {}) {
     // Quit before systemd has made the scope: the stop finds nothing, so the abort kills the server process too.
     const unit = 'p9-editor-host-' + randomBytes(4).toString('hex'), quit = new AbortController();
     app.once('will-quit', () => { stopEditorHost(unit); quit.abort(); });
+    // An install in progress (the AppImage's first start) finishes first, so Dev Focus opens instead of saying missing.
+    await editorInstall?.catch(() => {});
     return startEditorHost({ unit, signal: quit.signal });
   })().catch(error => { editorHost = null; throw error; });
+  // Server mode (threat model row 50): the server's daemon runs the editor (POST /dev/editor) and the tunnel forwards its socket to
+  // editor.sock in the state folder. A relay on 127.0.0.1 here carries the page's http and ws to it, so the page, its CSP and the
+  // token check are the same as with a local editor host, which listens on 127.0.0.1 too. One relay, for the current server.
+  let relay = null;
+  const serverEditor = async () => {
+    const asked = await daemonRequest(state, 'POST', '/dev/editor', {}, undefined, 60000).catch(error => error);
+    if (asked instanceof Error || asked.status === 404) throw new Error(asked.message === 'bad-response' || asked.status === 404 ? 'server-old' : 'daemon-unavailable');
+    const { body } = asked;
+    if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: serverHost });
+    const socket = path.join(state, 'editor.sock');
+    if (relay?.socket !== socket) {
+      relay?.server.close();
+      const listener = net.createServer(client => {
+        const far = net.connect(socket);
+        client.pipe(far).pipe(client);
+        far.on('error', () => client.destroy());
+        client.on('error', () => far.destroy());
+      });
+      await new Promise((resolve, reject) => listener.once('error', reject).listen(0, '127.0.0.1', resolve));
+      relay = { socket, server: listener, port: listener.address().port };
+    }
+    return { port: relay.port, token: body.token, commit: body.commit, data: body.data, server: serverHost };
+  };
   const openDev = () => dev ??= (async () => {
     const devSession = session.fromPartition('persist:p9-dev');
     if (!devSession.protocol.isProtocolHandled('p9')) devSession.protocol.handle('p9', serve('dev', 'webview'));
@@ -619,11 +1078,15 @@ export async function createDesktop({ state, open } = {}) {
       }
     });
     window.contentView.addChildView(devView);
+    if (cardsView) window.contentView.addChildView(cardsView); // the cards stay above the editor
     let config;
     try {
       if (!state) throw new Error('daemon-unavailable');
-      const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state)]);
-      const host = await startHost();
+      // Just after a switch to a server the tunnel is still coming up: wait for it as long as connectServer does (15 s).
+      for (let i = 0; i < 60 && serverHost && !server && !serverError; i++) await new Promise(resolve => setTimeout(resolve, 250));
+      const unanswered = () => { throw Object.assign(new Error('daemon-unavailable'), { server: serverHost ?? undefined }); };
+      const [devFiles, status] = await Promise.all([assets(fileURLToPath(new URL('../dev/dist/', import.meta.url))), health(state).catch(unanswered)]);
+      const host = serverHost ? await serverEditor() : await startHost();
       const origin = 'http://127.0.0.1:' + host.port;
       // Extension pages (webviews: a README, an image preview) get their own origin, p9://webview, so their scripts can't reach
       // window.p9dev (threat model row 5; Builder, 2026-10-19: "photos ... blocked"). VS Code injects an inline script into each
@@ -643,13 +1106,14 @@ export async function createDesktop({ state, open } = {}) {
       // workspace is the guard root (the folder saves are relative to); folder is the one the editor shows.
       if (devFolder?.outside && (await daemonRequest(state, 'POST', '/dev/root', { path: devFolder.path }).catch(() => null))?.status !== 200) devFolder = null;
       devServing = devFolder;
-      config = { port: host.port, token: host.token, commit: host.commit, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
+      config = { port: host.port, token: host.token, commit: host.commit, server: host.server, workspace: devFolder?.outside ? devFolder.path : status.workspace, folder: devFolder && (devFolder.outside ? devFolder.path : status.workspace + devFolder.tail), data: host.data };
     } catch (error) {
-      sites.dev = { files: new Map([['/index.html', Buffer.from('<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px">Dev Focus is unavailable: the editor host or daemon did not start.</body>')]]),
-        csp: "default-src 'none'; style-src 'unsafe-inline'" };
+      if (serverHost && error.server === undefined) error.server = serverHost;
+      sites.dev = devErrorPage(error, editorCopy ?? editorDownload());
       config = { error: error.message };
     }
     await devView.webContents.loadURL(DEV_URL);
+    devFailed = !!config.error;
     if (config.error) dev = null;
     return config;
   })().catch(error => { dev = null; throw error; });
@@ -665,26 +1129,68 @@ export async function createDesktop({ state, open } = {}) {
   };
   // A workspace change shows the new workspace, whatever folder was open.
   const devToWorkspace = () => { devFolder = null; reopenDev(); };
-  // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
-  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it.
-  ipcMain.handle('p9dev:open-folder', async (event, ...args) => {
+  // D5 (threat model row 52): Install on Dev Focus's error page. No arguments: main installs only the pinned download, one
+  // install at a time, never over an editor server that is running; then Dev Focus opens again.
+  const INSTALL_ERRORS = {
+    'editor-download-unavailable': 'P9 has no download of the editor server for this computer.',
+    'editor-download-failed': 'The download did not finish. Check the internet connection, then press Install again.',
+    'editor-download-too-big': 'The download was far larger than the editor server is, so it was stopped. Nothing was installed.',
+    'editor-download-mismatch': 'The download did not match the SHA-256 P9 pins, so nothing was installed. Press Install to try again.',
+    'editor-unpack-failed': 'The download could not be unpacked (tar failed). Nothing was installed.',
+    'editor-host-commit-mismatch': 'The download held a different release than P9 runs. Nothing was installed.',
+  };
+  ipcMain.handle('p9dev:install-editor', async (event, ...args) => {
     if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!state) return { error: 'daemon-unavailable' };
-    const workspace = await realpath((await health(state)).workspace);
-    const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
-    if (pick.canceled || !pick.filePaths[0]) return { ok: false };
-    const real = await realpath(pick.filePaths[0]).catch(() => null);
-    if (!real) return { error: 'root-not-found' };
-    const key = p => process.platform === 'win32' ? p.toLowerCase() : p; // Windows paths compare without case.
-    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + path.sep);
+    if (serverHost) {
+      // On the server, by its daemon (POST /dev/editor/install): the same pinned download, checked there.
+      const done = await daemonRequest(state, 'POST', '/dev/editor/install', {}, undefined, 660000).catch(() => null);
+      if (!done) return { error: 'The remote did not answer. Check the connection in Settings > Remote Connect, then press Install again.' };
+      if (done.status === 409) return { error: 'The editor server is already running on the remote.' };
+      if (done.status !== 200) return { error: INSTALL_ERRORS[done.body?.error] ?? 'The install on the remote failed (' + String(done.body?.error).slice(0, 200) + ').' };
+      setTimeout(reopenDev);
+      return { ok: true };
+    }
+    if (await editorHost?.catch(() => null)) return { error: 'The editor server is already running.' };
+    try { await installEditor(); }
+    catch (error) { return { error: INSTALL_ERRORS[error.message] ?? 'The install failed (' + String(error.message).slice(0, 200) + ').' }; }
+    setTimeout(reopenDev);
+    return { ok: true };
+  });
+  // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
+  // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it. Server mode (rows 41/50
+  // adds): the picker would list this computer's folders, so the page asks for the server path (one string, only then) and
+  // dev-folder.mjs checks it with the server's rules; the rest is the same, through the tunnel. A refusal names its own reason.
+  ipcMain.handle('p9dev:open-folder', async (event, ...args) => {
+    if (!fromDev(event) || args.length > 1 || (args.length && (!serverHost || typeof args[0] !== 'string'))) throw new Error('ipc-sender-refused');
+    const fail = error => ({ error, server: Boolean(serverHost) });
+    const status = state && await health(state).catch(() => null);
+    if (!status?.workspace) return fail('daemon-unavailable');
+    let workspace, real, key = p => p, sep = '/';
+    if (serverHost) {
+      if (!args.length) return { pathNeeded: true, value: devFolder?.path ?? status.workspace };
+      const typed = serverPath(args[0]);
+      if (typed.error) return fail(typed.error);
+      // Where it really is, from the server (a link inside the workspace may point outside); the check sets nothing.
+      const found = await daemonRequest(state, 'POST', '/dev/root', { path: typed.real, check: true }).catch(failedReply);
+      if (found.status !== 200) return fail(found.body?.error === 'request-refused' ? 'daemon-outdated' : found.body?.error ?? 'daemon-unavailable');
+      ({ workspace, root: real } = found.body);
+    } else {
+      workspace = await realpath(status.workspace);
+      const pick = await dialog.showOpenDialog(window, { title: 'Open Folder', buttonLabel: 'Open', properties: ['openDirectory'], defaultPath: devFolder?.path ?? workspace });
+      if (pick.canceled || !pick.filePaths[0]) return { ok: false };
+      real = await realpath(pick.filePaths[0]).catch(() => null);
+      if (!real) return fail('root-not-found');
+      key = p => process.platform === 'win32' ? p.toLowerCase() : p; sep = path.sep; // Windows paths compare without case.
+    }
+    const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + sep);
     let set; // the daemon's answer: the root as it stores it, which saves must name exactly
     if (outside) {
-      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + ' in Dev Focus?',
+      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + (serverHost ? ' on ' + serverHost : '') + ' in Dev Focus?',
         detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
         buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
       if (response !== 1) return { ok: false };
-      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(() => null);
-      if (set?.status !== 200) return { error: set?.body?.error ?? 'daemon-unavailable' };
+      set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(failedReply);
+      if (set.status !== 200) return fail(set.body?.error ?? 'daemon-unavailable');
     } else if (devFolder?.outside) await daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null);
     // Inside: kept as the part after the workspace, so the page gets the daemon's own spelling of it (Windows case, a linked workspace).
     devFolder = key(real) === key(workspace) ? null : { path: outside ? set.body.root : real, outside, tail: real.slice(workspace.length) };
@@ -698,13 +1204,70 @@ export async function createDesktop({ state, open } = {}) {
         || args.length !== 1 || !b || typeof b.visible !== 'boolean' || (b.visible && !['x', 'y', 'width', 'height'].every(key => whole(b[key])))) throw new Error('ipc-sender-refused');
     if (!b.visible) { devView?.setVisible(false); return { ok: true }; }
     const shown = devView?.getVisible();
-    openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
+    // D11 (Builder, 2026-10-28: the editor side "flash white really fast" while sliding, only when not connected): a failed start
+    // left dev unset, so each placement (every frame of a drag) built a new view. Shown and failed, a placement only moves it; coming
+    // back to Dev Focus tries again, as the page says.
+    if (!(shown && devFailed)) openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });
     devView.setVisible(true);
     if (!shown) devView.webContents.focus();
     return { ok: true };
+  });
+  // The Dev Focus cards overlay (threat model row 3, p9:cards): the shell hands over a bounded list of card texts and where to
+  // put them; the overlay view above the editor draws them and says which one was clicked. Created when first needed, closed a
+  // minute after it was last hidden, so it costs nothing in the other focuses.
+  const fromCards = event => cardsView && event.sender === cardsView.webContents && event.senderFrame === cardsView.webContents.mainFrame && event.senderFrame.url.startsWith(CARDS_URL);
+  const text = (value, max) => typeof value === 'string' && value.length <= max;
+  const openCards = () => {
+    if (cardsView) return cardsView;
+    const cardsSession = session.fromPartition('p9-cards'); // not persist: nothing kept
+    if (!cardsSession.protocol.isProtocolHandled('p9')) { sites.cards = cardsSite(); cardsSession.protocol.handle('p9', serve('cards')); }
+    cardsSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (_details, callback) => callback({ cancel: true }));
+    cardsSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    cardsSession.setPermissionCheckHandler(() => false);
+    cardsView = new WebContentsView({ webPreferences: { preload: fileURLToPath(new URL('./cards-preload.cjs', import.meta.url)), session: cardsSession, sandbox: true,
+      contextIsolation: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false } });
+    cardsView.setBackgroundColor('#00000000');
+    cardsView.webContents.on('dom-ready', () => cardsView?.webContents.setZoomFactor(settings.zoom));
+    cardsView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    cardsView.webContents.on('will-navigate', event => event.preventDefault());
+    cardsView.webContents.on('will-attach-webview', event => event.preventDefault());
+    cardsView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    window.contentView.addChildView(cardsView);
+    cardsView.webContents.loadURL(CARDS_URL).catch(() => {});
+    return cardsView;
+  };
+  ipcMain.handle('p9:cards', (event, ...args) => {
+    const [c] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
+        || args.length !== 1 || !c || typeof c.visible !== 'boolean'
+        || (c.visible && (!['x', 'y', 'width'].every(key => whole(c[key])) || !Array.isArray(c.items) || c.items.length > 8
+          || !c.items.every(i => i && text(i.key, 300) && text(i.title, 200) && text(i.sub, 300) && (i.n === undefined || whole(i.n)))))) throw new Error('ipc-sender-refused');
+    if (!c.visible || !c.items.length) {
+      cardsView?.setVisible(false);
+      if (cardsView && !cardsHide) cardsHide = setTimeout(() => { cardsHide = null; if (cardsView && !cardsView.getVisible()) { window.contentView.removeChildView(cardsView); cardsView.webContents.close(); cardsView = null; } }, 60000);
+      return { ok: true };
+    }
+    clearTimeout(cardsHide); cardsHide = null;
+    const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z), view = openCards();
+    cardsItems = c.items.map(i => ({ key: i.key, title: i.title, sub: i.sub, ...(i.n === undefined ? {} : { n: i.n }) }));
+    view.webContents.send('p9cards:list', cardsItems);
+    const bounds = view.getBounds();
+    view.setBounds({ x: px(c.x), y: px(c.y), width: px(c.width), height: bounds.height }); // the page says how tall it is
+    view.setVisible(true);
+    return { ok: true };
+  });
+  ipcMain.handle('p9cards:ready', event => { if (!fromCards(event)) throw new Error('ipc-sender-refused'); return { items: cardsItems, look }; });
+  ipcMain.on('p9cards:size', (event, height) => {
+    if (!fromCards(event) || !Number.isSafeInteger(height) || height < 0 || height > 4000) return;
+    const b = cardsView.getBounds(); cardsView.setBounds({ ...b, height: Math.round(height * window.webContents.getZoomFactor()) });
+  });
+  ipcMain.on('p9cards:act', (event, input) => {
+    if (!fromCards(event) || !input || !text(input.key, 300) || !['open', 'x'].includes(input.action)) return;
+    window.webContents.focus();
+    window.webContents.send('p9:card-act', { key: input.key, action: input.action });
   });
   // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
   ipcMain.handle('p9:settings', async (event, ...args) => {
@@ -806,6 +1369,8 @@ export async function createDesktop({ state, open } = {}) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length > 1 || (args.length && !Object.hasOwn(PICKS, args[0]))) throw new Error('ipc-sender-refused');
     if (!state) return null;
+    // ponytail: no picker in Server mode (this machine's dialog cannot browse the server); acts as Cancel. A server folder list is the sprint's.
+    if (serverHost) return undefined;
     const root = await realpath((await health(state)).workspace);
     const [title, buttonLabel, kind] = args.length ? PICKS[args[0]] : ['Start the chat in', 'Start here', 'openDirectory'];
     const pick = await dialog.showOpenDialog(window, { title, buttonLabel, properties: [kind], defaultPath: root });
@@ -814,6 +1379,22 @@ export async function createDesktop({ state, open } = {}) {
     if (real === root) return '';
     return real?.startsWith(root + path.sep) ? real.slice(root.length + 1).split(path.sep).join('/') : null;
   });
+  // The Obsidian vault folder (threat model row 73): no argument, so the page never sends a path. The native folder dialog, then a
+  // native confirm naming what it allows; only then main sends the folder to the daemon over its local socket. Server mode: this
+  // machine's dialog cannot browse the remote.
+  ipcMain.handle('p9:pick-vault', async (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (serverHost) return { status: 409, body: { error: 'server-mode-local-only' } };
+    if (!state) return { status: 503, body: { error: 'daemon-unavailable' } };
+    const pick = await dialog.showOpenDialog(window, { title: 'Choose your Obsidian vault folder', buttonLabel: 'Use this folder', properties: ['openDirectory'] });
+    if (pick.canceled || !pick.filePaths[0]) return { status: 200, body: { canceled: true } };
+    const folder = pick.filePaths[0];
+    const { response } = await dialog.showMessageBox(window, { type: 'question', title: 'Use this vault?', message: 'Use ' + folder + ' as your Obsidian vault?',
+      detail: 'Mission lists the notes in it, a checklist can change review and mark lines in them, and obsidian: links can open Obsidian on this computer. P9 writes nothing else there.',
+      buttons: ['Cancel', 'Use this folder'], defaultId: 0, cancelId: 0, noLink: true });
+    if (response !== 1) return { status: 200, body: { canceled: true } };
+    try { return await daemonRequest(state, 'POST', '/mission/vault', { folder }); } catch { return { status: 503, body: { error: 'daemon-unavailable' } }; }
+  });
   // Setup's Change the folder (threat model row 32): no argument; the native picker, then a native confirm naming the folder. Main writes
   // no unit: it re-runs the installed copy's own uninstall-service.mjs and install-service.mjs with only the folder, with the unit's own
   // node and PATH so the new unit differs only in --workspace, and installs the old folder again when the new one does not come up.
@@ -821,10 +1402,13 @@ export async function createDesktop({ state, open } = {}) {
   // script stops the old daemon itself. P9's private folder there is %LOCALAPPDATA%\P9, the state folder's parent.
   ipcMain.handle('p9:workspace-change', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    if (serverHost) return { error: 'server-mode-local-only' }; // this machine's service; the remote's folder is set where it is installed
     const old = state && (await health(state).catch(() => null))?.workspace;
     if (!old) return { error: 'daemon-unavailable' };
     const win = process.platform === 'win32';
     if (!win && process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
+    // The steps below rewrite the p9-foundation unit; a window on the dev daemon (p9-dev) must not touch the daily one.
+    if (!win && unitFor(state) !== 'p9-foundation.service') return { error: 'workspace-change-unsupported', workspace: old };
     const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
       properties: ['openDirectory', 'createDirectory'], defaultPath: old });
     if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
@@ -874,7 +1458,7 @@ export async function createDesktop({ state, open } = {}) {
     let detail = '';
     const run = (script, ...more) => new Promise(resolve => execFile(node, [path.join(scripts, script), ...more], { env, timeout: 60_000 },
       (error, _stdout, stderr) => { if (error) detail = String(stderr).trim().split('\n').filter(l => /^\w*Error/.test(l)).pop()?.slice(0, 300) ?? 'exit ' + error.code; resolve(!error); }));
-    if (!await run('uninstall-service.mjs')) await run('uninstall-service.mjs', '--force');
+    if (!await run('uninstall-service.mjs', '--keep-menu')) await run('uninstall-service.mjs', '--force', '--keep-menu');
     if (await run('install-service.mjs', folder)) { devToWorkspace(); return { workspace: folder }; }
     // install-service.mjs removed its own unit when the daemon did not answer; the old folder again.
     const why = detail;
@@ -888,18 +1472,24 @@ export async function createDesktop({ state, open } = {}) {
   const service = repair => async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
     if (!state) return { error: 'daemon-unavailable' };
+    if (serverHost && repair) return { error: 'server-mode-local-only' };
     const win = process.platform === 'win32';
-    if (!win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
+    if (!serverHost && !win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
     if (repair && win && !await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing' };
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: repair ? 'Repair P9?' : 'Restart P9?',
-      message: repair ? 'Repair P9\'s background service?' : 'Restart P9\'s background service?',
-      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + 'Running chats, scripts and terminals stop.',
+      message: repair ? 'Repair P9\'s background service?' : serverHost ? 'Restart P9 on ' + serverHost + '?' : 'Restart P9\'s background service?',
+      detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + (serverHost ? 'Running chats, scripts and terminals on the remote stop, the ones open on your phone too.' : 'Running chats, scripts and terminals stop.'),
       buttons: ['Cancel', repair ? 'Repair' : 'Restart'], defaultId: 0, cancelId: 0, noLink: true });
     if (response !== 1) return { cancelled: true };
     // A daemon that does not answer at all is restarted anyway (finding 6: otherwise a hung service had no way back); one that
     // answers but cannot stop something is left running, as before.
     const stopped = await daemonRequest(state, 'POST', '/stop-all', {}).catch(() => 'no-answer');
     if (stopped !== 'no-answer' && stopped?.status !== 200) return { error: 'stop-all-failed' };
+    if (serverHost) {
+      const remote = server, before = await remote?.check().then(h => h.boot, () => null);
+      if (!remote || !await restartServer(serverHost, sshCommand)) return { error: 'restart-failed' };
+      return answered(state, before, undefined, () => remote.check());
+    }
     if (!win) return repair ? repairLinuxService(state) : restartLinuxService(state);
     changing = true;
     try {
@@ -941,6 +1531,11 @@ export async function createDesktop({ state, open } = {}) {
     else await shell.openExternal(url);
     return { opened: true };
   });
+  // D13: the window asks once at load; the answer is given once, so a reload does not show it again.
+  ipcMain.handle('p9:whats-new', (event, ...args) => {
+    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
+    const answer = whatsNew; whatsNew = null; return answer;
+  });
   ipcMain.handle('p9:open-updates', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length) throw new Error('ipc-sender-refused');
@@ -957,6 +1552,17 @@ export async function createDesktop({ state, open } = {}) {
     const action = updateAction(args);
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');
     return (await updater)[action]();
+  });
+  // A link in an agent reply (threat model row 18): one plain http(s) address, checked again here, opens in the browser.
+  ipcMain.handle('p9:open-link', async (event, ...args) => {
+    const [href] = args;
+    if (!fromApp(event) || args.length !== 1 || typeof href !== 'string' || href.length > 2048 || /[\s\p{Cc}\p{Cf}]/u.test(href)) throw new Error('ipc-sender-refused');
+    let url;
+    try { url = new URL(href); } catch { throw new Error('ipc-sender-refused'); }
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('ipc-sender-refused');
+    if (process.env.P9_OPEN_URL) spawn(process.env.P9_OPEN_URL, [url.href], { shell: false, stdio: 'ignore' }).on('error', () => {});
+    else await shell.openExternal(url.href);
+    return { opened: true };
   });
   ipcMain.handle('p9:open-petdex', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -992,6 +1598,7 @@ export async function createDesktop({ state, open } = {}) {
         || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))) throw new Error('ipc-sender-refused');
     look = { dark: input.dark, colors: Object.fromEntries(LOOK_TOKENS.map(token => [token, input.colors[token]])) };
     devView?.webContents.send('p9dev:look', look);
+    cardsView?.webContents.send('p9cards:look', look);
     return { ok: true };
   });
   ipcMain.handle('p9dev:config', async (event, ...args) => {
@@ -1026,6 +1633,11 @@ export async function createDesktop({ state, open } = {}) {
   });
   ipcMain.handle('p9dev:host-path', async (event, ...args) => {
     if (!fromDev(event) || args.length !== 2 || typeof args[0] !== 'string' || !['write', 'name'].includes(args[1])) throw new Error('ipc-sender-refused');
+    if (serverHost) {
+      // The editor's data folder is on the server: its daemon checks the path there.
+      const answer = await daemonRequest(state, 'POST', '/dev/editor/writable', { path: args[0], kind: args[1] }).catch(() => null);
+      return answer?.status === 200 && answer.body?.ok === true;
+    }
     const host = await editorHost?.catch(() => null);
     return Boolean(host) && hostWritable(host.data, args[0], args[1]);
   });
@@ -1034,6 +1646,7 @@ export async function createDesktop({ state, open } = {}) {
     if (!fromDev(event) || args.length !== 1 || !input) throw new Error('ipc-sender-refused');
     const config = await openDev();
     if (config.error) return { ok: false, error: config.error };
+    if (config.server) return { ok: false, error: 'server-mode' };
     return openInCode({ workspace: config.workspace, name: input.name, line: input.line, reason: input.reason });
   });
   // p9 edit / p9 diff (threat model row 14). Anything running as Builder can start a second instance, so this is the boundary:

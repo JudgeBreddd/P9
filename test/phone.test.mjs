@@ -88,25 +88,27 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   t.after(() => browser.close());
   const { page, context, session } = await signedInPage(browser, server);
 
-  await page.waitForSelector('h1:text("Chat")');
+  await page.waitForSelector('h1:text("Chats")');
   const usage = await server.remote('/usage', { session: (await enrollDevice(server, await passkeyDevice(browser, server, 'usage-reader'))) });
   assert.equal(usage.status, 200);
   assert.deepEqual(usage.body.totals, { inputTokens: 27600, outputTokens: 3820, cachedTokens: 19200, costUsd: 0.2768 });
   assert.equal(usage.body.discarded, 1);
   assert.equal(JSON.stringify(usage.body).includes('command'), false);
-  // Threat model row 15 case 3: a phone reads the agent lock but has no route that changes it.
+  // Threat model row 66 (c18, Builder, 2026-10-27, amending rows 15 and 4): a phone reads and changes the agent lock and file
+  // protection through the desktop's routes, behind its session and CSRF (test/phone-c18.test.mjs has the refusals).
   const reader = await enrollDevice(server, await passkeyDevice(browser, server, 'lock-probe'));
   assert.deepEqual((await server.remote('/agent-lock', { session: reader })).body, { on: false });
-  assert.equal((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: true }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
-  // Threat model row 4: the phone can neither read nor change file protection.
-  assert.equal((await server.remote('/file-protection', { session: reader })).status, 404);
-  assert.equal((await server.remote('/file-protection', { method: 'POST', session: reader, body: { on: false }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
+  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: true }, headers: { 'x-p9-op': crypto.randomUUID() } })).body, { on: true });
+  assert.deepEqual((await server.remote('/agent-lock', { method: 'POST', session: reader, body: { on: false }, headers: { 'x-p9-op': crypto.randomUUID() } })).body, { on: false });
+  assert.deepEqual((await server.remote('/file-protection', { session: reader })).body, { on: true });
+  assert.equal((await server.remote('/file-protection', { method: 'POST', session: reader, body: { on: true, x: 1 }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 400);
   // Threat model row 4: creating files from the editor is desktop-only.
   assert.equal((await server.remote('/files', { method: 'POST', session: reader, body: { path: 'phone-made.txt', content: 'x' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
   // Conversations are labelled title · start time · state; New chat creates one and selects it.
   assert.match(await page.locator('#conversation option').first().innerText(), /^(claude|codex) · .+ · idle$/);
-  await page.click('[data-new="codex"]');
+  await page.click('#newChat'); await page.click('#sheet [data-new="codex"]');
   await page.waitForFunction(() => document.querySelectorAll('#conversation option').length === 3);
+  await page.waitForSelector('#composer', { state: 'visible' }); // the new chat opened (P1: the Chats list, then the chat screen)
   const picked = await page.locator('#conversation').evaluate((select) => select.selectedOptions[0].textContent);
   assert.match(picked, /^Codex · .+ · idle$/);
   await page.screenshot({ path: path.join(evidence, 'phone-chat.png') });
@@ -115,11 +117,11 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   // "No new recorded events." once the phone had a saved cursor).
   await page.fill('#prompt', 'late'); await page.click('#composer button');
   await page.waitForSelector('#events article:has-text("late reply")', { timeout: 10000 });
-  const labels = () => page.locator('#events article b').evaluateAll((items) => items.map((item) => item.textContent));
-  assert.deepEqual(await labels(), ['You', 'Agent']);
+  const labels = () => page.locator('#events > article').evaluateAll((items) => items.map((item) => item.dataset.kind));
+  assert.deepEqual(await labels(), ['user', 'agent']);
   await page.reload();
   await page.waitForSelector('#events article:has-text("late reply")');
-  assert.deepEqual(await labels(), ['You', 'Agent']);
+  assert.deepEqual(await labels(), ['user', 'agent']);
   await page.screenshot({ path: path.join(evidence, 'phone-chat-reply.png') });
   // Phase 17 row 2: the agent asks for approval; the phone shows the agent's options as buttons and the answer reaches it.
   await page.fill('#prompt', 'permission'); await page.click('#composer button');
@@ -129,13 +131,13 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.click('#events button[data-option="allow"]');
   await page.waitForSelector('#events article:has-text("permission:allow")', { timeout: 10000 });
   assert.equal(await page.locator('#events button[data-option]').count(), 0);
-  assert.deepEqual((await labels()).slice(-4), ['You', 'Approval needed', 'You answered', 'Agent']);
+  assert.deepEqual((await labels()).slice(-4), ['user', 'approval', 'answered', 'agent']);
   // Replies show as Markdown on the phone too, and markup in them stays text (threat model row 18).
   await page.fill('#prompt', 'x\n\n# Plan\n\n- **one**\n\n<img src=x onerror="window.pwned = 1"> <script>window.pwned = 2</script> [x](javascript:window.pwned=3)'); await page.click('#composer button');
-  const md = page.locator('#events article:last-child .md');
+  const md = page.locator('#events article:last-child.md');
   await md.locator('h1').waitFor({ timeout: 10000 });
   assert.deepEqual(await md.evaluate((m) => [!!m.querySelector('ul li strong'), m.querySelectorAll('script, img, iframe, a').length, m.textContent.includes('onerror'), window.pwned]), [true, 0, true, undefined]);
-  await md.locator('xpath=..').screenshot({ path: path.join(evidence, 'phone-markdown.png') });
+  await md.screenshot({ path: path.join(evidence, 'phone-markdown.png') });
   // Mode and Model from the phone (Builder, 2026-10-18): a picked mode reaches the agent, "as set" sends none (so it
   // stays), and the Model list is the agent's own.
   // Waits for this send's own reply (You + Agent added): the same text as the last reply would match at once and the
@@ -146,12 +148,16 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     await page.waitForFunction(([n, w]) => { const a = document.querySelectorAll('#events article'); return a.length >= n + 2 && a[a.length - 1].textContent.includes(w); }, [before, want], { timeout: 10000 })
       .catch(async (e) => { throw new Error(`no ${want}; last: ${(await page.locator('#events article').allInnerTexts()).slice(-3).join(' | ')}`, { cause: e }); });
   };
-  assert.deepEqual(await page.locator('#mode option').allInnerTexts(), ['Mode: as set', 'Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review']);
+  // The first row names the mode the daemon set as the chat started; Full access is listed, behind its warning (P6).
+  assert.deepEqual(await page.locator('#mode option').allInnerTexts(), ['Mode: Auto review', 'Mode: Read-only', 'Mode: Workspace access', 'Mode: Auto review', 'Mode: Full access']);
   assert.equal(await page.inputValue('#mode'), '', 'the phone picked a mode by itself');
-  await page.selectOption('#mode', 'Read-only'); await reply('mode', 'mode:read-only');
-  await page.selectOption('#mode', ''); await reply('mode', 'mode:read-only');
+  // The mode is picked from the composer's pill, which opens the Mode sheet (P4).
+  const pickMode = async (value) => { await page.click('#modePill'); await page.click(`#sheet[open] [data-mode="${value}"]`); };
+  await pickMode('Read-only'); await reply('mode', 'mode:read-only');
+  await pickMode(''); await reply('mode', 'mode:read-only');
   assert.deepEqual(await page.locator('#model option').evaluateAll((o) => o.map((x) => x.value)), ['default', 'opus', 'haiku']);
-  await page.selectOption('#model', 'opus'); await reply('model', 'model:opus');
+  await page.click('#modelBtn'); await page.click('#sheet[open] [data-model="opus"]'); // the top bar's Model sheet (c1's shell)
+  await page.waitForFunction(() => !document.querySelector('#sheet').open, null, { timeout: 5000 }); await reply('model', 'model:opus');
   await page.screenshot({ path: path.join(evidence, 'phone-mode-model.png') });
 
   // Phase 16 free-form space: with the daemon already running, one file edit adds a section with a button and a
@@ -246,6 +252,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.deepEqual(ideaRefused, [409, 400]);
   assert.equal(await readFile(path.join(server.workspace, '_ideas', 'garage-shelf-plan.md'), 'utf8'), 'Two rows over the bench.\n');
 
+  await page.click('[data-back]'); await page.waitForSelector('#chatList', { state: 'visible' });
   await page.click('[data-nav="mission"]');
   await page.waitForSelector('#mission >> text=Main project');
   // Phase 16 short Mission: every section is a tile that opens a full-screen window and closes again.
@@ -255,7 +262,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     'Last solo run', 'Workspace', 'Logs', 'Health', 'Backups', 'Notes', 'Pages']);
   for (const [id, title] of phoneWins) {
     await page.click(`#mission [data-open="${id}"]`);
-    assert.equal(await page.locator(`#w-${id}[open] > header h2`).innerText(), title);
+    assert.equal(await page.locator(`#w-${id}[open] > header .title h1`).innerText(), title);
     await page.click(`#w-${id} [data-close]`);
     await page.waitForSelector(`#w-${id}[open]`, { state: 'detached' });
   }
@@ -265,8 +272,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   const closeWindow = () => page.click('#mission dialog[open] [data-close]');
   // Phone Mission: a script runs and streams its output; a waiting item is answered in place; pages are links.
   await openWindowWith('Health check');
-  await page.click('#mission summary:has-text("Health check")');
-  await page.click('#mission dialog[open] form[data-run] button');
+  await page.click('#mission summary:has-text("Health check") [data-run-now]');
   await page.waitForFunction(() => document.querySelector('#mission dialog[open] pre[data-output]')?.textContent.includes('ok'));
   // Copy (Builder, 2026-10-18: "Yes" to phone Copy): the tap puts exactly the shown output on the clipboard.
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server.origin });
@@ -321,14 +327,13 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await closeWindow();
   // Phone: the same space; the button runs by its ID (no shell, as registry scripts do) and the log opens in place.
   await openWindowWith('Backup now');
-  await page.click('#mission summary:has-text("Backup now")');
-  await page.click('#mission details:has(summary:has-text("Backup now")) form[data-run] button');
+  await page.click('#mission summary:has-text("Backup now") [data-run-now]');
   await page.waitForSelector('#mission details:has(summary:has-text("Backup now")) pre[data-output]:has-text("backup-ok")');
   await page.click('#mission summary:has-text("Backup log")');
   await page.waitForSelector('#mission pre:has-text("backup line 2")');
   await page.screenshot({ path: path.join(evidence, 'phone-mission-window.png') });
   await closeWindow();
-  assert.equal(await page.locator('#mission dialog:has(h2:text-is("Notes")) [data-space-text]').textContent(), 'An empty section.');
+  assert.equal(await page.locator('#mission dialog:has(h1:text-is("Notes")) [data-space-text]').textContent(), 'An empty section.');
   assert.equal(await page.locator('#mission .tile:has(span:text-is("Backups")) b').innerText(), '2'); // a button and a log; the text is not counted
   await page.screenshot({ path: path.join(evidence, 'phone-mission-hub.png'), fullPage: true });
   // Phone: the same New idea box, in the Workspace window; this one is a fix, so it lands in _ideas/needs-done/.
@@ -358,11 +363,17 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   });
   assert.deepEqual(refused, { text: 400, save: 403, spaceSave: 403, spaceText: 400, spaceUnknown: 404 });
   await page.click('[data-nav="usage"]');
-  await page.waitForSelector('#usage >> text=$0.2768');
+  await page.waitForSelector('#usage >> text=$0.28');
   assert.match(await page.locator('#usage').innerText(), /context[\s\S]*%[\s\S]*of [\d,]+ tokens/i);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
-  assert.match(phoneLimits, /Claude plan\s+5 h 42% \(resets [^)]+\) · week 17%[^\n]*just now/);
-  assert.match(phoneLimits, /Codex plan\s+5 h new window · week 33%[^\n]*3 h old/);
+  // P5: each window is a ring with its % inside and when it resets under it; the plan says how old its numbers are.
+  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+42%\s+5 h\s+resets \w{3} \d{1,2}:\d\d\s?[AP]M\s+17%\s+week\s+resets /);
+  assert.match(phoneLimits, /Codex plan\s+Last read 3 h ago\s+0%\s+5 h\s+new window\s+33%\s+week/);
+  const ring = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .uring'), b = r.getBoundingClientRect(), pct = r.querySelector('b').getBoundingClientRect(), under = r.parentElement.querySelector('small').getBoundingClientRect();
+    return { inside: pct.left >= b.left && pct.right <= b.right && pct.top >= b.top && pct.bottom <= b.bottom, below: under.top >= b.bottom - 1, round: getComputedStyle(r, '::before').borderRadius }; });
+  assert.deepEqual(ring, { inside: true, below: true, round: '50%' });
+  // P5: each context bar names its chat (the fixture's chats are titled by their agent).
+  assert.match(await page.locator('#usage .ctxs').innerText(), /^claude\b/);
   await page.screenshot({ path: path.join(evidence, 'phone-usage.png') });
 
   // The browser lists the workspace (folders first, locked names hidden) and taps through folders; no typed path.
@@ -377,15 +388,20 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.click('#fileList button[data-name="inner.md"]'); await page.waitForSelector('#fileState:text("Loaded")');
   assert.equal(await page.locator('.cm-content').textContent(), 'inside');
   await page.click('#closeFile'); await page.click('#up'); await page.waitForSelector('#dirPath:text("Workspace")');
+  // P10: the title is the folder shown; the closed file's name is not left beside it.
+  assert.equal(await page.locator('[data-bar="files"] h1').innerText(), 'Workspace');
   await page.click('#fileList button[data-name="note.txt"]');
   await page.waitForSelector('#fileState:text("Loaded")');
   // Phase 15: iOS zooms into any focused field under 16px.
-  const small = await page.evaluate(() => [...document.querySelectorAll('input, select, textarea, .cm-content')].map((el) => (el.id || el.name || el.className) + ' ' + getComputedStyle(el).fontSize).filter((entry) => parseFloat(entry.split(' ').pop()) < 16));
+  const small = await page.evaluate(() => [...document.querySelectorAll('input, select, textarea')].map((el) => (el.id || el.name || el.className) + ' ' + getComputedStyle(el).fontSize).filter((entry) => parseFloat(entry.split(' ').pop()) < 16));
   assert.deepEqual(small, []);
+  // P17: the editor's text is the size of the preview's (14 px mono beside 15 px text); on an iPhone the viewport stops
+  // the focus zoom instead (phone-c23.test.mjs).
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-content')).fontSize), '14px');
   const edit = async (text) => { await page.locator('.cm-content').click(); await page.keyboard.press('Control+A'); await page.keyboard.type(text); };
   await edit('saved from phone'); await page.click('#save'); await page.waitForSelector('#fileState:text("Saved")');
   assert.equal(await readFile(path.join(server.workspace, 'note.txt'), 'utf8'), 'saved from phone');
-  await edit('discard me'); await page.click('#discard');
+  await edit('discard me'); await page.click('#moreFile'); await page.click('#sheetBody [data-file="discard"]');
   assert.equal(await page.locator('.cm-content').textContent(), 'saved from phone');
   externalEdit(path.join(server.workspace, 'note.txt'));
   await edit('conflicting phone draft'); await page.click('#save'); await page.waitForSelector('#conflict:not([hidden])');
@@ -444,6 +460,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), csrfKept);
   await page.click('[data-nav="files"]'); await page.click('#fileList button[data-name="note.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
 
+  await edit('before 401'); // Save is disabled until the draft differs; typing makes no /files request
   let used401;
   await page.route('**/files', async (route) => {
     used401 = route.request().headers()['x-p9-op'];
@@ -470,7 +487,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.evaluate((value) => localStorage.setItem('p9-cursor', String(value)), cursor);
   await page.reload();
   await page.waitForSelector('#gap:not([hidden])');
-  await page.click('#refreshChat'); await page.waitForSelector('#gap', { state: 'hidden' });
+  await page.click('#gap'); await page.waitForSelector('#gap', { state: 'hidden' });
   console.log('PASS phase11 phone: guarded save/discard/conflict, offline refusal, cursor gap, stable retry ID, fresh ID after 401, recorded usage and four 390x844 screenshots');
 });
 
@@ -646,9 +663,13 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
-  assert.equal((await server.remote('/setup/settings', { session: auth })).status, 404);
-  // The wizard's writes, sign-in and Settings → Mission Control files are desktop-only too (threat model rows 17, 31).
-  for (const route of ['/setup/starter', '/setup/settings', '/setup/login', '/setup/login/code', '/setup/login/stop']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
+  // Settings → Mission Control files is the phone's too since c18 (row 66): the desktop's settings, without the desktop's
+  // phone address or the settings file's path.
+  const files = await server.remote('/setup/settings', { session: auth });
+  assert.deepEqual([files.status, files.body], [200, { settings: (await server.desk('/setup/settings')).body.settings, error: null }]);
+  assert.ok(files.body.settings && !files.text.includes('settings.json'), files.text);
+  // The wizard's writes and sign-in stay desktop-only (threat model rows 17, 31).
+  for (const route of ['/setup/starter', '/setup/login', '/setup/login/code', '/setup/login/stop', '/setup/agent-terminal']) assert.equal((await server.remote(route, { method: 'POST', session: auth, body: {} })).status, 404, route);
   await chmod(path.join(server.workspace, '_ideas'), 0o500);
   try {
     const idea = await server.remote('/mission/idea', { method: 'POST', session: auth, body: { name: 'blocked', text: 'x', needs_done: false } });

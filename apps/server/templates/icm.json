@@ -1,0 +1,70 @@
+{
+  "title": "ICM workspace",
+  "about": "For a workspace laid out by the Interpretable Context Methodology: what waits on you, each folder's CONTEXT.md and the handoffs.",
+  "space": {
+    "sections": [
+      {
+        "id": "waiting",
+        "title": "Waiting on you",
+        "widget": "waiting"
+      },
+      {
+        "id": "usage",
+        "title": "Usage",
+        "widget": "usage"
+      },
+      {
+        "id": "apps-and-pages",
+        "title": "Apps and pages",
+        "widget": "apps"
+      },
+      {
+        "id": "notifications",
+        "title": "Notifications",
+        "widget": "notifications"
+      },
+      {
+        "id": "projects",
+        "title": "Projects",
+        "icon": "📁",
+        "text": "Each folder's CONTEXT.md, newest first: the map of what that folder holds and does.",
+        "folders": [
+          {
+            "id": "context-files",
+            "title": "CONTEXT.md files",
+            "pattern": "CONTEXT.md",
+            "recursive": true
+          }
+        ]
+      },
+      {
+        "id": "handoffs",
+        "title": "Handoffs",
+        "icon": "🤝",
+        "text": "Handoff notes in your workspace, newest first: where the last session stopped.",
+        "folders": [
+          {
+            "id": "handoff-files",
+            "title": "Handoff notes",
+            "pattern": "*handoff*.md",
+            "recursive": true
+          }
+        ]
+      },
+      {
+        "id": "rules",
+        "title": "Workspace rules",
+        "icon": "📏",
+        "text": "The CLAUDE.md files an agent reads first in each folder.",
+        "folders": [
+          {
+            "id": "claude-files",
+            "title": "CLAUDE.md files",
+            "pattern": "CLAUDE.md",
+            "recursive": true
+          }
+        ]
+      }
+    ]
+  }
+}

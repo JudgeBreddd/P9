@@ -19,8 +19,11 @@ function claudeWindows(limits) {
   return fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
 }
 
-async function claude(claudeJson, statusLine, live) {
+async function claude(claudeJson, statusLine, live, polled) {
   const found = [];
+  // The daemon's own poll (claude-usage.mjs): utilization is already a percent there.
+  const asked = polled && claudeWindows(polled.windows);
+  if (asked && Number.isFinite(polled.at)) found.push({ ...asked, asOf: polled.at });
   // A P9 Claude chat's own reading (utilization is a fraction there); usage.py's sources are only as fresh as /usage or a status line.
   const scaled = (w) => w && typeof w === 'object' && typeof w.utilization === 'number' ? { ...w, utilization: Math.round(w.utilization * 1000) / 10 } : null;
   const windows = live && claudeWindows({ five_hour: scaled(live.windows.five_hour), seven_day: scaled(live.windows.seven_day) });
@@ -90,7 +93,16 @@ export const agentDirs = (home, env = process.env) => ({
   claudeDir: env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), claudeJson: path.join(env.CLAUDE_CONFIG_DIR || home, '.claude.json'),
   codexHome: env.CODEX_HOME || path.join(home, '.codex') });
 
-export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null }) {
-  const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive), codex(codexHome)]);
+// P5: Claude Code compacts a chat once it holds CLAUDE_CODE_AUTO_COMPACT_WINDOW tokens when that is set (in its own
+// environment or its settings.json "env"), so that is the chat's real window; the agent reports the model's full one.
+// Only the number leaves this function.
+export async function claudeWindow(claudeDir, env = process.env) {
+  const tokens = (value) => { const n = Number(value); return Number.isSafeInteger(n) && n > 0 ? n : null; };
+  if (tokens(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)) return tokens(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW);
+  try { return tokens(JSON.parse(await readFile(path.join(claudeDir, 'settings.json'), 'utf8'))?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW); } catch { return null; }
+}
+
+export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null, claudePolled = null }) {
+  const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive, claudePolled), codex(codexHome)]);
   return { claude: claudeLimits, codex: codexLimits };
 }

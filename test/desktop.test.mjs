@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, stat, writeFile, realpath, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron } from '@playwright/test';
+import { daemon, http, authenticated } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 test('Phase 4: real sandboxed Electron, bridge boundary and approved shell acceptance', { timeout: 90000 }, async () => {
@@ -24,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'updates', 'openPetdex', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteInstall', 'remoteStart', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -109,14 +110,15 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     console.log('PASS phase4 must-pass: Chat draft/caret/scroll, Dev tab/draft/caret and Mission scroll survive focus cycle without reload');
 
     await focus('dev'); await editor.evaluate(t => { t.focus(); t.setSelectionRange(20, 25); });
-    const asks = Number(await card('asks:').locator('.n').innerText());
+    const asks = Number(await card('asks:').locator('.n').textContent());
     await page.keyboard.press('Control+k'); await page.locator('#palette li', { hasText: 'Simulate an agent question' }).click();
-    assert.equal(Number(await card('asks:').locator('.n').innerText()), asks + 1); assert.equal(await card('run:s-codex-1').count(), 0); assert.match(await card('asks:').getAttribute('class'), /fx-halo/);
-    await card('asks:').locator('.open').click(); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
+    assert.equal(Number(await card('asks:').locator('.n').textContent()), asks + 1); assert.equal(await card('run:s-codex-1').count(), 0); assert.match(await card('asks:').getAttribute('class'), /fx-halo/);
+    await card('asks:').locator('.open').evaluate(b => b.click()); await page.locator('#mdlBody .mlist button', { hasText: 'Unit tests for codex-limits' }).click();
     await page.check('#mdlBody [data-question] input[value="vitest"]'); await page.click('#mdlBody [data-question] [type="submit"]');
     assert.equal(await page.locator('#mdl').evaluate(el => el.open), false);
     // The dialog's close event restores the caret as a separate task; a fixed 100 ms wait lost that race on a loaded CI runner.
-    await page.waitForFunction(() => document.activeElement?.id === 'devEd', null, { timeout: 5000 }).catch(() => {});
+    // Wait for the caret itself: with the page's cards hidden the card is clicked without a mouse, devEd keeps focus, and the dialog's own focus restore (caret 0,0) comes first.
+    await page.waitForFunction(() => { const t = document.getElementById('devEd'); return document.activeElement === t && t.selectionStart === 20 && t.selectionEnd === 25; }, null, { timeout: 5000 }).catch(() => {});
     assert.deepEqual(await caret(editor), [true, devValue, 20, 25]);
     await focus('mission'); await card('reviews:').locator('.open').click(); await page.keyboard.press('Escape');
     await openWin(panelID); assert.equal(await body.evaluate(p => p.scrollTop), missionTop); await closeWin();
@@ -236,8 +238,587 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.deepEqual(navigation.committed, []);
     assert.ok(navigation.started.every(url => url === 'https://example.com/'));
     assert.equal(navigation.before, 'p9://app/'); assert.equal(navigation.after, navigation.before);
-    // The popup was refused: the only pages are the shell and (since Phase 8) the Dev Focus view.
-    assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/')), ['p9://app/']);
+    // The popup was refused: the only pages are the shell, (since Phase 8) the Dev Focus view and the cards overlay.
+    assert.deepEqual(application.windows().map(page => page.url()).filter(url => !url.startsWith('p9://dev/') && !url.startsWith('p9://cards/')), ['p9://app/']);
     if (process.env.P9_SCREENSHOTS) await writeFile(path.join(process.env.P9_SCREENSHOTS, 'navigation-check.json'), JSON.stringify(navigation, null, 2));
   } finally { await application.close(); await rm(profile, { recursive: true, force: true }); }
+});
+
+const fake = path.join(root, 'test/fake-acp-agent.mjs');
+const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+  headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+  body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => JSON.parse(result.text));
+
+// Chunk 3 (v0.1.6): first launch and Mission Control. D13.5 maximised window, D9 empty Mission explains itself, D3 the
+// starter-files step, D1 "Connect to a remote" on the welcome screen, D6 an existing layout is attached,
+// D4 labels use the owner's own name, D10 robot heads are numbered.
+const openFirst = async (t, instance) => {
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-first-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const shot = async (name, locator = page) => { await page.waitForTimeout(500); const png = await locator.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+  return { app, page, shot };
+};
+
+// One test per item, so one broken item fails only its own test and a single A/B run can break them all at once.
+const signedIn = async ({ directory }) => { await mkdir(path.join(directory, '.claude'), { recursive: true }); await writeFile(path.join(directory, '.claude', '.credentials.json'), '{}'); };
+const emptyFirst = async (t) => openFirst(t, await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] })));
+const openWelcome = async (page) => {
+  await page.locator('#cards [data-key="welcome"] .open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  // The card opens at the first thing not done (sign in); Back reaches the welcome step.
+  for (let back = 0; back < 4 && (await page.locator('#welT').textContent()) !== 'Welcome to Event Horizon'; back++) await page.locator('#welFoot [data-act="back"]').click();
+  assert.equal(await page.locator('#welT').textContent(), 'Welcome to Event Horizon');
+};
+
+test('First launch D13.5: the main window is maximised when it is made', { timeout: 20000 }, async () => {
+  // The test display has no window manager, so isMaximized() is false there whatever the code asks: check the call itself, right after the window is made.
+  assert.match(await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8'), /new BrowserWindow\([\s\S]{0,900}?\n  window\.removeMenu\(\);[^\n]*\n(?:  \/\/[^\n]*\n)*  window\.maximize\(\);/);
+});
+
+test('First launch D9 (fresh-install finding 2): a fresh Mission opens at its onboarding card, writes its own settings and no ICM files', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  const { page, shot } = await openFirst(t, instance);
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-mission-intro]').count(), 0, 'not the old settings-missing state');
+  assert.doesNotMatch(await page.locator('#fMission').innerText(), /not set up yet|settings-missing/);
+  // None of the ICM widgets: Waiting on you, and the Usage, Apps and pages and Notifications panels.
+  assert.equal(await page.locator('#fMission .needs').isVisible(), false, 'no Waiting on you');
+  assert.deepEqual(await page.locator('#fMission [data-panel]').evaluateAll((all) => all.filter((p) => p.checkVisibility()).map((p) => p.dataset.panel)), [], 'no ICM panels');
+  // P9 wrote its own settings file ({}), owner-only, and nothing in the workspace.
+  assert.equal(await readFile(settingsFile, 'utf8'), '{}\n');
+  if (process.platform !== 'win32') assert.equal((await stat(settingsFile)).mode & 0o777, 0o600);
+  for (const name of ['AGENTS.md', 'mission', 'needs-you', '_ideas']) await assert.rejects(stat(path.join(instance.workspace, name)), name);
+  await shot('mission-empty');
+});
+
+// Fresh-install finding 3a (threat model row 72): P9's four built-in panels (Waiting on you, Usage, Apps and pages,
+// Notifications) draw on a space only where a section names them, and only the ICM template adds those sections.
+test('Templates D10 (fresh-install finding 3a): no ICM widget on a space unless the ICM template made it', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
+  const widgets = () => page.evaluate(() => {
+    const seen = (el) => Boolean(el?.checkVisibility());
+    return { waiting: seen(document.querySelector('#fMission .needs')), usage: seen(document.querySelector('#fMission [data-panel="musage"]')),
+      apps: seen(document.querySelector('#fMission [data-panel="mlaunch"]')), notifications: seen(document.querySelector('#fMission [data-win="mnotes"]')) };
+  });
+  for (const name of ['blank', 'obsidian', 'homelab', 'icm']) {
+    // Each template into its own scratch space (the user's click confirms past File protection), then that space is shown.
+    const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
+    assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));
+    assert.equal((await page.evaluate((name) => window.p9.mission('space', { name }), name)).status, 200, name + ': space');
+    await page.reload();
+    await page.click('#rMission');
+    await page.locator('#fMission .tiles').waitFor({ timeout: 15000 });
+    await page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
+    const on = name === 'icm';
+    assert.deepEqual(await widgets(), { waiting: on, usage: on, apps: on, notifications: on }, name);
+    // + New idea writes to the workspace's _ideas folder: an ICM widget too (finding 3b follow-up).
+    assert.equal(await page.locator('#fMission [data-idea]').count(), on ? 1 : 0, name + ': New idea');
+    // A widget section is its panel, not a tile.
+    assert.doesNotMatch(await page.locator('#fMission .tiles').innerText(), /Waiting on you|Usage|Apps and pages|Notifications/, name + ': widget tiles');
+    await shot('template-' + name + '-dark');
+    const theme = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await shot('template-' + name + '-light');
+    await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, theme);
+  }
+  // An existing install (settings name a registry) on a space with sections but no widget section keeps all four, and
+  // no file is written for it.
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  await writeFile(path.join(instance.workspace, 'registry.json'), JSON.stringify({ scripts: [], apps: [], pages: [] }));
+  await writeFile(settingsFile, JSON.stringify({ ...JSON.parse(await readFile(settingsFile, 'utf8')), registry: 'registry.json' }));
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'homelab' }))).status, 200, 'homelab: space');
+  const spaceFile = path.join(instance.directory, '.config', 'p9', 'spaces', 'homelab.json');
+  const bytes = await readFile(spaceFile, 'utf8');
+  await page.reload();
+  await page.click('#rMission');
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab', null, { timeout: 15000 });
+  assert.deepEqual(await widgets(), { waiting: true, usage: true, apps: true, notifications: true }, 'existing install');
+  assert.equal(await readFile(spaceFile, 'utf8'), bytes, 'the space file is unchanged');
+});
+
+// Fresh-install finding 3(b), threat model rows 73-75: the Obsidian template draws real lists once the vault is picked
+// through main's native dialog and confirm; New note asks for a title, shows the encoded link and opens it only on Open.
+test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault and New note opens an encoded obsidian link', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { app, page, shot } = await openFirst(t, instance);
+  const vault = await mkdtemp(path.join(os.tmpdir(), 'p9-vault-'));
+  for (const [file, text] of [['Welcome.md', '# Welcome'], ['Inbox/Idea.md', 'an idea'], ['Templates/Daily.md', '# {{date}}']]) {
+    await mkdir(path.dirname(path.join(vault, file)), { recursive: true }); await writeFile(path.join(vault, file), text);
+  }
+  await app.evaluate(({ dialog, shell }, dir) => {
+    globalThis.asked = []; globalThis.opened = [];
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] });
+    dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.message); return { response: 1 }; };
+    shell.openExternal = async (url) => { globalThis.opened.push(url); };
+  }, vault);
+  // The page cannot name the vault route: only main's picker reaches it.
+  assert.equal(await page.evaluate(() => window.p9.mission('vault', { folder: '/' }).then(() => 'sent', () => 'refused')), 'refused');
+  const made = await page.evaluate(() => window.p9.mission('template', { name: 'obsidian', space: 'obsidian', confirm: true }));
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'obsidian' }))).status, 200);
+  await page.reload();
+  await page.click('#rMission');
+  const tile = page.locator('#fMission [data-group="Vault"]');
+  await tile.waitFor({ timeout: 15000 });
+  // Before a vault is picked: the folder says so, with the button; an obsidian link is refused until then.
+  await tile.click();
+  await page.locator('#mdlBody [data-folder="0"]').click();
+  await page.locator('#mdlBody [data-pick-vault]').waitFor({ timeout: 10000 });
+  await shot('obsidian-no-vault-dark');
+  // On a remote main refuses the pick before any request (remote.test checks that answer); the button then opens the setup
+  // chat with the ask typed, not sent, and the vault stays unset (finding 3b, answer A).
+  const settingsFile = path.join(instance.directory, '.config', 'p9', 'settings.json');
+  await app.evaluate(({ ipcMain }) => { globalThis.pickVault = ipcMain._invokeHandlers.get('p9:pick-vault'); ipcMain.removeHandler('p9:pick-vault');
+    ipcMain.handle('p9:pick-vault', () => ({ status: 409, body: { error: 'server-mode-local-only' } })); });
+  await page.locator('#mdlBody [data-pick-vault]').click();
+  await page.waitForFunction(() => document.querySelector('#mdlBody .composer textarea')?.value === 'Add my Obsidian vault folder', null, { timeout: 15000 });
+  await page.getByText('P9 runs on the remote, so the setup chat adds the folder there.').first().waitFor({ timeout: 5000 });
+  await shot('obsidian-remote-vault-chat-dark');
+  assert.equal(await page.locator('#mdlBody .hist', { hasText: 'Add my Obsidian vault folder' }).count(), 0, 'typed, not sent');
+  assert.equal(JSON.parse(await readFile(settingsFile, 'utf8').catch(() => '{}')).notes_roots?.vault, undefined, 'no vault set');
+  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('p9:pick-vault'); ipcMain.handle('p9:pick-vault', globalThis.pickVault); });
+  await page.reload(); await page.click('#rMission'); await tile.click();
+  await page.locator('#mdlBody [data-folder="0"]').click();
+  await page.locator('#mdlBody [data-pick-vault]').click();
+  await page.locator('#mdlBody', { hasText: 'Welcome.md' }).waitFor({ timeout: 10000 });
+  assert.deepEqual(await app.evaluate(() => globalThis.asked), ['Use ' + vault + ' as your Obsidian vault?']);
+  const settings = JSON.parse(await readFile(path.join(instance.directory, '.config', 'p9', 'settings.json'), 'utf8'));
+  assert.equal(settings.notes_roots.vault, await realpath(vault));
+  assert.ok(settings.page_schemes.includes('obsidian'), 'obsidian joins page_schemes');
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.click('#rMission');
+  await tile.click();
+  await shot('obsidian-vault-dark');
+  const light = async (name) => { await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+    await shot(name); await page.evaluate(() => { const h = document.documentElement; h.classList.add('dark'); delete h.dataset.theme; }); };
+  // The form sits under the section text with the cards' inset, and Save shows without scrolling at 1280x900.
+  const fit = await page.evaluate(() => { const box = document.querySelector('#mdlBody'), r = box.getBoundingClientRect(), f = box.querySelector('[data-quicknote]');
+    return { left: Math.round(f.getBoundingClientRect().left - r.left), shown: box.scrollTop === 0 && f.querySelector('button[type="submit"]').getBoundingClientRect().bottom <= r.bottom }; });
+  assert.ok(fit.left >= 16 && fit.shown, JSON.stringify(fit));
+  // Quick note (threat model row 76): the title is the file name, one new .md in Inbox; the same title again is refused, never replaced.
+  const form = page.locator('#mdlBody [data-quicknote]'), saved = path.join(vault, 'Inbox', 'Plan week 1 & more.md');
+  await form.locator('[name="title"]').fill('Plan / week 1 & more');
+  await form.locator('[name="body"]').fill('first thought');
+  await form.locator('button[type="submit"]').click();
+  await form.locator('[data-qn-status]', { hasText: 'Saved Inbox/Plan week 1 & more.md.' }).waitFor({ timeout: 10000 });
+  assert.equal(await readFile(saved, 'utf8'), 'first thought\n');
+  await form.locator('[name="title"]').fill('Plan week 1 & more');
+  await form.locator('[name="body"]').fill('second thought');
+  await form.locator('button[type="submit"]').click();
+  await form.locator('[data-qn-status]', { hasText: 'already there' }).waitFor({ timeout: 10000 });
+  assert.equal(await readFile(saved, 'utf8'), 'first thought\n', 'never replaced');
+  assert.equal(await form.locator('[name="body"]').inputValue(), 'second thought', 'typed text kept');
+  await shot('obsidian-quick-note-dark'); await light('obsidian-quick-note-light');
+  // The saved note in the Inbox list, and the Templates list (the vault has a Templates folder).
+  for (const [group, files, name] of [['Inbox', ['Idea.md', 'Plan week 1 & more.md'], 'obsidian-inbox'], ['Templates', ['Daily.md'], 'obsidian-templates']]) {
+    await page.reload(); await page.click('#rMission');
+    await page.locator(`#fMission [data-group="${group}"]`).click();
+    await page.locator('#mdlBody [data-folder="0"]').click();
+    await page.locator('#mdlBody [data-i]').first().waitFor({ timeout: 10000 });
+    assert.deepEqual((await page.locator('#mdlBody [data-i] .truncate:not(.sub)').allInnerTexts()).map((s) => s.trim()).sort(), files, group);
+    await shot(name + '-dark'); await light(name + '-light');
+  }
+  // The hub is ICM's: no hub hint on the Obsidian space (finding 3a), and no settings file to edit.
+  await page.reload(); await page.click('#rMission'); await tile.waitFor({ timeout: 15000 });
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('#fMission [data-hub-hint]').count(), 0, 'no hub hint on the Obsidian space');
+  await shot('obsidian-space-dark'); await light('obsidian-space-light');
+  // A space's own link that asks for text (row 75) still works: added by hand, as a user's space would.
+  const spaceFile = path.join(instance.directory, '.config', 'p9', 'spaces', 'obsidian.json'), space = JSON.parse(await readFile(spaceFile, 'utf8'));
+  space.sections[0].links.push({ id: 'new-note', title: 'New note', url: 'obsidian://new?name=', ask: 'Note title' });
+  await writeFile(spaceFile, JSON.stringify(space, null, 2));
+  await page.reload(); await page.click('#rMission');
+  await tile.click();
+  // New note: the typed title is URL-encoded onto the link, shown before it opens, and opened only on Open.
+  await page.locator('#mdlBody [data-weblink="new-note"]').click();
+  await page.locator('#mdlBody [data-weblink-text]').fill('Plan / week 1 & more');
+  const link = 'obsidian://new?name=' + encodeURIComponent('Plan / week 1 & more');
+  assert.equal(await page.locator('#mdlBody [data-link]').innerText(), link);
+  assert.deepEqual(await app.evaluate(() => globalThis.opened), [], 'nothing opens before Open');
+  await shot('obsidian-new-note-dark');
+  await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+  await shot('obsidian-new-note-light');
+  await page.locator('#mdlFoot [data-open]').click();
+  await page.waitForFunction(() => !document.querySelector('#mdlBody [data-weblink-text]'), null, { timeout: 10000 });
+  assert.deepEqual(await app.evaluate(() => globalThis.opened), [link]);
+  await shot('obsidian-vault-light');
+  // A link that asks for text refuses a missing title at the daemon too.
+  assert.equal((await page.evaluate(() => window.p9.mission('link', { id: 'new-note', confirm: true }))).status, 400);
+});
+
+// Fresh-install finding 3(b): Homelab and ICM sections are read-only lists of matching workspace files, not text-only stubs.
+test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list the matching workspace files', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'CLAUDE.md']) {
+    await mkdir(path.dirname(path.join(instance.workspace, file)), { recursive: true }); await writeFile(path.join(instance.workspace, file), '# ' + file);
+  }
+  const lists = { homelab: [['Services', ['stack/docker-compose.yml']], ['Logs', ['stack/logs/app.log', 'stack/nightly-backup.log']], ['Backups', ['stack/nightly-backup.log']]],
+    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Workspace rules', ['CLAUDE.md']]] };
+  for (const [name, sections] of Object.entries(lists)) {
+    const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
+    assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));
+    assert.equal((await page.evaluate((name) => window.p9.mission('space', { name }), name)).status, 200, name + ': space');
+    await page.reload();
+    await page.click('#rMission');
+    await page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
+    for (const [title, files] of sections) {
+      await page.locator(`#fMission [data-group="${title}"]`).click();
+      await page.locator('#mdlBody [data-folder="0"]').click();
+      await page.locator('#mdlBody [data-i]').first().waitFor({ timeout: 10000 });
+      assert.deepEqual((await page.locator('#mdlBody [data-i] .truncate:not(.sub)').allInnerTexts()).map((s) => s.trim()).sort(), files, name + ': ' + title);
+      if (title === sections[0][0]) {
+        await shot('template-' + name + '-list-dark');
+        await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+        await shot('template-' + name + '-list-light');
+        await page.evaluate(() => { const h = document.documentElement; h.classList.add('dark'); delete h.dataset.theme; });
+      }
+      await page.reload();
+      await page.click('#rMission');
+      await page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
+    }
+  }
+});
+
+test('First launch D1: the welcome screen offers a P9 on another machine', { timeout: 60000 }, async (t) => {
+  const { page, shot } = await emptyFirst(t);
+  await openWelcome(page);
+  const connect = page.locator('#welBody [data-act="remote"]');
+  assert.match(await connect.innerText(), /Connect to a remote/);
+  await shot('wizard-welcome', page.locator('#welDlg'));
+  await connect.click();
+  await page.locator('#welBody [data-wiz-remote]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#welBody [data-wiz-remote]').innerText(), /ssh|Host/);
+  await shot('wizard-welcome-remote', page.locator('#welDlg'));
+  await page.locator('#welBody [data-act="remote"]').click();
+  assert.equal(await page.locator('#welBody [data-wiz-remote]').count(), 0, 'Hide closes the choice');
+});
+
+test('First launch D3: an older setup\'s waiting folder opens the Mission step with it filled in; Open Mission Control stays the main button', { timeout: 60000 }, async (t) => {
+  // Signed in, and the workspace has a needs-you folder: Mission is the first thing not done (a bare workspace has nothing to do).
+  const { page, shot } = await openFirst(t, await daemon(t, undefined, false, async (where) => {
+    await mkdir(path.join(where.workspace, 'needs-you'), { recursive: true }); await signedIn(where); return { args: ['--acp-override', fake] }; }));
+  await page.locator('#cards [data-key="welcome"] .open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  await page.locator('#welT', { hasText: 'Mission Control' }).waitFor({ timeout: 10000 });
+  const step = await page.locator('#welBody').innerText();
+  assert.match(step, /Last, build Mission Control[\s\S]*It starts empty\. Open Mission Control takes you to its own wizard/);
+  assert.match(step, /I already have Mission files[\s\S]*Every path is optional/);
+  assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), true, 'open: something was found');
+  assert.equal(await page.locator('#welBody [data-path="waiting"]').inputValue(), 'needs-you');
+  assert.equal(await page.locator('#welFoot [data-act="mission-open"]').getAttribute('data-variant'), 'default');
+  assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
+  await shot('wizard-mission-step', page.locator('#welDlg'));
+});
+
+// A workspace that keeps its own layout: AGENTS.md in Work/, a registry in Work/tools, waiting items in Work/_waiting.
+const layout = async ({ workspace }) => {
+  await mkdir(path.join(workspace, 'Work/_waiting'), { recursive: true });
+  await mkdir(path.join(workspace, 'Work/tools'), { recursive: true });
+  await writeFile(path.join(workspace, 'Work/AGENTS.md'), '# Workspace\n');
+  await writeFile(path.join(workspace, 'Work/tools/registry.json'), JSON.stringify({
+    scripts: [{ id: 'backup', title: 'Back up', group: 'Maintenance', cmd: ['true'] }], apps: [], pages: [] }));
+  await writeFile(path.join(workspace, 'Work/_waiting/alpha-question.md'), '# Which colour?\n\nA.\n');
+};
+
+test('First launch D6: the wizard finds the workspace\'s own layout and attaches it', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async (where) => { await layout(where); await signedIn(where); return { args: ['--acp-override', fake] }; });
+  const { page, shot } = await openFirst(t, instance);
+  const card = page.locator('#cards [data-key="welcome"]');
+  await card.waitFor({ timeout: 15000 });
+  await card.locator('.open').click();
+  await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
+  await page.locator('#welBody [data-have][open] [data-path]').first().waitFor({ timeout: 10000 });
+  // The nested main file, the registry and the _waiting folder are proposed, not the empty starter paths.
+  assert.deepEqual((await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => box.value))).slice(0, 3), ['Work/AGENTS.md', 'Work/tools/registry.json', 'Work/_waiting']);
+  assert.equal(await page.locator('#welBody [data-act="starter"]').innerText(), 'Use these files');
+  await shot('wizard-mission-existing', page.locator('#welDlg'));
+  await page.click('#welBody [data-act="starter"]');
+  await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => document.querySelector('#welDlg').close());
+  await page.click('#rMission');
+  await page.locator('#fMission .needs [data-list] li .kind').first().waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#fMission [data-mission-intro]').count(), 0, 'a filled Mission has no intro');
+  await shot('mission-filled');
+});
+
+// Finding 4: the Space menu in the top bar (Mission focus only); + Add shows the onboarding card; a template click is a
+// preview that writes nothing, Back to wizard writes nothing, Choose template writes one new space file and shows it.
+test('Mission D13 (finding 4): Switch mission control, + Add, template preview and Choose', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  const spaces = path.join(instance.directory, '.config', 'p9', 'spaces'), files = () => readdir(spaces).then((list) => list.sort(), () => []);
+  const light = async (name) => { const was = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await shot(name); await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, was); };
+  // File protection may answer the first Choose with a request to click again (the user's confirmation).
+  const choose = async (name, want) => { const b = page.locator('#fMission [data-choose="' + name + '"]'); await b.click();
+    await page.waitForFunction((want) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === want || /File protection/.test(document.querySelector('#fMission [data-onboard-note]')?.textContent || ''), want, { timeout: 15000 });
+    if (await b.count()) await b.click(); };
+  assert.equal(await page.locator('#spaceBtn').isVisible(), false, 'not in Chat focus');
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 15000 });
+  await page.locator('#spaceBtn', { hasText: 'Main' }).waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#fMission [data-space-pick]').count(), 0, 'no Space select in the page');
+  await shot('space-switch-1-dark'); await light('space-switch-1-light');
+  // Preview: the template's sections and two buttons, and no file.
+  await page.locator('#fMission [data-template="homelab"]').click();
+  await page.locator('#fMission [data-preview] [data-choose="homelab"]').waitFor({ timeout: 10000 });
+  await page.locator('#fMission [data-preview] [data-preview-back]').waitFor();
+  await shot('space-preview-dark'); await light('space-preview-light');
+  assert.deepEqual(await files(), [], 'a preview writes no file');
+  await page.locator('#fMission [data-preview-back]').click();
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await files(), [], 'Back to wizard writes no file');
+  // Choose: one new space file, shown at once.
+  await page.locator('#fMission [data-template="homelab"]').click();
+  await choose('homelab', 'homelab');
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab', null, { timeout: 15000 });
+  assert.deepEqual(await files(), ['homelab.json'], 'Choose writes one');
+  // + Add from a space with sections: the card, then Choose under a free name; nothing is replaced or removed.
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space-add]').click();
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').click();
+  await choose('homelab', 'homelab-2');
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'homelab-2', null, { timeout: 15000 });
+  assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json']);
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space="homelab"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#spacePop [aria-checked="true"]').getAttribute('data-space'), 'homelab-2', 'the current space carries the check');
+  assert.equal(await page.locator('#spacePop [data-space="homelab-2"]').evaluate((el) => getComputedStyle(el, '::after').content), '"\u2713"');
+  await shot('space-switch-2-open-dark'); await light('space-switch-2-open-light');
+  // + Add, then Have Claude build it: the build chat is for a new space under a free name, not the one shown.
+  await page.locator('#spacePop [data-space-add]').click();
+  await page.locator('#fMission [data-onboard] [data-build="claude"]').click();
+  await page.waitForFunction(() => /builds the new space|build it: /.test(document.body.innerText), null, { timeout: 15000 });
+  assert.match(await page.evaluate(() => document.body.innerText), /builds the new space new-space\./);
+  await page.keyboard.press('Escape');
+  assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json'], 'starting the build writes no file');
+  await page.locator('#spaceBtn').click();
+  await page.locator('#spacePop [data-space=""]').click();
+  await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === '', null, { timeout: 15000 });
+  assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json'], 'switching deletes no space file');
+});
+
+// Finding 4 adds (threat model rows A and B): Delete removes the shown space's file after a confirm that names it and keeps
+// the last space; Save as template keeps the shown space in the settings folder, and Choose gives the same space back.
+test('Mission D14 (finding 4 adds): Delete a space, Save as template, and Choose it back', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  const config = path.join(instance.directory, '.config', 'p9'), spaces = path.join(config, 'spaces');
+  const files = (dir = spaces) => readdir(dir).then((list) => list.sort(), () => []), json = async (file) => JSON.parse(await readFile(file, 'utf8'));
+  const light = async (name) => { const was = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await shot(name); await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, was); };
+  const current = (name) => page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
+  const menu = async (item) => { await page.locator('#spaceBtn').click(); await page.locator('#spacePop ' + item).click(); };
+  // File protection may answer the first click with a request to click again (the user's confirmation).
+  const twice = async (b, want, note) => { await b.click();
+    await page.waitForFunction(([want, note]) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === want || /File protection/.test(document.querySelector(note)?.textContent || ''), [want, note], { timeout: 15000 });
+    if (await b.isVisible()) await b.click(); };
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 15000 });
+  // One space, edited by hand after its template.
+  assert.equal((await page.evaluate(() => window.p9.mission('template', { name: 'homelab', space: 'lab', confirm: true }))).status, 201);
+  const source = await json(path.join(spaces, 'lab.json'));
+  source.sections[0].title = 'Edited by hand';
+  await writeFile(path.join(spaces, 'lab.json'), JSON.stringify(source, null, 2) + '\n');
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'lab' }))).status, 200);
+  await page.reload(); await page.click('#rMission'); await current('lab');
+  // The last space is kept: the confirm says so and offers + Add, with no Delete button.
+  await menu('[data-space-del]');
+  await page.locator('#spacePop [data-space-confirm]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#spacePop [data-space-confirm]').innerText(), /lab is your only space, so P9 keeps it/);
+  assert.equal(await page.locator('#spacePop [data-space-del-go]').count(), 0, 'no Delete for the last space');
+  assert.equal(await page.locator('#spacePop [data-space-add]').count(), 1, '+ Add offered');
+  await page.waitForTimeout(2500); // a poll while the confirm shows keeps it
+  assert.equal(await page.locator('#spacePop [data-space-confirm]').count(), 1, 'a poll keeps the confirm');
+  await page.locator('#spacePop [data-space-cancel]').click();
+  assert.deepEqual(await files(), ['lab.json']);
+  // Save as template: a name and a one-line about; the same name again asks Replace or Rename, and Replace writes over it.
+  await page.locator('#spacePop [data-space-save]').click();
+  const form = page.locator('#spacePop [data-space-save-form]');
+  await form.locator('[name="name"]').fill('my-lab'); await form.locator('[name="about"]').fill('My lab, edited');
+  await shot('tpl-save-form-dark'); await light('tpl-save-form-light');
+  await form.locator('[data-space-save-go]').click();
+  await page.locator('#spacePop').waitFor({ state: 'hidden', timeout: 10000 });
+  const saved = path.join(config, 'templates', 'my-lab.json');
+  assert.deepEqual(await json(saved), { title: 'my-lab', about: 'My lab, edited', space: source });
+  if (process.platform !== 'win32') assert.equal((await stat(saved)).mode & 0o777, 0o600);
+  await menu('[data-space-save]');
+  await form.locator('[name="name"]').fill('my-lab'); await form.locator('[data-space-save-go]').click();
+  await form.locator('[data-space-clash]:not([hidden])').waitFor({ timeout: 10000 });
+  await form.locator('[data-space-replace]').click();
+  await page.locator('#spacePop').waitFor({ state: 'hidden', timeout: 10000 });
+  assert.deepEqual(await json(saved), { title: 'my-lab', about: '', space: source }, 'Replace writes the new one');
+  // The saved template in the wizard beside the built-ins; Choose gives back the same space.
+  await menu('[data-space-add]');
+  await page.locator('#fMission [data-onboard] [data-template="my-lab"]').waitFor({ timeout: 15000 });
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor();
+  await shot('tpl-in-wizard-dark'); await light('tpl-in-wizard-light');
+  await page.locator('#fMission [data-template="my-lab"]').click();
+  await page.locator('#fMission [data-preview] [data-preview-back]').waitFor({ timeout: 10000 });
+  await twice(page.locator('#fMission [data-choose="my-lab"]'), 'my-lab', '#fMission [data-onboard-note]');
+  await current('my-lab');
+  assert.deepEqual(await json(path.join(spaces, 'my-lab.json')), source, 'the new space is the one saved');
+  // Delete the shown space: the confirm names it; the file is gone and Mission shows another space.
+  await menu('[data-space-del]');
+  await page.locator('#spacePop [data-space-del-go]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#spacePop [data-space-confirm]').innerText(), /Delete my-lab\?\s+This removes its file\. It can't be undone\./);
+  await shot('space-delete-confirm-dark'); await light('space-delete-confirm-light');
+  await twice(page.locator('#spacePop [data-space-del-go]'), 'lab', '#spacePop [data-space-note]');
+  await current('lab');
+  assert.deepEqual(await files(), ['lab.json'], 'the file is deleted');
+  assert.equal((await files(config)).includes('deleted'), false, 'no deleted folder');
+  await page.locator('#spaceBtn').click();
+  assert.equal(await page.locator('#spacePop [data-space="my-lab"]').count(), 0, 'the space leaves the menu');
+  await page.keyboard.press('Escape');
+  // Main is not a file in the spaces folder: no Delete there.
+  await menu('[data-space=""]'); await current('');
+  await page.locator('#spaceBtn').click(); await page.locator('#spacePop [data-space="lab"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#spacePop [data-space-del]').count(), 0, 'no Delete on Main');
+});
+
+test('First launch D4: a waiting item says who it waits on, from the owner\'s own name', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async (where) => {
+    await layout(where);
+    const file = path.join(where.directory, '.config', 'p9', 'settings.json');
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ primary: 'Work/AGENTS.md', registry: 'Work/tools/registry.json', waiting: 'Work/_waiting' }));
+    return { args: ['--acp-override', fake] };
+  });
+  const { page } = await openFirst(t, instance);
+  await page.click('#rMission');
+  const chip = page.locator('#fMission .needs [data-list] li .kind');
+  await chip.first().waitFor({ timeout: 20000 });
+  // A new profile's name is the account's own (the greeting's), so the chip reads it; it is never a fixed person.
+  const own = await page.evaluate(async () => (await window.p9.getSettings()).name);
+  assert.equal(await chip.first().textContent(), own ? 'needs ' + own : 'needs you');
+  const reopen = async (name) => { await page.evaluate(async (name) => window.p9.setSettings({ ...(await window.p9.getSettings()), name }), name); await page.reload(); await page.click('#rMission'); await chip.first().waitFor({ timeout: 20000 }); return chip.first().textContent(); };
+  assert.equal(await reopen('Sam'), 'needs Sam');
+  assert.equal(await reopen(''), 'needs you');
+});
+
+test('First launch D10: two running chats are told apart by number and title', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  for (const text of ['first chat', 'second chat']) {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text });
+    await page.locator(`#rBots [data-bot="${id}"]`).waitFor({ timeout: 20000 });
+  }
+  const heads = await page.locator('#rBots [data-bot]').evaluateAll((all) => all.map((b) => [b.dataset.n, b.title, b.getAttribute('aria-label')]));
+  assert.equal(heads.length, 2);
+  assert.deepEqual(heads.map((h) => h[0]).sort(), ['1', '2']);
+  for (const [n, title, label] of heads) { assert.match(title, new RegExp('^#' + n + ' .+ · (Claude|Codex) · (working|idle)$')); assert.equal(label, title); }
+  assert.notEqual(heads[0][1], heads[1][1], 'the two heads read differently');
+  await page.click('#rChat');
+  await shot('rail-robot-heads', page.locator('.rail'));
+});
+
+// Items 24 and 25 (specs/move-progress-events.md check 4): the window draws main's p9:move stream over the moving chat,
+// says when the server goes quiet, cancels through main, and on done asks "Open it on <host>?"; Enter switches with the
+// host main sent. Main's handlers stand in for the move (its own stream is send-to-server.test.mjs).
+test('Send to server: the black hole and bar follow p9:move; Cancel goes to main; done asks, then switches and reopens the chat; a reload mid-move asks to finish', { timeout: 150000 }, async (t) => {
+  // The fake agent keeps a Claude Code transcript (claude-home), so the daemon can freeze the chat for the reload check.
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const marker of ['uuid-sessions', 'claude-home']) await writeFile(path.join(workspace, marker), '');
+    return { args: ['--acp-override', fake] };
+  });
+  const { app, page, shot } = await openFirst(t, instance);
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'move me' });
+  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  const pane = page.locator(`.pane[data-id="${id}"]`);
+  await pane.waitFor();
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.calls = [];
+    for (const name of ['p9:server', 'p9:move-cancel']) ipcMain.removeHandler(name);
+    ipcMain.handle('p9:server', (_event, ...args) => { globalThis.calls.push(['server', ...args]); return args.length ? { ok: true } : { host: null, last: 'test-host', connected: false, hosts: [] }; });
+    ipcMain.handle('p9:move-cancel', (_event, ...args) => { globalThis.calls.push(['cancel', ...args]); return { cancelling: true }; });
+  });
+  let seq = 0;
+  const move = (phase, percent, extra) => app.evaluate(({ BrowserWindow }, m) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === m.url).webContents.send('p9:move', m.move),
+    { url: page.url(), move: { id, seq: ++seq, host: 'test-host', phase, percent, bytes: { sent: Math.round(percent * 100000), total: 10000000 }, ...extra } });
+  const fx = page.locator('#moveFx'), b = await pane.boundingBox(); // the pane's place before it is pulled in
+  await move('stopping', 0);
+  await fx.waitFor();
+  assert.equal(await pane.getAttribute('data-pulled'), '', 'the chat is pulled in');
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Pausing the chat here…');
+  await move('connecting', 0);
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Connecting to test-host…');
+  await move('uploading', 40);
+  await page.waitForFunction(() => document.querySelector('#movePct').textContent === '40%');
+  assert.equal(await page.locator('.move-bar').getAttribute('aria-valuenow'), '40');
+  assert.equal(await page.locator('#moveBytes').textContent(), ' · 3.8 MB of 9.5 MB');
+  // The overlay covers the chat's pane, not the window.
+  const a = await fx.boundingBox();
+  assert.deepEqual([a.x, a.y, a.width, a.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round));
+  for (const n of [1, 2, 3]) await shot('move-frame-' + n, page);
+  // No event for 15 s (three missed heartbeats): the label says so; the next event clears it.
+  await page.locator('#moveFx[data-wait]').waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#moveWhat').textContent(), 'Waiting for the remote…');
+  // Long after the chat has fallen in (scaled to a dot), the overlay still covers the pane's whole place.
+  const c = await fx.boundingBox();
+  assert.deepEqual([c.x, c.y, c.width, c.height].map(Math.round), [b.x, b.y, b.width, b.height].map(Math.round), 'the overlay keeps the pane\'s size');
+  await shot('move-waiting', page);
+  await move('uploading', 70);
+  assert.equal(await fx.getAttribute('data-wait'), null);
+  await page.click('#moveCancel');
+  for (let i = 0; i < 50 && !(await app.evaluate(() => globalThis.calls.length)); i++) await page.waitForTimeout(100);
+  assert.deepEqual(await app.evaluate(() => globalThis.calls), [['cancel', id]]);
+  await move('landing', 99);
+  assert.equal(await page.locator('#moveWhat').textContent(), 'test-host is setting it up…');
+  assert.equal(await page.locator('#moveCancel').isVisible(), false, 'no Cancel once the server has it');
+  await shot('move-landing', page);
+  await move('done', 100);
+  const ask = page.locator('#moveDlg');
+  await ask.waitFor();
+  assert.equal(await page.locator('#moveT').textContent(), 'Open it on test-host?');
+  await shot('move-ask', page);
+  // The switch is the filled button (a button without a variant draws as plain text), in both themes.
+  assert.equal(await page.locator('#moveYes').getAttribute('data-variant'), 'default');
+  const look = (theme) => page.evaluate((t) => { document.getElementById('themeBtn').click(); document.querySelector('[data-theme-pick="' + t + '"]').click(); }, theme);
+  await look('event-horizon-prime'); await shot('c35-move-ask-event-horizon-prime', ask);
+  await look('daylight'); await shot('c35-move-ask-daylight', ask);
+  await look('event-horizon-prime');
+  // Enter from the "Don't show again" box still takes the switch (a form's own Enter would press Stay).
+  await page.locator('#moveNever').check();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => localStorage.getItem('p9-after-move'));
+  assert.deepEqual(await page.evaluate(() => [JSON.parse(localStorage.getItem('p9-after-move')), localStorage.getItem('p9-after-move-ask')]), [{ id }, 'open']);
+  assert.deepEqual(await app.evaluate(() => globalThis.calls), [['cancel', id], ['server', 'test-host']]);
+  // The reload main does: the chat opens in the pane and the key goes.
+  await page.evaluate(() => sessionStorage.clear());
+  await page.reload();
+  await pane.waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => localStorage.getItem('p9-after-move') === null);
+  // A window reloaded mid-move: the daemon says moving, main sends nothing for 6 s, so the window asks to finish. Yes asks
+  // main to move it (here main has no server, and says so).
+  let frozen;
+  for (let i = 0; i < 100 && !(frozen = await call(instance, '/chat/' + id + '/send-away', 'POST', {})).session && frozen.error !== 'moving'; i++) await page.waitForTimeout(100);
+  assert.ok(frozen.session || frozen.error === 'moving', JSON.stringify(frozen));
+  await page.reload();
+  await page.locator('#moveDlg[open]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#moveT').textContent(), 'Finish the move?');
+  assert.equal(await page.locator('#moveNeverRow').isVisible(), false);
+  await shot('move-finish-ask', page);
+  await page.click('#moveYes');
+  await pane.getByText('Not sent to the remote: No remote yet').waitFor({ timeout: 10000 });
+  // Reduced motion: no sky, no mark; the bar, its label and Cancel.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload();
+  await pane.waitFor({ timeout: 20000 });
+  await move('uploading', 55);
+  await fx.waitFor();
+  assert.deepEqual(await page.evaluate(() => ['#moveSky', '.move-mark'].map((s) => getComputedStyle(document.querySelector(s)).display)), ['none', 'none']);
+  await shot('move-reduced', page);
 });

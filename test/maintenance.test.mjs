@@ -7,7 +7,15 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { root } from './helpers.mjs';
-import { health, restartLinuxService, repairLinuxService, repairEnv } from '../scripts/teh.mjs';
+import { health, restartLinuxService, repairLinuxService, repairEnv, unitFor } from '../scripts/teh.mjs';
+
+// Restart and Repair act on the unit that owns the window's state folder: a dev window (p9-dev) never restarts the daily daemon.
+test('the unit is named after the state folder', () => {
+  assert.equal(unitFor('/run/user/1000/p9-dev'), 'p9-dev.service');
+  assert.equal(unitFor('/run/user/1000/p9-foundation'), 'p9-foundation.service');
+  assert.equal(unitFor('/tmp/fixture/state'), 'p9-foundation.service');
+  assert.equal(unitFor('/tmp/p9-Dev;rm'), 'p9-foundation.service');
+});
 
 // A stand-in systemctl that runs the unit's ExecStart for real and never touches the machine's own user units. Every call
 // is logged. $HOME/restart-mode: "nothing" is a restart that leaves the old daemon running, "dead" one that starts nothing.

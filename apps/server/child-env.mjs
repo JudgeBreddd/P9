@@ -1,3 +1,4 @@
+import { binFolder } from './deps.mjs';
 // Every process P9 starts (agents, scripts, apps, later terminals) gets an environment built from empty plus this
 // list, so a token in the daemon's own environment never reaches a child. Agents read their logins from HOME.
 const ALLOW = new Set(['HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LANGUAGE', 'TZ', 'TERM', 'COLORTERM', 'TMPDIR', 'TMUX_TMPDIR',
@@ -20,5 +21,12 @@ export function childEnv(source = process.env, platform = process.platform) {
   // ponytail: only ~/.local/bin; a tool elsewhere (nvm, ~/.cargo/bin) still needs the unit's PATH line (UPGRADE.md).
   const local = env.HOME + '/.local/bin';
   if (platform === 'linux' && env.HOME && env.PATH !== undefined && !env.PATH.split(':').includes(local)) env.PATH += ':' + local;
+  // Item 15: P9's own bin folder (the Claude and Codex launchers, deps.mjs), last, so a CLI the owner installed wins.
+  const key = Object.keys(env).find((name) => name.toUpperCase() === 'PATH');
+  const home = platform === 'win32' ? env.USERPROFILE : env.HOME;
+  if (key && home && (platform === 'linux' || platform === 'win32')) {
+    const bin = binFolder(platform, env, home), sep = platform === 'win32' ? ';' : ':';
+    if (!env[key].split(sep).includes(bin)) env[key] += sep + bin;
+  }
   return env;
 }

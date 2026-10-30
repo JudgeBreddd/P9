@@ -194,3 +194,29 @@ test('Phase 12: a remote device gets 600 new operation IDs an hour; the desktop 
   for (let i = 0; i < 700; i++) assert.equal((await post(desktop)).status, 200);
   console.log('PASS operation quota: device a 600 then 429, device b 200, desktop 700 unlimited');
 });
+
+// P2 (v0.1.6): one passkey signs in from more than one browser on the phone (the home-screen app and a Safari tab); a login in one
+// must not end the other. A session slides 12 h from its last use, capped at 7 days from its login; lock still ends them all.
+test('P2: a second browser\'s login keeps the first signed in; sessions slide to the 7-day cap; a fifth drops the oldest; lock ends all', { timeout: 10000 }, async () => {
+  const { auth, db, login, release, advance } = await setup();
+  db.prepare("INSERT INTO devices VALUES ('d1', 'phone', 'cred1', ?, 0, 'active', 0)").run(Buffer.from([1]));
+  const sign = async () => { const pending = login('cred1'); await tick(); release(ok); return pending; };
+  const app = await sign(), tab = await sign();
+  assert.equal(auth.session(app.token).status, 0, 'the home-screen app is still signed in after the Safari tab signed in');
+  assert.equal(auth.session(tab.token).status, 0);
+  // Used every 8 h for 8 days: it stays signed in until the 7-day cap, then ends.
+  for (let hours = 8; hours < 7 * 24; hours += 8) { advance(8 * 3600 * 1000); assert.equal(auth.session(app.token).status, 0, 'in use at ' + hours + ' h'); }
+  advance(8 * 3600 * 1000);
+  assert.equal(auth.session(app.token).status, 401, 'past 7 days from its login it ends');
+  // Unused for over 12 h: it ends.
+  const idle = await sign();
+  advance(13 * 3600 * 1000);
+  assert.equal(auth.session(idle.token).status, 401, 'unused for 13 h it ends');
+  const kept = [await sign(), await sign(), await sign(), await sign()];
+  const fifth = await sign();
+  assert.equal(auth.session(kept[0].token).status, 401, 'the oldest of five goes');
+  assert.deepEqual([...kept.slice(1), fifth].map((s) => auth.session(s.token).status), [0, 0, 0, 0]);
+  auth.lock('d1');
+  assert.deepEqual([...kept.slice(1), fifth].map((s) => auth.session(s.token).status), [423, 423, 423, 423]);
+  console.log('PASS P2: two browsers stay signed in, sliding to the 7-day cap, four at most, lock ends all');
+});

@@ -1,23 +1,348 @@
-:root{color-scheme:dark;--bg:#080b10;--panel:#111722;--raised:#17202d;--line:#293548;--text:#edf3fb;--muted:#91a0b5;--cyan:#6ee7f2;--amber:#f6c76b;--red:#ff7b8b;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:var(--bg);color:var(--text)}
-*{box-sizing:border-box}body{margin:0;min-height:100svh;background:radial-gradient(circle at 75% -10%,#172e3d 0,transparent 42%),var(--bg);font-size:15px;padding-bottom:calc(76px + env(safe-area-inset-bottom))}button,input,select,textarea{font:inherit;color:inherit}button,input,select,textarea{min-height:44px;border:1px solid var(--line);border-radius:12px;background:var(--raised)}button{padding:8px 13px;font-weight:700;background:var(--cyan);color:#061014;border-color:transparent}button:disabled{opacity:.42}button.quiet{background:transparent;color:var(--text);border-color:var(--line)}header{height:56px;display:flex;align-items:center;gap:10px;padding:env(safe-area-inset-top) 18px 0;border-bottom:1px solid var(--line);position:sticky;top:0;background:#080b10ed;backdrop-filter:blur(16px);z-index:4}header .mark{width:14px;height:14px;border:2px solid var(--cyan);border-radius:50%;box-shadow:0 0 18px var(--cyan)}header #syncState{margin-left:auto;color:var(--muted);font-size:13px}#stale,#gap{position:sticky;top:56px;z-index:3;background:#4a3512;color:#ffe4a4;padding:10px 18px;font-weight:700}main{padding:16px 14px 24px;max-width:700px;margin:auto}.heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.heading button{width:auto}.eyebrow{margin:0 0 5px;color:var(--cyan);font:700 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:24px;line-height:1;margin:0}h2{font-size:15.5px;margin:0 0 8px}p{line-height:1.5}label{display:grid;gap:7px;color:var(--muted);font-size:12.5px;font-weight:650;margin-bottom:10px}select,input,textarea{width:100%;padding:10px 12px;background:#0d131c}textarea{resize:vertical;line-height:1.45}.feed,.stack{display:grid;gap:8px}.feed{min-height:210px;margin:12px 0 18px}.event,.card,.empty,.conflict{padding:11px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.event b,.card .value{display:block;margin-bottom:5px;color:var(--cyan)}.event p,.card p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.event.tool{color:var(--muted)}
+/* c18: the phone's colours are the picked DUWOP theme's (theme-picker.ts, saved on this phone like the desktop's). The
+   fallbacks are the old fixed look. --dim, not --muted: DUWOP's --muted is a background colour. Status colours stay fixed. */
+:root{color-scheme:light;--bg:var(--background,#080b10);--panel:var(--card,#111722);--raised:var(--secondary,#17202d);--line:var(--border,#293548);--text:var(--foreground,#edf3fb);--dim:var(--muted-foreground,#91a0b5);--cyan:var(--primary,#6ee7f2);--on-cyan:var(--primary-foreground,var(--on-cyan));--field:color-mix(in oklch,var(--bg) 55%,var(--panel));--amber:#f6c76b;--red:#ff7b8b;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(circle at 75% -10%,color-mix(in oklch,var(--cyan) 14%,transparent) 0,transparent 42%),var(--bg);color:var(--text)}:root.dark{color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;height:100dvh;overflow:hidden;background:none;font-size:15px}button,input,select,textarea{font:inherit;color:inherit}button,input,select,textarea{min-height:44px;border:1px solid var(--line);border-radius:12px;background:var(--raised)}button{padding:8px 13px;font-weight:700;background:var(--cyan);color:var(--on-cyan);border-color:transparent}button:disabled{opacity:.42}button.quiet{background:transparent;color:var(--text);border-color:var(--line)}.heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.heading button{width:auto}.eyebrow{margin:0 0 5px;color:var(--cyan);font:700 12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:24px;line-height:1;margin:0}h2{font-size:15.5px;margin:0 0 8px}p{line-height:1.5}label{display:grid;gap:7px;color:var(--dim);font-size:12.5px;font-weight:650;margin-bottom:10px}select,input,textarea{width:100%;padding:10px 12px;background:var(--field)}textarea{resize:vertical;line-height:1.45}.feed,.stack{display:grid;gap:8px}.feed{min-height:210px;margin:12px 0 18px}.event,.card,.empty,.conflict{padding:11px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.event b,.card .value{display:block;margin-bottom:5px;color:var(--cyan)}.event p,.card p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.event.tool{color:var(--dim)}
 .md{overflow-wrap:anywhere}.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}.md :is(p,ul,ol,pre,table,blockquote){margin:0 0 .6em}.md :is(ul,ol){padding-left:1.3em}.md :is(h1,h2,h3,h4){font-size:1em;margin:.8em 0 .3em}
 .md code{font:.9em "JetBrains Mono",ui-monospace,monospace}.md pre{overflow-x:auto;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
-.md table{border-collapse:collapse;display:block;overflow-x:auto}.md :is(th,td){border:1px solid var(--line);padding:3px 7px}.md blockquote{padding-left:9px;border-left:3px solid var(--line);color:var(--muted)}.md .link{color:var(--cyan);text-decoration:underline dotted}.card .value{font:750 20px ui-monospace,monospace}.card small,.muted{color:var(--muted)}.card.warn{border-color:#73551f}.card.bad,.conflict{border-color:#713744;color:#ffbec6}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}.path div,.actions{display:flex;gap:10px}.path button,.actions button{width:auto}.path input{min-width:0}.actions{justify-content:flex-end;margin-top:14px}#editor{min-height:300px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0d131c}.cm-editor{min-height:300px}.cm-scroller{font-family:"JetBrains Mono",ui-monospace,monospace!important;font-size:16px}.conflict{margin-top:12px}nav{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(5,1fr);padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:#0a0e15f5;border-top:1px solid var(--line);backdrop-filter:blur(18px);z-index:5}nav button{min-height:52px;padding:5px;background:transparent;color:var(--muted);border:0;font-size:11px;display:grid;place-items:center;gap:2px}nav button span{font-size:19px}nav button[aria-current="page"]{color:var(--cyan);background:#14222c}@media(min-width:720px){body{padding-left:76px}nav{top:0;right:auto;width:76px;grid-template-columns:1fr;align-content:center;border-top:0;border-right:1px solid var(--line)}header{padding-left:24px}}
-.crumbs{display:flex;align-items:center;gap:10px;margin-bottom:12px}.crumbs button{width:auto}.crumbs span{overflow-wrap:anywhere;color:var(--muted);font:600 13px ui-monospace,monospace}.list{list-style:none;margin:0;padding:0;display:grid;gap:8px}.list button{width:100%;text-align:left;font-weight:600;overflow-wrap:anywhere}.actions.start{justify-content:flex-start;margin:0 0 4px}
-.section{display:flex;align-items:center;gap:8px;margin:14px 0 2px}.count{color:var(--muted);font:600 13px ui-monospace,monospace}details.row{border:1px solid var(--line);border-radius:14px;background:var(--panel)}details.row summary{padding:10px 12px;font-weight:650;cursor:pointer;display:grid;gap:3px}details.row summary small{color:var(--muted);font-weight:500}details.row .body{padding:0 12px 12px;display:grid;gap:10px}details.row p{margin:0}details.row pre{margin:0;max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.45 ui-monospace,monospace;background:#0d131c;border:1px solid var(--line);border-radius:10px;padding:10px}details.row form{display:grid;gap:8px}details.row form label{margin:0}a.link{display:block;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--cyan);font-weight:650;text-decoration:none}
+.md table{border-collapse:collapse;display:block;overflow-x:auto}.md :is(th,td){border:1px solid var(--line);padding:3px 7px}.md blockquote{padding-left:9px;border-left:3px solid var(--line);color:var(--dim)}.md .link{color:var(--cyan);text-decoration:underline dotted}.md a.link{display:inline;padding:0;border:0;border-radius:0;background:none;font-weight:inherit;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}.md .link-host{color:var(--dim);font-size:.85em}.card .value{font:750 20px ui-monospace,monospace}.card small,.muted{color:var(--dim)}.card.warn{border-color:#73551f}.card.bad,.conflict{border-color:#713744;color:#ffbec6}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}.path div,.actions{display:flex;gap:10px}.path button,.actions button{width:auto}.path input{min-width:0}.actions{justify-content:flex-end;margin-top:14px}#editor{min-height:300px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--field)}.cm-editor{min-height:300px}.cm-scroller{font-family:"JetBrains Mono",ui-monospace,monospace!important;font-size:14px;line-height:1.55}.conflict{margin-top:12px}
+.crumbs{display:flex;align-items:center;gap:10px;margin-bottom:12px}.crumbs button{width:auto}.crumbs span{overflow-wrap:anywhere;color:var(--dim);font:600 13px ui-monospace,monospace}.list{list-style:none;margin:0;padding:0;display:grid;gap:8px}.list button{width:100%;text-align:left;font-weight:600;overflow-wrap:anywhere}.actions.start{justify-content:flex-start;margin:0 0 4px}
+.section{display:flex;align-items:center;gap:8px;margin:14px 0 2px}.count{color:var(--dim);font:600 13px ui-monospace,monospace}details.row{border:1px solid var(--line);border-radius:14px;background:var(--panel)}details.row summary{padding:10px 12px;font-weight:650;cursor:pointer;display:grid;gap:3px}details.row summary small{color:var(--dim);font-weight:500}details.row .body{padding:0 12px 12px;display:grid;gap:10px}details.row p{margin:0}details.row pre{margin:0;max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.45 ui-monospace,monospace;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:10px}details.row form{display:grid;gap:8px}details.row form label{margin:0}a.link{display:block;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--cyan);font-weight:650;text-decoration:none}
 /* iOS Safari zooms into any focused field under 16px (labels are 13px and fields inherit), so fields never go below 16px. */
 input,select,textarea{font-size:16px}
 input[type=checkbox]{min-height:0;width:20px;height:20px;margin:0 8px 0 0;vertical-align:middle}
 /* Mission tiles: two columns of small boxes, each opens its section as a full-screen window (Builder, 2026-10-17) */
 #mission .tiles,#hub{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#hub{display:contents}
-.tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;min-height:84px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--text);text-align:left;font-size:12px}.tile span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}.tile b{font:750 19px ui-monospace,monospace;color:var(--cyan);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tile small{color:var(--muted);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.tile.bad{border-color:#713744}.tile.bad b{color:var(--red)}
-dialog.window{width:100vw;max-width:none;height:100svh;max-height:none;margin:0;padding:calc(env(safe-area-inset-top) + 8px) 14px calc(env(safe-area-inset-bottom) + 16px);border:0;background:var(--bg);color:var(--text);overflow:auto}dialog.window>header{position:sticky;top:-8px;z-index:1;height:auto;padding:4px 0 8px;margin-bottom:8px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}dialog.window>header h2{margin:0;font-size:16px;flex:1;min-width:0;overflow-wrap:anywhere}dialog.window>header button{width:auto}dialog.window>*+*{margin-top:8px}
-#screen{height:calc(100svh - 440px);min-height:220px;margin-top:12px;padding:4px;border:1px solid var(--line);border-radius:14px;background:#0d131c;overflow:hidden}
-#termState{align-self:center;color:var(--muted);font-size:13px}
-.keys{margin-top:10px;flex-wrap:wrap}.keys button{min-width:52px}
 .xterm .xterm-helper-textarea{font-size:16px}
 /* PH2: messages kept on this phone until they can go; the grid above would show it empty */
 #queued{margin:-6px 0 14px}#queued[hidden]{display:none}
 
 /* PH4: the plan and pinned cards above the chat, the same markup as the desktop strip */
-.pinned{display:flex;flex-direction:column;gap:8px;max-height:35vh;overflow:auto;margin-bottom:12px}.pinned .plan,.card-pin{flex:none;border:1px solid var(--line);border-radius:14px;padding:10px 14px;background:var(--panel)}.pinned .eyebrow{margin-bottom:4px;color:var(--cyan);font:700 12px ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase}.pinned .plan li{display:flex;gap:8px;margin:2px 0;list-style:none}.pinned .plan li[data-s=completed]{color:var(--muted)}.card-pin li:has(>input[type=checkbox]){list-style:none;margin-left:-1.2em}.card-pin .msg{font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.pinned{display:flex;flex-direction:column;gap:8px;max-height:35vh;overflow:auto;margin-bottom:12px}.pinned .plan,.card-pin{flex:none;border:1px solid var(--line);border-radius:14px;padding:10px 14px;background:var(--panel)}.pinned .eyebrow{margin-bottom:4px;color:var(--cyan);font:700 12px ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase}.pinned .plan li{display:flex;gap:8px;margin:2px 0;list-style:none}.pinned .plan li[data-s=completed]{color:var(--dim)}.card-pin li:has(>input[type=checkbox]){list-style:none;margin-left:-1.2em}.card-pin .msg{font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.agent-imgs{display:flex;flex-direction:column;gap:8px;margin-top:8px}.agent-imgs img{display:block;width:100%;height:auto;border-radius:12px;border:1px solid var(--line);cursor:zoom-in}dialog.picture{max-width:100vw;max-height:100svh;width:100vw;height:100svh;margin:0;padding:0;border:0;background:#000e;display:none;place-items:center}dialog.picture[open]{display:grid}dialog.picture img{max-width:100vw;max-height:100svh;object-fit:contain}
+/* P6: the loosened-mode warning, red as on the desktop */
+dialog.loose{width:calc(100vw - 32px);max-width:420px;border:1px solid var(--red);border-radius:16px;background:var(--panel);color:var(--text);padding:18px}dialog.loose::backdrop{background:#000a}dialog.loose h2{margin:0 0 8px;font-size:17px;color:var(--red)}dialog.loose p{margin:0 0 8px;line-height:1.45}dialog.loose .note{color:var(--dim);font-size:13px}dialog.loose .stack{display:grid;gap:8px;margin-top:12px}dialog.loose button{min-height:44px;width:100%}button.danger{background:var(--red);color:#1a0508;border-color:var(--red)}
+/* P10: an agent's question, answered on the phone */
+form.question{display:grid;gap:10px;margin-top:8px}form.question fieldset{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:0;display:grid;gap:4px}form.question legend{font-weight:600;padding:0 4px}form.question small{color:var(--dim)}form.question label.pick{display:flex;align-items:center;gap:8px;min-height:40px}form.question input[type=text],form.question input[type=number]{min-height:44px;font-size:16px;width:100%}
+/* P10: slash commands above the message box, and the new chat's folder */
+.slash{display:grid;gap:2px;max-height:40vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:4px}.slash button{display:block;text-align:left;min-height:44px;width:100%}.slash small{color:var(--dim)}#startIn{max-width:100%;margin-top:8px}
+/* P8: attach sheet, 48 px chips with a remove button, photos already sent */
+.attached{display:flex;flex-wrap:wrap;gap:8px}.chip-img{position:relative;width:48px;height:48px}.chip-img img{width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+.chip-img button{position:absolute;top:-10px;right:-10px;width:28px;height:28px;min-height:0;padding:0;border-radius:50%;font-size:13px;line-height:1}
+.chip-img button::after{content:"";position:absolute;inset:-8px}
+.user-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.user-imgs img{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+/* P4 (spec §4): one rounded box docked under the chat. Chips and slash commands, then the message (1 to 6 lines of
+   22 px, then it scrolls), then +, the mode pill, Queue during a turn, and a 36 px round send (44 px hit area). The form is
+   display:contents so its textarea, note and send sit in the box's grid; the send words stay in a hidden span for
+   screen readers and the tests, the arrow and the stop square are drawn. */
+#box{display:grid;grid-template-columns:auto auto 1fr auto auto;grid-template-areas:"chips chips chips chips chips" "slash slash slash slash slash" "text text text text text" "note note note note note" "plus pill . . send";align-items:center;gap:2px 6px;margin:0 8px;padding:4px 6px 4px 12px;border:1px solid var(--line);border-radius:22px;background:var(--raised)}
+#box:focus-within{border-color:color-mix(in oklch,var(--cyan) 45%,var(--line))}#composer{display:contents}
+#attached{grid-area:chips;padding:10px 4px 4px}#slash{grid-area:slash;margin-top:6px}#composerNote{grid-area:note;margin:0;font-size:13px}
+#prompt{grid-area:text;width:100%;font-size:16px;line-height:22px;min-height:34px;max-height:144px;padding:6px 0;border:0;border-radius:0;background:transparent;resize:none;overflow-y:auto}#prompt:focus{outline:none}
+#attach{grid-area:plus;width:44px;height:44px;margin-left:-8px;padding:0;border:0;border-radius:50%;font-size:24px;font-weight:400;line-height:1}
+#modePill{grid-area:pill;width:auto;min-height:32px;padding:0 12px;border-radius:16px;font-size:13px;font-weight:600;white-space:nowrap}
+#midTurn{display:flex;align-items:center;gap:4px;margin:0 8px 6px;padding:3px 3px 3px 12px;border:1px solid color-mix(in oklch,var(--cyan) 35%,var(--line));border-radius:20px;background:var(--raised);font-size:13px}#midTurn[hidden]{display:none}#midTurnLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}#midTurn button{width:auto;min-height:34px;padding:0 10px;border-radius:17px;font-size:13px}
+#send{grid-area:send;position:relative;width:36px;height:36px;min-height:0;padding:0;border-radius:50%;display:grid;place-items:center}
+#send::after{content:"";position:absolute;inset:-4px}#send::before{content:"↑";font-size:20px;line-height:1}#send[data-stop=true]::before{content:"■";font-size:14px}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#queued{margin:0 8px 6px;gap:4px}#queued .event{display:flex;align-items:center;gap:8px;padding:2px 2px 2px 12px;border-radius:18px;font-size:13px}#queued .event b{flex:none;margin:0;font-size:12px}#queued .event p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#queued button{width:auto;min-height:36px;padding:0 12px;border:0;font-size:13px}
+#more{display:grid;gap:8px;margin-top:10px}#pickers{display:contents}
+
+/* Shell (v0.1.6, phone spec §1, §4, §7): one fixed column the size of the visible viewport. Top bar, a scroller, a tab bar
+   on top-level screens only. --vvh / --vvtop follow visualViewport (phone.ts fit()), so the composer and the editors ride
+   the keyboard and the page never slides. Every tab uses these pieces; c7 lays out each tab inside them. */
+[hidden]{display:none!important}
+#app{position:fixed;left:0;right:0;top:var(--vvtop,0px);height:var(--vvh,100dvh);max-width:700px;margin:0 auto;display:flex;flex-direction:column;overflow:hidden}
+main{flex:1;min-height:0;position:relative}
+main>section{position:absolute;inset:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:16px}
+main>section>:not(.bar){margin-left:16px;margin-right:16px}
+section[data-view=chat]:not([hidden]){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
+#chatBody{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* No safe-area term here: with the tab bar showing it owns the home indicator, and with the keyboard open the keyboard covers it (a 34 pt gap on an iPhone, Builder 2026-10-27). */
+#composerSlot{flex:none;max-height:55%;overflow-y:auto;padding:8px 0;border-top:1px solid rgba(255,255,255,.08)}
+#stale,#gap{flex:none;min-height:32px;display:flex;align-items:center;margin:0;padding:4px 16px;font-size:13px;font-weight:650;background:#4a3512;color:#ffe4a4}
+.bar{position:sticky;top:0;z-index:4;flex:none;display:flex;align-items:center;gap:4px;min-height:calc(44px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 8px 0 16px;background:var(--bg)}
+.bar.ruled{box-shadow:0 1px 0 rgba(255,255,255,.08)}
+.bar .mark{flex:none;width:20px;height:20px;margin-right:8px;border-radius:5px}
+.bar .title{flex:1;min-width:0;display:grid}
+.bar h1{font-size:17px;font-weight:600;line-height:1.2;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar small{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar .back{width:auto;padding:0 8px 0 0;margin-left:-8px;color:var(--cyan)}
+/* The shared 2 px ring (d1.css) sat outside the button and the scrolling screen cut it off at the top (Builder 2026-10-27): inside, thin and soft. */
+.bar .back:focus-visible{outline:1px solid color-mix(in srgb,var(--cyan) 45%,transparent);outline-offset:-1px}
+.bar button{min-height:44px;min-width:44px;border:0;border-radius:12px;background:transparent;color:var(--cyan);font-weight:600}
+.bar button svg{width:24px;height:24px}
+.bar .sync{flex:none;width:8px;height:8px;border-radius:50%;background:var(--cyan);margin:0 8px}
+.bar .sync[data-state=stale]{background:var(--amber)}
+nav{flex:none;display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom);background:color-mix(in oklch,var(--bg) 96%,transparent);border-top:1px solid rgba(255,255,255,.08);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+nav button{min-height:49px;padding:4px 0 2px;background:transparent;color:var(--dim);border:0;border-radius:0;font-size:10px;font-weight:500;display:grid;justify-items:center;align-content:center;gap:2px}
+nav button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+nav button[aria-current="page"]{color:var(--cyan)}
+body.kbd nav{display:none}
+/* Sheet: one shared bottom-sheet <dialog>; openSheet(title, html) in phone.ts fills it. */
+dialog.sheet{width:100%;max-width:700px;margin:auto auto 0;padding:8px 16px calc(16px + env(safe-area-inset-bottom));border:0;border-radius:16px 16px 0 0;background:var(--raised);color:var(--text);max-height:80dvh;overflow-y:auto}
+dialog.sheet::backdrop{background:rgba(0,0,0,.5)}
+dialog.sheet.full{max-height:100dvh;height:100dvh;border-radius:0;margin:0}
+dialog.sheet .grab{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.2);margin:0 auto 8px}
+dialog.sheet h2{font-size:13px;color:var(--dim);font-weight:600;margin:4px 0 6px}
+dialog.sheet .opt{display:flex;align-items:center;width:100%;min-height:48px;padding:0 4px;border:0;border-radius:0;background:transparent;color:var(--text);font-weight:500;text-align:left;border-bottom:1px solid rgba(255,255,255,.08)}
+dialog.sheet .opt:last-child{border-bottom:0}
+dialog.sheet .opt[aria-checked=true]::after{content:"✓";margin-left:auto;color:var(--cyan)}
+@media(prefers-reduced-motion:no-preference){dialog.sheet[open]{animation:sheet .22s ease-out}@keyframes sheet{from{transform:translateY(24px);opacity:0}}}
+
+/* Tabs (v0.1.6, phone spec §6): Terminal, Mission, a Mission window, Usage, Files and the editor, on the shell's pieces above. */
+:root{--hair:rgba(255,255,255,.08)}
+.bar h1:has(.pick){overflow:visible}
+.bar h1 .pick,.bar h1 .pick:hover{position:relative;display:inline-flex;align-items:center;gap:2px;min-height:0;width:auto;max-width:100%;padding:0;border:0;background:transparent;color:var(--text);font:inherit;text-align:left}
+.bar h1 .pick::after{content:"";position:absolute;inset:-12px -8px}
+.bar h1 .pick span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bar h1 .pick svg{flex:none;width:18px;height:18px;color:var(--dim)}
+.bar .title:has(.pick){align-content:center;grid-template-columns:minmax(0,1fr)}.bar .title:has(.pick) h1{line-height:1;min-width:0}
+#termState{white-space:normal}.bar small#termState{font-size:12px}
+section[data-view=terminal]:not([hidden]){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
+main>section>#screen{flex:1;min-height:0;height:auto;margin:0;padding:4px 6px;border:0;border-radius:0;background:var(--field);overflow:hidden}
+main>section>#keys{flex:none;display:flex;gap:2px;margin:0;padding:4px 8px;overflow-x:auto;scrollbar-width:none;background:var(--bg);border-top:1px solid var(--hair)}
+#keys::-webkit-scrollbar{display:none}
+#keys button{flex:1 0 auto;min-height:44px;min-width:36px;padding:0 4px;border:0;border-radius:10px;background:transparent;color:var(--text);font-weight:600;font-size:14px}
+#keys button:active{background:var(--raised)}
+/* Mission: a grouped list. Needs attention first, then the rest; order moves tiles across the #hub wrapper without touching the DOM. */
+#mission,#usage{margin-left:0;margin-right:0;gap:0}
+#mission>.card{margin:8px 16px}
+#mission .tiles{display:flex;flex-direction:column;gap:0}
+.tiles>.grp{margin:14px 16px 4px;font-size:13px;font-weight:600;color:var(--dim);order:0}.tiles>.grp.b{order:2}
+.tiles:not(:has(.tile[data-attn])) .grp{display:none}
+.tile{order:3;display:grid;grid-template-columns:minmax(0,1fr) auto 20px;align-items:center;column-gap:8px;width:100%;min-height:52px;padding:6px 16px;border:0;border-bottom:1px solid var(--hair);border-radius:0;background:transparent;color:var(--text);text-align:left;font-weight:500}
+.tile[data-attn]{order:1}
+.tile::after{content:"";grid-column:3;grid-row:1;justify-self:end;width:8px;height:8px;border-right:2px solid var(--dim);border-top:2px solid var(--dim);transform:rotate(45deg)}
+.tile span{grid-column:1;font-size:16px;color:var(--text);text-transform:none;letter-spacing:0}
+.tile b{grid-column:2;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 15px ui-monospace,monospace;color:var(--dim)}
+/* Every row has its detail line (spec §6), muted; a row needing attention keeps its amber or red count. */
+.tile small{display:block;grid-column:1/-1;grid-row:2;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:13px;font-weight:400}
+.tile[data-attn] b{color:var(--amber);font-weight:700}.tile.bad b{color:var(--red)}
+.tile[data-zero] span{color:var(--dim)}
+/* A Mission window is a pushed screen over everything: back to Mission, the section title, flat rows. */
+dialog.window{position:fixed;top:var(--vvtop,0px);left:0;width:100%;max-width:700px;height:var(--vvh,100dvh);max-height:none;margin:0 auto;padding:0;border:0;background:var(--bg);color:var(--text);overflow-y:auto;overscroll-behavior:contain}
+dialog.window:not([open]){display:none}
+dialog.window>.bar{position:sticky;top:0}
+dialog.window .wbody{padding:0 16px calc(16px + env(safe-area-inset-bottom));display:grid;gap:0;align-content:start}
+dialog.window .wbody>.card,dialog.window .wbody>.empty{margin:8px 0;border:0;background:transparent;padding:8px 0}
+/* Chats' bare .row rule (a flex list row) also matches these <details class="row">: put them back to blocks. */
+details.row{display:block;width:auto;min-height:0;padding:0;font-weight:inherit;color:inherit}
+details.row small,details.row b{overflow:visible;text-overflow:clip;white-space:normal}
+dialog.window details.row{border:0;border-radius:0;background:transparent;border-bottom:1px solid var(--hair)}
+dialog.window details.row summary{min-height:52px;padding:8px 0;align-content:center;list-style:none}
+dialog.window details.row summary::-webkit-details-marker{display:none}
+dialog.window details.row summary small{font-size:13px}
+dialog.window details.row .body{padding:0 0 12px}
+dialog.window details.row pre{border:0;border-radius:10px}
+/* Spec §6: a script's closed row has a Run pill at its right; the hit area reaches 44 px. */
+details.row summary:has(.pill){grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:12px}
+details.row summary .pill{position:relative;width:auto;min-width:0;min-height:32px;margin:0;padding:0 16px;border:0;border-radius:999px;background:color-mix(in srgb,var(--cyan) 18%,transparent);color:var(--cyan);font-size:15px;font-weight:600}
+details.row summary .pill::after{content:"";position:absolute;inset:-6px -4px}
+dialog.window details.row form button[type=submit]{justify-self:end;width:auto;min-width:88px;padding:0 20px;border-radius:999px}
+dialog.window [data-copy]{justify-self:end;width:auto;min-height:44px;padding:0 16px;border:0;border-radius:999px;background:var(--raised);color:var(--text)}
+dialog.window .list{gap:0}dialog.window .list li{border-bottom:1px solid var(--hair)}
+dialog.window a.link,dialog.window .list button{border:0;border-radius:0;background:transparent;padding:12px 0;min-height:48px}
+/* Usage: two plan rows with two bars each, one totals line, context bars, the rest under Details. */
+#usage{padding:4px 16px 16px;gap:12px}
+.plans{display:grid;gap:12px}.plan h2{margin:0;font-size:16px}.plan small{display:block;color:var(--dim);font-size:13px;line-height:1.4;margin:2px 0 8px}.plan.muted h2{color:var(--dim)}
+.plan .meters{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+/* P5: the plan rings. */
+.plan .meter{justify-items:center;text-align:center}.plan .meter span{font-size:13px;color:var(--text);font-weight:600}.plan .meter small{margin:0;font-size:12px}
+.uring{--c:var(--cyan);position:relative;display:grid;place-items:center;width:84px;height:84px}.uring.warn{--c:var(--amber)}.uring.bad{--c:var(--red)}
+.uring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--c) calc(var(--p) * 1%),var(--line) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 8px),#000 calc(100% - 7px));mask:radial-gradient(farthest-side,transparent calc(100% - 8px),#000 calc(100% - 7px))}
+.uring b{position:relative;font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+.ctx span small{color:var(--dim);font-size:12px}
+/* P6: a refresh turns while it loads. */
+.bar button[aria-busy=true]{opacity:.6}@media (prefers-reduced-motion:no-preference){.bar button[aria-busy=true] svg{animation:spin .8s linear infinite}}
+.meter{display:grid;gap:4px}.meter span{font-size:11px;color:var(--dim)}
+.track{height:6px;border-radius:3px;background:var(--raised);overflow:hidden}.track i{display:block;height:100%;border-radius:3px;background:var(--cyan)}.track i.warn{background:var(--amber)}.track i.bad{background:var(--red)}
+.sum{margin:4px 0;font-size:16px;color:var(--dim)}.sum b{color:var(--text);font-weight:600}.sum+.muted{margin:0 0 12px;font-size:13px;line-height:1.4}
+.ctxs{display:grid;gap:12px}.ctx{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center}.ctx span{font-size:16px}.ctx b{font:600 15px ui-monospace,monospace}.ctx .track,.ctx small{grid-column:1/-1}.ctx small{color:var(--dim);font-size:13px}
+details.more summary{min-height:44px;display:flex;align-items:center;color:var(--dim);font-size:13px;list-style:none;cursor:pointer}
+details.more summary::-webkit-details-marker{display:none}
+/* The Details disclosure has a chevron: right while closed, down while open. */
+details.more summary::after{content:"";margin:0 4px 0 auto;width:8px;height:8px;border-right:2px solid var(--dim);border-top:2px solid var(--dim);transform:rotate(45deg)}
+details.more[open] summary::after{transform:rotate(135deg)}details.more p{margin:0;color:var(--dim);font-size:13px}
+/* Files: iOS-style rows. One bar serves the list and the open file; the file's own pieces show only while a file is open. */
+[data-bar=files] h1{display:block}
+[data-bar=files] #openPath,[data-bar=files] #closeFile,[data-bar=files] #save,[data-bar=files] #moreFile{display:none}
+section[data-view=files]:has(#fileView:not([hidden])) :is(#closeFile,#save,#moreFile){display:inline-flex;align-items:center;justify-content:center}
+section[data-view=files]:has(#fileView:not([hidden])) :is(#up,#dirPath,#pickFolder){display:none}
+/* P15: the folder sheet. */
+.pickfolder{display:grid;gap:8px}.pickfolder label{font-size:13px;color:var(--dim)}.pickfolder input{width:100%;font:16px "JetBrains Mono",ui-monospace,monospace}.pickfolder .muted{margin:0;font-size:13px;overflow-wrap:anywhere}
+section[data-view=files]:has(#fileView:not([hidden])) #openPath{display:inline}
+[data-bar=files] #up:disabled{display:none}
+[data-bar=files] #save{min-width:64px;padding:0 12px}[data-bar=files] #save:disabled{opacity:.4}
+main>section>#browser{margin:0}
+.list{gap:0}.list li{border-bottom:1px solid var(--hair);margin-left:16px}
+#fileList button{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:0 16px 0 0;border:0;border-radius:0;background:transparent;font-size:16px;font-weight:500;color:var(--text)}
+#fileList button svg{flex:none;width:20px;height:20px;color:var(--dim)}
+#fileList button[data-dir="1"] svg{color:var(--cyan)}
+#fileList button[data-dir="1"]::after{content:"";margin-left:auto;width:8px;height:8px;border-right:2px solid var(--dim);border-top:2px solid var(--dim);transform:rotate(45deg)}
+#fileList .empty{margin:16px;border:0;background:transparent;color:var(--dim)}
+/* The editor fills the column down to the keyboard (--vvh via #app): no border, no floating buttons. */
+section[data-view=files]:has(#fileView:not([hidden])){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
+main>section>#fileView{flex:1;min-height:0;margin:0;display:flex;flex-direction:column}
+#fileView #editor{flex:1;min-height:0;border:0;border-radius:0;background:var(--field)}
+#fileView .cm-editor{height:100%;min-height:0}#fileView .cm-scroller{overflow:auto}
+#fileView #rendered{flex:1;min-height:0;overflow:auto;padding:12px 16px;border:0;border-radius:0}
+#fileView #conflict{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:0;padding:8px 16px;border:0;border-radius:0;background:#4a3512;color:#ffe4a4;font-size:13px}
+#fileView #conflict span{flex:1 1 100%}
+#fileView #conflict button{min-height:44px;padding:0 12px;border:0;background:transparent;color:#ffe4a4;font-weight:700;text-decoration:underline}
+/* Chats (v0.1.6, phone spec §2, §3): a list of rows, then one chat screen: top bar, one scroller, the composer slot. No cards, no labels. */
+section[data-view=chat]>:not(.bar){margin-left:0;margin-right:0}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+#chatArea{flex:1;min-height:0;display:flex;flex-direction:column}
+.scrollwrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+body.inchat nav{display:none}
+.sec{margin:16px 16px 4px;font-size:13px;font-weight:600;color:var(--dim)}
+#chatList .row{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:8px 16px;border:0;border-radius:0;background:linear-gradient(rgba(255,255,255,.08),rgba(255,255,255,.08)) right bottom/calc(100% - 16px) 1px no-repeat;color:var(--text);font-weight:400;text-align:left}
+#chatList .row .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--dim)}
+#chatList .row .dot.claude{background:#d97757}#chatList .row .dot.codex{background:#5b9cff}
+#chatList .row .t{flex:1;min-width:0;display:grid;gap:2px}
+#chatList .row b{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chatList .row small{color:var(--dim);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chatList .row time{flex:none;color:var(--dim);font-size:13px}
+#chatList .row[data-run=working] small{color:var(--cyan)}
+#chatList .row[data-run=needs] small{color:var(--amber)}#chatList .row[data-run=needs] .dot{background:var(--amber)}
+.bar .sub{min-height:0;min-width:0;display:flex;align-items:center;gap:2px;padding:2px 0;border-radius:6px;color:var(--dim);font-size:12px;font-weight:400;text-align:left;overflow:hidden;white-space:nowrap}
+.bar .sub svg{flex:none;width:12px;height:12px}
+.bar .run{flex:none;width:16px;height:16px;margin:0 6px;border-radius:50%}
+.bar .run[data-run=idle]{display:none}
+/* P3: what the turn is doing (a spinner, or amber when it waits on you) and, apart from it, a labelled Stop. */
+.bar .stop{position:relative;flex:none;display:inline-flex;align-items:center;gap:5px;min-height:30px;margin-right:4px;padding:0 10px;border:1px solid var(--line);border-radius:15px;background:none;color:var(--text);font-size:13px;font-weight:600}.bar .stop svg{width:10px;height:10px}.bar .stop::after{content:"";position:absolute;inset:-7px -2px}
+.bar .run[data-run=needs]{background:var(--amber)}
+.bar .run[data-run=working]{border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan)}
+.chips{flex:none;display:flex;gap:8px;min-height:32px;align-items:center;padding:0 16px 6px}
+.chip{min-height:32px;padding:0 12px;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:var(--raised);color:var(--text);font-size:13px;font-weight:600}
+#earlier{display:block;margin:12px auto 0;padding:0 18px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--dim);font-size:14px}#earlier[hidden]{display:none}#earlier:disabled{opacity:.6}
+#events{display:flex;flex-direction:column;gap:12px;padding:12px 16px 16px}
+#events>article{margin:0}
+#events>article[data-kind=user]+article:not([data-kind=user]){margin-top:4px}
+#events .msg{font-size:16px;line-height:1.5}
+#events .msg.user{padding:10px 14px;border-radius:16px;background:var(--raised);white-space:pre-wrap;overflow-wrap:anywhere}
+#events .msg.ask{padding:10px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;overflow-wrap:anywhere}
+#events .msg.ask.open{border-color:var(--amber)}
+#events .msg.ask .actions{margin-top:8px}
+/* P16: an approval or question reads at 14 px and its choices wrap instead of squeezing three bold 44 px pills into a row. */
+#events .msg.ask{font-size:14px;line-height:1.45}#events .msg.ask .actions{flex-wrap:wrap;gap:8px}#events .msg.ask .actions button{flex:1 1 auto;min-height:38px;padding:6px 12px;font-size:13px;line-height:1.3;white-space:normal}
+#events .msg.ask :is(fieldset,legend,small,label){font-size:13px}
+/* P19: a code block's Copy sits in its top right corner; no hover on a phone, so it is always shown. */
+.md pre{position:relative}.md pre [data-copycode]{position:absolute;top:4px;right:4px;min-height:28px;padding:2px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font-size:12px;font-weight:600}
+/* P13: the terminal's text, selectable. P14: not connected is red and written over the screen. */
+.termcopy{max-height:55vh;overflow:auto;margin:0 0 10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--field);font:12px/1.45 "JetBrains Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+section[data-view=terminal][data-live=no] #termState{color:var(--red);font-weight:600}section[data-view=terminal][data-live=wait] #termState{color:var(--amber)}
+#screen{position:relative}section[data-view=terminal]:not([data-live=yes]) #screen::after{content:attr(data-off);position:absolute;inset:0;z-index:5;display:grid;place-items:center;padding:24px;text-align:center;background:color-mix(in oklch,var(--bg) 70%,transparent);color:var(--dim);font-size:14px;white-space:pre-line;pointer-events:none}
+section[data-view=terminal][data-live=no] #screen::after{color:var(--red);font-weight:600}
+#events .note{text-align:center;color:var(--dim);font-size:13px;overflow-wrap:anywhere}
+#events .note[data-kind=error]{color:var(--red)}
+#events [data-kind=think] summary,#events [data-kind=group]>details>summary{color:var(--dim);font-size:13px}
+#events summary{display:flex;align-items:center;gap:8px;min-height:36px;cursor:pointer;list-style:none}
+#events summary::-webkit-details-marker{display:none}
+#events [data-kind=think] summary::after,#events [data-kind=group]>details>summary::after{content:"▸";margin-left:2px}
+#events [data-kind=think] details[open]>summary::after,#events [data-kind=group]>details[open]>summary::after{content:"▾"}
+#events [data-kind=think] details>div{padding:0 0 4px;color:var(--dim);font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+/* An agent program's warning (helpers.mjs warnHtml): one grey line above the reply; its "i" opens what it means. */
+#events [data-kind=warn]{color:var(--dim);font-size:13px}
+#events .agent-warn summary{display:flex;align-items:center;gap:8px;min-height:32px;list-style:none;cursor:pointer}
+#events .agent-warn summary::-webkit-details-marker{display:none}
+#events .agent-warn summary>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#events .agent-warn .i{flex:none;display:inline-grid;place-items:center;width:18px;height:18px;border:1px solid currentColor;border-radius:50%;font:italic 600 11px/1 Georgia,serif}
+#events .agent-warn[open] .i{color:var(--text)}
+#events .agent-warn p{margin:2px 0 4px;padding-left:10px;border-left:2px solid var(--line);font-size:14px;line-height:1.5}
+#events .agent-warn code{display:block;padding-left:12px;font-size:12px;overflow-wrap:anywhere}
+#events [data-kind=tool],#events [data-kind=group]{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:0 10px;overflow:hidden}
+#events [data-kind=group] [data-kind=tool]{border-width:0 0 0 0;padding:0}
+#events [data-kind=tool] summary .t,#events [data-kind=group]>details>summary .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px "JetBrains Mono",ui-monospace,monospace;color:var(--text)}
+#events [data-kind=group]>details>summary .t{font-family:inherit;color:var(--dim)}
+#events pre{margin:0 0 8px;padding:8px;border-radius:8px;background:rgba(255,255,255,.04);color:var(--dim);font:12px/1.4 "JetBrains Mono",ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+#events .st{flex:none;display:inline-grid;place-items:center;width:14px;height:14px;font-size:12px;line-height:1}
+#events [data-status=completed]>details>summary .st::before,#events [data-status=done]>details>summary .st::before{content:"✓";color:var(--cyan)}
+#events [data-status=failed]>details>summary .st::before{content:"✕";color:var(--red)}
+#events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{content:"";width:12px;height:12px;border:2px solid rgba(255,255,255,.25);border-top-color:var(--cyan);border-radius:50%}
+#jump{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:36px;height:36px;min-width:36px;min-height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.08);background:var(--raised);color:var(--text);display:grid;place-items:center;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+#jump svg{width:18px;height:18px}
+/* P4: the P9 black hole (black-hole.html, styled in black-hole.css) from first paint until the chat list has loaded. */
+#boot{position:fixed;inset:0;z-index:5;display:grid;place-items:center;pointer-events:none}
+@media(prefers-reduced-motion:no-preference){
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.35}}
+.bar .run[data-run=working],#events [data-status=pending]>details>summary .st::before,#events [data-status=in_progress]>details>summary .st::before{animation:spin .8s linear infinite}
+#chatList .row[data-run=working] .dot{animation:pulse 1.4s ease-in-out infinite}}
+#composerSlot{margin-left:16px;margin-right:16px}
+/* Sprint tracker: one ring per chunk, coloured by state (green merged, amber waiting, blue running, red blocked). */
+#sprint{display:contents}.springs{display:grid;gap:8px;margin:10px 0}
+.spr{--ring-c:var(--dim);display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.spr[data-state=merged]{--ring-c:#5fd39a}.spr[data-state=waiting]{--ring-c:var(--amber)}.spr[data-state=running]{--ring-c:#6aa8ff}.spr[data-state=blocked]{--ring-c:var(--red)}
+.spr .ring{position:relative;display:grid;place-items:center;width:52px;height:52px}
+.spr .ring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--ring-c) calc(var(--p) * 1%),var(--line) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px));mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px))}
+.spr .ring b{position:relative;font-size:12px}.spr .spt{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}.spr .st{color:var(--ring-c)}
+.spall{display:flex;align-items:center;gap:12px;margin:8px 0 12px;--ring-c:#6ee7f2}.spall .ring{position:relative;display:grid;place-items:center;width:76px;height:76px}
+.spall .ring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--ring-c) calc(var(--p) * 1%),var(--line) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 7px),#000 calc(100% - 6px));mask:radial-gradient(farthest-side,transparent calc(100% - 7px),#000 calc(100% - 6px))}
+.spall .ring b{position:relative;font-size:16px}.spall .spt{display:grid;gap:2px}
+.spr [data-activity="needs you"]{color:var(--amber)}.spr [data-steps]{color:var(--dim);font-variant-numeric:tabular-nums}
+.sprint-acts{display:grid;gap:8px}.sprint-acts form{display:grid}.sprint-acts pre{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;font:12.5px/1.45 ui-monospace,monospace;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:10px}
+/* c18: the desktop's theme picker (theme-picker.css) in the sheet. Phone buttons are 44 px primary pills; the picker's keep
+   their own look, in two columns, each card in its own theme's text colour. */
+#themeMenu button{min-height:44px;font-weight:inherit;color:var(--foreground)}#themeMenu .switch{min-height:0;padding:0;border:0}
+#themeMenu .tgrid,#themeMenu .fgrid{grid-template-columns:repeat(2,minmax(0,1fr));padding:2px 0}#themeMenu .theme-pop,#themeMenu.theme-pop{padding:0}
+#themeMenu .hd{margin:12px 0 6px}#themeMenu :is(.tnote,.fx-row){padding-left:0;padding-right:0}#themeMenu .roll{margin:8px 0 0}
+#phoneSettings h2{margin-top:8px}#phoneSettings p{margin:0}
+#phoneSettings label.set{display:flex;align-items:flex-start;gap:4px}#phoneSettings label.set input{margin-top:2px;flex:none}#phoneSettings label.set>span,#phoneSettings label.mission-file{display:grid;gap:4px}#phoneSettings label.set .muted{font-size:13px}#phoneSettings .field-err{color:var(--red)}
+.sign-in h2{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.sign-in h2 small{font-weight:400;color:var(--dim)}.sign-in p+p,.sign-in p+form,.sign-in form+p{margin-top:8px}.sign-in a{font-weight:600}.sign-code code{font-size:1.6em;letter-spacing:.08em}.sign-form{display:flex;gap:8px;margin-top:8px}.sign-form input{flex:1;min-width:0}.sign-acts{display:flex;justify-content:flex-end;margin-top:10px}
+/* A space reference whose ID nothing has: a row that is not a button, dim, saying not found. */
+dialog.window .row.missing{display:grid;gap:3px;min-height:52px;padding:8px 0;align-content:center;border-bottom:1px solid var(--hair);color:var(--dim)}
+dialog.window .row.missing small{font-size:13px}
+/* A folder list's files sit inside its row: indented on a hairline, lighter and smaller than the rows around them. */
+dialog.window [data-folder]{display:grid;margin-left:2px;padding-left:12px;border-left:1px solid var(--hair)}
+dialog.window [data-folder] details.row:last-child{border-bottom:0}
+dialog.window [data-folder] details.row summary{min-height:44px;padding:6px 0;font-weight:500;font-size:14px}
+dialog.window [data-folder] details.row summary small{font-size:12px}
+
+/* Mission data tiles and links (M3): a script's JSON drawn as text. */
+.card-frame iframe{display:block;width:100%;height:200px;border:0;background:transparent;color-scheme:light}
+.dark .card-frame iframe{color-scheme:dark}
+.tile-note{margin:0;font-size:13px;color:var(--dim)}
+.tile-stat{margin:0;display:flex;align-items:baseline;gap:6px}.tile-stat b{font-size:30px;font-weight:650;color:var(--text);font-variant-numeric:tabular-nums}.tile-stat span{font-size:13px;color:var(--dim)}
+.tile-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.tile-list li{display:grid;grid-template-columns:1fr auto;gap:0 8px;min-width:0}.tile-list li>:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.tile-list a{color:var(--cyan);text-decoration:none}
+.tile-list em{font-style:normal;font-size:11px;padding:0 7px;border-radius:999px;background:var(--raised);color:var(--text);align-self:center}
+.tile-list small{grid-column:1/-1;font-size:12px;color:var(--dim)}
+.tile-table{overflow:auto}.tile-table table{border-collapse:collapse;width:100%;font-size:13px}
+.tile-table th{text-align:left;font-weight:600;color:var(--dim);border-bottom:1px solid var(--line);padding:2px 10px 4px 0}.tile-table td{padding:4px 10px 4px 0;color:var(--text);font-variant-numeric:tabular-nums}
+.tile-rings{display:flex;flex-wrap:wrap;gap:12px}.tile-rings figure{margin:0;display:grid;justify-items:center;position:relative;width:68px}
+.tile-rings svg{width:60px;height:60px;transform:rotate(-90deg)}.tile-rings circle{fill:none;stroke:var(--line);stroke-width:3.2}.tile-rings circle+circle{stroke:var(--cyan);stroke-linecap:round}
+.tile-rings b{position:absolute;top:21px;font-size:13px;font-variant-numeric:tabular-nums;color:var(--text)}.tile-rings figcaption{font-size:12px;color:var(--dim);text-align:center}
+.tile-printed{margin:6px 0 0;max-height:140px;overflow:auto;padding:6px 8px;border-radius:7px;background:var(--raised);color:var(--text);font-size:12px;white-space:pre-wrap;word-break:break-all}
+.tile-allow{margin-top:8px;min-height:40px;padding:0 18px;border:0;border-radius:999px;background:var(--cyan);color:var(--bg);font:inherit;font-size:14px;font-weight:600}
+.tile-row{margin:0}.tile-link{display:grid;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;color:var(--text);text-decoration:none;font-size:15px}
+.tile-link small{font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+
+/* Mission checklists (M4): each row's marks wrap under its text at 390 px; 40 px tall targets. */
+.ck-file+.ck-file{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.ck-name{margin:0 0 8px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;font-size:15px}.ck-name b{font-weight:600;color:var(--text)}
+.ck-state{font-size:13px;color:var(--dim)}
+.ck-rows{list-style:none;margin:0;padding:0}
+.ck-rows li{display:grid;gap:8px;padding:10px 0;border-top:1px solid var(--line)}.ck-rows li:first-child{border-top:0}
+.ck-rows p{margin:0;font-size:14px;line-height:1.4;color:var(--text);overflow-wrap:anywhere}
+.ck-marks{display:flex;flex-wrap:wrap;gap:3px;padding:3px;border:1px solid var(--line);border-radius:999px;justify-self:start}
+.ck-marks button{min-height:36px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--dim);font:inherit;font-size:14px}
+.ck-marks button[aria-pressed=true]{background:var(--cyan);color:var(--bg);font-weight:600}
+.ck-apply{margin-top:10px;min-height:44px;padding:0 20px;border:0;border-radius:999px;background:var(--cyan);color:var(--bg);font:inherit;font-size:15px;font-weight:600}
+.ck-apply[data-armed]{outline:2px solid var(--cyan);outline-offset:3px}
+.ck-note{margin-bottom:8px;color:var(--text)}
+/* M4 onboarding card on an empty Mission, and the space picker (onboarding.mjs) */
+.onboard{margin:12px;padding:16px;display:grid;gap:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.onboard h3{margin:0;font-size:19px}.onboard h4{margin:6px 0 0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}.onboard p{margin:0;line-height:1.45}
+.onboard-protect{display:grid;gap:8px;padding:10px 12px;border:1px solid color-mix(in oklch,var(--amber) 35%,var(--line));background:color-mix(in oklch,var(--amber) 6%,transparent);border-radius:10px}.onboard-protect p{margin:0}
+.onboard-go{display:grid;gap:8px}.onboard-go [data-variant=default]{background:var(--cyan);color:var(--bg);border-color:var(--cyan)}
+.onboard-tpls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+div.onboard-tpl{border:1px solid var(--line);border-radius:10px}
+#mission [data-preview-back]{background:transparent;color:var(--text);border-color:var(--line)} /* Back is the quiet one, as button.quiet */ /* a preview's sections: shown, not tapped */
+.onboard-tpl{display:grid;gap:4px;align-content:start;padding:10px;text-align:left;background:var(--raised);color:var(--text)}.onboard-tpl b{font-weight:600}.onboard-tpl span{font-size:13px;color:var(--dim)}
+.space-pick{display:flex;align-items:center;gap:8px;margin:12px 12px 0;color:var(--dim)}.space-pick select{flex:1}
+/* A workspace image: whole and centred on a quiet surface, so a transparent PNG still reads; read-only, so no Save or file menu. */
+section[data-view=files]:has(#fileView[data-image]:not([hidden])) :is(#save,#moreFile){display:none}
+#imageView{flex:1;min-height:0;display:grid;place-items:center;padding:16px;overflow:auto;background:color-mix(in oklab,var(--raised) 60%,transparent)}
+#imageView[hidden]{display:none}
+#imageView img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
+#imageView .note{max-width:32ch;text-align:center;color:var(--dim);font-size:14px;line-height:1.45}

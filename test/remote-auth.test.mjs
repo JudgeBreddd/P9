@@ -158,14 +158,15 @@ test('Phase 10: auth state machine and threat model surface 12 with real passkey
   const raceAssertion = await assertion(a.page, raceOptions.body.options);
   const raced = await Promise.all([1, 2].map(() => server.remote('/auth/login/verify', { method: 'POST', body: raceAssertion })));
   assert.deepEqual(raced.map((result) => result.status).sort(), [200, 401]);
-  // Cookie rotation: a new login replaces the old session; the login assertion cannot be replayed.
+  // A new login (another browser on the same phone, P2) adds a session and leaves the old one signed in; the login
+  // assertion cannot be replayed.
   const again = await login(server, a);
   assert.equal(again.result.status, 200, again.result.text);
-  assert.equal((await server.remote('/health', { session: sessionA })).status, 401);
+  assert.equal((await server.remote('/health', { session: sessionA })).status, 200, 'the first browser stays signed in');
   assert.equal((await server.remote('/auth/login/verify', { method: 'POST', body: again.response })).status, 401);
   sessionA = again;
   assert.equal((await server.remote('/health', { session: sessionA })).status, 200);
-  console.log('PASS CSRF/origin 403, /devices 404 on TCP, per-device operation IDs, rotation: old cookie 401, replayed assertion 401');
+  console.log('PASS CSRF/origin 403, /devices 404 on TCP, per-device operation IDs, second login keeps the first, replayed assertion 401');
 
   // Lock: 423 on every route for that device only; another device unlocking does not unlock it; its passkey does.
   assert.equal((await server.desk('/devices/' + deviceA + '/lock', 'POST')).status, 200);

@@ -74,7 +74,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
     if (!hasUserBus() || !gone(await serverState())) return;
     await systemctl(['reset-failed', unit]).catch(() => {});
     const environment = Object.entries(childEnv()).map(([key, value]) => key + '=' + value);
-    await run('systemd-run', ['--user', '--quiet', '--collect', '--unit', unit, '--property=KillMode=control-group', '--',
+    await run('systemd-run', ['--user', '--quiet', '--collect', '--slice=p9.slice', '--unit', unit, '--property=KillMode=control-group', '--',
       '/usr/bin/env', '-i', ...environment, 'tmux', '-L', socket, '-D'], { env: childEnv(), timeout: 3000 });
     for (let i = 0; i < 60; i++) {
       try { await tmux(['list-sessions']); return; } catch (error) { if (/no sessions/i.test(String(error.stderr))) return; }
@@ -99,20 +99,25 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
   // A failed recovery is tried again on the next route call, so installing tmux needs no daemon restart.
   const ready = () => recovered.catch(() => (recovered = recover()));
 
-  // start (Hand off, from server.mjs only, never a request's body): the folder, and a command typed in but not run.
+  // start (from server.mjs only, never a request's body): the folder and a command typed in but not run (Hand off; run:
+  // true presses Enter too, only for Sprint's fixed tmux attach), and
+  // phone: made from a phone, so that session's own environment has P9_PHONE=1 (threat model row 13; a shell config can
+  // skip a desktop-only greeting). The tmux server's shared environment is not changed.
   async function create(body, start = {}) {
     try { await ready(); } catch (error) { if (error.message === 'tmux-not-found') return { status: 503, error: 'tmux-not-found' }; throw error; }
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
-    if (!release) return { status: 503, error: 'stop-all-running' };
+    if (!release) return { status: 503, error: lifecycle.refusal() };
     const id = randomUUID();
     try {
       stillAuthorized();
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       await ensureServer();
       stillAuthorized();
-      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace]);
+      // -e PATH: a tmux server an older P9 started keeps its own PATH, without P9's bin folder (item 15).
+      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, '-e', 'PATH=' + childEnv().PATH, ...(start.phone ? ['-e', 'P9_PHONE=1'] : [])]);
       if (start.typed) await tmux(['send-keys', '-t', '=' + name(id) + ':', '-l', start.typed]);
+      if (start.typed && start.run) await tmux(['send-keys', '-t', '=' + name(id) + ':', 'Enter']); // a fixed command from server.mjs (Sprint: Open tmux)
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);
       return { status: 201, terminal: id };
     } catch (error) {
@@ -233,13 +238,13 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
   async function create(body, start = {}) {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return { status: 400, error: 'request-refused' };
     const release = lifecycle.begin();
-    if (!release) return { status: 503, error: 'stop-all-running' };
+    if (!release) return { status: 503, error: lifecycle.refusal() };
     const id = randomUUID();
     try {
       stillAuthorized();
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       let pty;
-      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: childEnv() }); } catch (error) {
+      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: { ...childEnv(), ...(start.phone ? { P9_PHONE: '1' } : {}) } }); } catch (error) {
         // spawnPty undoes its own partial start, so nothing is left running.
         db.prepare("UPDATE terminals SET state = 'stopped' WHERE id = ?").run(id);
         return { status: 503, error: 'terminal-unavailable', reason: 'The Windows terminal did not start: ' + String(error.message).slice(0, 200) };
