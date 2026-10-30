@@ -225,7 +225,8 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
       assert.equal((await extras.evaluateAll(l => l.filter(e => e.checkVisibility({ visibilityProperty: true })).length)), 0, name + ': full mode hides the plan card and the meters');
       const ta = page.locator('#chats > .pane textarea').first();
       assert.ok(await ta.isVisible(), name + ': the text box is visible under the full-screen artifact');
-      assert.ok(await ta.evaluate(el => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el; }), name + ': nothing covers the text box');
+      const cover = await ta.evaluate(el => { const r = el.getBoundingClientRect(), top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return top === el ? '' : (top?.outerHTML ?? 'nothing').slice(0, 200); });
+      assert.equal(cover, '', name + ': nothing covers the text box');
       const side = await box('#side'), tb = await ta.boundingBox();
       assert.ok(side.y + side.height <= tb.y + 1, `${name}: the artifact ends at ${side.y + side.height}, the text box starts at ${tb.y}`);
       assert.ok(side.height > 100, name + ': the artifact still has room: ' + side.height);

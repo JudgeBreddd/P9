@@ -1930,7 +1930,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   // A click on an "i" opens its section, and the checkbox in the same row stays as it was.
   const locked = await page.locator('#setLock').isChecked();
   await page.locator('#setLock').locator('xpath=..').locator('.info').click();
-  await page.locator('#setBody fieldset:last-child legend .info').click();
+  await page.locator('#setBody > [data-page="General"] > fieldset:last-child legend .info').click();
   await until(async () => (await lines(opened)).length === 2, 'two guide sections opened');
   assert.deepEqual(await lines(opened), ['https://github.com/' + REPO + '/blob/main/docs/guide.md#agent-lock', 'https://github.com/' + REPO + '/blob/main/docs/guide.md#maintenance']);
   assert.equal(await page.locator('#setLock').isChecked(), locked);
@@ -1941,9 +1941,9 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
     return [link.textDecorationLine, link.color === primary];
   }), ['underline', true]);
   // MT1: the Updates row's Check now (the releases page in a source checkout), then the five buttons (maintenance.test.mjs has the row's states).
-  assert.deepEqual(await page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
+  assert.deepEqual(await page.locator('#setBody > [data-page="General"] > fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS]);
   assert.deepEqual([await page.locator('#mtUpdOpen').isEnabled(), await page.locator('#setBody strong', { hasText: /^Updates$/ }).count()], [true, 1], 'updates off: one Updates row, its Check now opens the releases page');
-  await page.locator('#setBody fieldset:last-child').scrollIntoViewIfNeeded();
+  await page.locator('#setBody > [data-page="General"] > fieldset:last-child').scrollIntoViewIfNeeded();
   const png = await page.locator('#setDlg').screenshot({ type: 'png' });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT settings-maintenance ' + png.toString('base64'));
   // The page's own refusals: a section not in the guide's list, a second argument, arguments where none are taken.
@@ -1981,7 +1981,7 @@ test('Settings → Maintenance: each button and its Ctrl K entry does its job, e
   const packaged = await launch({ P9_PACKAGED: '1' });
   assert.equal(await packaged.page.evaluate(() => window.p9.source), false);
   await settingsOpen(packaged.page);
-  assert.deepEqual(await packaged.page.locator('#setBody fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
+  assert.deepEqual(await packaged.page.locator('#setBody > [data-page="General"] > fieldset:last-child button:not(.info)').evaluateAll((b) => b.map((x) => x.textContent)), ['Check now', ...LABELS.slice(0, 4)]);
   await packaged.page.click('#setClose');
   assert.equal(await (await palette(packaged.page, 'Rebuild')).count(), 0);
   assert.equal(await (await palette(packaged.page, 'Restart daemon')).count(), 1);
