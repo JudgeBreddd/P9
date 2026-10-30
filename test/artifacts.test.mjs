@@ -273,3 +273,28 @@ test('artifacts: the phone opens an artifact in the full sheet and sends a comme
   assert.equal(g.url(), server.origin + '/frame/', 'the frame is back on the frame page');
   assert.equal(await page.locator('#sheet .art').getAttribute('data-rendered'), 'error', 'the panel says the artifact left its frame');
 });
+
+test('artifacts: a pinned artifact sits above the black hole; its top right corner and first line are not covered', { timeout: 60000 }, async (t) => {
+  const { page, shot, reply } = await launch(t);
+  const frame = await reply(`${F}html artifact pinned First line\n<h1 style="margin:0">First line of the artifact</h1><p>More</p>\n${F}`);
+  const line = await frame.evaluate(() => { const r = document.querySelector('h1').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    // What the page draws at each point: '' when it is the panel (or its frame), else the element on top of it. The black
+    // hole (.stage::before) ignores the pointer, so it is made hit-testable here or elementFromPoint looks through it.
+    const covers = await page.evaluate(line => {
+      if (!document.querySelector('#holeHit')) document.head.append(Object.assign(document.createElement('style'), { id: 'holeHit', textContent: '.stage::before{pointer-events:auto!important}' }));
+      const side = document.querySelector('#side'), s = side.getBoundingClientRect(), f = side.querySelector('.art-frame').getBoundingClientRect();
+      const at = (x, y) => { const e = document.elementFromPoint(x, y); return e && side.contains(e) ? '' : (e?.outerHTML ?? 'nothing').slice(0, 160); };
+      return {
+        'top right corner': at(s.right - 4, s.top + 4),
+        'first line start': at(f.x + line.x + 4, f.y + line.y + line.h / 2),
+        'first line end': at(f.x + Math.min(line.x + line.w, f.width) - 4, f.y + line.y + line.h / 2),
+        'first line top right': at(f.right - 4, f.y + line.y + 2),
+      };
+    }, line);
+    assert.deepEqual(covers, { 'top right corner': '', 'first line start': '', 'first line end': '', 'first line top right': '' }, theme + ': nothing draws over the pinned panel');
+    await shot('a1-pinned-over-blackhole-' + theme);
+  }
+});
