@@ -4,7 +4,7 @@
 // parsers and File protection as the desktop; the agent lock turns every write off; running a script or answering a
 // needs-you item asks the user in the chat first.
 // ponytail: MCP by hand (JSON-RPC, tools and resources only, no SDK in the daemon); the SDK if P9 needs more of the protocol.
-import { readFile as readText, writeFile as writeText, open, mkdir, lstat, chmod, realpath } from 'node:fs/promises';
+import { readFile as readText, writeFile as writeText, open, mkdir, lstat, chmod, realpath, rename, readdir, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -12,8 +12,8 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { readFile, guardedSave, createFile } from '../../packages/files/index.mjs';
-import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt, draftAt } from './mission.mjs';
-import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES } from './mission-fields.mjs';
+import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt, draftAt, draftNames } from './mission.mjs';
+import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -311,8 +311,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
   // A template into the space Mission shows, or into a named scratch space (threat model row 72): only when that space is missing or has no
   // sections, so nothing the user built is replaced. The user's click on the card is the write; File protection still asks.
-  function install(name, space, confirm) {
-    const template = TEMPLATES.find((entry) => entry.name === name);
+  async function install(name, space, confirm) {
+    const template = TEMPLATES.find((entry) => entry.name === name) ?? await userTemplate(name);
     if (!template) return { error: 'unknown-template' };
     if (space !== undefined && !draftAt(drafts, space)) return badName();
     return drafting.run(space, () => edit('space', undefined, (data) => {
@@ -321,6 +321,65 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       data.sections = structuredClone(template.space.sections);
       return { changed: { action: 'installed', template: name, ...(space !== undefined ? { space } : {}) } };
     }, { user: true, confirm: confirm === true }));
+  }
+  // Finding 4 adds (threat model rows A and B): Delete a space, and user templates in the settings folder.
+  const home = settingsFile ? path.dirname(settingsFile) : null, templatesDir = home && path.join(home, 'templates');
+  async function plainFolder(dir) {
+    try {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const folder = await lstat(dir);
+      return folder.isSymbolicLink() || !folder.isDirectory() ? { error: 'request-refused', detail: dir + ' is not a plain folder, so P9 will not write there.' } : {};
+    } catch (error) { return { error: 'save-failed', code: error.code }; }
+  }
+  // Main is never in the spaces folder, so it is never deleted; the last space is kept (Main counts when settings name its file).
+  async function deleteSpace(name, confirm) {
+    const file = draftAt(drafts, name);
+    if (!file) return badName();
+    const names = await draftNames(drafts), settings = need();
+    if (!names.includes(name)) return { error: 'unknown-space' };
+    if (names.length === 1 && !settings.space) return { error: 'last-space', detail: 'This is the only space, so P9 keeps it. Add another space first.' };
+    if (protection() && confirm !== true) return { error: 'registry-read-only', detail: 'File protection is on: the user confirms the move with a second click.' };
+    // A real delete (no deleted folder, no trash) after the confirm that names the space; a link is never in names.
+    try { await unlink(file); } catch (error) { return { error: 'save-failed', code: error.code }; }
+    return { deleted: name, next: settings.space ? null : names.find((entry) => entry !== name) };
+  }
+  // A user template read back: a plain file under 6 MB, { title, about, space }, and a space validate_space accepts; else left out.
+  async function userTemplate(name) {
+    if (!templatesDir || !spaceName(name) || TEMPLATES.some((entry) => entry.name === name)) return null;
+    try {
+      const handle = await open(path.join(templatesDir, name + '.json'), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      let text;
+      try { const info = await handle.stat(); if (!info.isFile() || info.size > 6 * 1024 * 1024) return null; text = await handle.readFile('utf8'); } finally { await handle.close(); }
+      const data = JSON.parse(stripBom(text));
+      if (!object(data) || typeof data.title !== 'string' || typeof data.about !== 'string' || !object(data.space) || !Array.isArray(data.space.sections)) return null;
+      return (await validate('space', JSON.stringify(data.space))).ok ? { name, title: data.title.slice(0, 80), about: data.about.slice(0, 200), space: data.space, user: true } : null;
+    } catch { return null; }
+  }
+  async function userTemplates() {
+    if (!templatesDir) return [];
+    const names = await readdir(templatesDir, { withFileTypes: true }).then((list) => list.filter((entry) => entry.isFile() && entry.name.endsWith('.json')).map((entry) => entry.name.slice(0, -5)).sort(), () => []);
+    return (await Promise.all(names.map(userTemplate))).filter(Boolean);
+  }
+  // The space Mission shows, as it is now, saved as <settings folder>/templates/<name>.json. A clash asks Replace or Rename.
+  async function saveTemplate(name, about, replace) {
+    if (!templatesDir || !spaceName(name)) return badName();
+    if (TEMPLATES.some((entry) => entry.name === name)) return { error: 'builtin-template', detail: 'A built-in template has that name.' };
+    const settings = need(), { space } = await files(settings, settings.space_name);
+    if (!space?.content) return noSpace();
+    const check = await validate('space', space.content);
+    if (!check.ok) return { error: 'invalid-space', detail: 'Mission Control would drop part of this space, so it was not saved as a template.', invalid: check.invalid ?? [] };
+    const made = await plainFolder(templatesDir);
+    if (made.error) return made;
+    const file = path.join(templatesDir, name + '.json'), there = await lstat(file).then(() => true, () => false);
+    if (there && replace !== true) return { error: 'template-exists' };
+    // Replace: written beside it under a temporary name, then renamed over it, so a failed write leaves the old template whole.
+    const to = there ? path.join(templatesDir, '.' + name + '.' + Date.now() + '.tmp') : file;
+    let handle;
+    try { handle = await open(to, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
+    catch (error) { return { error: 'save-failed', code: error.code }; }
+    try { await handle.writeFile(JSON.stringify({ title: name, about, space: JSON.parse(stripBom(space.content)) }, null, 2) + '\n'); await handle.sync(); } finally { await handle.close(); }
+    if (there) try { await rename(to, file); } catch (error) { await unlink(to).catch(() => {}); return { error: 'save-failed', code: error.code }; }
+    return { saved: name };
   }
   // A copy of the space's old text beside it, owner-only, under a new name (never over a file).
   async function keep(file, text) {
@@ -627,5 +686,5 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const { registry, space } = await files(need());
     return { registry: registry.hash, space: space?.hash ?? null, protection: protection() };
   }
-  return { handle, update, editState, install };
+  return { handle, update, editState, install, deleteSpace, saveTemplate, userTemplates };
 }
