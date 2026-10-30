@@ -77,15 +77,15 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   assert.equal(await page.locator('#setLock').isChecked(), false);
   await page.click('#zIn'); await page.click('#zIn');
   await page.locator('#zVal', { hasText: '120%' }).waitFor();
-  await page.check('#setCloseSend');
-  await page.uncheck('#setF-mission');
-  await page.check('#setLock');
+  await page.click('[data-set-page="Chat Focus"]'); await page.check('#setCloseSend');
+  await page.click('[data-set-page="Mission Control"]'); await page.uncheck('#setF-mission');
+  await page.click('[data-set-page="General"]'); await page.check('#setLock');
   await page.locator('#setLock:checked').waitFor();
   assert.deepEqual(await call(instance, '/agent-lock'), { on: true });
   // The last focus mode left on cannot be turned off.
-  await page.uncheck('#setF-dev');
+  await page.click('[data-set-page="Dev Focus"]'); await page.uncheck('#setF-dev');
   assert.equal(await page.locator('#setF-chat').isDisabled(), true);
-  await page.check('#setF-dev');
+  await page.check('#setF-dev'); await page.click('[data-set-page="General"]');
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'settings.png') }); }
   await page.click('#setDocs');
   let url = '';
@@ -1318,7 +1318,7 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
     return pane.locator('[data-mode]');
   };
   const pick = page.locator('[data-default-mode="codex"]'), dlg = page.locator('#looseDlg');
-  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); };
+  const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
   const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
   const kept = () => page.evaluate(() => localStorage.getItem('p9-mode-default:codex'));
   await settings();
@@ -2029,7 +2029,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
     const box = page.locator('#setMission [data-mission="' + key + '"]');
     await box.fill(value); await box.dispatchEvent('change');
   };
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   assert.deepEqual(await boxes(), keys.map((key) => [key, MISSION_FILES[key] ?? '']));
   // Each row has the "i" that opens its guide section, and every path row but scripts_root (a full path) has Pick.
@@ -2091,7 +2091,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   // A restart reads them back from the daemon's file.
   await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
   ({ app, page } = await launchOn(t, instance, profile));
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   const saved = { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' };
   assert.deepEqual(await boxes(), keys.map((key) => [key, { page_schemes: 'obsidian, zotero', notes_roots: 'vault = ' + notes }[key] ?? saved[key] ?? '']));
@@ -2109,7 +2109,7 @@ test('Pick: the workspace folder itself and a folder outside get their own refus
   await rm(path.join(instance.workspace, 'mission'), { recursive: true });
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-pick-')), 'profile');
   const { app, page } = await launchOn(t, instance, profile);
-  await page.click('#setBtn');
+  await page.click('#setBtn'); await page.click('[data-set-page="Mission Control"]');
   await page.locator('#setMission').waitFor({ timeout: 10000 });
   for (const [pick, text] of [[instance.workspace, 'That is the workspace folder itself.'], [instance.directory, 'That is outside the workspace.']]) {
     await pickNext(app, [pick]);

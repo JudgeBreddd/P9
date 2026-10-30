@@ -56,7 +56,7 @@ const mid = b => ({ x: b.x + b.width / 2, y: b.y + 250 });
 
 test('side panel: the drag bar, slots, narrow mode, the editor view beside it, swap, toggle, cards over the view, the Chat split bar (A/B)', { timeout: 240000 }, async (t) => {
   const { app, page, reset, native, box, shot, drag, size, frames } = await launch(t);
-  const goDev = async () => { await page.click('#rDev'); await page.locator('#side').waitFor(); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat'); };
+  const goDev = async () => { await page.click('#rDev'); if (await page.evaluate(() => window.__side.current()?.slot !== 'dan-chat')) await page.click('#sideToggle'); await page.locator('#side').waitFor(); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat'); };
 
   await t.test('1. dragBar: the bar drags the panel, the width survives a reload, ArrowLeft adds 24, a drag past the end stops at the end', async () => {
     await reset(); await goDev();
