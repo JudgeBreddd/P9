@@ -167,6 +167,57 @@ test('M4a scratch spaces: a name never becomes a path; a draft write keeps the l
   console.log('PASS M4a scratch: 12 bad names and a linked folder refused, lock and protection held, draft 0600 in 0700, switch and back left live bytes as they were');
 });
 
+// Finding 4 adds (threat model rows A and B): Delete a space and user templates, on the server.
+test('M4a finding 4 adds (server): Delete removes a space and keeps the last; a user template validates, round-trips and is read back with care', { timeout: 90000 }, async (t) => {
+  const instance = await start(t);
+  const config = path.join(instance.directory, '.config/p9'), spaces = path.join(config, 'spaces'), templates = path.join(config, 'templates');
+  const list = (dir) => readdir(dir).then((names) => names.sort(), () => []), json = async (file) => JSON.parse(await readFile(file, 'utf8'));
+  assert.equal((await call(instance, '/mission/template', 'POST', { name: 'homelab', space: 'a', confirm: true })).status, 201);
+  // Names never become paths; an unknown space and the last space are refused; nothing moves.
+  for (const [body, status] of [[{ name: '../x' }, 400], [{ name: 'A' }, 400], [{ name: 'a', extra: 1 }, 400], [{ name: 'nope' }, 404], [{ name: 'a' }, 409]]) {
+    assert.equal((await call(instance, '/mission/space/delete', 'POST', body)).status, status, JSON.stringify(body));
+  }
+  // A link in the spaces folder is never a space, so it is never deleted (nor its target).
+  await symlink(path.join(config, 'settings.json'), path.join(spaces, 'l.json'));
+  assert.equal((await call(instance, '/mission/space/delete', 'POST', { name: 'l' })).status, 404);
+  await rm(path.join(spaces, 'l.json'));
+  assert.deepEqual(await list(spaces), ['a.json']);
+  const source = await json(path.join(spaces, 'a.json'));
+  source.sections[0].title = 'Edited by hand';
+  await writeFile(path.join(spaces, 'b.json'), JSON.stringify(source));
+  await call(instance, '/mission/space', 'POST', { name: 'a' });
+  // File protection asks for the user's confirm; then the file is gone (no deleted folder) and Mission shows another space.
+  assert.equal((await call(instance, '/mission/space/delete', 'POST', { name: 'a' })).status, 403);
+  const done = await call(instance, '/mission/space/delete', 'POST', { name: 'a', confirm: true });
+  assert.deepEqual([done.status, done.body.spaceName], [200, 'b']);
+  assert.equal((await settingsOf(instance)).space_name, 'b');
+  assert.deepEqual(await list(spaces), ['b.json']);
+  assert.equal((await list(config)).includes('deleted'), false, 'no deleted folder');
+  // Save as template: the name rule, no built-in name, one-line about; a clash asks; Replace writes over it.
+  for (const [body, status] of [[{ name: '../x' }, 400], [{ name: 'homelab' }, 409], [{ name: 't1', about: 'a\nb' }, 400], [{ name: 't1', about: 'x'.repeat(201) }, 400], [{ name: 't1', more: 1 }, 400]]) {
+    assert.equal((await call(instance, '/mission/template/save', 'POST', body)).status, status, JSON.stringify(body));
+  }
+  assert.equal((await call(instance, '/mission/template/save', 'POST', { name: 't1', about: 'Lab' })).status, 201);
+  assert.deepEqual(await json(path.join(templates, 't1.json')), { title: 't1', about: 'Lab', space: source });
+  if (process.platform !== 'win32') assert.equal((await stat(path.join(templates, 't1.json'))).mode & 0o777, 0o600);
+  assert.equal((await call(instance, '/mission/template/save', 'POST', { name: 't1' })).body.error, 'template-exists');
+  assert.equal((await call(instance, '/mission/template/save', 'POST', { name: 't1', about: 'Again', replace: true })).status, 201);
+  assert.equal((await json(path.join(templates, 't1.json'))).about, 'Again');
+  assert.deepEqual(await list(templates), ['t1.json'], 'no temporary file left');
+  // Read back: only plain files with a valid space and a free name; a link, a bad file and a built-in name are left out.
+  await writeFile(path.join(templates, 'bad.json'), JSON.stringify({ title: 'x', about: 'y', space: { sections: 'no' } }));
+  await writeFile(path.join(templates, 'odd.json'), JSON.stringify({ title: 'x', about: 'y', space: { sections: [], extra: 1 } }));
+  await writeFile(path.join(templates, 'homelab.json'), JSON.stringify({ title: 'x', about: 'y', space: { sections: [] } }));
+  await writeFile(path.join(templates, 'Up.json'), JSON.stringify({ title: 'x', about: 'y', space: { sections: [] } }));
+  await symlink(path.join(templates, 't1.json'), path.join(templates, 'link.json'));
+  const guide = (await call(instance, '/mission/guide')).body.templates;
+  assert.deepEqual(guide.map(({ name, user }) => name + (user ? '*' : '')), ['icm', 'obsidian', 'homelab', 'blank', 't1*']);
+  assert.equal((await call(instance, '/mission/template', 'POST', { name: 'link', space: 'c', confirm: true })).status, 404, 'a link is not read');
+  // Choose: the new space is the saved one.
+  assert.equal((await call(instance, '/mission/template', 'POST', { name: 't1', space: 'c', confirm: true })).status, 201);
+  assert.deepEqual(await json(path.join(spaces, 'c.json')), source);
+});
+
 test('M4a onboarding (server): a fresh profile is empty; the guide and templates come from P9; a build chat starts with the shipped guide only', { timeout: 90000 }, async (t) => {
   const instance = await start(t);
   const fresh = (await call(instance, '/mission')).body;

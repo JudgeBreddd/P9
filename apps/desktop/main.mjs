@@ -564,6 +564,8 @@ export async function createDesktop({ state, open } = {}) {
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
     build: ({ provider, space }) => ['claude', 'codex'].includes(provider) && ['POST', '/mission/build', { provider, ...(space !== undefined ? { space } : {}) }],
     space: ({ name }) => (name === null || typeof name === 'string') && ['POST', '/mission/space', { name }],
+    deleteSpace: ({ name, confirm }) => typeof name === 'string' && ['POST', '/mission/space/delete', { name, ...(confirm !== undefined ? { confirm } : {}) }],
+    saveTemplate: ({ name, about, replace }) => typeof name === 'string' && ['POST', '/mission/template/save', { name, ...(about !== undefined ? { about } : {}), ...(replace !== undefined ? { replace } : {}) }],
     // Sprint tracker: the connected machine's status file, and a terminal attached to its sprint tmux session (no body).
     sprint: () => ['GET', '/mission/sprint'],
     sprintTmux: () => ['POST', '/mission/sprint/tmux', {}],

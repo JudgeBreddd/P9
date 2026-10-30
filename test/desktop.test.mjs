@@ -609,6 +609,84 @@ test('Mission D13 (finding 4): Switch mission control, + Add, template preview a
   assert.deepEqual(await files(), ['homelab-2.json', 'homelab.json'], 'switching deletes no space file');
 });
 
+// Finding 4 adds (threat model rows A and B): Delete removes the shown space's file after a confirm that names it and keeps
+// the last space; Save as template keeps the shown space in the settings folder, and Choose gives the same space back.
+test('Mission D14 (finding 4 adds): Delete a space, Save as template, and Choose it back', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const { page, shot } = await openFirst(t, instance);
+  const config = path.join(instance.directory, '.config', 'p9'), spaces = path.join(config, 'spaces');
+  const files = (dir = spaces) => readdir(dir).then((list) => list.sort(), () => []), json = async (file) => JSON.parse(await readFile(file, 'utf8'));
+  const light = async (name) => { const was = await page.evaluate(() => { const h = document.documentElement, was = h.dataset.theme; h.classList.remove('dark'); h.dataset.theme = 'daylight'; return was; });
+    await shot(name); await page.evaluate((was) => { const h = document.documentElement; h.classList.add('dark'); if (was === undefined) delete h.dataset.theme; else h.dataset.theme = was; }, was); };
+  const current = (name) => page.waitForFunction((name) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === name, name, { timeout: 15000 });
+  const menu = async (item) => { await page.locator('#spaceBtn').click(); await page.locator('#spacePop ' + item).click(); };
+  // File protection may answer the first click with a request to click again (the user's confirmation).
+  const twice = async (b, want, note) => { await b.click();
+    await page.waitForFunction(([want, note]) => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === want || /File protection/.test(document.querySelector(note)?.textContent || ''), [want, note], { timeout: 15000 });
+    if (await b.isVisible()) await b.click(); };
+  await page.click('#rMission');
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor({ timeout: 15000 });
+  // One space, edited by hand after its template.
+  assert.equal((await page.evaluate(() => window.p9.mission('template', { name: 'homelab', space: 'lab', confirm: true }))).status, 201);
+  const source = await json(path.join(spaces, 'lab.json'));
+  source.sections[0].title = 'Edited by hand';
+  await writeFile(path.join(spaces, 'lab.json'), JSON.stringify(source, null, 2) + '\n');
+  assert.equal((await page.evaluate(() => window.p9.mission('space', { name: 'lab' }))).status, 200);
+  await page.reload(); await page.click('#rMission'); await current('lab');
+  // The last space is kept: the confirm says so and offers + Add, with no Delete button.
+  await menu('[data-space-del]');
+  await page.locator('#spacePop [data-space-confirm]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#spacePop [data-space-confirm]').innerText(), /lab is your only space, so P9 keeps it/);
+  assert.equal(await page.locator('#spacePop [data-space-del-go]').count(), 0, 'no Delete for the last space');
+  assert.equal(await page.locator('#spacePop [data-space-add]').count(), 1, '+ Add offered');
+  await page.waitForTimeout(2500); // a poll while the confirm shows keeps it
+  assert.equal(await page.locator('#spacePop [data-space-confirm]').count(), 1, 'a poll keeps the confirm');
+  await page.locator('#spacePop [data-space-cancel]').click();
+  assert.deepEqual(await files(), ['lab.json']);
+  // Save as template: a name and a one-line about; the same name again asks Replace or Rename, and Replace writes over it.
+  await page.locator('#spacePop [data-space-save]').click();
+  const form = page.locator('#spacePop [data-space-save-form]');
+  await form.locator('[name="name"]').fill('my-lab'); await form.locator('[name="about"]').fill('My lab, edited');
+  await shot('tpl-save-form-dark'); await light('tpl-save-form-light');
+  await form.locator('[data-space-save-go]').click();
+  await page.locator('#spacePop').waitFor({ state: 'hidden', timeout: 10000 });
+  const saved = path.join(config, 'templates', 'my-lab.json');
+  assert.deepEqual(await json(saved), { title: 'my-lab', about: 'My lab, edited', space: source });
+  if (process.platform !== 'win32') assert.equal((await stat(saved)).mode & 0o777, 0o600);
+  await menu('[data-space-save]');
+  await form.locator('[name="name"]').fill('my-lab'); await form.locator('[data-space-save-go]').click();
+  await form.locator('[data-space-clash]:not([hidden])').waitFor({ timeout: 10000 });
+  await form.locator('[data-space-replace]').click();
+  await page.locator('#spacePop').waitFor({ state: 'hidden', timeout: 10000 });
+  assert.deepEqual(await json(saved), { title: 'my-lab', about: '', space: source }, 'Replace writes the new one');
+  // The saved template in the wizard beside the built-ins; Choose gives back the same space.
+  await menu('[data-space-add]');
+  await page.locator('#fMission [data-onboard] [data-template="my-lab"]').waitFor({ timeout: 15000 });
+  await page.locator('#fMission [data-onboard] [data-template="homelab"]').waitFor();
+  await shot('tpl-in-wizard-dark'); await light('tpl-in-wizard-light');
+  await page.locator('#fMission [data-template="my-lab"]').click();
+  await page.locator('#fMission [data-preview] [data-preview-back]').waitFor({ timeout: 10000 });
+  await twice(page.locator('#fMission [data-choose="my-lab"]'), 'my-lab', '#fMission [data-onboard-note]');
+  await current('my-lab');
+  assert.deepEqual(await json(path.join(spaces, 'my-lab.json')), source, 'the new space is the one saved');
+  // Delete the shown space: the confirm names it; the file is gone and Mission shows another space.
+  await menu('[data-space-del]');
+  await page.locator('#spacePop [data-space-del-go]').waitFor({ timeout: 10000 });
+  assert.match(await page.locator('#spacePop [data-space-confirm]').innerText(), /Delete my-lab\?\s+This removes its file\. It can't be undone\./);
+  await shot('space-delete-confirm-dark'); await light('space-delete-confirm-light');
+  await twice(page.locator('#spacePop [data-space-del-go]'), 'lab', '#spacePop [data-space-note]');
+  await current('lab');
+  assert.deepEqual(await files(), ['lab.json'], 'the file is deleted');
+  assert.equal((await files(config)).includes('deleted'), false, 'no deleted folder');
+  await page.locator('#spaceBtn').click();
+  assert.equal(await page.locator('#spacePop [data-space="my-lab"]').count(), 0, 'the space leaves the menu');
+  await page.keyboard.press('Escape');
+  // Main is not a file in the spaces folder: no Delete there.
+  await menu('[data-space=""]'); await current('');
+  await page.locator('#spaceBtn').click(); await page.locator('#spacePop [data-space="lab"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#spacePop [data-space-del]').count(), 0, 'no Delete on Main');
+});
+
 test('First launch D4: a waiting item says who it waits on, from the owner\'s own name', { timeout: 90000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async (where) => {
     await layout(where);

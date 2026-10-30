@@ -688,7 +688,8 @@ dialog.connecting .conn-acts{display:flex;gap:10px;margin-top:12px}
 .onboard-tpl[data-armed]{border-color:var(--primary)}
 div.onboard-tpl{cursor:default}div.onboard-tpl:hover{border-color:var(--border)} /* a preview's sections: shown, not clicked */
 .onboard-back{max-width:760px;margin:-12px auto 0}
-#spacePop .item{display:flex}#spacePop .item[aria-checked="true"]::after{content:"\2713";margin-left:auto;padding-left:12px;color:var(--primary)}
+#spacePop{background:linear-gradient(var(--popover),var(--popover)),var(--background)}#spacePop .item{display:flex}#spacePop .space-del{color:var(--destructive)}
+.space-form{display:grid;gap:8px;padding:8px 10px;width:260px}.space-form p{margin:0}.space-form label{display:grid;gap:4px;font-size:12px}.space-form .space-hint{font-size:11px;margin-top:-4px}.space-form-go{display:flex;gap:8px;flex-wrap:wrap}.space-form-go[hidden]{display:none}#spacePop .item[aria-checked="true"]::after{content:"\2713";margin-left:auto;padding-left:12px;color:var(--primary)}
 #spaceBtn{align-self:center;gap:4px;max-width:220px}#spaceBtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2}
 .space-pick{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-foreground)}.space-pick select{min-width:140px}
 /* In the tiles row: the page's grid rows are fixed (tiles, note, panels), so the picker takes two tile cells, not a row */

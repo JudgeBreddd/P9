@@ -327,12 +327,28 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // Onboarding (M4, threat model row 72): the shipped guide and templates, a template into an empty space, and a chat whose
   // first message is the shipped guide. The request names only the provider; nothing from it reaches the chat's text.
-  api.get('/mission/guide', (c) => c.json({ guide: GUIDE, templates: TEMPLATES.map(({ name, title, about, space }) => ({ name, title, about, sections: space.sections.map(({ title, icon, text }) => ({ title, icon, text })) })) }));
+  api.get('/mission/guide', async (c) => c.json({ guide: GUIDE, templates: [...TEMPLATES, ...await mcp.userTemplates()].map(({ name, title, about, space, user }) => ({ name, title, about, ...(user ? { user } : {}), sections: space.sections.map(({ title, icon, text }) => ({ title, icon, text })) })) }));
   api.post('/mission/template', async (c) => {
     const { name, space, confirm, ...rest } = (await json(c)) ?? {};
     if (Object.keys(rest).length || typeof name !== 'string' || (confirm !== undefined && typeof confirm !== 'boolean')) return c.json({ error: 'request-refused' }, 400);
     const { error, ...result } = await mcp.install(name, space, confirm);
     return c.json(error ? { error, ...result } : result, !error ? 201 : ({ 'space-not-empty': 409, 'registry-read-only': 403, 'unknown-template': 404 })[error] ?? 400);
+  });
+  // Finding 4 adds. Delete (threat model row A): the space's file is deleted; Mission then shows another space.
+  api.post('/mission/space/delete', async (c) => {
+    const { name, confirm, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || (confirm !== undefined && typeof confirm !== 'boolean')) return reply(c, { status: 400, error: 'request-refused' });
+    const { error, ...result } = await mcp.deleteSpace(name, confirm);
+    if (error) return reply(c, { status: ({ 'unknown-space': 404, 'last-space': 409, 'registry-read-only': 403, 'save-failed': 500 })[error] ?? 400, error, ...result });
+    await changeSettings(({ space_name: was, ...now }) => (was !== name ? { ...now, ...(was ? { space_name: was } : {}) } : result.next ? { ...now, space_name: result.next } : now));
+    return reply(c, { status: 200, deleted: name, spaceName: result.next ?? null });
+  });
+  // Save as template (threat model row B): the shown space into the settings folder's templates; about is one short line.
+  api.post('/mission/template/save', async (c) => {
+    const { name, about = '', replace, ...rest } = (await json(c)) ?? {};
+    if (Object.keys(rest).length || typeof about !== 'string' || about.length > 200 || /[\r\n]/.test(about) || (replace !== undefined && typeof replace !== 'boolean')) return reply(c, { status: 400, error: 'request-refused' });
+    const { error, ...result } = await mcp.saveTemplate(name, about.trim(), replace);
+    return reply(c, error ? { status: ({ 'template-exists': 409, 'builtin-template': 409, 'no-space-file': 404, 'save-failed': 500 })[error] ?? 400, error, ...result } : { status: 201, ...result });
   });
   // Space links (threat model rows 74, 75): the daemon's checks, then the link; the device that asked opens it.
   api.post('/mission/link', async (c) => reply(c, await mission.link(await json(c))));

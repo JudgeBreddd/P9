@@ -1123,7 +1123,7 @@ function applyOverview(o) {
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
   M.space = o.space || []; M.icmFiles = !!o.icmFiles;
-  live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null;
+  live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null; live.mainFile = o.mainFile === true;
   for (const s of M.space) if (!s.widget) M.scripts[s.title] ||= []; // a widget section is its panel, not a tile
   applyQueue(o);
 }
@@ -1282,25 +1282,28 @@ async function loadGuide() {
   const r = await window.p9.mission('guide', {});
   if (r.status !== 200) return;
   guide = r.body;
-  if (live.empty) renderMission();
+  if (live.empty || live.adding) renderMission();
   if (mdl.open && S.modal?.kind === 'guide') renderModal();
 }
 // Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Switching sets
-// settings.space_name through the space route; no space file is written or deleted here.
-let spacePop = null;
+// settings.space_name through the space route and writes no space file; only Delete, after its confirm, removes one.
+let spacePop = null, spaceForm = null; // spaceForm: the Delete confirm or the Save as template form, kept through polls
 function renderSpaceBtn() {
   const b = $('#spaceBtn'), pop = $('#spacePop');
   b.hidden = !live.on;
   b.dataset.spaceCurrent = live.spaceName || '';
   b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
-  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; renderSpaceMenu(); });
-  if (!pop.hidden) renderSpaceMenu();
+  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); });
+  if (!pop.hidden && !spaceForm) renderSpaceMenu();
 }
 function renderSpaceMenu() {
   const pop = $('#spacePop'), now = live.spaceName || '';
   pop.innerHTML = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
-    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button>';
+    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button><button class="item" role="menuitem" data-space-save>Save as template…</button>'
+    + (now ? `<button class="item space-del" role="menuitem" data-space-del>Delete ${esc(now)}…</button>` : '');
+  pop.querySelector('[data-space-save]').onclick = () => spaceSave();
+  pop.querySelector('[data-space-del]')?.addEventListener('click', spaceDelete);
   pop.querySelectorAll('[data-space]').forEach(b => b.onclick = async () => {
     spacePop.close(); live.adding = false; live.preview = null;
     const r = await window.p9.mission('space', { name: b.dataset.space || null });
@@ -1308,6 +1311,65 @@ function renderSpaceMenu() {
     refreshMission();
   });
   pop.querySelector('[data-space-add]').onclick = () => { spacePop.close(); live.adding = true; live.preview = null; renderMission(); };
+}
+// Finding 4 adds: Delete removes the shown space's file after a confirm that names it; the last space is kept and + Add offered.
+const formGo = (...buttons) => '<div class="space-form-go">' + buttons.join('') + '</div>';
+const formBtn = (variant, attr, label, type = 'button') => `<button type="${type}" data-slot="button" data-variant="${variant}" data-size="sm" ${attr}>${label}</button>`;
+function spaceDelete() {
+  const pop = $('#spacePop'), name = live.spaceName, last = !live.mainFile && (live.spaces || []).length <= 1;
+  spaceForm = 'delete';
+  pop.innerHTML = last
+    ? `<div class="space-form" data-space-confirm role="alertdialog" aria-labelledby="spaceDelHd"><p id="spaceDelHd"><b>${esc(name)}</b> is your only space, so P9 keeps it.</p><p class="muted">Add another space first.</p>`
+      + formGo(formBtn('default', 'data-space-add', '+ Add'), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</div>'
+    : `<div class="space-form" data-space-confirm role="alertdialog" aria-labelledby="spaceDelHd"><p id="spaceDelHd">Delete <b>${esc(name)}</b>?</p><p class="muted">This removes its file. It can't be undone.</p><p class="muted" data-space-note role="status"></p>`
+      + formGo(formBtn('destructive', 'data-space-del-go', 'Delete ' + esc(name)), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</div>';
+  bindSpaceForm(pop);
+  const go = pop.querySelector('[data-space-del-go]');
+  if (!go) return pop.querySelector('[data-space-add]').focus();
+  go.focus();
+  go.onclick = async () => {
+    go.disabled = true;
+    const r = await window.p9.mission('deleteSpace', { name, ...(go.dataset.armed ? { confirm: true } : {}) });
+    go.disabled = false;
+    if (r.status === 403 && !go.dataset.armed) { go.dataset.armed = '1'; pop.querySelector('[data-space-note]').textContent = 'File protection is on. Click Delete again to delete it.'; return; }
+    if (r.status !== 200) { pop.querySelector('[data-space-note]').textContent = 'Not deleted: ' + (r.body?.detail || r.body?.error || r.status); return; }
+    spaceForm = null; spacePop.close();
+    toast({ kind: 'saved', txt: 'Space ' + name + ' deleted.', level: 'ok' }, true);
+    refreshMission();
+  };
+}
+// Save as template: a name (the scratch-space rule) and an optional one-line about. A clash asks Replace or Rename.
+function spaceSave() {
+  const pop = $('#spacePop');
+  spaceForm = 'save';
+  pop.innerHTML = '<form class="space-form" data-space-save-form aria-labelledby="spaceSaveHd"><p id="spaceSaveHd"><b>Save as template</b></p>'
+    + `<label>Name<input data-slot="input" name="name" required maxlength="32" pattern="[a-z0-9][a-z0-9\\-]{0,31}" autocomplete="off" spellcheck="false" value="${esc(live.spaceName || 'main')}"></label>`
+    + '<span class="muted space-hint">Lowercase letters, digits and -</span>'
+    + '<label><span>About <span class="muted">(optional)</span></span><input data-slot="input" name="about" maxlength="200" autocomplete="off"></label>'
+    + '<p class="muted" data-space-note role="status"></p>'
+    + '<div class="space-form-go" data-space-clash hidden>' + formBtn('default', 'data-space-replace', 'Replace') + formBtn('outline', 'data-space-rename', 'Rename') + '</div>'
+    + formGo(formBtn('default', 'data-space-save-go', 'Save template', 'submit'), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</form>';
+  bindSpaceForm(pop);
+  const form = pop.querySelector('form'), note = form.querySelector('[data-space-note]'), clash = form.querySelector('[data-space-clash]');
+  form.elements.name.select();
+  const save = async (replace) => {
+    const name = form.elements.name.value.trim(), r = await window.p9.mission('saveTemplate', { name, about: form.elements.about.value.trim(), ...(replace ? { replace: true } : {}) });
+    clash.hidden = r.body?.error !== 'template-exists';
+    if (r.status === 201) {
+      spaceForm = null; spacePop.close(); guide = null; loadGuide();
+      return toast({ kind: 'saved', txt: 'Template ' + name + ' saved. It shows under + Add.', level: 'ok' }, true);
+    }
+    note.textContent = r.body?.error === 'template-exists' ? 'A template named ' + name + ' exists. Replace it, or rename this one.'
+      : r.body?.error === 'builtin-template' ? name + ' is a built-in template. Pick another name.'
+        : 'Not saved: ' + (r.body?.detail || r.body?.error || r.status);
+  };
+  form.onsubmit = (event) => { event.preventDefault(); save(false); };
+  form.querySelector('[data-space-replace]').onclick = () => save(true);
+  form.querySelector('[data-space-rename]').onclick = () => { clash.hidden = true; note.textContent = ''; form.elements.name.select(); };
+}
+function bindSpaceForm(pop) {
+  pop.querySelectorAll('[data-space-cancel]').forEach((b) => b.onclick = () => { spaceForm = null; renderSpaceMenu(); });
+  pop.querySelector('[data-space-add]')?.addEventListener('click', () => { spaceForm = null; spacePop.close(); live.adding = true; live.preview = null; renderMission(); });
 }
 function bindOnboard(root) {
   root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {

@@ -14,7 +14,7 @@ export function onboardCard({ templates = [], spaces = [], current = null, prote
       + '<button type="button" data-slot="button" data-variant="outline" data-size="sm" data-open-protect>Open File protection</button>'
       + '<p class="muted">' + PROTECT_WORDS[1] + '</p></div>' : '')
     + (templates.length ? '<h4>Or start from a template</h4><div class="onboard-tpls">' + templates.map((t) => `<button type="button" class="onboard-tpl" data-template="${esc(t.name)}">`
-      + `<b>${esc(t.title)}</b><span>${esc(t.about)}</span></button>`).join('') + '</div>' : '')
+      + `<b>${esc(t.title)}</b><span>${esc(t.about || (t.user ? 'Your template' : ''))}</span></button>`).join('') + '</div>' : '')
     + spacePicker(spaces, current, esc)
     + '<p class="muted" data-onboard-note role="status"></p></section>';
 }
