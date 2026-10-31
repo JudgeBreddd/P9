@@ -77,16 +77,16 @@ async function signedInPage(browser, server) {
 }
 
 test('T7: a tap on Mission draws the last answer at once and refreshes behind', { timeout: 120000 }, async (t) => {
-  // No space file: with one, the built-in hub layer is off (threat model row M4-b) and its tiles are what T7 times.
+  // No space file: the built-in tiles are what T7 times.
   const server = await remoteDaemon(t, { setup: (paths) => setup(paths, false) });
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const { page } = await signedInPage(browser, server);
 
-  // How long the two routes take (fixture workspace; the numbers are in the log as P9_TIME).
+  // How long the route takes (fixture workspace; the number is in the log as P9_TIME).
   const timing = await page.evaluate(async () => {
     const out = {};
-    for (const route of ['/mission', '/mission/hub']) {
+    for (const route of ['/mission']) {
       const took = [];
       for (let i = 0; i < 5; i++) { const start = performance.now(); await (await fetch(route, { cache: 'no-store' })).json(); took.push(Math.round(performance.now() - start)); }
       out[route] = took;
@@ -95,43 +95,41 @@ test('T7: a tap on Mission draws the last answer at once and refreshes behind', 
   });
   console.log('P9_TIME ' + JSON.stringify(timing));
 
-  // First visit: nothing cached, it waits for the routes as before, then both answers are kept.
+  // First visit: nothing cached, it waits for the route as before, then the answer is kept.
   await page.click('[data-nav="mission"]');
-  await page.waitForSelector('#hub [data-open="work"]', { timeout: 10000 });
-  await page.waitForFunction(() => localStorage.getItem('p9-mission') && localStorage.getItem('p9-mission-hub'), null, { timeout: 10000 });
+  await page.waitForSelector('#mission [data-open="queue"]', { timeout: 10000 });
+  await page.waitForFunction(() => localStorage.getItem('p9-mission'), null, { timeout: 10000 });
   assert.equal(await page.locator('#mission .tile:has(span:text-is("Waiting on you")) b').innerText(), '1');
 
-  // The world changes while the page is closed; a reload keeps only the cache. Both routes then hang.
+  // The world changes while the page is closed; a reload keeps only the cache. The route then hangs.
   await unlink(path.join(server.workspace, '_tyler', 'p9-question.md'));
   await page.reload();
   let release; const gate = new Promise((resolve) => { release = resolve; });
   let held = 0;
-  await page.route((url) => ['/mission', '/mission/hub'].includes(new URL(url).pathname), async (route) => { held++; await gate; await route.continue().catch(() => {}); });
+  await page.route((url) => new URL(url).pathname === '/mission', async (route) => { held++; await gate; await route.continue().catch(() => {}); });
   await page.click('[data-nav="mission"]');
   // Drawn from the cache while GET /mission has not answered (this is what fails without the cache).
   await page.waitForSelector('#mission .tile', { timeout: 3000 });
-  await page.waitForSelector('#hub [data-open="work"]', { timeout: 3000 });
   assert.ok(held >= 1, 'GET /mission was in flight while the tiles showed');
   assert.equal(await page.locator('#mission .tile:has(span:text-is("Waiting on you")) b').innerText(), '1', 'the cached answer, not yet the fresh one');
-  // Another tap on Mission leaves what is drawn alone: the hub tiles do not vanish while the routes wait.
-  const hubTiles = () => page.locator('#hub [data-open]').count();
-  const before = await hubTiles();
-  assert.ok(before >= 6, 'hub tiles ' + before);
+  // Another tap on Mission leaves what is drawn alone: the tiles do not vanish while the route waits.
+  const tiles = () => page.locator('#mission .tile[data-open]').count();
+  const before = await tiles();
+  assert.ok(before >= 3, 'tiles ' + before);
   await page.click('[data-nav="usage"]'); await page.click('[data-nav="mission"]');
-  assert.equal(await hubTiles(), before);
+  assert.equal(await tiles(), before);
 
-  // The routes answer: the fresh answer replaces the cached one, and the hub is there throughout.
+  // The route answers: the fresh answer replaces the cached one.
   release();
   await page.waitForFunction(() => document.querySelector('#mission .tile b')?.textContent === '0', null, { timeout: 10000 });
-  await page.waitForSelector('#hub [data-open="work"]', { timeout: 10000 });
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('p9-mission')).queue.length === 0, null, { timeout: 10000 });
-  await page.unroute((url) => ['/mission', '/mission/hub'].includes(new URL(url).pathname));
+  await page.unroute((url) => new URL(url).pathname === '/mission');
 
   // A signed-out answer forgets the cache (the phone stores Mission text only while signed in).
   await page.route((url) => new URL(url).pathname === '/mission', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
   await page.click('[data-nav="usage"]'); await page.click('[data-nav="mission"]');
   await page.waitForURL(/\/login/, { timeout: 10000 });
-  assert.deepEqual(await page.evaluate(() => [localStorage.getItem('p9-mission'), localStorage.getItem('p9-mission-hub')]), [null, null]);
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-mission')), null);
 });
 
 test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the editor, 390 wide (pictures in the log)', { timeout: 180000 }, async (t) => {

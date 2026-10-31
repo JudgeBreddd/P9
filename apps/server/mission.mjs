@@ -345,7 +345,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts), mainFile: Boolean(settings.space),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
-      empty: !settings.space_name && !settings.hub && !reg.space.length && !reg.scripts.length && !reg.apps.length && !reg.pages.length && !waiting.length };
+      empty: !settings.space_name && !reg.space.length && !reg.scripts.length && !reg.apps.length && !reg.pages.length && !waiting.length };
   }
   // A section's reference to a script, app or page by ID (M2): the tile names what it found, or says it is missing.
   function reference(reg, id) {
@@ -523,25 +523,6 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     stillAuthorized();
     const started = await run(item.apply, { args: [file.name], confirm: true });
     return { ...started, hash: saved.hash };
-  }
-  // What the space reaches (migrate_mission's after list): every file its folder lists and checklists show, by real path,
-  // with the item that shows it; a root not in settings.notes_roots yet is named instead.
-  // ponytail: a folder list counts its newest NOTES_SHOWN files, as Mission shows them.
-  async function reach() {
-    const files = new Map(), unallowed = new Set(), refusedItems = [];
-    for (const section of (await registry()).space) {
-      for (const [kind, item] of [...section.folders.map((entry) => ['folders', entry]), ...(section.checklists ?? []).map((entry) => ['checklists', entry])]) {
-        const where = section.title + ' › ' + item.title;
-        if (item.root && !(settings.notes_roots && Object.hasOwn(settings.notes_roots, item.root))) { unallowed.add(item.root); continue; }
-        const found = kind === 'folders' ? await folderFiles(item.id) : await checklistFiles(item);
-        if (found.error) { refusedItems.push({ where, error: found.error }); continue; }
-        for (const file of found.files) {
-          const at = await realpath(path.join(found.root, file.path)).catch(() => path.join(found.root, file.path));
-          if (!files.has(at)) files.set(at, where);
-        }
-      }
-    }
-    return { files, unallowed: [...unallowed].sort(), refused: refusedItems };
   }
   async function notesRead(name, relative) {
     if (!note(relative)) return refused;
@@ -889,5 +870,5 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     } finally { release?.(); }
   }
 
-  return { overview, iconSources, run, output, launch, link, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, reach, data, allow, card };
+  return { overview, iconSources, run, output, launch, link, answer, stopAll, spaceLog, setSettings, named, notesList, notesRead, notesSave, notesCreate, notesRename, folderList, folderRead, checklist, checklistSet, data, allow, card };
 }

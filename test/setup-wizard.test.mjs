@@ -188,7 +188,7 @@ test('Setup wizard: an existing workspace-hub is used as it is; only the setting
   });
   const before = (await readdir(instance.workspace)).sort();
   const s = (await call(instance, '/setup')).body;
-  const found = { hub, registry: hub + '/registry.json', primary: 'AGENTS.md', waiting: 'waiting' };
+  const found = { registry: hub + '/registry.json', primary: 'AGENTS.md', waiting: 'waiting' };
   assert.deepEqual([s.found, s.proposed, s.creates], [found, found, []]);
   // Edited paths are planned again; a path settings.json would refuse is flagged, not planned.
   const edited = (await call(instance, '/setup?primary=docs/ME.md&registry=' + encodeURIComponent(hub + '/registry.json') + '&waiting=inbox')).body;
@@ -225,7 +225,7 @@ test('Setup wizard: an ICM-shaped workspace proposes its own primary AGENTS.md a
   });
   const before = (await readdir(instance.workspace)).sort();
   const s = (await call(instance, '/setup')).body;
-  const found = { hub, registry: hub + '/registry.json', primary: 'work/AGENTS.md', waiting: 'work/_owner' };
+  const found = { registry: hub + '/registry.json', primary: 'work/AGENTS.md', waiting: 'work/_owner' };
   assert.deepEqual([s.found, s.proposed, s.creates], [found, found, []]);
   const made = await call(instance, '/setup/starter', 'POST', s.proposed);
   assert.deepEqual([made.status, made.body.created], [201, [settingsPath(instance.directory)]]);
@@ -249,7 +249,7 @@ test('Setup wizard: starter settings left from another workspace never lay a sta
   const before = (await readdir(instance.workspace)).sort();
   const s = (await call(instance, '/setup')).body;
   assert.deepEqual([s.settings, s.conflict, s.creates, s.found], [true, true, [],
-    { hub, registry: hub + '/registry.json', waiting: 'work/_owner' }]);
+    { registry: hub + '/registry.json', waiting: 'work/_owner' }]);
   assert.equal((await call(instance, '/setup/starter', 'POST', {})).status, 409);
   assert.deepEqual((await readdir(instance.workspace)).sort(), before, 'nothing created');
   console.log('PASS starter: loaded starter settings on a folder with its own layout create nothing');
@@ -273,12 +273,12 @@ test('Setup wizard: confirming the found paths repoints loaded settings; the old
   const file = settingsPath(instance.directory), old = await readFile(file, 'utf8'), before = (await readdir(instance.workspace)).sort();
   const s = (await call(instance, '/setup')).body;
   // The workspace sits inside a bigger folder the registry's commands are written from: proposed, editable.
-  const found = { hub, registry: hub + '/registry.json', waiting: 'work/_owner', scripts_root: path.dirname(instance.workspace) };
+  const found = { registry: hub + '/registry.json', waiting: 'work/_owner', scripts_root: path.dirname(instance.workspace) };
   assert.deepEqual([s.conflict, s.found, s.proposed, s.creates], [true, found, { ...STARTER, page_schemes: ['obsidian'], ...found }, []]);
   assert.equal((await call(instance, '/setup/starter', 'POST', {})).status, 409, 'no paths: still refused');
   assert.equal((await call(instance, '/setup/starter', 'POST', { ...STARTER, scripts_root: 'relative' })).status, 400, 'validated like first run');
   assert.equal(await readFile(file, 'utf8'), old);
-  const chosen = { primary: 'AGENTS.md', registry: found.registry, waiting: found.waiting, hub, scripts_root: found.scripts_root };
+  const chosen = { primary: 'AGENTS.md', registry: found.registry, waiting: found.waiting, scripts_root: found.scripts_root };
   const made = await call(instance, '/setup/starter', 'POST', chosen);
   assert.deepEqual([made.status, made.body.created], [201, [file]]);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { ...chosen, page_schemes: ['obsidian'] });
@@ -537,8 +537,8 @@ test('Setup wizard: Mission writes its own empty settings file on first run, and
   const instance = await daemon(t);
   const file = settingsPath(instance.directory), before = (await readdir(instance.workspace)).sort();
   await assert.rejects(stat(file));
-  const [first, ...rest] = await Promise.all([call(instance, '/mission'), call(instance, '/mission/hub'), call(instance, '/mission/icons'), call(instance, '/mission')]);
-  assert.deepEqual(rest.map((r) => [r.status, r.body?.error]), [[404, 'hub-not-set'], [200, undefined], [200, undefined]], 'requests that arrive together all see the new settings');
+  const [first, ...rest] = await Promise.all([call(instance, '/mission'), call(instance, '/mission'), call(instance, '/mission/icons'), call(instance, '/mission')]);
+  assert.deepEqual(rest.map((r) => [r.status, r.body?.error]), [[200, undefined], [200, undefined], [200, undefined]], 'requests that arrive together all see the new settings');
   assert.equal(first.status, 200, JSON.stringify(first.body));
   assert.deepEqual([first.body.scripts, first.body.apps, first.body.pages, first.body.queue, first.body.primary], [[], [], [], [], null]);
   assert.equal(await readFile(file, 'utf8'), '{}\n');

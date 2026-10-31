@@ -273,13 +273,9 @@ Optional keys, each off when left out:
 - `space`: a workspace-relative JSON file of your own Mission sections, each a `title` with optional `text`,
   `buttons` (registry script records, run the same way) and `logs` (`id`, `title`, workspace-relative `path`;
   shows the end of that file). P9 never saves it.
-- `hub`: the workspace-relative folder of a workspace-hub checkout. Turns on the hub sections (notifications,
-  Wiki inbox, weekly audit, logs, incidents, work in flight, last solo run); they expect the ICM workspace
-  layout the hub was built for. The Wiki inbox also needs `MC_VAULT` set to your vault in the service's
-  environment. Left out, those sections say how to turn them on; on Windows, or with no heartbeats folder, the
-  scheduled-job notices say the jobs are not checked instead of reporting them missing.
-- `server_host`: an ssh host name whose logs and incidents the hub sections also list, over
-  `ssh -o BatchMode=yes` (a key login must already work). No default, so nothing is ever ssh'd unasked.
+- `hub` and `server_host`: read by the built-in hub sections, removed in 0.1.6. Still accepted so an older
+  settings file keeps loading; P9 ignores them. Build those sections in your space instead (cards, data tiles,
+  folder lists and checklists).
 
 ## Install on Windows
 

@@ -1038,9 +1038,6 @@ one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = tru
 // /runs/:id. Terminal scripts and laptop apps open windows on the laptop, so the phone lists them as laptop-only.
 type Item = { id: string; title: string; desc: string; group: string; args: string[]; confirm: boolean; terminal: boolean; url: string };
 type Waiting = { name: string; title: string; project: string; age: string; hash: string; content: string; answerable: boolean };
-type Hub = { notices: { kind: string; text: string }[] | null; incidents: { host: string; check: string; name: string; resolved: boolean; count: number; failed: string[] }[];
-  inbox: { branch: string; decision: string; pages: string[] }[]; logs: { host: string; name: string; age_min: number; last: string }[]; handoffs: { project: string; age_days: number }[];
-  audit: { run?: string; review?: string; ticked?: number; changes?: number; contradiction_count?: number | null }; solo: { name: string; bluf: string }; ideas: number; needs_done: number };
 let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: string[] } = { queue: [], scripts: [] };
 const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
@@ -1051,10 +1048,10 @@ const win = (id: string, title: string, count: number | string, line: string, bo
   return `<button type="button" class="tile${bad ? ' bad' : ''}"${attn ? ' data-attn' : ''}${zero ? ' data-zero' : ''} data-open="${id}"><span>${title}</span><b>${count}</b><small>${line}</small></button>`
     + `<dialog class="window" id="w-${id}"><header class="bar"><button type="button" class="back" data-close aria-label="Back to Mission">${ICON.back}Mission</button><div class="title"><h1>${title}</h1></div></header><div class="wbody">${body}</div></dialog>`;
 };
-// A reload rebuilds the tiles (loadMission empties #hub until loadHub refills it); the window Builder had open opens
+// A reload rebuilds the tiles; the window Builder had open opens
 // again, with the rows he had expanded (matched by the summary's title, not its <small>, which can change; reopening
 // fires toggle, which reloads lazy text).
-// Kept across renders: loadMission empties #hub, so the hub window is missing when loadHub renders it again.
+// Kept across renders.
 let openWindow = '', expanded = new Set<string | null | undefined>();
 function keepOpen(render: () => void) {
   const rows = (dialog: HTMLElement | null) => [...dialog?.querySelectorAll<HTMLDetailsElement>('details.row') ?? []];
@@ -1067,12 +1064,11 @@ function keepOpen(render: () => void) {
   if (again) void loadFolders(again);
   rows(again).forEach((d) => { if (!d.open && expanded.has(title(d))) d.open = true; });
 }
-// T7: the last Mission and hub answers are kept here and in localStorage (threat model row 56; a 401 forgets them). A tap
-// on Mission draws them at once, then both routes refresh behind; before, the page waited on GET /mission, then emptied
-// #hub and waited on GET /mission/hub.
+// T7: the last Mission answer is kept here and in localStorage (threat model row 56; a 401 forgets it). A tap on Mission
+// draws it at once, then the route refreshes behind.
 const kept = (key: string) => { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } };
 const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }; // storage full: no cache
-// P2: Mission text typed and not sent. A redraw (Refresh, the hub's retry, a save) rebuilds the forms, so keepOpen() reads
+// P2: Mission text typed and not sent. A redraw (Refresh, a save) rebuilds the forms, so keepOpen() reads
 // it before and puts it back after; toLogin() keeps the same record through a sign-in. An answer is matched by its item's
 // name (its place in the list can change); a sent answer or a saved idea leaves the record.
 type MissionDraft = { answers: Record<string, string>; idea: { name: string; text: string; needs: boolean } | null };
@@ -1129,7 +1125,7 @@ function keptMission(part: 'answers' | 'idea') {
   try { if (draft.idea) localStorage.setItem('p9-mission-draft', JSON.stringify(draft)); else localStorage.removeItem('p9-mission-draft'); } catch {}
 }
 const forgetMission = () => { try { localStorage.removeItem('p9-mission'); localStorage.removeItem('p9-mission-hub'); } catch {} };
-let lastMission: any = kept('p9-mission'), lastHub: Hub | null = kept('p9-mission-hub'), missionDrawn = false;
+let lastMission: any = kept('p9-mission'), missionDrawn = false;
 async function loadMission(cached = false) {
   try {
     const data = cached ? lastMission : await request('/mission');
@@ -1182,7 +1178,7 @@ async function loadMission(cached = false) {
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
       const quick = space.quick_note ? [`<div class="tile-row" data-qn="${escape(JSON.stringify(space.quick_note))}">${quickNoteHtml(escape, space.quick_note, quickTyped[space.quick_note.root + '/' + space.quick_note.path])}</div>`] : [];
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...quick, ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ kind: 'space', name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs]);
+      groups.set(space.title, [...(groups.get(space.title) ?? []), ...quick, ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs]);
       names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
         ...(space.folders ?? []).map((list) => list.title), ...(space.checklists ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
@@ -1192,6 +1188,7 @@ async function loadMission(cached = false) {
       : `<li><button type="button" class="link" data-open-page="${escape(item.id)}" data-url="${escape(item.url)}">${escape(item.title)} (opens on the laptop)</button></li>`)).join('');
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
+    const widgets = ((data.space ?? []) as { widget?: string }[]).some((s) => s.widget), icm = widgets || (!!data.icmFiles && !widgets);
     // Item 14: a laptop is updating this server's P9; it restarts once no chat is mid-turn (apps/server/update.mjs).
     // A fresh profile shows only the onboarding card (M4, threat model row 72).
     if (data.empty) {
@@ -1203,15 +1200,15 @@ async function loadMission(cached = false) {
       + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
       + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
-      + '<div id="hub"></div><div id="sprint"></div>'
+      // + New idea writes to _ideas: an ICM widget, shown only where the desktop shows the ICM widgets (finding 3a).
+      + (icm ? win('idea', 'New idea', '+', 'Saved to _ideas/', row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>')) : '')
+      + '<div id="sprint"></div>'
       + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
       + win('pages', 'Pages', data.pages.length, escape(data.pages.map((item: Item) => item.title).join(' · ')) || 'No pages.',`<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
     missionDrawn = true;
-    if (!cached) { lastMission = data; keep('p9-mission', data); keptMission('answers'); }
+    if (!cached) { lastMission = data; keep('p9-mission', data); keptMission('answers'); keptMission('idea'); }
   } catch { if (cached) lastMission = null; else if (!missionDrawn) one('#mission').innerHTML = '<div class="empty">Mission Control is unavailable.</div>'; return; }
-  if (lastHub) void loadHub(true); // the redraw above emptied #hub: refill it from memory, not from the wire
-  if (!cached) void loadHub();
   if (!cached) void loadSprint();
 }
 // Sprint tracker: a tile while the computer has a sprint status file (404 = none, so no tile); one ring per chunk, the
@@ -1247,39 +1244,9 @@ one('#mission').addEventListener('click', async (event) => {
   button.closest('dialog')?.close();
   show('terminal'); await openTerminal(String(result.body.terminal));
 });
-// The old workspace-hub sections. Each row's text loads when it is opened.
+// A row's text loads when it is opened.
 const ago = (min: number) => min < 60 ? `${min} min` : min < 2880 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} d`;
 const lazy = (query: Record<string, string>) => `<pre data-text="${escape(new URLSearchParams(query).toString())}">Loading…</pre>`;
-async function loadHub(cached = false) {
-  const target = document.querySelector<HTMLElement>('#hub');
-  if (!target) return;
-  let o: Hub;
-  // No hub folder in settings (an answer, not a lost connection): these sections stay hidden, cached or not.
-  try { o = cached ? lastHub! : await request('/mission/hub'); } catch (error) { if ((error as { body?: unknown }).body) { lastHub = null; target.innerHTML = ''; try { localStorage.removeItem('p9-mission-hub'); } catch {} } return; }
-  if (!cached) { lastHub = o; keep('p9-mission-hub', o); }
-  // + New idea writes to _ideas: an ICM widget, shown only where the desktop shows the ICM widgets (finding 3a).
-  const widgets = ((lastMission?.space ?? []) as { widget?: string }[]).some((s) => s.widget), icm = widgets || (!!lastMission?.icmFiles && !widgets);
-  const notices = o.notices === null ? '<div class="empty">Checking scheduled jobs and setup…</div>'
-    : o.notices.map((n) => `<article class="card warn"><h2>${n.kind === 'job' ? 'SILENT JOB' : 'SETUP'}</h2><p>${escape(n.text)}</p></article>`).join('') || '<div class="empty">Every scheduled job reported in.</div>';
-  const open = o.incidents.filter((i) => !i.resolved);
-  const incidents = o.incidents.map((i) => row(`${i.resolved ? '' : '⚠ '}${escape(i.check)}<small>${escape(i.host)} · failed ${i.count}×, last ${escape(i.failed[0])}${i.resolved ? ' · resolved' : ''}</small>`, lazy({ kind: 'incident', host: i.host, name: i.name }))).join('');
-  const inbox = o.inbox.map((b) => row(`${escape(b.branch)}<small>${escape(b.decision)} · ${b.pages.length} page${b.pages.length === 1 ? '' : 's'}</small>`,
-    lazy({ kind: 'inbox', name: b.branch }) + `<form data-decide="${escape(b.branch)}"><button type="submit" value="merge">Approve</button> <button type="submit" value="reject">Reject</button><p class="muted" data-note></p></form>`)).join('');
-  const logs = o.logs.map((l) => row(`${escape(l.name)}<small>${escape(l.host)} · ${ago(l.age_min)} · ${escape(l.last)}</small>`, lazy({ kind: 'log', host: l.host, name: l.name }))).join('');
-  const handoffs = o.handoffs.sort((a, b) => a.age_days - b.age_days).map((h) => row(`${escape(h.project)}<small>updated ${h.age_days} d ago</small>`, lazy({ kind: 'handoff', name: h.project }))).join('');
-  const audit = o.audit.run ? `<p>Weekly audit ${escape(o.audit.run)} (${escape(o.audit.review)}): ${o.audit.ticked} of ${o.audit.changes} ticked, ${o.audit.contradiction_count ?? 0} contradictions.</p>` : '';
-  const solo = escape(o.solo.name.replace(/-solo-run-report\.md$/, ''));
-  keepOpen(() => { target.innerHTML = win('notes', 'Notifications', o.notices ? o.notices.length : '…', o.notices?.[0] ? escape(o.notices[0].text) : o.notices ? 'Every scheduled job reported in.' : 'Checking…', notices, !!o.notices?.length)
-    + win('incidents', 'Incidents', `${open.length} open`, open[0] ? escape(open[0].host + ' · ' + open[0].check) : 'No open incidents.', incidents || '<div class="empty">No incidents.</div>', open.length > 0)
-    + win('inbox', 'Wiki review inbox', o.inbox.length, o.inbox.length ? 'batches to review' : 'Nothing to review.', inbox || '<div class="empty">No Wiki batches waiting for review.</div>')
-    + win('handoffs', 'Work in flight', o.handoffs.length, o.handoffs[0] ? 'newest: ' + escape(o.handoffs[0].project) : 'No HANDOFF.md files.', handoffs)
-    + win('solo', 'Last solo run', solo, escape(o.solo.bluf || ''), row(`${solo}<small>${escape(o.solo.bluf || '')}</small>`, lazy({ kind: 'solo' })))
-    + win('work', 'Workspace', o.ideas, `ideas · ${o.needs_done} punch-list${icm ? ' · + New idea' : ''}`, `<article class="card"><h2>Workspace</h2><p>${o.ideas} ideas not researched · ${o.needs_done} punch-list items</p>${audit}</article>`
-    + (icm ? row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>') : ''))
-    + win('logs', 'Logs', o.logs.length, o.logs[0] ? escape(o.logs[0].name) : 'No logs.', logs); });
-  if (!cached) keptMission('idea');
-  if (o.notices === null && !cached) setTimeout(() => void loadHub(), 15000);
-}
 one('#mission').addEventListener('click', (event) => {
   const target = event.target as Element;
   const open = target.closest<HTMLElement>('[data-open]');
@@ -1382,7 +1349,7 @@ one('#mission').addEventListener('toggle', async (event) => {
   const pre = (event.target as HTMLElement).querySelector<HTMLElement>(':scope > .body > pre[data-text]');
   if (!pre || pre.dataset.loaded) return;
   pre.dataset.loaded = '1';
-  try { pre.textContent = (await request((pre.dataset.src ?? '/mission/hub/text') + '?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
+  try { pre.textContent = (await request((pre.dataset.src ?? '/mission/space-log') + '?' + pre.dataset.text)).text; } catch (error) { pre.textContent = `Could not read it (${(error as Error).message})`; }
 }, true);
 // A data tile's answer (threat model row 70), drawn as text by the same code as the desktop's.
 async function pullTile(tile: HTMLElement) {
@@ -1483,12 +1450,7 @@ one('#mission').addEventListener('submit', async (event) => {
     const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement, note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/idea', { name: field('name').value, text: field('text').value, needs_done: field('needs').checked });
     note.textContent = result.status === 201 ? `Saved ${result.body.path}.` : `Not saved: ${result.body.error ?? result.status}`;
-    if (result.status === 201) { form.reset(); typed.idea = null; setTimeout(() => void loadHub(), 900); }
-  } else if (form.dataset.decide !== undefined) {
-    const choice = ((event as SubmitEvent).submitter as HTMLButtonElement)?.value, note = form.querySelector<HTMLElement>('[data-note]')!;
-    const result = await mutate('/mission/hub/decide', { name: form.dataset.decide, choice });
-    note.textContent = result.status === 200 ? `Marked ${choice}.` : `Not saved: ${result.body.error ?? result.status}`;
-    if (result.status === 200) setTimeout(() => void loadHub(), 900);
+    if (result.status === 201) { form.reset(); typed.idea = null; }
   } else if (form.dataset.answer !== undefined) {
     const item = mission.queue[Number(form.dataset.answer)], note = form.querySelector<HTMLElement>('[data-note]')!;
     const result = await mutate('/mission/answer', { name: item.name, hash: item.hash, answer: form.querySelector('textarea')!.value.replace(/\s+/g, ' ').trim() });

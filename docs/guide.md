@@ -218,11 +218,9 @@ A path box shows the end of the path (the file name); hover it for the full path
 - **Main project file** (`primary`): the file that names your main project, the bold "Main project: Name" line with its folder (for the Mission Control Main Project card and the Chat Focus Files pane's Current project).
 - **Buttons, apps and pages file** (`registry`): the JSON file listing your buttons, apps and pages (for the Mission Control script buttons and the Apps and pages card).
 - **Folder of items waiting on you** (`waiting`): a folder of .md files, one for each thing waiting on you (for the Mission Control Waiting on you list, the Chat Focus cards and the Files pane's Needs you view).
-- **workspace-hub folder** (`hub`, optional): the folder of your workspace-hub tool (for the Mission Control Logs and incidents, Wiki review inbox and Workspace cards, which stay hidden without it).
-- These four are the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
+- These three are the same paths as in [first start](#first-start), each inside the workspace. **Pick** opens a picker there.
 - **Folder your buttons run in** (`scripts_root`, optional): a full path where your buttons and apps run, and the one ~/workspace stands for. Empty: the workspace.
 - **Extra sections file** (`space`, optional): the JSON file with your own sections, buttons and log views (for the extra sections on the Mission Control page). Empty: no extra sections.
-- **Remote host name** (`server_host`, optional): the network name of your remote, the second machine workspace-hub watches (for the Mission Control Logs and incidents card, which also reads that remote's logs over ssh).
 - **Extra link types for pages** (`page_schemes`, optional): link types besides http and https that a Mission Control page may open, separated by commas (for example `obsidian`). A page link of that type asks before it opens.
 - **Notes folders** (`notes_roots`, optional): one `name = /full/path` per line (for the notes an extra Mission Control section shows, by that name). Your home folder, a folder holding the workspace and P9's recovery folder are refused.
 

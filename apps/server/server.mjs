@@ -17,7 +17,6 @@ import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
 import { SETTINGS, SPACES_DIR, TEMPLATES } from './mission-fields.mjs';
 import { GUIDE, buildPrompt } from './templates/guide.mjs';
-import { createHub } from './hub.mjs';
 import { openLedger, operations } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
 import { createChat } from './chat.mjs';
@@ -113,7 +112,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // Scratch spaces (threat model row 71): <settings folder>/spaces/<name>.json.
   const drafts = settingsFile ? path.join(path.dirname(settingsFile), SPACES_DIR) : undefined;
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts });
-  let hub = createHub({ workspace, settings });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
   const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive, turnLimit: updateTurnMs });
@@ -176,14 +174,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
     recoveryRecordCount: (await readdir(recovery)).filter((name) => name.startsWith('.p9-conflict-')).length }));
   // File protection off lifts these three read-only rules too (Builder, 2026-10-18: "Everything").
-  const readOnly = (path, name = path.toLowerCase()) => protection() && Boolean(
+  const readOnly = (file, name = file.toLowerCase()) => protection() && Boolean(
     // The registry is the script allowlist: an API that can rewrite it could run anything, so P9 never writes it.
     // ponytail: Builder edits registry.json outside P9; a reviewed registry editor would need its own confirm step.
     (settings?.registry !== undefined && name === settings.registry.toLowerCase())
     // The space holds button commands too, so it is read-only to P9 for the same reason.
     || (settings?.space && name === settings.space.toLowerCase())
-    // workspace-hub still runs its own Python until it retires, so the same rule covers that file.
-    || (settings?.hub && name === (settings.hub + '/mission_control.py').toLowerCase()));
+    // workspace-hub still runs its own Python beside its registry until it retires, so the same rule covers that file.
+    || (settings?.registry !== undefined && name === path.posix.join(path.posix.dirname(settings.registry), 'mission_control.py').toLowerCase()));
   // The space P9 made on the first space write (threat model row 69) goes into settings.json through the same queue as Settings saves.
   const useSpace = (file) => {
     const turn = settingsSaves.then(async () => {
@@ -195,7 +193,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     settingsSaves = turn.then(() => {}, () => {});
     return turn;
   };
-  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, hub: () => hub, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change) });
+  const mcp = createMcp({ workspace, recovery, state, settingsFile, settings: () => settings, mission: () => mission, chat, readOnly, protection, useSpace, changeSettings: (change) => changeSettings(change) });
   // Dev Focus's second root (threat model row 41): a folder outside the workspace, set only by the desktop (POST /dev/root),
   // kept in memory only, and checked again on every use, as notes roots are. A save names it by the path main set, so a save from
   // the page of a folder Dev Focus has since left is refused, never written into the new one.
@@ -294,7 +292,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     try { settings = parseSettings(text); settingsInvalid = false; settingsError = null; }
     catch (error) { settingsError = String(error.message).slice(0, 200); if (!settings) settingsInvalid = true; return; }
     mission.setSettings(settings);
-    hub = createHub({ workspace, settings });
   };
   // What a restart would apply: no settings.json key needs one (all of them are read per request), so the only reason is a
   // saved workspace folder that was missing at start (main.mjs); the desktop button restarts the service once it is back.
@@ -304,17 +301,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   }
   api.get('/mission', async (c) => c.json({ ...(await mission.overview()), fileProtection: protection(), settingsError, restart: restart(), update: update.brief() }));
   api.post('/mission/answer', async (c) => reply(c, await mission.answer(await json(c))));
-  api.get('/mission/hub', async (c) => reply(c, await hub.overview()));
   // Data tiles (row 70): the client asks only while Mission shows the tile; the daemon holds each tile to one run per 30 s.
   api.get('/mission/data', async (c) => reply(c, await mission.data(c.req.query('id'))));
   api.get('/mission/card', async (c) => reply(c, await mission.card(c.req.query('id'))));
   api.post('/mission/data/allow', async (c) => reply(c, await mission.allow(await json(c))));
-  // A space log view rides the hub text route, so both clients open it like any other log.
-  api.get('/mission/hub/text', async (c) => reply(c, c.req.query('kind') === 'space' ? await mission.spaceLog(c.req.query('name')) : await hub.text(c.req.query())));
-  // Fix with Claude: the daemon reads the incident through the hub's own checks and seeds a Claude chat with it; the
-  // client names only the machine and incident, never prompt text. workspace-hub opened a terminal here instead.
+  api.get('/mission/space-log', async (c) => reply(c, await mission.spaceLog(c.req.query('name'))));
+  // Fix with Claude: the daemon reads the file again and seeds a Claude chat with it; the client names only the folder
+  // and file, never prompt text.
   api.post('/mission/fix', async (c) => {
-    const { host, name, id, path: file } = (await json(c)) ?? {};
+    const { id, path: file } = (await json(c)) ?? {};
     // Wall 15: a space folder's file. The folder's own fix text (the user's space file) leads; the daemon reads both again.
     if (id !== undefined) {
       const read = await mission.folderRead(id, file);
@@ -324,15 +319,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       const sent = await chat.prompt(made.conversation, { text: `${read.fix}\n\nThe file is ${file}:\n\n${read.text.slice(-90_000)}` });
       return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
     }
-    const incident = await hub.text({ kind: 'incident', host, name });
-    if (incident.status !== 200) return reply(c, incident);
-    // Only an incident the hub lists: a server read that fails comes back as a placeholder line, not an error.
-    if (!(await hub.sections()).incidents.some((i) => i.host === host && i.name === name)) return reply(c, { status: 404, error: 'not-found' });
-    const where = host === os.hostname().split('.')[0] ? '' : ` You are on ${os.hostname().split('.')[0]}; reach ${host} with ssh ${host} (its workspace is ~/workspace).`;
-    const made = await chat.create({ provider: 'claude', title: 'Fix: ' + name.replace(/\.md$/, '').slice(0, 100) });
-    const sent = await chat.prompt(made.conversation, { text: `This is a doctor incident from ${host}. Find the cause and fix it, then run `
-      + `doctor.sh --fix (the workspace's _system/scripts) to confirm it passes.${where}\n\n${incident.text.slice(-90_000)}` });
-    return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
+    return reply(c, { status: 400, error: 'bad-request' });
   });
   // Onboarding (M4, threat model row 72): the shipped guide and templates, a template into an empty space, and a chat whose
   // first message is the shipped guide. The request names only the provider; nothing from it reaches the chat's text.
@@ -412,7 +399,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     }
     return reply(c, { status: 201, path: relative });
   });
-  api.post('/mission/hub/decide', async (c) => reply(c, await hub.decide(await json(c))));
   // Sprint tracker: read-only view of the coordinator's status file; Open tmux is a new P9 terminal running one fixed
   // command (sprint.mjs), with an empty body only, like the agent terminal (threat model row 53). Tmux only: Windows' terminals have none.
   api.get('/mission/sprint', async (c) => reply(c, await readSprint()));
@@ -624,6 +610,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const byDepth = (a, b) => a.split('/').length - b.split('/').length;
   const existing = async () => {
     const found = {};
+    let hubFolder;
     const agents = [], registries = [], waits = [];
     const walk = async (relative, depth) => {
       const entries = await readdir(path.join(workspace, relative), { withFileTypes: true }).catch(() => []);
@@ -633,13 +620,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
         if (entry.isDirectory() && WAITING_NAMES.has(entry.name)) waits.push(relative ? relative + '/' + entry.name : entry.name);
         if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
         const child = relative ? relative + '/' + entry.name : entry.name;
-        if (entry.name === 'workspace-hub' && !found.hub && await present(path.join(workspace, child, 'registry.json'))) found.hub = child;
+        if (entry.name === 'workspace-hub' && !hubFolder && await present(path.join(workspace, child, 'registry.json'))) hubFolder = child;
         else if (depth < 3) await walk(child, depth + 1);
       }
     };
     await walk('', 1);
-    if (found.hub) {
-      found.registry = found.hub + '/registry.json';
+    if (hubFolder) {
+      found.registry = hubFolder + '/registry.json';
       // Registry commands written relative to the folder above the workspace (the workspace is a folder inside a bigger one)
       // only resolve with scripts_root set there.
       const text = (await readAsset(path.join(workspace, found.registry), 'utf8').catch(() => '')).replace(/^﻿/, '');
@@ -677,7 +664,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   };
   // Exactly what a starter run with these paths makes: each of the three that is missing (a missing waiting folder gets its
   // AGENTS.md; an existing one is left as it is), and _ideas/ only in an empty workspace.
-  const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'hub', 'scripts_root'];
+  const WIZARD_KEYS = ['primary', 'registry', 'waiting', 'scripts_root'];
   const planFor = async (paths, empty) => [
     ...(paths.primary === undefined || await present(path.join(workspace, paths.primary)) ? [] : [paths.primary]),
     ...(paths.registry === undefined || await present(path.join(workspace, paths.registry)) ? [] : [paths.registry]),
@@ -781,7 +768,6 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       settings = disk.parsed ?? paths;
       settingsInvalid = false;
       server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts });
-      hub = createHub({ workspace, settings });
     }
     return c.json({ created, settings: true }, 201);
   });

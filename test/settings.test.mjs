@@ -880,7 +880,7 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   assert.equal(await page.locator('#welBody [data-act="starter"]').count(), 0, 'Use these files waits for a path');
   // The path rows share one label column and one box column, as in Settings: every box at the same x and width.
   const wizEdges = await page.locator('#welBody [data-path]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
-  assert.equal(wizEdges.length, 5);
+  assert.equal(wizEdges.length, 4);
   assert.deepEqual(wizEdges, wizEdges.map(() => wizEdges[0]), 'aligned wizard boxes');
   await page.waitForTimeout(10500); // across one 10 s poll (BL5): the section stays open
   assert.equal(await page.locator('#welBody [data-have]').evaluate((d) => d.open), true, 'still open after a refresh');
@@ -1015,14 +1015,14 @@ test('Setup wizard UI: starter settings on a folder with its own layout show the
   await page.locator('#welDlg[open]').waitFor({ timeout: 10000 });
   await page.locator('#welBody [data-conflict]').waitFor({ timeout: 10000 });
   assert.deepEqual(await page.locator('#welBody [data-path]').evaluateAll((inputs) => inputs.map((input) => input.value)),
-    ['AGENTS.md', hub + '/registry.json', 'work/_owner', hub, '']);
+    ['AGENTS.md', hub + '/registry.json', 'work/_owner', '']);
   await page.waitForTimeout(400);
   const png = await page.screenshot({ type: 'png' });
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT conflict-card ' + png.toString('base64'));
   await page.click('[data-act="starter"]');
   await page.locator('#welBody .ok', { hasText: 'Created:' }).waitFor({ timeout: 10000 });
   const saved = JSON.parse(await readFile(path.join(instance.directory, '.config', 'p9', 'settings.json'), 'utf8'));
-  assert.deepEqual(saved, { primary: 'AGENTS.md', registry: hub + '/registry.json', waiting: 'work/_owner', hub });
+  assert.deepEqual(saved, { primary: 'AGENTS.md', registry: hub + '/registry.json', waiting: 'work/_owner' });
   assert.deepEqual((await readdir(instance.workspace)).sort(), ['AGENTS.md', 'note.txt', 'work'], 'no mission/ or needs-you/');
   console.log('PASS wizard UI: found paths shown in the conflict state; Use these repointed the settings and made nothing else');
 });
@@ -2039,7 +2039,7 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   const file = path.join(instance.directory, '.config', 'p9', 'settings.json'), notes = path.join(instance.directory, 'notes');
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-mission-files-')), 'profile');
   let { app, page } = await launchOn(t, instance, profile);
-  const keys = ['primary', 'registry', 'waiting', 'hub', 'scripts_root', 'space', 'server_host', 'page_schemes', 'notes_roots'];
+  const keys = ['primary', 'registry', 'waiting', 'scripts_root', 'space', 'page_schemes', 'notes_roots'], above = path.dirname(instance.workspace);
   const boxes = () => page.locator('#setMission [data-mission]').evaluateAll((all) => all.map((box) => [box.dataset.mission, box.value]));
   const disk = async () => JSON.parse(await readFile(file, 'utf8'));
   const until = async (check, what) => {
@@ -2056,20 +2056,20 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   // Each row has the "i" that opens its guide section, and every path row but scripts_root (a full path) has Pick.
   assert.equal(await page.locator('#setMission [data-docs="mission-control-files"]').count(), keys.length + 1);
   assert.deepEqual(await page.locator('#setMission [data-mission-pick]').evaluateAll((all) => all.map((b) => b.dataset.missionPick.split(':')[0])),
-    ['primary', 'registry', 'waiting', 'hub', 'space']);
+    ['primary', 'registry', 'waiting', 'space']);
 
   // ST1: each row saves on change; the file is what parseSettings accepts.
-  await set('server_host', 'box-1');
+  await set('scripts_root', above);
   await set('page_schemes', 'obsidian, zotero');
   await set('notes_roots', 'vault = ' + notes);
-  const want = { ...MISSION_FILES, server_host: 'box-1', page_schemes: ['obsidian', 'zotero'], notes_roots: { vault: notes } };
+  const want = { ...MISSION_FILES, scripts_root: above, page_schemes: ['obsidian', 'zotero'], notes_roots: { vault: notes } };
   await until(async () => JSON.stringify(await disk()) === JSON.stringify(want), 'three rows saved');
   // A value the daemon refuses stays in its box with the reason under it, and the file is left alone.
-  await set('server_host', 'bad host!');
-  const hostErr = page.locator('#setMission [data-mission="server_host"] ~ [data-mission-err]');
-  await hostErr.filter({ hasText: 'Not saved: server_host:' }).waitFor({ timeout: 5000 });
-  assert.equal(await page.locator('#setMission [data-mission="server_host"]').inputValue(), 'bad host!');
-  assert.equal(await page.locator('#setMission [data-mission="server_host"]').getAttribute('aria-invalid'), 'true');
+  await set('scripts_root', 'relative/dir');
+  const hostErr = page.locator('#setMission [data-mission="scripts_root"] ~ [data-mission-err]');
+  await hostErr.filter({ hasText: 'Not saved: scripts_root:' }).waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#setMission [data-mission="scripts_root"]').inputValue(), 'relative/dir');
+  assert.equal(await page.locator('#setMission [data-mission="scripts_root"]').getAttribute('aria-invalid'), 'true');
   assert.deepEqual(await disk(), want);
   // ST2: the wizard's paths, by Pick and by typing.
   await pickNext(app, [path.join(instance.workspace, 'inbox')]);
@@ -2104,9 +2104,9 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   const edges = await page.locator('#setMission [data-mission]').evaluateAll((all) => all.map((box) => { const r = box.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
   assert.deepEqual(edges, edges.map(() => edges[0]), 'aligned boxes');
   // A good value clears the reason.
-  await set('server_host', 'box-1');
+  await set('scripts_root', above);
   await until(async () => !(await hostErr.count()), 'the reason cleared');
-  assert.equal(await page.locator('#setMission [data-mission="server_host"]').getAttribute('aria-invalid'), null);
+  assert.equal(await page.locator('#setMission [data-mission="scripts_root"]').getAttribute('aria-invalid'), null);
   assert.deepEqual(await disk(), { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' });
 
   // A restart reads them back from the daemon's file.
@@ -2117,8 +2117,8 @@ test('Settings → Mission Control files: rows save to settings.json and survive
   const saved = { ...want, waiting: 'inbox', primary: 'needs-you/AGENTS.md' };
   assert.deepEqual(await boxes(), keys.map((key) => [key, { page_schemes: 'obsidian, zotero', notes_roots: 'vault = ' + notes }[key] ?? saved[key] ?? '']));
   // Emptying an optional row removes its key.
-  await set('server_host', '');
-  await until(async () => !('server_host' in await disk()), 'server_host removed');
+  await set('scripts_root', '');
+  await until(async () => !('scripts_root' in await disk()), 'scripts_root removed');
   console.log('PASS Settings → Mission Control files: rows save and survive a restart, refused values stay with the reason');
 });
 

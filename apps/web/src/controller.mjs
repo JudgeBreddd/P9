@@ -30,9 +30,8 @@ export function mountShell({ askAdmin } = {}) {
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
 // empty and fill from the daemon (GitHub issue #4: a fresh Windows install showed the sample items, and so did a dead daemon).
 const sampleView = !!window.p9?.sample;
-const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], history: [], files: [], fileBody: {}, queue: [], notifications: [], inbox: [],
-  audit: { run: 'none yet', ticked: 0, total: 0, contradictions: 0 }, logs: { host: '', incidents: [], rows: [] }, solo: { when: 'none yet', txt: '' },
-  stats: [['Work in flight (HANDOFF.md)', 0], ['Ideas not researched', 0], ['Punch-list items', 0]], apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
+const M = sampleView ? structuredClone(window.p9.sample) : { sessions: [], history: [], files: [], fileBody: {}, queue: [], notifications: [],
+  apps: [], tools: [], pages: [], scripts: {}, terminal: [], outputs: {}, space: [] };
 const lifetime = new AbortController(), timers = new Set(), observers = [];
 // The Sprint tracker's state (loadSprint): declared up here, as renderMission reads it.
 const SP = { on: false, data: null, error: '', timer: 0 };
@@ -527,9 +526,9 @@ function renderModal() {
     $('#mdlFoot [data-dismiss]').onclick = () => closeModal();
   } else if (m.kind === 'alert') {
     const a = m.a; $('#mdlT').textContent = a.kind;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}${a.start ? '<p class="start"><b>Where to start:</b> ' + esc(a.start) + '</p>' : ''}<p class="muted sm">${a.hub ? 'From the scheduled-job and setup checks. Dismiss hides it until the next check still finds it.' : a.steps || m.done ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
+    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(a.level)}"></span> ${esc(a.kind)}</span><p>${esc(a.txt)}</p>${a.steps ? '<ol class="steps">' + a.steps.map(s => '<li><code>' + esc(s) + '</code></li>').join('') + '</ol><p>' + esc(a.after) + '</p>' : ''}${a.start ? '<p class="start"><b>Where to start:</b> ' + esc(a.start) + '</p>' : ''}<p class="muted sm">${a.steps || m.done ? '' : 'In the real app this opens the check\'s log in Mission Control.'}</p></div>`;
     $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-dismiss>Dismiss</button>`;
-    $('#mdlFoot [data-dismiss]').onclick = () => { S.alerts = S.alerts.filter(x => x !== a); if (H.notices) H.notices = H.notices.filter(x => x !== a); renderCards(); missionLive(); m.back ? openModal(m.back) : closeModal(); };
+    $('#mdlFoot [data-dismiss]').onclick = () => { S.alerts = S.alerts.filter(x => x !== a); renderCards(); missionLive(); m.back ? openModal(m.back) : closeModal(); };
   } else missionModal(m, body, row);
   body.scrollTop = top;
 }
@@ -1184,7 +1183,7 @@ async function loadMission() {
     return renderMission();
   }
   applyOverview(r.body);
-  renderMission(); renderTabs(); loadHub(); loadArt(); loadSprint();
+  renderMission(); renderTabs(); loadArt(); loadSprint();
 }
 // Sprint tracker: the button shows while the connected machine has a sprint status file (the sprint skill writes it each
 // wake-up). 404 = no sprint; any other answer keeps the button and the window says why.
@@ -1260,43 +1259,12 @@ function applyQueue(o) {
 // _tyler/ items newest first, or by project: the file name starts with it, <project>-<what>.md (Builder, 2026-10-19 #1).
 function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'project' ? 'project' : 'updated';
   S.reviews.sort(by === 'project' ? (a, b) => (a.name || a.proj).localeCompare(b.name || b.proj) : (a, b) => (b.updated || 0) - (a.updated || 0)); return by; }
-// The old workspace-hub sections, live: notifications, Wiki inbox, logs and incidents, work in flight, audit, last solo run.
-const H = { on: false, notices: [], handoffs: [], timer: 0, hint: '', unchecked: null };
-// Why no job was checked: an empty list then never reads as "every job reported in" (finding 8).
-const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'no-heartbeats': 'the workspace has no _system/scripts/heartbeats.sh', 'hub-not-set': 'no hub in the Mission settings' };
-// A space file owns Mission (row M4-b): scheduled-job checks are a built-in item, so there is nothing to report.
-const noticeLine = () => (H.unchecked === 'space-set' ? 'No notifications.' : H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
+// P9's own notifications only (the old hub's silent jobs are a space data tile now).
+const noticeLine = () => 'No notifications.';
 // A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
 const listRow = (i, a, b, c) => `<li><button data-i="${esc(i)}">${a}<span class="truncate">${b}</span><span class="sub truncate">${c}</span></button></li>`;
 const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
-async function loadHub() {
-  clearTimeout(H.timer);
-  const r = await window.p9.mission('hub').catch(() => ({ status: 503 }));
-  if (lifetime.signal.aborted) return;
-  // No hub in the settings: the sections stay off and the page says why. Asked again, as the settings load live; any other
-  // failure is asked again sooner.
-  if (r.status !== 200) {
-    // A space file turns the built-in layer off for good (row M4-b): no hint, its windows go.
-    const off = ['hub-not-set', 'space-set'].includes(r.body?.error), hint = r.body?.error === 'hub-not-set' ? 'Logs, incidents and work in flight are off: P9 found no hub folder in this workspace.' : '';
-    if (off) { H.unchecked = r.body.error; H.on = false; }
-    if (hint !== H.hint) { H.hint = hint; renderMission(); }
-    H.timer = setTimeout(loadHub, off ? 60000 : 15000);
-    return;
-  }
-  const o = r.body; H.on = true; H.hint = ''; H.unchecked = o.unchecked;
-  H.handoffs = o.handoffs.sort((a, b) => a.age_days - b.age_days);
-  // null while the first doctor sweep runs (it can take two minutes): ask again soon
-  H.notices = o.notices && o.notices.map(n => ({ kind: n.kind === 'job' ? 'silent job' : 'setup', txt: n.text, level: 'bad', hub: true }));
-  M.inbox = o.inbox.map(b => ({ status: b.decision, pages: b.pages.length, batch: b.branch, live: true }));
-  M.logs = { host: '', incidents: o.incidents.map(i => ({ txt: `${i.host} · ${i.check}: failed ${i.count}×, last ${i.failed[0]}${i.resolved ? ' (resolved)' : ''}`, level: i.resolved ? 'ok' : 'bad', req: { kind: 'incident', host: i.host, name: i.name } })),
-    rows: o.logs.map(l => [l.name, l.host + ' · ' + ago(l.age_min), l.last, { kind: 'log', host: l.host, name: l.name }]) };
-  M.stats = [['Work in flight (HANDOFF.md)', o.handoffs.length], ['Ideas not researched', o.ideas], ['Punch-list items', o.needs_done]];
-  M.audit = o.audit.run ? { run: o.audit.run + ' (' + o.audit.review + ')', ticked: o.audit.ticked, total: o.audit.changes, contradictions: o.audit.contradiction_count ?? 0 } : { run: 'none yet', ticked: 0, total: 0, contradictions: 0 };
-  M.solo = { when: o.solo.name.replace(/-solo-run-report\.md$/, ''), txt: o.solo.bluf || '(no BLUF line)', live: true };
-  renderMission();
-  H.timer = setTimeout(loadHub, o.notices ? 60000 : 15000);
-}
 async function answerLive(r) {
   if (r.gone) return toast({ kind: 'not saved', txt: r.file + ' was answered or removed elsewhere. Copy your text from the box; nothing was written.', level: 'warn' }, true);
   const answer = (r.draft || '').split('\n').map(l => l.trim()).filter(Boolean).join(' ');
@@ -1335,7 +1303,7 @@ const sample = () => (sampleView ? ' · sample' : '');
 const widgetOn = w => sampleView || M.space.some(s => s.widget === w) || (M.icmFiles && !M.space.some(s => s.widget));
 // + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
 const icmSpace = () => sampleView || M.space.some(s => s.widget) || M.icmFiles && !M.space.some(s => s.widget);
-const allNotes = () => [...(H.notices || []), ...S.alerts];
+const allNotes = () => S.alerts;
 const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`);
@@ -1344,11 +1312,6 @@ const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
     body: () => `<p><b>${esc(live.primary.name)}</b> <span class="muted sm mono">${esc(live.primary.path)}</span></p><p class="sm">${esc(live.primary.status.replace(/\*\*/g, ''))}</p>` },
   mnotes: { show: () => widgetOn('notifications'), title: () => 'Notifications' + sample(), card: () => { const n = allNotes(); return [n.length, n[0]?.txt || noticeLine(), n.some(a => a.level === 'bad') ? 'bad' : 'ok']; }, body: () => '' },
-  minbox: { show: () => sampleView || H.on, title: () => 'Wiki review inbox' + sample(), card: () => [M.inbox.length, M.inbox.length ? M.inbox.length + ' batch' + (M.inbox.length > 1 ? 'es' : '') + ' to review' : 'No Wiki batches waiting for review.', M.inbox.length ? 'warn' : 'ok'], body: () => '' },
-  mlogs: { show: () => sampleView || H.on, title: () => 'Logs and incidents' + sample(), card: () => { const open = M.logs.incidents.filter(i => i.level === 'bad'); return [open.length, open[0]?.txt || M.logs.rows.length + ' logs, no open incident', open.length ? 'bad' : 'ok']; },
-    body: () => `<ul class="plist">${M.logs.incidents.map((i, n) => `<li><button data-inc="${n}"${i.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(i.level)}"></span><span class="txt">${esc(i.txt)}</span></button></li>`).join('')}${M.logs.rows.map((r, n) => `<li class="mono sm"${tint(r[0])}><button data-log="${n}"><b>${esc(r[0])}</b><span class="muted">${esc(r[1])}</span><span class="truncate">${esc(r[2])}</span></button></li>`).join('')}</ul>` },
-  mwork: { show: () => sampleView || H.on, title: () => 'Workspace' + sample(), card: () => [M.stats[0][1], `${M.stats[1][1]} ideas · ${M.stats[2][1]} punch-list · solo ${M.solo.when}`, 'ok'],
-    body: () => `<div class="stats">${M.stats.map(([k, v], n) => `<div${n === 0 && H.on ? ' data-handoffs role="button" tabindex="0"' : ''}><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div><p class="sm"><span class="kind"${tint('audit')}>audit</span> ${esc(M.audit.run)}: ${esc(M.audit.ticked)} of ${esc(M.audit.total)} ticked, ${esc(M.audit.contradictions)} contradictions</p><p class="sm"${M.solo.live ? ' data-solo role="button" tabindex="0"' : ''}><span class="kind"${tint('last solo run')}>last solo run</span> ${esc(M.solo.when)}: ${esc(M.solo.txt)}</p>` },
   mlaunch: { show: () => widgetOn('apps'), title: () => 'Apps and pages', card: () => [M.apps.length + M.pages.length, M.apps.concat(M.pages).map(x => x[0]).join(' · ') || 'None in the registry', 'ok'],
     // Each app or page is its own launch tile: P9's icon for P9, a lettered tile in its tint for the rest (Builder, 2026-10-18 #3:
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
@@ -1365,9 +1328,9 @@ const launchTile = (name, title, data, id, page, icon, shown = {}) => `<button c
 const winTop = {};
 const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
   return `<button class="win${lvl === 'bad' ? ' bad fx-halo' : ''}" data-win="${id}"><h4><span class="lvl" data-l="${lvl}"></span>${esc(w.title())}</h4><b class="big${id === 'mprimary' ? ' fx-title' : ''}">${esc(big)}</b><span class="line">${esc(line)}</span></button>`; };
-// Logs, Usage and Apps sit open on the page and scroll on their own, like Waiting on you (Builder, 2026-10-18 #3); the heading still
+// Usage and Apps sit open on the page and scroll on their own, like Waiting on you (Builder, 2026-10-18 #3); the heading still
 // opens the full window.
-const PANELS = ['mlogs', 'musage', 'mlaunch'];
+const PANELS = ['musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 const NEEDS = '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>';
 // The page from the space file: once any section has place col1, col2 or col3, the three columns hold the sections placed
@@ -1588,7 +1551,6 @@ function renderMission() {
   setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${lay ? M.space.filter(s => s.widget && !PLACED.test(s.place)).map(widgetTile).join('') : ''}${groups.map(([g, l]) => `<button class="tile${secWorst(g, l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${secWorst(g, l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
-    + (live.on && H.hint && icmSpace() ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
@@ -1615,11 +1577,6 @@ async function launchLive(name, req) {
 }
 // A section window's buttons; back returns to the window
 function bindWin(root, m) {
-  const text = (title, req) => H.on && req && openModal({ kind: 'hubtext', title, req, back: m });
-  root.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => text(M.logs.incidents[+b.dataset.inc].txt, M.logs.incidents[+b.dataset.inc].req));
-  root.querySelectorAll('[data-log]').forEach(b => b.onclick = () => text(M.logs.rows[+b.dataset.log][0], M.logs.rows[+b.dataset.log][3]));
-  root.querySelectorAll('[data-solo]').forEach(b => b.onclick = () => text('Last solo run · ' + M.solo.when, { kind: 'solo' }));
-  root.querySelectorAll('[data-handoffs]').forEach(b => b.onclick = () => openModal({ kind: 'handoffs', back: m }));
   root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
     if (!live.on) return toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
     // A link that is not http(s) opens another program: the full link is shown first, and only Open sends confirm (M6).
@@ -1650,8 +1607,6 @@ function missionLive() {
   const notes = allNotes();
   set('mnotes', notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button data-i="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`)
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'alert', a: notes[+b.dataset.i], back: S.modal }));
-  set('minbox', M.inbox.length ? `<ul class="plist">${M.inbox.map((x, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(x.status)}>${esc(x.status)}</span><span class="muted sm">${esc(x.pages)} page${x.pages > 1 ? 's' : ''}</span><span class="txt mono sm">${esc(x.batch)}</span></button></li>`).join('')}</ul>` : '<p class="empty">No Wiki batches waiting for review.</p>')
-    .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'inbox', x: M.inbox[+b.dataset.i], back: S.modal }));
 }
 // Notes (threat model row 34): a folder outside the workspace, named in settings.notes_roots; the daemon checks every path.
 // The preview goes through md, which shows raw HTML as text and links and images as plain text (row 18).
@@ -1890,7 +1845,7 @@ function sectionBody(m, body, g, o) {
   const back = o.back;
   body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back }));
   body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back }));
-  body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back }));
+  body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { name: b.dataset.slog }, call: 'spaceLog', back }));
   body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
   body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: g, back }));
   // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section (on the page, once per
@@ -1977,14 +1932,14 @@ function missionModal(m, body, row) {
     if (m.out) $('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
   } else if (m.kind === 'hubtext') {
     $('#mdlT').textContent = m.title;
-    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call || 'hubText', m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; m.canFix = r.status === 200 && !!r.body.fix; if (S.modal === m) renderModal(); }); }
+    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call, m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; m.canFix = r.status === 200 && !!r.body.fix; if (S.modal === m) renderModal(); }); }
     body.innerHTML = `<div class="review"><pre class="out">${esc(m.text)}</pre></div>`;
-    const fix = (m.req?.kind === 'incident' || m.canFix) && liveChat.on; // m.canFix: a space folder with fix text (wall 15)
+    const fix = m.canFix && liveChat.on; // a space folder with fix text (wall 15)
     $('#mdlFoot').innerHTML = `<span class="spacer"></span>${fix ? '<button data-slot="button" data-fix>Fix with Claude</button>' : ''}<button data-slot="button" data-variant="outline" data-copy>Copy</button>`;
     $('#mdlFoot [data-copy]').onclick = e => copy(m.text, e.currentTarget);
     // The daemon starts the chat; the 'created' event adds the session, so the chat modal fills in as events arrive.
     if (fix) $('#mdlFoot [data-fix]').onclick = async () => {
-      const r = await window.p9.mission('fix', m.canFix ? { id: m.req.id, path: m.req.path } : { host: m.req.host, name: m.req.name });
+      const r = await window.p9.mission('fix', { id: m.req.id, path: m.req.path });
       if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation, back: m });
       else toast({ kind: 'chat', txt: 'Fix with Claude: ' + (r.body?.error || r.status), level: 'bad' }, true);
     };
@@ -2002,7 +1957,7 @@ function missionModal(m, body, row) {
       else { m.hint = 'Open tmux: ' + (r.body?.error || r.status); renderModal(); }
     };
   } else if (m.kind === 'idea') {
-    // workspace-hub's New idea box: the daemon names the file and refuses to replace one.
+    // New idea (the old hub's box): the daemon names the file and refuses to replace one.
     $('#mdlT').textContent = 'New idea';
     body.innerHTML = `<div class="review"><p class="sm muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><label>Name<input data-slot="input" data-idea-name value="${esc(m.name)}" placeholder="short-name"></label><label>Idea<textarea data-idea-text rows="8">${esc(m.text)}</textarea></label><label class="sm"><input type="checkbox" data-idea-needs${m.needs ? ' checked' : ''}> A fix for an existing project (needs-done)</label></div>`;
     body.querySelector('[data-idea-name]').oninput = e => { m.name = e.target.value; };
@@ -2012,7 +1967,7 @@ function missionModal(m, body, row) {
     $('#mdlFoot [data-idea-save]').onclick = async () => {
       const r = await window.p9.mission('idea', { name: m.name, text: m.text, needs_done: m.needs });
       toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: r.status === 201 ? r.body.path : 'New idea: ' + (r.body?.error || r.status), level: r.status === 201 ? 'ok' : 'bad' }, true);
-      if (r.status === 201) { closeModal(); loadHub(); }
+      if (r.status === 201) closeModal();
     };
   } else if (m.kind === 'guide') {
     // "Build it yourself" (M4): the shipped guide, and the way to the edit form.
@@ -2025,26 +1980,6 @@ function missionModal(m, body, row) {
     $('#mdlT').textContent = 'Edit names and icons';
     editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => M.art, esc, toast, again: () => S.modal === m && renderModal(),
       reload: async keep => { await refreshMission(); if (keep) S.modal === m && renderModal(); else openModal({ kind: 'medit', items: editItems(M) }); } });
-  } else if (m.kind === 'handoffs') {
-    $('#mdlT').textContent = `Work in flight · ${H.handoffs.length} HANDOFF.md`;
-    body.innerHTML = `<ul class="mlist">${H.handoffs.map((x, i) => row(i, '', esc(x.project), 'updated ' + esc(x.age_days) + ' d ago')).join('')}</ul>`;
-    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const x = H.handoffs[+b.dataset.i]; openModal({ kind: 'hubtext', title: x.project + '/HANDOFF.md', req: { kind: 'handoff', name: x.project }, back: m }); });
-    $('#mdlFoot').innerHTML = '';
-  } else if (m.kind === 'inbox' && m.x.live) {
-    const x = m.x; $('#mdlT').textContent = x.batch;
-    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission('hubText', { kind: 'inbox', name: x.batch }).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; if (S.modal === m) renderModal(); }); }
-    body.innerHTML = `<div class="review"><span class="kind">${esc(x.status)} · ${esc(x.pages)} page${x.pages > 1 ? 's' : ''}</span><pre class="out">${esc(m.text)}</pre></div>`;
-    $('#mdlFoot').innerHTML = `<span class="muted sm">The Librarian applies your call on its next run</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-st="reject">Reject</button><button data-slot="button" data-st="merge">Approve</button>`;
-    $('#mdlFoot').querySelectorAll('[data-st]').forEach(b => b.onclick = async () => {
-      const r = await window.p9.mission('hubDecide', { name: x.batch, choice: b.dataset.st });
-      toast({ kind: r.status === 200 ? 'saved' : 'not saved', txt: x.batch + (r.status === 200 ? ' marked ' + b.dataset.st : ' (' + (r.body?.error || r.status) + ')'), level: r.status === 200 ? 'ok' : 'bad' }, true);
-      closeModal(); loadHub();
-    });
-  } else if (m.kind === 'inbox') {
-    const x = m.x; $('#mdlT').textContent = x.batch;
-    body.innerHTML = `<div class="review"><span class="kind">${esc(x.status)} · ${esc(x.pages)} page${x.pages > 1 ? 's' : ''}</span><pre class="out">${esc(x.body)}</pre></div>`;
-    $('#mdlFoot').innerHTML = `<span class="muted sm">The Librarian applies your call on its next run</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-st="reject">Reject</button><button data-slot="button" data-st="merge">Approve</button>`;
-    $('#mdlFoot').querySelectorAll('[data-st]').forEach(b => b.onclick = () => { x.status = b.dataset.st === 'merge' ? 'approved' : 'rejected'; missionLive(); closeModal(); });
   } else return false;
   return true;
 }
@@ -2768,7 +2703,7 @@ async function firstRun() {
 }
 const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null, have: null };
 // The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
-// starter paths). Empty fields are left out; hub is optional.
+// starter paths). Empty fields are left out.
 const wizPaths = () => Object.fromEntries(Object.entries(W.paths || (W.s?.conflict ? W.s.proposed : W.s?.found) || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
 const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict || (s.settings && s.agentsFile === null && s.registryFile === null));
 // Fresh-install attempt 2, item 8: Mission Control is the last step, once everything else is set up; its button opens
@@ -3501,7 +3436,7 @@ if (chatOn()) side.open('dan-chat', danChat);
 renderMission(); renderTabs(); renderChats(); renderTree(); renderDev(); setFocus('chat', true); loadMission().then(() => setTimeout(pollMission, 20000)); pollUsage(); loadChat(); checkSetup();
 addEventListener('keydown', e => { if (e.ctrlKey && e.shiftKey && e.code === 'KeyN') { e.preventDefault(); mdl.open && S.modal?.kind === 'center' ? closeModal() : openModal({ kind: 'center' }); } });
 // mock: the hub's two open alerts arrive a few seconds after load. Sample view only: on the daemon they filled the
-// bell with test data (Builder, 2026-10-18); live notices come from loadHub.
+// bell with test data (Builder, 2026-10-18); live notices are P9's own alerts.
 if (!window.p9?.mission) M.notifications.forEach((n, i) => setTimeout(() => toast({ ...n }), 2500 + i * 3000));
 
 // Anymouse: DUWOP's idea / bug / gripe box. The desktop main process sends it; the daemon files it or main opens

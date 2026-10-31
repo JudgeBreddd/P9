@@ -246,14 +246,15 @@ export const SETTINGS = {
   waiting: relative('The folder of needs-you .md items. Optional: without it the Waiting on you list is empty.'),
   scripts_root: { type: 'string', check: (value) => typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0'),
     doc: 'An absolute folder where registry commands run and ~/workspace expands to. Default: the workspace.' },
-  hub: relative('The workspace-hub folder.'),
+  // Read by the old built-in hub, gone since 0.1.6; still accepted so a settings file that names it keeps loading.
+  hub: relative('Ignored: the workspace-hub folder the old built-in hub read.'),
   space: { type: 'string', check: (value) => relativePath(value) || (typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0') && path.basename(value) === SPACE_FILE),
     doc: 'The space JSON file (free-form sections with buttons and log views): a relative workspace path, or the absolute path of a file named ' + SPACE_FILE + ' (P9 makes one beside settings.json on the first space write). A relative workspace path has / separators and no empty, . or .. parts.' },
   space_name: { type: 'string', check: spaceName,
     doc: 'The scratch space Mission shows instead of the main space, set by the space picker: ' + SPACE_NAME_RULE + '. Absent: the main space.' },
   page_schemes: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length >= 1 && value.length <= 16 && value.every((scheme) => typeof scheme === 'string' && SCHEME.test(scheme)),
     doc: 'Extra link schemes pages may use (e.g. obsidian), 1 to 16 lowercase schemes of 2 to 32 characters. javascript, file, data, vbscript and blob never open.' },
-  server_host: { type: 'string', check: (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value), doc: 'The server\'s host name, letters, digits, _ . and -, at most 64.' },
+  server_host: { type: 'string', check: (value) => typeof value === 'string' && /^[\w.-]{1,64}$/.test(value), doc: 'Ignored: the server\'s host name the old built-in hub read, letters, digits, _ . and -, at most 64.' },
   notes_roots: { type: 'object', check: (value) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length >= 1
     && Object.keys(value).length <= 16 && Object.entries(value).every(([name, folder]) => ID.test(name) && typeof folder === 'string' && path.isAbsolute(folder) && !folder.includes('\0')),
     doc: 'Notes folders a space section may show, by name (threat model row 34): 1 to 16 entries, each an ID mapped to an absolute folder, e.g. {"vault": "/srv/notes/Vault"}. A folder holding the workspace, the home folder or P9\'s recovery folder is refused.' },

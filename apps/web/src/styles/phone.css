@@ -11,7 +11,7 @@
 input,select,textarea{font-size:16px}
 input[type=checkbox]{min-height:0;width:20px;height:20px;margin:0 8px 0 0;vertical-align:middle}
 /* Mission tiles: two columns of small boxes, each opens its section as a full-screen window (Builder, 2026-10-17) */
-#mission .tiles,#hub{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#hub{display:contents}
+#mission .tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .xterm .xterm-helper-textarea{font-size:16px}
 /* PH2: messages kept on this phone until they can go; the grid above would show it empty */
 #queued{margin:-6px 0 14px}#queued[hidden]{display:none}
@@ -103,7 +103,7 @@ main>section>#keys{flex:none;display:flex;gap:2px;margin:0;padding:4px 8px;overf
 #keys::-webkit-scrollbar{display:none}
 #keys button{flex:1 0 auto;min-height:44px;min-width:36px;padding:0 4px;border:0;border-radius:10px;background:transparent;color:var(--text);font-weight:600;font-size:14px}
 #keys button:active{background:var(--raised)}
-/* Mission: a grouped list. Needs attention first, then the rest; order moves tiles across the #hub wrapper without touching the DOM. */
+/* Mission: a grouped list. Needs attention first, then the rest; order moves tiles without touching the DOM. */
 #mission,#usage{margin-left:0;margin-right:0;gap:0}
 #mission>.card{margin:8px 16px}
 #mission .tiles{display:flex;flex-direction:column;gap:0}

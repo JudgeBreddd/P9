@@ -91,7 +91,7 @@ test('log view root: a log in an allowed folder shows; a root not allowed does n
   const home = os.homedir(), guard = { workspace: path.join(home, 'no-such-workspace'), recovery: path.join(home, 'no-such-recovery') };
   assert.deepEqual([await rootRefused(path.join(home, 'icm-logs'), guard), await rootRefused(path.join(home, '.local/state/sprint'), guard), await rootRefused(home, guard)], [false, false, true]);
   const instance = await start(t);
-  const log = (name) => call(instance, '/mission/hub/text?' + new URLSearchParams({ kind: 'space', name }));
+  const log = (name) => call(instance, '/mission/space-log?' + new URLSearchParams({ name }));
   const shown = await log('vault-log');
   assert.equal(shown.status, 200);
   assert.match(shown.body.text, /Status: open/);

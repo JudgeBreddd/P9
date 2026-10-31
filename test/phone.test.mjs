@@ -9,6 +9,7 @@ import { remoteDaemon, passkeyDevice, enrollDevice, root, externalEdit } from '.
 
 const evidence = process.env.P9_SCREENSHOTS || path.join(os.tmpdir(), 'p9-phase11-screenshots');
 async function setup(paths) {
+  // hub and server_host: an older settings file still loads (both ignored since 0.1.6).
   const settings = { registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: '_tyler', hub: 'hub', space: 'p9/mission-space.json', server_host: 'test-server' };
   await mkdir(path.join(paths.workspace, 'hub'), { recursive: true });
   await mkdir(path.join(paths.workspace, 'projects', 'event-horizon'), { recursive: true });
@@ -20,27 +21,10 @@ async function setup(paths) {
   await writeFile(path.join(paths.workspace, 'projects', 'AGENTS.md'), '# Projects\n\n**Main project: P9 — Event Horizon** (`event-horizon/`)\n');
   await writeFile(path.join(paths.workspace, 'projects', 'event-horizon', 'AGENTS.md'), '# P9\n\n**Status:** **Open** — phase 11 in work\n');
   await writeFile(path.join(paths.workspace, '_tyler', 'p9-question.md'), '# Pick a color\n\nQ. Which one?\n\nA.\n');
-  // The files the hub sections are read from (Phase 16: the daemon reads them itself, no Python): this machine's
-  // ~/icm-logs, the Wiki inbox in the vault the kit env names, and the two scripts behind the notices.
-  const home = paths.directory, logs = path.join(home, 'icm-logs'), server = path.join(home, 'server-home', 'icm-logs');
-  const batch = path.join(home, 'vault', 'Review', 'Inbox', 'librarian-2026-10-16');
-  for (const dir of [logs, path.join(home, '.claude'), path.join(server, 'incidents'), batch, path.join(paths.workspace, '_system', 'scripts'), path.join(home, 'bin')])
-    await mkdir(dir, { recursive: true });
-  await writeFile(path.join(logs, 'doctor.log'), 'start\nall checks pass\n');
-  await writeFile(path.join(server, 'backup.log'), 'backup done\n');
-  await writeFile(path.join(server, 'incidents', '2026-10-16-disk_space.md'), '# Incident: disk_space on test-server, 2026-10-16 04:00:00\n\nDisk at 97%.\n');
-  await writeFile(path.join(home, '.claude', 'continuity-kit.env'), 'WIKI_PATH="' + path.join(home, 'vault') + '"\n');
-  await writeFile(path.join(batch, '_decision.md'), '---\nreview: pending\n---\n# Librarian batch\n');
-  await writeFile(path.join(batch, 'a.md'), '# Page A\n');
-  await writeFile(path.join(paths.workspace, '_system', 'scripts', 'heartbeats.sh'), '[ "$1" = overdue ] && echo "OVERDUE backup.sh last ran 30 h ago"\nexit 0\n');
-  await writeFile(path.join(paths.workspace, '_system', 'scripts', 'doctor.sh'), 'echo "ok   everything"\n');
   // workspace-hub itself still runs this file until it retires, so P9 keeps it read-only (server.mjs).
   await writeFile(path.join(paths.workspace, 'hub', 'mission_control.py'), 'HOSTNAME = "laptop"\n');
-  // A stand-in ssh: runs the server one-liner here against a fixture server home, so the test never reaches a real host.
-  await writeFile(path.join(home, 'bin', 'ssh'), '#!/bin/sh\nfor last; do :; done\nHOME="' + path.join(home, 'server-home') + '" exec sh -c "$last"\n', { mode: 0o755 });
-  await writeFile(path.join(paths.workspace, 'projects', 'event-horizon', 'HANDOFF.md'), '# Handoff\n\nPhase 11 phone check.\n');
   await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify(settings));
-  return { args: ['--settings', path.join(paths.directory, 'settings.json')], path: path.join(home, 'bin') + path.delimiter + process.env.PATH };
+  return { args: ['--settings', path.join(paths.directory, 'settings.json')] };
 }
 // Plan limits as Claude Code and Codex record them in the (fixture) home: Claude fresh, Codex 3 h old with its 5 h window
 // already reset, so the screens must say "new window" and the age instead of the expired figure.
@@ -50,6 +34,8 @@ async function seedLimits(home) {
     utilization: { five_hour: { utilization: 42, resets_at: new Date(now + 2 * hour).toISOString() }, seven_day: { utilization: 17, resets_at: new Date(now + 90 * hour).toISOString() } } } }));
   const day = path.join(home, '.codex', 'sessions', '2026', '10', '17');
   await mkdir(day, { recursive: true });
+  // A signed-in Codex: without its auth.json, Usage (P8) names Codex signed out and drops its figures.
+  await writeFile(path.join(home, '.codex', 'auth.json'), '{}');
   const event = { timestamp: new Date(now - 3 * hour).toISOString(), type: 'event_msg', payload: { type: 'token_count', rate_limits: {
     primary: { used_percent: 61, window_minutes: 300, resets_at: Math.round((now - hour) / 1000) },
     secondary: { used_percent: 33, window_minutes: 10080, resets_at: Math.round((now + 50 * hour) / 1000) } } } };
@@ -187,9 +173,9 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   const desktopPage = await desktop.firstWindow();
   await desktopPage.click('#rMission');
   // Phase 16 short Mission: every section is a card that opens its window and closes again; the page itself does not scroll.
-  await desktopPage.locator('#fMission [data-win="mwork"]').waitFor();
+  await desktopPage.locator('#fMission [data-win="mnotes"]').waitFor();
   const desktopWins = await desktopPage.locator('#fMission [data-win]').evaluateAll((cards) => cards.map((card) => [card.dataset.win, card.querySelector('h4').textContent]));
-  assert.deepEqual(desktopWins.map(([id]) => id), ['mprimary', 'mlogs', 'musage', 'mlaunch', 'mnotes', 'minbox', 'mwork']);
+  assert.deepEqual(desktopWins.map(([id]) => id), ['mprimary', 'musage', 'mlaunch', 'mnotes']);
   for (const [id, title] of desktopWins) {
     await desktopPage.click(`#fMission [data-win="${id}"]`);
     await desktopPage.locator(`#mdl[open] #mdlBody #${id}`).waitFor();
@@ -221,27 +207,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await desktopPage.locator('#mdlBody pre', { hasText: 'backup line 2' }).waitFor();
   await desktopPage.screenshot({ path: path.join(evidence, 'desktop-space-log.png') });
   await desktopPage.keyboard.press('Escape');
-  // Fix with Claude (Phase 16 row 4): the incident's modal starts a Claude chat whose first message is the incident,
-  // read by the daemon (the stand-in ssh serves the server's file), and the chat opens in the modal.
-  await desktopPage.click('#fMission [data-win="mlogs"]');
-  // The status dot sits on the incident's own line, not on a line above it (Phase 16 review).
-  const [dot, line] = await desktopPage.locator('#mdlBody [data-inc]:has-text("disk_space")').evaluate((b) => ['.lvl', '.txt'].map((s) => b.querySelector(s).getBoundingClientRect()));
-  assert.ok(dot.top >= line.top && dot.bottom <= line.bottom, `dot ${dot.top}-${dot.bottom} outside its line ${line.top}-${line.bottom}`);
-  await desktopPage.click('#mdlBody [data-inc]:has-text("disk_space")');
-  await desktopPage.locator('#mdlBody pre', { hasText: 'Disk at 97%' }).waitFor();
-  await desktopPage.click('#mdlFoot [data-fix]');
-  await desktopPage.locator('#mdlBody', { hasText: 'This is a doctor incident from test-server' }).waitFor();
-  assert.match(await desktopPage.locator('#mdlBody').innerText(), /doctor\.sh --fix[\s\S]*ssh test-server[\s\S]*Disk at 97%/);
-  const fixChats = (await desktopPage.evaluate(() => window.p9.chat('list'))).body.conversations.filter((c) => c.title.startsWith('Fix: '));
-  assert.deepEqual(fixChats.map((c) => [c.provider, c.title]), [['claude', 'Fix: 2026-10-16-disk_space']]);
-  await desktopPage.screenshot({ path: path.join(evidence, 'desktop-fix-chat.png') });
-  // The daemon reads only incidents the hub lists: a made-up name or a path is refused, and no chat starts.
-  const fixRefused = await desktopPage.evaluate(async () => [(await window.p9.mission('fix', { host: 'test-server', name: '../x.md' })).status,
-    (await window.p9.mission('fix', { host: 'test-server', name: 'nope.md' })).status]);
-  assert.deepEqual(fixRefused, [400, 404]);
-  assert.equal((await desktopPage.evaluate(() => window.p9.chat('list'))).body.conversations.filter((c) => c.title.startsWith('Fix: ')).length, 1);
-  await desktopPage.keyboard.press('Escape');
-  // The hub's New idea box (Builder: "keep the _ideas/ box ... I use that often"): one new file, named as the hub names it.
+  // The New idea box (Builder: "keep the _ideas/ box ... I use that often"): one new file, named from its name.
   await desktopPage.click('#fMission .tiles [data-idea]');
   await desktopPage.fill('#mdlBody [data-idea-name]', 'Garage Shelf Plan');
   await desktopPage.fill('#mdlBody [data-idea-text]', 'Two rows over the bench.\n\n');
@@ -265,10 +231,9 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.click('[data-nav="mission"]');
   await page.waitForSelector('#mission >> text=Main project');
   // Phase 16 short Mission: every section is a tile that opens a full-screen window and closes again.
-  await page.waitForSelector('#hub [data-open="work"]');
+  await page.waitForSelector('#mission [data-open="idea"]');
   const phoneWins = await page.locator('#mission [data-open]').evaluateAll((tiles) => tiles.map((tile) => [tile.dataset.open, tile.querySelector('span').textContent]));
-  assert.deepEqual(phoneWins.map(([, title]) => title), ['Waiting on you', 'Main project', 'Notifications', 'Incidents', 'Wiki review inbox', 'Work in flight',
-    'Last solo run', 'Workspace', 'Logs', 'Health', 'Backups', 'Notes', 'Pages']);
+  assert.deepEqual(phoneWins.map(([, title]) => title), ['Waiting on you', 'Main project', 'New idea', 'Health', 'Backups', 'Notes', 'Pages']);
   for (const [id, title] of phoneWins) {
     await page.click(`#mission [data-open="${id}"]`);
     assert.equal(await page.locator(`#w-${id}[open] > header .title h1`).innerText(), title);
@@ -300,40 +265,11 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.click('#mission form[data-answer] button');
   await page.waitForSelector('#mission [data-note]:text("Answer saved.")');
   assert.match(await readFile(path.join(server.workspace, '_tyler', 'p9-question.md'), 'utf8'), /^A\. Blue$/m);
-  // The answer reloads Mission 900 ms later; wait for it, or it lands inside the hub steps below and wipes their notes.
+  // The answer reloads Mission 900 ms later; wait for it, or it lands inside the steps below and wipes their notes.
   await page.waitForSelector('#mission [data-note]:text("Answer saved.")', { state: 'detached' });
   await closeWindow();
   await page.screenshot({ path: path.join(evidence, 'phone-mission.png') });
-  // The old hub's sections: notices, incidents, Wiki inbox, work in flight, solo run, logs; each row's text loads on open.
-  await page.click('#hub [data-open="notes"]');
-  await page.waitForSelector('#hub .card.warn:has-text("backup.sh last ran 30 h ago")');
-  // The hub's label, on both screens (Phase 16: it said "Overdue job").
-  assert.equal(await page.locator('#hub .card.warn h2').innerText(), 'SILENT JOB');
-  await closeWindow();
-  await desktopPage.click('#fMission [data-win="mnotes"]');
-  assert.match(await desktopPage.locator('#mdl #mnotes', { hasText: 'backup.sh last ran 30 h ago' }).innerText(), /SILENT JOB/);
-  await desktopPage.click('#mdlX');
   assert.equal(await page.locator('#mission .card:has-text("Registry")').count(), 0); // a clean registry shows no warning
-  await page.click('#hub [data-open="incidents"]');
-  await page.click('#hub summary:has-text("disk_space")');
-  await page.waitForSelector('#hub pre:has-text("Disk at 97%.")');
-  await closeWindow();
-  await page.click('#hub [data-open="handoffs"]');
-  await page.click('#hub summary:has-text("projects/event-horizon")');
-  await page.waitForSelector('#hub pre:has-text("Phase 11 phone check.")');
-  await closeWindow();
-  await page.click('#hub [data-open="inbox"]');
-  await page.click('#hub summary:has-text("librarian-2026-10-16")');
-  await page.waitForSelector('#hub pre:has-text("## a.md")');
-  await page.click('#hub form[data-decide] button[value="merge"]');
-  await page.waitForSelector('#hub [data-note]:text("Marked merge.")');
-  assert.match(await readFile(path.join(server.directory, 'vault', 'Review', 'Inbox', 'librarian-2026-10-16', '_decision.md'), 'utf8'), /^review: merge$/m);
-  // The reload after a decision (it clears the note) reopens the window it was in.
-  await page.waitForSelector('#hub [data-note]:text("Marked merge.")', { state: 'detached' });
-  await page.waitForSelector('#w-inbox[open]');
-  // ...and the row Builder had expanded stays expanded (a 15 s notices reload collapsed it under load).
-  await page.waitForSelector('#w-inbox details.row[open] pre:has-text("## a.md")');
-  await closeWindow();
   // Phone: the same space; the button runs by its ID (no shell, as registry scripts do) and the log opens in place.
   await openWindowWith('Backup now');
   await page.click('#mission summary:has-text("Backup now") [data-run-now]');
@@ -344,21 +280,20 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await closeWindow();
   assert.equal(await page.locator('#mission dialog:has(h1:text-is("Notes")) [data-space-text]').textContent(), 'An empty section.');
   assert.equal(await page.locator('#mission .tile:has(span:text-is("Backups")) b').innerText(), '2'); // a button and a log; the text is not counted
-  await page.screenshot({ path: path.join(evidence, 'phone-mission-hub.png'), fullPage: true });
-  // Phone: the same New idea box, in the Workspace window; this one is a fix, so it lands in _ideas/needs-done/.
-  await page.click('#hub [data-open="work"]');
-  await page.click('#hub summary:has-text("+ New idea")');
-  await page.fill('#hub form[data-idea] input[name="name"]', 'Phone fix');
-  await page.fill('#hub form[data-idea] textarea', 'Send button does nothing.');
-  await page.check('#hub form[data-idea] input[name="needs"]');
+  await page.screenshot({ path: path.join(evidence, 'phone-mission-space.png'), fullPage: true });
+  // Phone: the same New idea box, in its own window; this one is a fix, so it lands in _ideas/needs-done/.
+  await page.click('#mission [data-open="idea"]');
+  await page.click('#mission summary:has-text("+ New idea")');
+  await page.fill('#mission form[data-idea] input[name="name"]', 'Phone fix');
+  await page.fill('#mission form[data-idea] textarea', 'Send button does nothing.');
+  await page.check('#mission form[data-idea] input[name="needs"]');
   await page.screenshot({ path: path.join(evidence, 'phone-new-idea.png') });
-  await page.click('#hub form[data-idea] button');
-  await page.waitForSelector('#hub form[data-idea] [data-note]:has-text("Saved _ideas/needs-done/phone-fix.md.")');
+  await page.click('#mission form[data-idea] button');
+  await page.waitForSelector('#mission form[data-idea] [data-note]:has-text("Saved _ideas/needs-done/phone-fix.md.")');
   assert.equal(await readFile(path.join(server.workspace, '_ideas', 'needs-done', 'phone-fix.md'), 'utf8'), 'Send button does nothing.\n');
   await closeWindow();
-  // Bad names never reach the file system, and the old hub's code stays read-only.
+  // Bad names never reach the file system, and the old hub's code (still run by mission-control.service) stays read-only.
   const refused = await page.evaluate(async () => {
-    const text = await fetch('/mission/hub/text?kind=log&host=laptop&name=..%2Fsecrets.log').then((r) => r.status);
     const file = await fetch('/files?path=hub%2Fmission_control.py').then((r) => r.json());
     const save = await fetch('/files', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf') ?? '', 'x-p9-op': crypto.randomUUID() },
       body: JSON.stringify({ path: 'hub/mission_control.py', hash: file.hash, content: 'import os\n' }) }).then((r) => r.status);
@@ -366,14 +301,14 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
     const space = await fetch('/files?path=p9%2Fmission-space.json').then((r) => r.json());
     const spaceSave = await fetch('/files', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-p9-csrf': sessionStorage.getItem('p9-csrf') ?? '', 'x-p9-op': crypto.randomUUID() },
       body: JSON.stringify({ path: 'p9/mission-space.json', hash: space.hash, content: '{"sections":[]}' }) }).then((r) => r.status);
-    const spaceText = await fetch('/mission/hub/text?kind=space&name=..%2Fbackup.log').then((r) => r.status);
-    const spaceUnknown = await fetch('/mission/hub/text?kind=space&name=other-log').then((r) => r.status);
-    return { text, save, spaceSave, spaceText, spaceUnknown };
+    const spaceText = await fetch('/mission/space-log?name=..%2Fbackup.log').then((r) => r.status);
+    const spaceUnknown = await fetch('/mission/space-log?name=other-log').then((r) => r.status);
+    return { save, spaceSave, spaceText, spaceUnknown };
   });
-  assert.deepEqual(refused, { text: 400, save: 403, spaceSave: 403, spaceText: 400, spaceUnknown: 404 });
+  assert.deepEqual(refused, { save: 403, spaceSave: 403, spaceText: 400, spaceUnknown: 404 });
   await page.click('[data-nav="usage"]');
   await page.waitForSelector('#usage >> text=$0.28');
-  assert.match(await page.locator('#usage').innerText(), /context[\s\S]*%[\s\S]*of [\d,]+ tokens/i);
+  assert.match(await page.locator('#usage').innerText(), /Claude · [\s\S]*%[\s\S]*of [\d,]+ tokens/);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
   // P5: each window is a ring with its % inside and when it resets under it; the plan says how old its numbers are.
   assert.match(phoneLimits, /Claude plan\s+Last read just now\s+42%\s+5 h\s+resets \w{3} \d{1,2}:\d\d\s?[AP]M\s+17%\s+week\s+resets /);

@@ -578,15 +578,12 @@ export async function createDesktop({ state, open } = {}) {
     launch: ({ kind, id: target, ...body }) => ['apps', 'pages'].includes(kind) && id(target) && ['POST', `/${kind}/${target}/launch`, body],
     link: body => ['POST', '/mission/link', body], // rows 74, 75: opened below, on this computer
     answer: body => ['POST', '/mission/answer', body],
-    hub: () => ['GET', '/mission/hub'],
     // Data tiles (threat model row 70): one tile's last answer, and the user's Allow for it.
     data: ({ id: tile }) => id(tile) && ['GET', '/mission/data?' + new URLSearchParams({ id: tile })],
     card: ({ id: card }) => id(card) && ['GET', '/mission/card?' + new URLSearchParams({ id: card })], // a card's HTML (row M5)
     dataAllow: ({ id: tile }) => id(tile) && ['POST', '/mission/data/allow', { id: tile }],
-    hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
-    hubDecide: body => ['POST', '/mission/hub/decide', body],
-    fix: ({ host, name, id: item, path: file }) => item !== undefined ? id(item) && typeof file === 'string' && ['POST', '/mission/fix', { id: item, path: file }]
-      : [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
+    spaceLog: ({ name }) => typeof name === 'string' && ['GET', '/mission/space-log?' + new URLSearchParams({ name })],
+    fix: ({ id: item, path: file }) => id(item) && typeof file === 'string' && ['POST', '/mission/fix', { id: item, path: file }],
     // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
     guide: () => ['GET', '/mission/guide'],
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],
@@ -683,10 +680,10 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Chat: the same pattern. The renderer may name its own operation ID so a retry after a lost reply is not run twice.
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-  const wizardPaths = body => Object.entries(body).every(([key, value]) => ['primary', 'registry', 'waiting', 'hub', 'scripts_root'].includes(key) && typeof value === 'string' && value.length <= 400);
+  const wizardPaths = body => Object.entries(body).every(([key, value]) => ['primary', 'registry', 'waiting', 'scripts_root'].includes(key) && typeof value === 'string' && value.length <= 400);
   // Settings → Mission Control files (ST1/ST2): settings.json keys only, small values (null removes one); the daemon checks
   // the rest as it checks the file itself.
-  const SETTINGS_KEYS = ['primary', 'registry', 'waiting', 'scripts_root', 'hub', 'space', 'page_schemes', 'server_host', 'notes_roots'];
+  const SETTINGS_KEYS = ['primary', 'registry', 'waiting', 'scripts_root', 'space', 'page_schemes', 'notes_roots'];
   const short = value => typeof value === 'string' && value.length <= 400;
   const settingsChange = body => Object.keys(body).length > 0 && Object.entries(body).every(([key, value]) => SETTINGS_KEYS.includes(key) && (value === null || short(value)
     || (Array.isArray(value) && value.length <= 16 && value.every(short))
