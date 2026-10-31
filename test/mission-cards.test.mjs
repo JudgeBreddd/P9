@@ -4,7 +4,8 @@
 // and a card that throws show their error on the card. Desktop 1280 in a dark and a light theme, the phone at 390x844.
 // Wall 4: a card's feeder script and its title-bar buttons are not rows; the buttons sit in the card's title bar.
 // Wall 15: a card opens one of its folder's files in P9's text viewer on a click; a call with no click, or a file outside
-// the folder, opens nothing.
+// the folder, opens nothing. Wall 6: the folder's fix text puts Fix with Claude on the viewer; it starts a Claude chat
+// with that text and the file, read again by the daemon.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
@@ -49,7 +50,7 @@ const space = (extra = []) => ({ sections: [{ id: 'home', title: 'Home', text: '
   { id: 'broken', title: 'Broken script', html: 'cards/inbox.html', script: 'oops' },
   { id: 'throws', title: 'Throws', html: 'cards/throws.html', script: 'nums' },
   { id: 'tall', title: 'Tall', html: 'cards/tall.html', script: 'homefeed' },
-  { id: 'logs', title: 'Logs', html: 'cards/logs.html', script: 'nums', folder: { path: 'logs', pattern: '*.log' } },
+  { id: 'logs', title: 'Logs', html: 'cards/logs.html', script: 'nums', folder: { path: 'logs', pattern: '*.log', fix: 'Find why this log failed.' } },
   ...extra] }] });
 
 async function files(paths, port, extra) {
@@ -116,7 +117,7 @@ test('M5 cards (server): the HTML file is read inside the workspace only; the sc
 test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the card; desktop and phone', { timeout: 180000 }, async (t) => {
   let hits = 0; const other = createServer((_q, s) => { hits++; s.end('ok'); }); await new Promise((r) => other.listen(0, '127.0.0.1', r)); t.after(() => other.close());
   const port = other.address().port;
-  let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, port); } });
+  let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, port); }, args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] });
   for (const id of ['inbox', 'probe', 'broken', 'throws', 'tall', 'logs']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
 
   const profile = path.join(server.directory, 'electron-profile');
@@ -200,6 +201,19 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       await card('logs').scrollIntoViewIfNeeded();
       await logs.locator('#b').click();
       await page.locator('#mdlBody pre', { hasText: 'Could not read it' }).waitFor({ timeout: 10000 });
+      assert.equal(await page.locator('#mdlFoot [data-fix]').count(), 0, 'no Fix with Claude on a file that did not open');
+      await page.click('#mdlBack');
+      await card('logs').scrollIntoViewIfNeeded();
+      await logs.locator('#a').click();
+      await page.locator('#mdlFoot [data-fix]').click({ timeout: 10000 });
+      await page.locator('#mdlBody', { hasText: 'Find why this log failed.' }).waitFor({ timeout: 30000 });
+      assert.match(await page.locator('#mdlBody').innerText(), /Find why this log failed\.[\s\S]*logs\/a\.log[\s\S]*the whole log, not its last lines/);
+      const fixes = (await page.evaluate(() => window.p9.chat('list'))).body.conversations.filter((c) => c.title.startsWith('Fix: '));
+      assert.deepEqual(fixes.map((c) => [c.provider, c.title]), [['claude', 'Fix: a.log']]);
+      shot('wall6-fix-chat', await page.screenshot());
+      const refused = await page.evaluate(async () => [(await window.p9.mission('fix', { id: 'logs', path: 'logs/b.txt' })).status, (await window.p9.mission('fix', { id: 'inbox', path: 'logs/a.log' })).status]);
+      assert.deepEqual(refused, [404, 404], 'a file outside the folder, or a card with no folder, starts no chat');
+      assert.equal((await page.evaluate(() => window.p9.chat('list'))).body.conversations.filter((c) => c.title.startsWith('Fix: ')).length, 1);
     }
     await page.keyboard.press('Escape');
     await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 });

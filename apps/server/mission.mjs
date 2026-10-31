@@ -435,7 +435,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
         try { if ((await readFile(target.root, file.path)).content.split('\n').some((text) => text.trim() === line)) found.push(file); } catch {}
       }
     }
-    return { status: 200, root: target.root, files: found.slice(0, NOTES_SHOWN), total: found.length, shown: NOTES_SHOWN, partial };
+    return { status: 200, root: target.root, files: found.slice(0, NOTES_SHOWN), total: found.length, shown: NOTES_SHOWN, partial, ...(item.fix ? { fix: item.fix } : {}) };
   }
   async function folderList(id) {
     const { root, ...list } = await folderFiles(id);
@@ -446,7 +446,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const list = await folderFiles(id);
     if (list.error) return list;
     if (!list.files.some((file) => file.path === relative)) return { status: 404, error: 'not-found' };
-    try { return { status: 200, text: (await readFile(list.root, relative)).content }; } catch { return { status: 404, error: 'not-found' }; }
+    try { return { status: 200, text: (await readFile(list.root, relative)).content, ...(list.fix ? { fix: list.fix } : {}) }; } catch { return { status: 404, error: 'not-found' }; }
   }
   // Checklists (threat model row M4-a): the files an item names, read through packages/files: in the workspace, or in a
   // notes root the user said yes to (allow_folder, whose question names these writes). A write is one mark or one review

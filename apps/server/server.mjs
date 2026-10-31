@@ -314,7 +314,16 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // Fix with Claude: the daemon reads the incident through the hub's own checks and seeds a Claude chat with it; the
   // client names only the machine and incident, never prompt text. workspace-hub opened a terminal here instead.
   api.post('/mission/fix', async (c) => {
-    const { host, name } = (await json(c)) ?? {};
+    const { host, name, id, path: file } = (await json(c)) ?? {};
+    // Wall 15: a space folder's file. The folder's own fix text (the user's space file) leads; the daemon reads both again.
+    if (id !== undefined) {
+      const read = await mission.folderRead(id, file);
+      if (read.status !== 200) return reply(c, read);
+      if (!read.fix) return reply(c, { status: 404, error: 'no-fix', detail: 'This folder has no fix text in the space file.' });
+      const made = await chat.create({ provider: 'claude', title: 'Fix: ' + file.split('/').pop().slice(0, 100) });
+      const sent = await chat.prompt(made.conversation, { text: `${read.fix}\n\nThe file is ${file}:\n\n${read.text.slice(-90_000)}` });
+      return reply(c, sent.status === 202 ? { status: 201, conversation: made.conversation } : sent);
+    }
     const incident = await hub.text({ kind: 'incident', host, name });
     if (incident.status !== 200) return reply(c, incident);
     // Only an incident the hub lists: a server read that fails comes back as a placeholder line, not an error.

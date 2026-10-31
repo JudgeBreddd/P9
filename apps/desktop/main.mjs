@@ -585,7 +585,8 @@ export async function createDesktop({ state, open } = {}) {
     dataAllow: ({ id: tile }) => id(tile) && ['POST', '/mission/data/allow', { id: tile }],
     hubText: ({ kind, host = '', name = '' }) => [kind, host, name].every(v => typeof v === 'string') && ['GET', '/mission/hub/text?' + new URLSearchParams({ kind, host, name })],
     hubDecide: body => ['POST', '/mission/hub/decide', body],
-    fix: ({ host, name }) => [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
+    fix: ({ host, name, id: item, path: file }) => item !== undefined ? id(item) && typeof file === 'string' && ['POST', '/mission/fix', { id: item, path: file }]
+      : [host, name].every(v => typeof v === 'string') && ['POST', '/mission/fix', { host, name }],
     // Onboarding and the space picker (threat model rows 71, 72): the daemon checks each name again.
     guide: () => ['GET', '/mission/guide'],
     template: ({ name, space, confirm }) => typeof name === 'string' && ['POST', '/mission/template', { name, ...(space !== undefined ? { space } : {}), ...(confirm !== undefined ? { confirm } : {}) }],

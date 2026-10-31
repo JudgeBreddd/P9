@@ -1958,14 +1958,14 @@ function missionModal(m, body, row) {
     if (m.out) $('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
   } else if (m.kind === 'hubtext') {
     $('#mdlT').textContent = m.title;
-    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call || 'hubText', m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; if (S.modal === m) renderModal(); }); }
+    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call || 'hubText', m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; m.canFix = r.status === 200 && !!r.body.fix; if (S.modal === m) renderModal(); }); }
     body.innerHTML = `<div class="review"><pre class="out">${esc(m.text)}</pre></div>`;
-    const fix = m.req?.kind === 'incident' && liveChat.on;
+    const fix = (m.req?.kind === 'incident' || m.canFix) && liveChat.on; // m.canFix: a space folder with fix text (wall 15)
     $('#mdlFoot').innerHTML = `<span class="spacer"></span>${fix ? '<button data-slot="button" data-fix>Fix with Claude</button>' : ''}<button data-slot="button" data-variant="outline" data-copy>Copy</button>`;
     $('#mdlFoot [data-copy]').onclick = e => copy(m.text, e.currentTarget);
     // The daemon starts the chat; the 'created' event adds the session, so the chat modal fills in as events arrive.
     if (fix) $('#mdlFoot [data-fix]').onclick = async () => {
-      const r = await window.p9.mission('fix', { host: m.req.host, name: m.req.name });
+      const r = await window.p9.mission('fix', m.canFix ? { id: m.req.id, path: m.req.path } : { host: m.req.host, name: m.req.name });
       if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation, back: m });
       else toast({ kind: 'chat', txt: 'Fix with Claude: ' + (r.body?.error || r.status), level: 'bad' }, true);
     };

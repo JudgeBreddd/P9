@@ -94,6 +94,9 @@ export const FOLDER = {
   recursive: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'Look in subfolders too, 8 deep. Default false.' },
   match: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n\0]/.test(value),
     doc: 'Only files holding a line that is exactly this text (spaces at either end ignored); the newest 200 files are checked.' },
+  fix: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 2000,
+    doc: 'What a Claude chat should do with an opened file, at most 2000 characters. With it, the file viewer has Fix with Claude: a new Claude chat gets this text, then the file.',
+    example: 'This is a doctor incident. Find the cause and fix it, then run doctor.sh --fix to confirm it passes.' },
 };
 // A checklist (threat model row M4-a): rows like "- [x] text" and a "review: word" line in .md files, each changed one mark or
 // one line at a time through the guarded save. The audit's Approve, Park, Deny and Apply, the Wiki inbox's merge or reject.
@@ -147,8 +150,8 @@ export const CARD = {
     doc: 'Up to 4 IDs of registry scripts or space buttons, drawn as small buttons in the card\'s title bar instead of as rows. A press opens the button\'s run window, '
     + 'which still asks before a confirm button runs. An ID nothing has shows "not found".', example: ['sprint-start', 'sprint-close'] },
   folder: { type: 'object', check: (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-    && Object.entries(value).every(([key, item]) => ['root', 'path', 'pattern', 'recursive', 'match'].includes(key) && FOLDER[key].check(item)),
-    doc: 'Files the card may open in P9\'s text viewer: root, path, pattern, recursive and match as in a folder list, drawn as no row. The card calls '
+    && Object.entries(value).every(([key, item]) => ['root', 'path', 'pattern', 'recursive', 'match', 'fix'].includes(key) && FOLDER[key].check(item)),
+    doc: 'Files the card may open in P9\'s text viewer: root, path, pattern, recursive, match and fix as in a folder list, drawn as no row. The card calls '
     + 'p9open(path) from a click (a call with no click is ignored), path as the folder list gives it (from the root or the workspace). A file outside the list does not open.',
     example: { path: 'logs', pattern: '*.log' } },
 };
