@@ -249,6 +249,9 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .ptool .name{font-weight:600}
 .ptool [data-slot="select"]{width:auto;height:24px;padding:0 24px 0 8px;font-size:11.5px;background-color:transparent;border-color:transparent;color:var(--muted-foreground)}
 .ptool [data-slot="select"]:hover{border-color:var(--border)}
+.ptool [data-chat-files]{margin-left:auto;gap:4px}.ptool [data-chat-files]+.state{margin-left:0}
+.ptool [data-chat-files][aria-pressed=true]{background:var(--accent)}
+#sideChats [data-chat-files]{display:none} /* ponytail: the Dev Focus side chat is itself in the side panel; the list is Chat Focus only */
 .ptool .state{margin-left:auto;color:var(--muted-foreground);font-size:11.5px;display:flex;align-items:center;gap:6px}
 .ptool .state[data-s="running"]::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
 .ptool .state[data-s="stopped"]::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--muted-foreground)}

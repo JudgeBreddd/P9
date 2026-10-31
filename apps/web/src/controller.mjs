@@ -20,7 +20,7 @@ import './components/landing-v5/background.css';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
-import { artifactView, artifactsIn, chipArtifact, mountCard } from './artifact.mjs';
+import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 
 // The admin password window (Shell.tsx, row I2), for row 61 on a remote.
 let adminAsk = null;
@@ -166,8 +166,10 @@ function openArtifact(art) {
   }
   side.open('artifact', { title: art.title, mode: ART.mode, focuses: [S.focus], defaultWidth: w => w / 2, // it goes with its chat's focus: hidden in another, back (still pinned) on return
     render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [
+      ...(art.list ? [{ label: 'All files', go: () => openChatFiles(art.sid) }] : []), // opened from the chat's list: back to it
       { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; side.mode(ART.mode); } }, full] }),
-    onClose: why => { if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
+    onClose: why => { if (why === 'close' && art.list) localStorage.removeItem(cfKey(art.sid)); // its x closes the chat's list too
+      if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
 }
 // Plan view: Claude's plan-mode plan (an "Approve Plan" call or approval), or the agent's plan entries, as Markdown.
 function openPlan(s, which) {
@@ -183,6 +185,80 @@ function autoArtifact(s) {
   if (found.length && onScreen) openArtifact({ ...found.at(-1), sid: s.id });
 }
 side.onResize(() => { ART.state?.refresh?.(); keepBox(); });
+// Chat files (the request, 2026-10-30: "a button just to the left of the running indicator that will open a side pannel and show me
+// the artifacts and files and such? just like anthropic does"). The button sits left of the chat's own Running label (pane());
+// its list, the side panel's 'chat-files' slot, is newest first: every artifact the chat's replies posted (a click opens it as
+// its chip does) and every file its finished edit calls wrote (editFiles), created or edited. A file opens read-only in the
+// artifact view through the Files pane's own reads (p9:mission read and image: GET /files and /files/image, workspace paths
+// only), so the daemon's walk and File protection decide what shows; a file outside the workspace is listed with Copy path only.
+// The open list is remembered per chat (localStorage 'p9-chat-files:<id>'): that chat shown again in Chat Focus opens it again.
+// ponytail: only the chat's loaded events are read (its latest TAIL steps until Show earlier), as the chat itself shows them.
+const CF = { sid: null, ws: null, asked: false, html: null };
+const cfKey = id => 'p9-chat-files:' + id;
+function chatItems(s) {
+  const out = [], seen = new Map();
+  s.events.forEach((e, i) => {
+    if (e.t === 'agent' && e.text?.includes('artifact')) { if (e.artText !== e.text) { e.artText = e.text; e.arts = artifactsIn(e.text); } for (const art of e.arts) out.push({ type: 'artifact', at: i, art }); }
+    else if (e.t === 'tool' && e.files && e.status === 'completed') for (const f of e.files) {
+      const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created || !!was?.created };
+      if (was) out.splice(out.indexOf(was), 1); // one row per file, at its newest write
+      seen.set(f.path, item); out.push(item);
+    }
+  });
+  return out.reverse();
+}
+const fwd = p => String(p).replace(/\\/g, '/');
+// An agent's file path as a workspace path ('proj/notes.md'), or null outside the workspace (or while its path is not known
+// yet). A relative path is from the chat's folder.
+function wsPath(p, folder) {
+  p = fwd(p); const ws = CF.ws && fwd(CF.ws).replace(/\/$/, '');
+  const rel = /^(\/|[A-Za-z]:\/)/.test(p) ? (ws && p.startsWith(ws + '/') ? p.slice(ws.length + 1) : null) : (folder ? folder + '/' : '') + p;
+  const parts = rel?.split('/').filter(x => x && x !== '.');
+  return !parts?.length || parts.includes('..') ? null : parts.join('/');
+}
+// The daemon's workspace folder, once, from the setup read the welcome screen uses (the agents' paths are absolute under it).
+const loadWs = () => { if (CF.asked) return; CF.asked = true; loadSetup().then(b => { CF.ws = b?.workspace ?? null; if (!CF.ws) CF.asked = false; renderChatFiles(); }, () => { CF.asked = false; }); };
+function openChatFiles(sid) {
+  if (CF.sid !== sid && side.current()?.slot === 'chat-files') localStorage.removeItem(cfKey(CF.sid)); // one list open at a time
+  CF.sid = sid; localStorage.setItem(cfKey(sid), '1'); loadWs();
+  side.open('chat-files', { title: 'Artifacts and files', focuses: ['chat'], defaultWidth: w => w / 3, render: () => { CF.html = null; renderChatFiles(); },
+    onClose: why => { if (why === 'close') localStorage.removeItem(cfKey(sid)); queueMicrotask(() => renderChats()); } }); // 'hidden' and 'replaced' keep it remembered
+  renderChats();
+}
+function renderChatFiles() {
+  const b = side.body; if (side.current()?.slot !== 'chat-files') return;
+  const s = S.sessions.find(x => x.id === CF.sid), items = s ? chatItems(s) : [];
+  const row = (it, i) => {
+    if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact</span></button></li>`;
+    const rel = wsPath(it.path, s.folder), shown = rel ?? fwd(it.path), cut = shown.lastIndexOf('/');
+    const where = rel === null ? (CF.ws ? 'outside the workspace, ' : '') + (shown.slice(0, cut) || '/') : cut < 0 ? 'workspace' : shown.slice(0, cut);
+    const tag = rel === null ? 'div' : 'button';
+    return `<li><${tag}${rel === null ? '' : ` type="button" data-cf="${i}" title="Open ${esc(shown)} read-only"`} class="cf-item" data-cf-file><span class="art-kind">File</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></${tag}>`
+      + `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-cf-copy="${i}" title="Copy ${esc(fwd(it.path))}">Copy path</button></li>`;
+  };
+  const html = items.length ? `<ul class="cf-list">${items.map(row).join('')}</ul>` : '<p class="empty">Nothing yet. The artifacts this chat posts and the files it writes show here.</p>';
+  if (CF.html === html) return; // called on every chat change: the DOM is left alone when nothing in it changed
+  CF.html = html; b.innerHTML = html;
+  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true }); else openChatFile(s, it); });
+  b.querySelectorAll('[data-cf-copy]').forEach(el => el.onclick = () => copy(fwd(items[+el.dataset.cfCopy].path), el));
+}
+// A file, read-only, as an artifact: Markdown rendered, an image as itself, anything else as code (an .html file is not run).
+async function openChatFile(s, it) {
+  const rel = wsPath(it.path, s.folder), name = rel.split('/').pop(), image = FILE_IMAGE.test(name);
+  const r = await window.p9?.mission?.(image ? 'image' : 'read', { path: rel }).catch(() => null);
+  const src = r?.status === 200 ? image ? fileImageSrc(r.body) : r.body?.content : null;
+  if (typeof src !== 'string') return toast({ kind: 'file', txt: rel + ': ' + (fileImageError[r?.status === 200 ? 'not-an-image' : r?.body?.error] || 'P9 cannot show it (' + (r?.body?.error || r?.status || 'no daemon') + ').'), level: 'warn' }, true);
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'text', kind = image ? 'image' : /^(md|markdown)$/.test(ext) ? 'markdown' : 'code';
+  openArtifact({ kind, lang: ext, mode: 'panel', title: rel, src, sid: s.id, list: true });
+}
+// From renderChats, in Chat Focus: the open list follows its chat (another chat shown hides it, still remembered), and a
+// remembered one comes back when its chat is shown and the panel is free.
+function chatFilesFollow(ids) {
+  if (S.focus !== 'chat') return;
+  if (side.current()?.slot === 'chat-files' && !ids.includes(CF.sid)) side.close('chat-files', 'hidden');
+  const want = !side.current() && ids.find(id => localStorage.getItem(cfKey(id)) && S.sessions.some(s => s.id === id && !s.stub && chatItems(s).length));
+  if (want) openChatFiles(want); else renderChatFiles();
+}
 if (sampleView) { // the test door: an agent reply arrives whole and its turn ends (reply() streams 3 characters per 18 ms)
   const at = id => S.sessions.find(s => s.id === (id ?? (S.focus === 'dev' ? sideSession()?.id : S.open[0])));
   window.__artifact = { reply: (text, id) => { const s = at(id); s.events.push({ t: 'agent', text }); renderChats(); turnEnd(s); }, render: () => renderChats(), state: () => ART.state, events: id => at(id).events };
@@ -647,6 +723,7 @@ function pane(s, i, bare) {
       ${pickerSelects(s)}
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
+      ${(n => n && !bare ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-chat-files aria-pressed="${side.current()?.slot === 'chat-files' && CF.sid === s.id}" title="Artifacts and files this chat made" aria-label="Artifacts and files (${n})">${svg.files}<span>${n}</span></button>` : '')(s.stub ? 0 : chatItems(s).length)}
       <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
@@ -675,7 +752,8 @@ function renderChats(only) {
   bottoms.disconnect(); $('#chats').querySelectorAll(':scope > .pane > .bottom').forEach(b => bottoms.observe(b));
   if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
   renderSideChat(only);
-  if (side.current()?.slot === 'artifact' && ART.mode === 'panel' && S.focus === 'chat' && ![...ids, mdl.open && S.modal?.kind === 'chat' && S.modal.id].includes(ART.state?.sid)) side.close('artifact'); // item 19: a panel artifact goes with its chat; a pinned one stays
+  if (side.current()?.slot === 'artifact' && ART.mode === 'panel' && S.focus === 'chat' && ![...ids, mdl.open && S.modal?.kind === 'chat' && S.modal.id].includes(ART.state?.sid)) side.close('artifact', 'hidden'); // item 19: a panel artifact goes with its chat; a pinned one stays
+  chatFilesFollow(ids);
   tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
 // The same pane renders in Chat Focus and inside a chat modal; root says which.
@@ -772,6 +850,7 @@ function paint(root, ss, only) {
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); renderTabs(); renderChats(); };
     const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => { if (s.live) return liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); renderTabs(); renderChats(); };
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); renderTabs(); renderChats(); };
+    const cf = p.querySelector('[data-chat-files]'); if (cf) cf.onclick = () => side.current()?.slot === 'chat-files' && CF.sid === s.id ? side.close('chat-files') : openChatFiles(s.id);
     p.querySelector('[data-steps]').onclick = () => { hideSteps = !hideSteps; localStorage.setItem('p9-hide-steps', hideSteps ? '1' : '0'); renderChats(); };
     const cl = p.querySelector('[data-close]'); if (cl) cl.onclick = () => closeTab(s.id);
     const ph = p.querySelector('[data-phone]'); if (ph) ph.onclick = () => continueOnPhone(s);
@@ -3020,6 +3099,16 @@ addEventListener('click', e => {
   const a = e.target.closest?.('a.link[href]'); if (!a || !window.p9?.openLink) return; // a browser preview follows the link
   e.preventDefault(); window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
 });
+// Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
+// and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff with no old text, else a Write.
+// ponytail: a Write over a file that was already there, with no diff, reads as created.
+const editFiles = (d, tool) => {
+  if (tool.kind !== 'edit') return tool.files;
+  const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
+  const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
+  const created = p => { const c = diffs.find(c => c.path === p); return c ? c.oldText == null || c.oldText === '' : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
+  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p) })) : tool.files;
+};
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
 const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
@@ -3103,8 +3192,8 @@ function applyChat(ev, into) {
         const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
         if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
         else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
-      } else if (d.sessionUpdate === 'tool_call') s.events.push({ t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) });
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
+      } else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
+      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
       else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
       else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
       else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) usageNow(); }
