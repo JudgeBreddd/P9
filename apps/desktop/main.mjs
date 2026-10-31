@@ -1012,7 +1012,7 @@ export async function createDesktop({ state, open } = {}) {
   // devFolder: Open Folder's choice ({ path, outside }), null for the workspace; kept until restart or Back to the workspace.
   // devServing: the folder the loaded page was given (its saves go there).
   let cardsView = null, cardsItems = [], cardsHide = null;
-  let devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
+  let devToken = null, devFailed = false, dev = null, devView = null, editorHost = null, look = null, devReady = false, queued = [], devFolder = null, devServing = null;
   const fromDev = event => devView && event.sender === devView.webContents && event.senderFrame === devView.webContents.mainFrame && isDevPage(event.senderFrame.url);
   const startHost = () => editorHost ??= (async () => {
     // The quit handler exists before the host does, so a quit during startup still stops it. Synchronous: Electron does not
@@ -1053,7 +1053,7 @@ export async function createDesktop({ state, open } = {}) {
     // An extension page's files are asked for at https://*.vscode-cdn.net and answered by VS Code's service worker from the
     // editor host; a request that gets past it never leaves the machine.
     devSession.webRequest.onBeforeRequest({ urls: ['*://*.vscode-cdn.net/*'] }, (_details, callback) => callback({ cancel: true }));
-    devReady = false;
+    devReady = false; devToken = null;
     if (devView) { window.contentView.removeChildView(devView); devView.webContents.close(); }
     devSession.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'clipboard-sanitized-write'));
     devSession.setPermissionCheckHandler((_contents, permission) => permission === 'clipboard-sanitized-write');
@@ -1112,6 +1112,7 @@ export async function createDesktop({ state, open } = {}) {
     }
     await devView.webContents.loadURL(DEV_URL);
     devFailed = !!config.error;
+    devToken = config.error ? null : config.token;
     if (config.error) dev = null;
     return config;
   })().catch(error => { dev = null; throw error; });
@@ -1206,6 +1207,12 @@ export async function createDesktop({ state, open } = {}) {
     // left dev unset, so each placement (every frame of a drag) built a new view. Shown and failed, a placement only moves it; coming
     // back to Dev Focus tries again, as the page says.
     if (!(shown && devFailed)) openDev().catch(error => console.error('p9: Dev Focus failed to open:', error.message));
+    // Server mode: the server's daemon may have restarted (an update, a reboot, an idle stop) and ended its editor while the
+    // tunnel stayed up, leaving the page on a dead editor ("Canceled"). Coming back asks the daemon again; it hands back the same
+    // editor while that runs, and a new token reloads the page. Unsaved edits come back from the page's hot-exit backups.
+    if (!shown && serverHost && devToken) { const had = devToken;
+      // check() first: a restarted daemon has new credentials, and check() reads them (remote.mjs).
+      Promise.resolve(server?.check()).then(serverEditor).then(host => { if (devToken === had && host.token !== had) reopenDev(); }).catch(() => {}); }
     // The shell measures in its own (zoomed) CSS pixels; the view is placed in window pixels.
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z);
     devView.setBounds({ x: px(b.x), y: px(b.y), width: px(b.width), height: px(b.height) });

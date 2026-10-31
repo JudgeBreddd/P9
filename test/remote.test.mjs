@@ -808,7 +808,32 @@ test('Dev Focus in Server mode, in the window: the unavailable page names the se
   assert.equal(await readFile(saved, 'utf8'), 'typed before\n', 'Ctrl+S saved the server\'s file');
   await evidence(dev, 'c10-server-dev-focus');
   assert.deepEqual(errors.filter(error => !/EAI_AGAIN|ENOTFOUND|ECONNREFUSED/.test(error)), []);
-  console.log('PASS server Dev Focus in the window: missing names the server, Install there, the server\'s file opened and saved');
+  // The server's daemon restarts (an update, a reboot, an idle stop) and its stop ends the editor, while the tunnel stays up.
+  // An unsaved edit first: the page's hot-exit backup holds it (written about a second after the edit).
+  await dev.evaluate(async () => {
+    const { v, open } = window.devFocus, editor = await open('on-server.txt');
+    await editor.edit(edit => edit.insert(new v.Position(0, 0), 'unsaved '));
+  });
+  await sleep(2500);
+  await shell.keyboard.press('Control+1');
+  remote.child.kill('SIGTERM');
+  await once(remote.child, 'exit');
+  assert.ok(await refused(path.join(remote.state, 'editor.sock')), 'the daemon\'s stop ended its editor');
+  const second = await restart(t, remote, 'state-2');
+  await rm(path.join(s.server, 'p9-foundation'), { recursive: true, force: true });
+  await symlink(second.state, path.join(s.server, 'p9-foundation'));
+  // Back to Dev Focus: the window asks the new daemon, gets a new editor and reloads the page onto it.
+  opened = devPage();
+  await shell.keyboard.press('Control+2');
+  dev = await opened;
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#cause')?.textContent, null, { timeout: 120000 });
+  assert.equal(await dev.locator('#cause').count(), 0, await dev.locator('#cause').textContent().catch(() => ''));
+  assert.notEqual((await dev.evaluate(() => window.p9dev.config())).token, config.token, 'a new editor, not the dead one');
+  const kept = await dev.evaluate(async () => { const editor = await window.devFocus.open('on-server.txt'); return [editor.document.getText(), editor.document.isDirty]; });
+  assert.deepEqual(kept, ['unsaved typed before\n', true], 'the unsaved edit came back, still unsaved');
+  assert.equal(await readFile(saved, 'utf8'), 'typed before\n', 'nothing was saved on the server');
+  await evidence(dev, 'c10-server-dev-focus-after-restart');
+  console.log('PASS server Dev Focus in the window: missing names the server, Install there, the server\'s file opened and saved; after a server daemon restart a new editor, the unsaved edit kept');
 });
 
 test('Dev Focus\'s page when the editor server cannot start: no systemd user session says what to do', { skip, timeout: 120000 }, async (t) => {
