@@ -2532,6 +2532,8 @@ if (LAND_BG === 'video') {
   cosmos.querySelector('img').src = landPoster;
   Object.assign(cosmos.querySelector('video'), { poster: landPoster, src: landLoop });
   cosmos.hidden = false; $('#landSky').hidden = true;
+  // The video is the whole landing: no P9 mark over the hole (Builder, 2026-10-29: "A. remove it", kept 2026-10-31).
+  land.querySelector('.land-mark').remove();
   // Plays only while the landing is open (its dialog is shown) and the window is not hidden; reduced motion, a blocked
   // play or a failed load leave the poster (playback.mjs).
   landVideo = mountLandingVideo(cosmos);
@@ -2546,7 +2548,9 @@ function landingStart() {
   if (!landOn) return;
   let landed = false; try { landed = !!sessionStorage.getItem('p9-landed'); } catch {}
   if (landed || settings.startLast) { land.removeAttribute('data-pending'); setFocus(lastFocus(), true); return; }
-  openLanding(true);
+  // The intro (the mark and its orbit drawn in) belongs to the WebGL sky; with the video, P9 opens on the same page the mark
+  // in the top bar opens (Builder, 2026-10-31: "the first one is wrong").
+  openLanding(LAND_BG === 'original');
 }
 function openLanding(intro) {
   land.removeAttribute('data-pending');

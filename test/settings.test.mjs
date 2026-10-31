@@ -1695,7 +1695,9 @@ test('Landing page: shows on open, only Space skips the intro, a focus pick leav
   // A file from before the landing page: no name, no startLast. It must load (upgraded), not fall back to the defaults.
   await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ zoom: 1.1, closeOnSend: false, focus: { chat: true, dev: true, mission: true }, pet: PETS }));
   await versionSeen(profile);
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_LANDING;
+  // The intro runs with the WebGL sky only (the rollback switch); with the default video P9 opens on the main stage
+  // (landing-first-open.test.mjs).
+  const env = { ...process.env, P9_LANDING: 'original' }; delete env.ELECTRON_RUN_AS_NODE;
   // Evidence: the window's own capture. page.screenshot crops a zoomed (1.1) window to its CSS size and cuts off the bottom right.
   const ev = process.env.P9_EVIDENCE, shot = async (name) => ev && await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 300))))) === undefined && writeFile(path.join(ev, name), Buffer.from(await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString('base64')), 'base64'));
   if (ev) await mkdir(ev, { recursive: true });
