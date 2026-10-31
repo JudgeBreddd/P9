@@ -1188,7 +1188,7 @@ const sprintOverall = d => Number.isFinite(d.overall) ? `<div class="spall"><div
 const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}${c.activity ? ` · <span data-activity="${esc(c.activity)}">${esc(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${esc(c.steps)}</span>` : ''}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
 // The modal's buttons: each is a registry script (asks first, like any script), found by its fixed id.
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
-const scriptById = id => Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
+const scriptById = id => M.cardScripts?.[id] ?? Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
 let lastArt = '';
 async function loadArt() {
@@ -1200,8 +1200,9 @@ async function loadArt() {
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
   live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting?.split('/').pop() ?? null; // no waiting folder on a fresh install
-  M.scripts = {}; M.tools = [];
-  for (const x of o.scripts) (M.scripts[x.group || 'Other'] ||= []).push([x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }]);
+  M.scripts = {}; M.tools = []; M.cardScripts = {}; // hidden: a card's feeder or title-bar button, not a row
+  for (const x of o.scripts) { const row = [x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }];
+    if (x.hidden) M.cardScripts[x.id] = row; else (M.scripts[x.group || 'Other'] ||= []).push(row); }
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
@@ -1810,7 +1811,7 @@ function sectionBody(m, body, g, o) {
     + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join('')}${(sp?.refs || []).map((r, i) => r.missing
       ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
       : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`
-    + (runs.length || sp?.links?.length ? `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>` : '')
+    + (runs.length || sp?.links?.length ? `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card><h3>${esc(c.title)}${(c.buttons || []).map(id => { const s = scriptById(id); return s ? `<button class="cbtn" data-cbtn="${esc(id)}">${esc(s[1])}</button>` : `<button class="cbtn" disabled title="No script or button has this ID">${esc(id)} not found</button>`; }).join('')}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>` : '')
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
     + (sp?.checklists?.length ? `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>` : ''));
   // ponytail: the window draws whole, so there a card's frame is made again on each draw (a tile's answer, a checklist press)
@@ -1828,6 +1829,7 @@ function sectionBody(m, body, g, o) {
       if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
     } });
   }
+  body.querySelectorAll('[data-cbtn]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: scriptById(b.dataset.cbtn), back: o.back }));
   if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
     m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => o.shown() && o.redraw()); }
   const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });

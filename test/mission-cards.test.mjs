@@ -2,6 +2,7 @@
 // Server: the file is read inside the workspace only, the script runs under the data tile rules, any JSON comes back.
 // Screen: a probe card tries the network, P9 and the top window and gets none of them; the JSON arrives; a bad script
 // and a card that throws show their error on the card. Desktop 1280 in a dark and a light theme, the phone at 390x844.
+// Wall 4: a card's feeder script and its title-bar buttons are not rows; the buttons sit in the card's title bar.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
@@ -38,12 +39,14 @@ const img = new Image(); img.onload = () => put('img', 'ok:loaded'); img.onerror
 addEventListener('p9data', e => { document.getElementById('data').textContent = 'data:' + JSON.stringify(e.detail); });
 setTimeout(() => put('done', true), 1500);
 </script>`;
-const space = (extra = []) => ({ sections: [{ id: 'home', title: 'Home', text: 'Custom cards.', cards: [
-  { id: 'inbox', title: 'Inbox', html: 'cards/inbox.html', script: 'nums' },
+const space = (extra = []) => ({ sections: [{ id: 'home', title: 'Home', text: 'Custom cards.', buttons: [
+  { id: 'homefeed', title: 'Home feed', cmd: print({ count: 3 }) }, { id: 'hello', title: 'Say hi', cmd: print('hi') },
+  { id: 'ship', title: 'Ship it', cmd: print('shipped'), confirm: true }, { id: 'plain', title: 'Plain row', cmd: print('plain') }], cards: [
+  { id: 'inbox', title: 'Inbox', html: 'cards/inbox.html', script: 'nums', buttons: ['hello', 'ship', 'ghost'] },
   { id: 'probe', title: 'Probe', html: 'cards/probe.html', script: 'nums' },
   { id: 'broken', title: 'Broken script', html: 'cards/inbox.html', script: 'oops' },
   { id: 'throws', title: 'Throws', html: 'cards/throws.html', script: 'nums' },
-  { id: 'tall', title: 'Tall', html: 'cards/tall.html', script: 'nums' },
+  { id: 'tall', title: 'Tall', html: 'cards/tall.html', script: 'homefeed' },
   ...extra] }] });
 
 async function files(paths, port, extra) {
@@ -81,6 +84,9 @@ test('M5 cards (server): the HTML file is read inside the workspace only; the sc
   const home = overview.space.find((section) => section.id === 'home');
   assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'tall', 'gone', 'linked'], 'a card with .. or a non-.html file is dropped');
   assert.ok(overview.invalid.some((x) => x.cards !== undefined && x.reason === 'malformed-record'), JSON.stringify(overview.invalid));
+  const hidden = overview.scripts.filter((x) => x.hidden).map((x) => x.id).sort();
+  assert.deepEqual(hidden, ['hello', 'homefeed', 'nums', 'oops', 'ship'], 'feeders and title-bar buttons come marked hidden; plain stays a row');
+  assert.deepEqual(home.cards.find((c) => c.id === 'inbox').buttons, ['hello', 'ship', 'ghost']);
 
   const card = await call(instance, '/mission/card?id=inbox');
   assert.deepEqual([card.status, card.body.html], [200, CARD]);
@@ -123,7 +129,12 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     await card('broken').locator('.card-note', { hasText: 'printed something that is not JSON' }).waitFor({ timeout: 15000 });
     assert.match(await card('broken').locator('.card-note').innerText(), /oops, not JSON/, 'a bad script shows its error on the card');
     await card('throws').locator('.card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
-    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 5 items', 'the title counts cards');
+    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 6 items', 'the title counts cards and the one plain row');
+    assert.deepEqual(await page.locator('#mdlBody .mlist [data-i]').allInnerTexts().then((x) => x.map((t) => t.split('\n')[0])), ['Plain row'], 'feeders and title-bar buttons are not rows');
+    assert.deepEqual(await card('inbox').locator('h3 .cbtn').allInnerTexts(), ['Say hi', 'Ship it', 'ghost not found']);
+    assert.ok(await card('inbox').locator('h3 .cbtn', { hasText: 'not found' }).isDisabled(), 'an ID nothing has is a dead chip');
+    const head = await card('inbox').locator('h3').boundingBox(), chip = await card('inbox').locator('h3 .cbtn').first().boundingBox();
+    assert.ok(chip.height <= 26 && chip.y >= head.y - 4 && chip.y + chip.height <= head.y + head.height + 4, 'the chips are small and sit in the title bar: ' + JSON.stringify([head, chip]));
     // Wall 3: each card's box fits its content, not a fixed 200 px: the short inbox shrinks, the 480 px card grows.
     const tall = async (id) => (await card(id).locator('iframe').boundingBox()).height;
     for (const end = Date.now() + 10000; Date.now() < end && (await tall('inbox') >= 200 || await tall('tall') < 480); await sleep(200));
@@ -159,6 +170,12 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     assert.equal(page.url(), 'p9://app/', 'the shell is still P9');
     await card('inbox').scrollIntoViewIfNeeded();
     shot('m5-desktop-1280-' + theme, await page.screenshot());
+    // A title-bar press opens the button's run window; a confirm button still asks first.
+    await card('inbox').locator('h3 .cbtn', { hasText: 'Ship it' }).click();
+    await page.locator('#mdlFoot', { hasText: 'asks before it runs' }).waitFor({ timeout: 5000 });
+    await page.click('#mdlFoot [data-run]');
+    assert.equal(await page.locator('#mdlFoot [data-run]').innerText(), 'Confirm run', 'the first press only arms it');
+    if (theme === 'event-horizon-prime') shot('wall4-ship-window', await page.screenshot());
     await page.keyboard.press('Escape');
     await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 });
   }

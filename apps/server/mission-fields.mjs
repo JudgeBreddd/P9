@@ -141,7 +141,11 @@ export const CARD = {
   html: { ...relative('The workspace .html file the card draws (256 KiB at most). An agent writes it with its own file tool, which the user approves; Mission tools never write it.'), required: true, check: (value) => relativePath(value) && /\.html$/i.test(value) },
   script: { ...DATA.script, doc: 'The ID of a registry script or space button with no args, confirm, terminal or detach, run under the data tile rules: only after the user answers Allow on the card, '
     + 'only while Mission shows it, at most every 30 s, stopped at 10 s, 64 KiB read. It prints any JSON. The card reads it as window.p9data, and gets a p9data event (event.detail) on each run. '
-    + 'The card runs with no network (no fetch, no images or CSS from the web), no access to P9 and no navigation, like a chat artifact: put styles and scripts inline.' },
+    + 'The card runs with no network (no fetch, no images or CSS from the web), no access to P9 and no navigation, like a chat artifact: put styles and scripts inline. '
+    + 'This script is not drawn as its own button row.' },
+  buttons: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 4 && value.every((item) => typeof item === 'string' && ID.test(item)),
+    doc: 'Up to 4 IDs of registry scripts or space buttons, drawn as small buttons in the card\'s title bar instead of as rows. A press opens the button\'s run window, '
+    + 'which still asks before a confirm button runs. An ID nothing has shows "not found".', example: ['sprint-start', 'sprint-close'] },
 };
 // A plain web link (M3): http and https only, so javascript:, file: and data: never open from a section.
 export const WEBLINK = {
