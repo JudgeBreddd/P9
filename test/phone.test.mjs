@@ -402,7 +402,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.unroute('**/files');
   await page.goto(server.origin + '/phone/');
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), csrfKept);
-  await page.click('[data-nav="files"]'); await page.click('#fileList button[data-name="note.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
+  // P2 (c21): the unsaved edit comes back on its own after the sign-in, in the file it was typed in.
+  await page.waitForSelector('#fileState:text("Kept through sign-in, not saved")');
 
   await edit('before 401'); // Save is disabled until the draft differs; typing makes no /files request
   let used401;
@@ -415,7 +416,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.unroute('**/files');
   await page.goto(server.origin + '/phone/');
   await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
-  await page.click('[data-nav="files"]'); await page.click('#fileList button[data-name="note.txt"]'); await page.waitForSelector('#fileState:text("Loaded")');
+  // P2 (c21): the unsaved edit comes back on its own after the sign-in, in the file it was typed in.
+  await page.waitForSelector('#fileState:text("Kept through sign-in, not saved")');
   await edit('after relogin');
   let fresh;
   await page.route('**/files', async (route) => { fresh = route.request().headers()['x-p9-op']; await route.continue(); });
