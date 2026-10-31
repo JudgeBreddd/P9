@@ -197,6 +197,9 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .empty{margin:40px auto;color:var(--muted-foreground);font-size:13px}
 .lvl{width:8px;height:8px;border-radius:50%;background:var(--muted-foreground)}
 .lvl[data-l="bad"]{background:var(--destructive)}.lvl[data-l="warn"]{background:var(--warn)}.lvl[data-l="ok"]{background:var(--ok)}
+/* A data tile, card or placed section whose script printed level warn or bad */
+.dtile[data-l="bad"],.mpanel[data-l="bad"]{box-shadow:inset 0 0 0 1px var(--destructive);background:color-mix(in oklab,var(--destructive) 14%,transparent)}
+.dtile[data-l="warn"],.mpanel[data-l="warn"]{box-shadow:inset 0 0 0 1px var(--warn);background:color-mix(in oklab,var(--warn) 12%,transparent)}
 /* Popups: bottom right, under the card gutter; fade unless hovered (D07) */
 .toasts{position:fixed;right:14px;bottom:34px;width:var(--card-w,232px);display:flex;flex-direction:column;gap:8px;z-index:40}
 /* Desktop item 1, D1: a toast shows its whole message, never cut to one line (a click opens it in the panel too) */

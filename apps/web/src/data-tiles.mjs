@@ -3,6 +3,8 @@
 const web = (url) => typeof url === 'string' && /^https?:\/\/[^\s]+$/.test(url);
 const host = (url) => { try { return new URL(url).host; } catch { return ''; } };
 
+// A tile's or card's level from its script's JSON: 'warn', 'bad' or '' (ok, none, or not answered yet).
+export const tileLevel = (r) => { const v = r?.shape || r?.json; return v && typeof v === 'object' && ['warn', 'bad'].includes(v.level) ? v.level : ''; };
 // r: the daemon's answer ({ shape } or { why, printed }), { allow: script title } before the user's Allow, { error }, or nothing yet.
 // what: the word for it in the text ('card' for a Mission card, row M5).
 export function tileHtml(r, esc, what = 'tile') {

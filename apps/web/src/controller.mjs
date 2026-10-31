@@ -9,7 +9,7 @@ import { MAINTENANCE, maintenanceGroup } from './maintenance.mjs';
 import { PATH_KEYS, missionKeys, missionShown, missionValue } from './mission-files.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { editorModal, editItems } from './mission-editor.mjs';
-import { tileHtml, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
+import { tileHtml, tileLevel, linkHtml, tileAnswer, quickNotePath, quickNoteHtml, quickNoteWords } from './data-tiles.mjs';
 import { checklistHtml, checklistAction, checklistAnswer } from './checklist.mjs';
 import { onboardCard, templateWords, previewCard, freeName } from './onboarding.mjs';
 import { createSky } from './landing-sky.mjs';
@@ -1037,6 +1037,10 @@ function renderModalFoot() {
 const CTP = ['#cba6f7', '#89b4fa', '#94e2d5', '#fab387', '#f5c2e7', '#a6e3a1', '#89dceb', '#f9e2af', '#b4befe', '#eba0ac'];
 const tint = s => ` style="--tint:${CTP[[...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % CTP.length]}"`;
 const worst = list => ['bad', 'warn', 'ok'].find(l => list.some(s => s[3] === l)) || 'ok';
+// A space section's level: the worst of its data tiles' and cards' last answers ('' when none is warn or bad), set by sectionBody.
+// ponytail: tiles run only while their section is drawn (row 70), so a top-row tile knows its level once its window was opened.
+const secLv = {};
+const secWorst = (g, l) => { const w = worst(l), v = secLv[g]; return w === 'bad' || v === 'bad' ? 'bad' : w === 'warn' || v === 'warn' ? 'warn' : w; };
 const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
 // Live data from the daemon (window.p9.mission) fills the lists once it answers; until then the page says why it is empty.
 const live = { on: false, note: window.p9?.mission ? 'Connecting to the P9 daemon…' : 'No P9 daemon in this view', primary: null, waiting: '' };
@@ -1307,6 +1311,7 @@ function secInline(g) {
   // ponytail: a counted folder and a checklist are read once per version of the section here, not on each look as the window does.
   sectionBody(m, p.querySelector('.pscroll'), g, { write: writeKeep, shown: () => inlineSec[g] === m && !!secPanel(g),
     seen: () => S.focus === 'mission' && !document.hidden, redraw: () => secInline(g) });
+  p.dataset.l = secLv[g] || '';
 }
 // D9: an empty Mission (no buttons, apps, pages or waiting items yet) says what it is and how to set it up.
 const missionEmpty = () => window.p9?.mission && !sampleView && !Object.keys(M.scripts).length && !M.apps.length && !M.pages.length && !S.reviews.length
@@ -1484,7 +1489,7 @@ function renderMission() {
     return;
   }
   const lay = placed(), groups = Object.entries(M.scripts).filter(([g]) => !lay || !PLACED.test((M.space || []).find(x => x.title === g)?.place));
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${lay ? M.space.filter(s => s.widget && !PLACED.test(s.place)).map(widgetTile).join('') : ''}${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${lay ? M.space.filter(s => s.widget && !PLACED.test(s.place)).map(widgetTile).join('') : ''}${groups.map(([g, l]) => `<button class="tile${secWorst(g, l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${secWorst(g, l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint && icmSpace() ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
@@ -1722,7 +1727,7 @@ function sectionBody(m, body, g, o) {
     + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join('')}${(sp?.refs || []).map((r, i) => r.missing
       ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
       : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`
-    + (runs.length || sp?.links?.length ? `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>` : '')
+    + (runs.length || sp?.links?.length ? `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>` : '')
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
     + (sp?.checklists?.length ? `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>` : ''));
   // ponytail: the window draws whole, so there a card's frame is made again on each draw (a tile's answer, a checklist press)
@@ -1755,6 +1760,8 @@ function sectionBody(m, body, g, o) {
     if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
     if (o.shown()) o.redraw();
   });
+  const lv = ['bad', 'warn'].find(l => runs.some(r => tileLevel(m.tiles[r.id]) === l)) || '';
+  if ((secLv[g] || '') !== lv) { secLv[g] = lv; setTimeout(renderMission); }
   const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (o.shown()) o.redraw(); });
   if (runs.length && !m.pulled && o.seen()) { m.pulled = true; runs.forEach(pull); }
   if (runs.length && !m.pulling) m.pulling = setInterval(() => { if (!o.shown()) { clearInterval(m.pulling); m.pulling = 0; return; } if (o.seen()) { m.pulled = true; runs.forEach(pull); } }, 30000);

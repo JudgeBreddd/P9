@@ -6,6 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, _electron } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root, versionSeen } from './helpers.mjs';
+import { dataShape } from '../apps/server/mission-fields.mjs';
 
 const node = process.execPath;
 const print = (value) => [node, '-e', `process.stdout.write(${JSON.stringify(JSON.stringify(value))})`];
@@ -162,4 +163,45 @@ test('Mission layout from the space: col1 to col3 draw their sections open, in o
   await phone.locator('#mission [data-open]:has-text("Later")').waitFor({ timeout: 15000 });
   await phone.click('#mission [data-open]:has-text("Ops")', { timeout: 15000 });
   await phone.locator('#mission dialog[open] summary:has-text("Deploy")').waitFor({ timeout: 15000 });
+});
+
+// A data script's level: bad draws its tile and its placed section red; warn draws a top-row section's tile amber once its
+// window has drawn the tile. A level that is not ok, warn or bad is a bad shape.
+const LEVEL = { sections: [
+  { id: 'alerts', title: 'Alerts', place: 'col1', data: [{ id: 'tile-alarm', title: 'Alarm', script: 'alarm' }] },
+  { title: 'Main', widget: 'primary', place: 'col2' },
+  { id: 'later', title: 'Later', data: [{ id: 'tile-meh', title: 'Meh', script: 'meh' }] }] };
+async function setupLevel(paths) {
+  const configured = await setup(paths), w = paths.workspace;
+  const scripts = [...SCRIPTS, { id: 'alarm', title: 'Alarm', cmd: print({ type: 'stat', value: 2, label: 'open incidents', level: 'bad' }) },
+    { id: 'meh', title: 'Meh', cmd: print({ type: 'stat', value: 1, level: 'warn' }) }];
+  await writeFile(path.join(w, 'hub/registry.json'), JSON.stringify({ scripts, apps: [], pages: [] }));
+  await writeFile(path.join(w, 'hub/space.json'), JSON.stringify(LEVEL));
+  return configured;
+}
+
+test('Mission level: a script\'s level warn or bad draws its tile, its placed section and its top-row tile amber or red', { timeout: 150000 }, async (t) => {
+  assert.equal(dataShape({ type: 'stat', value: 1, level: 'bad' }), null);
+  assert.match(dataShape({ type: 'stat', value: 1, level: 'red' }), /level/);
+  const server = await remoteDaemon(t, { setup: setupLevel });
+  for (const id of ['tile-alarm', 'tile-meh']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.click('#rMission');
+  const alerts = page.locator('#fMission [data-sec="Alerts"]');
+  await alerts.locator('[data-tile="tile-alarm"][data-l="bad"]', { hasText: '2' }).waitFor({ timeout: 20000 });
+  await page.locator('#fMission [data-sec="Alerts"][data-l="bad"]').waitFor({ timeout: 10000 });
+  // Later's tile runs only once its window shows it; after that its top-row tile carries the warn.
+  await page.click('#fMission .tiles [data-group="Later"]');
+  await page.locator('#mdlBody [data-tile="tile-meh"][data-l="warn"]').waitFor({ timeout: 15000 });
+  await page.keyboard.press('Escape');
+  await page.locator('#fMission .tiles [data-group="Later"] .lvl[data-l="warn"]').waitFor({ timeout: 10000 });
+  await settled(page);
+  shot('mission-level', await page.screenshot());
 });

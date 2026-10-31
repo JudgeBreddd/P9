@@ -129,7 +129,8 @@ export const DATA = {
     doc: 'The ID of a registry script or space button with no args, confirm, terminal or detach. It runs only after the user answers Allow on the tile, '
       + 'only while Mission shows the tile, at most every 30 s, stopped at 10 s, 64 KiB of output read. It prints one JSON object: '
       + '{"type":"stat","value":12,"label":"Inbox","unit":"notes"}, {"type":"list","rows":[{"title":"Note","subtitle":"2 h ago","link":"https://example.com","badge":"new"}]}, '
-      + '{"type":"table","columns":["Name","State"],"rows":[["web","up"]]} or {"type":"rings","rings":[{"label":"Disk","percent":42}]}. Anything else shows what it printed.' },
+      + '{"type":"table","columns":["Name","State"],"rows":[["web","up"]]} or {"type":"rings","rings":[{"label":"Disk","percent":42}]}. Any of them may add "level":"ok", "warn" or "bad": warn or bad draws the tile, '
+      + 'its section\'s panel and the section\'s top-row tile amber or red. Anything else shows what it printed.' },
 };
 // A custom card (M5, threat model row M5): a workspace .html file drawn in the chat-artifact frame (no network, no P9,
 // no navigation), fed one data script's JSON as data. The script runs under the data tile rules above.
@@ -156,8 +157,11 @@ export const WEBLINK = {
 const cell = (value) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 const listOf = (value, max, check) => Array.isArray(value) && value.length <= max && value.every(check);
 const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+// Any shape may carry a level: warn or bad draws the tile, and the section holding it, amber or red.
+export const LEVELS = ['ok', 'warn', 'bad'];
 export function dataShape(value) {
   if (!object(value)) return 'printed JSON that is not an object';
+  if (!optional(value, 'level', (l) => LEVELS.includes(l))) return 'printed a level that is not ok, warn or bad';
   if (value.type === 'stat') return cell(value.value) && optional(value, 'label', text) && optional(value, 'unit', text) ? null
     : 'printed a stat without a value (a number or text), or with a label or unit that is not text';
   if (value.type === 'list') return listOf(value.rows, 200, (row) => object(row) && text(row.title) && optional(row, 'subtitle', text) && optional(row, 'badge', cell)
