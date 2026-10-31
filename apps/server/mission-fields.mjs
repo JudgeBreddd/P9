@@ -170,7 +170,9 @@ export function dataShape(value) {
 }
 // A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
-export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications'];
+export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications', 'primary'];
+// Where a section draws on the desktop page: a top-row tile that opens its window, or open in one of the three columns.
+export const PLACES = ['tile', 'col1', 'col2', 'col3'];
 export const SECTION = {
   id: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'The section\'s id: lowercase letters, digits and dashes, unique among sections. Optional: P9 makes one from the title.' },
@@ -204,7 +206,10 @@ export const SECTION = {
   // Fresh-install finding 3a (threat model row 72): P9's built-in panels draw on a space only where a section names them.
   widget: { type: 'string', check: (value) => WIDGETS.includes(value),
     doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage), apps (Apps and pages) or notifications (Notifications)'
-      + '. Without a space all four show; on a space only the ones a section names.', example: 'waiting' },
+      + ' or primary (the Main project card). Without a space the first four show; on a space only the ones a section names.', example: 'waiting' },
+  place: { type: 'string', check: (value) => PLACES.includes(value),
+    doc: 'Where the section draws on the desktop Mission page: tile (the default) is a tile in the top row that opens the section\'s window; col1, col2 or col3 draws it open in that column, '
+      + 'its items shown in place (a widget section draws its panel there), in file order. Once any section has a column, the three columns hold only the sections placed in them. The phone ignores it.', example: 'col2' },
 };
 // The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
 export const SPACE_FILE = 'mission-space.json';
@@ -294,14 +299,14 @@ export const SCHEMAS = {
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
 export function describeMission() {
-  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget').map(([key, field]) => ({
+  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place').map(([key, field]) => ({
     item: key, about: field.doc, ...(field.fields ? { fields: jsonSchema(field.fields).properties } : {}),
     example: { id: 'example-' + key, title: 'Example ' + key, [key]: field.example } }));
   return {
     about: 'Mission Control shows the space: one JSON file of sections in order. Each section has a title, optional text and icon, and items of the types below. '
       + 'Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
       + 'Unknown fields and a second section with the same title or id are refused. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
-    file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
+    file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', place: SECTION.place.example, buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
     items, templates: TEMPLATES, schema: SCHEMAS.space,
   };
 }

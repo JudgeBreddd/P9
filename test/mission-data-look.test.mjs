@@ -88,3 +88,78 @@ test('M3 look: tile shapes, a bad shape, Allow and a link on desktop (dark, ligh
   await phone.locator('#mission dialog[open] .tile-row').scrollIntoViewIfNeeded();
   shot('m3-phone-bottom', await phone.screenshot());
 });
+
+// Mission from the space file: sections placed col1 to col3 draw open in those columns, in file order (widgets as P9's own
+// panels, any other section with its items in place); a section with no place stays a tile in the top row.
+const PLACED = { sections: [
+  { title: 'Waiting', widget: 'waiting', place: 'col1' },
+  { id: 'ops', title: 'Ops', place: 'col1', buttons: [{ id: 'deploy', title: 'Deploy', cmd: ['true'] }],
+    logs: [{ id: 'ops-log', title: 'Ops log', path: 'logs/ops.log' }], data: [{ id: 'tile-stat', title: 'Count', script: 'stat' }] },
+  { title: 'Main', widget: 'primary', place: 'col2' },
+  { title: 'Usage', widget: 'usage', place: 'col3' },
+  { id: 'later', title: 'Later', text: 'Not placed.', buttons: [{ id: 'later-run', title: 'Later run', cmd: ['true'] }] }] };
+async function setupPlaced(paths) {
+  const configured = await setup(paths), w = paths.workspace;
+  await mkdir(path.join(w, 'logs'), { recursive: true });
+  await writeFile(path.join(w, 'logs/ops.log'), 'deployed\n');
+  await writeFile(path.join(w, '_waiting/pick-a-host.md'), '# Pick a host\n\nA or B.\n');
+  await writeFile(path.join(w, 'hub/space.json'), JSON.stringify(PLACED));
+  return configured;
+}
+
+test('Mission layout from the space: col1 to col3 draw their sections open, in order; an unplaced section stays a tile', { timeout: 150000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: setupPlaced });
+  assert.equal((await server.desk('/mission/data/allow', 'POST', { id: 'tile-stat' })).status, 200);
+  const profile = path.join(server.directory, 'electron-profile');
+  await mkdir(profile); await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', server.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.click('#rMission');
+  await page.locator('#fMission .tiles [data-group="Later"]').waitFor({ timeout: 20000 });
+  const row = page.locator('#fMission .mrow[data-placed]');
+  await row.waitFor({ timeout: 10000 });
+  // Each column holds what the space placed there, in file order.
+  const kids = (n) => row.locator(':scope>[data-col="' + n + '"]>*').evaluateAll((all) => all.map((k) => k.dataset.sec || k.dataset.panel || k.dataset.card || k.className));
+  assert.deepEqual(await kids(1), ['needs', 'Ops']);
+  assert.deepEqual(await kids(2), ['mprimary']);
+  assert.deepEqual(await kids(3), ['musage']);
+  // The widgets are P9's own panels: Waiting on you with its sort and item, the Main project card, Usage.
+  await row.locator('[data-col="1"] .needs [data-sort]').waitFor();
+  await row.locator('[data-col="1"] .needs [data-list] button', { hasText: 'Pick a host' }).waitFor({ timeout: 15000 });
+  await row.locator('[data-col="2"] [data-card="mprimary"] .win', { hasText: 'P9' }).waitFor({ timeout: 10000 });
+  assert.match(await row.locator('[data-col="3"] [data-panel="musage"] .pscroll').innerText(), /\S/);
+  // Ops draws open: its button, its log view and its data tile in place, and Open opens its window.
+  const ops = row.locator('[data-col="1"] [data-sec="Ops"]');
+  await ops.locator('.pscroll .mlist [data-i]', { hasText: 'Deploy' }).waitFor();
+  await ops.locator('.pscroll .mlist [data-slog="ops-log"]', { hasText: 'Ops log' }).waitFor();
+  await ops.locator('.pscroll [data-tile="tile-stat"]', { hasText: '12' }).waitFor({ timeout: 15000 });
+  // The section with no place is only a tile; a placed one is not.
+  assert.equal(await page.locator('#fMission [data-sec="Later"]').count(), 0);
+  assert.equal(await page.locator('#fMission .tiles [data-group="Ops"]').count(), 0);
+  await settled(page);
+  shot('mission-placed', await page.screenshot());
+  await ops.locator('.phead').click();
+  await page.locator('#mdl[open] #mdlT', { hasText: 'Ops · 3 items' }).waitFor({ timeout: 10000 });
+  await page.locator('#mdlBody [data-tile="tile-stat"]', { hasText: '12' }).waitFor({ timeout: 15000 });
+  await page.keyboard.press('Escape');
+
+  // The phone ignores place: each section is still a row there.
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const device = await passkeyDevice(browser, server, 'phone-placed');
+  const session = await enrollDevice(server, device);
+  await device.context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
+  const phone = device.page;
+  await phone.setViewportSize({ width: 390, height: 844 });
+  await phone.goto(server.origin + '/phone/');
+  await phone.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
+  await phone.reload();
+  await phone.click('[data-nav="mission"]');
+  await phone.locator('#mission [data-open]:has-text("Later")').waitFor({ timeout: 15000 });
+  await phone.click('#mission [data-open]:has-text("Ops")', { timeout: 15000 });
+  await phone.locator('#mission dialog[open] summary:has-text("Deploy")').waitFor({ timeout: 15000 });
+});

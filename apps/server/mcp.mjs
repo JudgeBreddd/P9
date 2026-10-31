@@ -13,7 +13,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { readFile, guardedSave, createFile } from '../../packages/files/index.mjs';
 import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt, draftAt, draftNames } from './mission.mjs';
-import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, WIDGETS, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
+import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, WIDGETS, PLACES, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -38,6 +38,7 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission b
 
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
 const sectionField = { type: 'string', description: 'A space section title. Without it the button goes to (or comes from) the registry\'s scripts.' };
+const placeField = { type: 'string', description: 'Where it draws on the desktop page: ' + PLACES.join(', ') + '. tile (the default) is a top-row tile; col1 to col3 draws it open in that column.' };
 const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty string removes it.' };
 const cardIdField = { type: 'string', description: 'Your name for the card, like status or todo: 1 to 64 of A-Z a-z 0-9 . _ -' };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -58,14 +59,15 @@ const TOOLS = [
     input({ record: jsonSchema(RECORD, {}, true), section: sectionField, space: spaceField, hash: hashField }, ['record'])],
   ['add_app', 'Add an app to the registry.', input({ record: jsonSchema(RECORD, {}, true), hash: hashField }, ['record'])],
   ['add_page', 'Add a link to the registry.', input({ record: jsonSchema(PAGE, {}, true), hash: hashField }, ['record'])],
-  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, space: spaceField, hash: hashField }, ['title'])],
+  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, place: placeField, space: spaceField, hash: hashField }, ['title'])],
   ['update_button', 'Change a script button\'s title or icon in the registry, or in a space section. icon "" removes the icon.',
     input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField, space: spaceField, hash: hashField }, ['id'])],
   ['update_app', 'Change an app\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
   ['update_page', 'Change a link\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
-  ['update_section', 'Change a space section: rename it (new_title), change its icon, draw one of P9\'s built-in panels as it (widget), show registry entries in it (refs) or show a notes folder (notes). "" or [] removes a field.',
+  ['update_section', 'Change a space section: rename it (new_title), change its icon, draw one of P9\'s built-in panels as it (widget), place it on the page (place), show registry entries in it (refs) or show a notes folder (notes). "" or [] removes a field.',
     input({ title: { type: 'string', description: 'The section\'s current title.' }, new_title: { type: 'string' }, icon: iconField,
       widget: { type: 'string', description: 'One of ' + WIDGETS.join(', ') + '. "" removes it.' },
+      place: { ...placeField, description: placeField.description + ' "" removes it.' },
       refs: { type: 'array', items: { type: 'string' }, description: 'IDs of registry scripts, apps or pages (read them from p9://registry) or of space buttons, at most 64. [] removes them.' },
       notes: { type: 'string', description: 'A key of settings.notes_roots (allow_folder asks the user to add one), never a path. "" removes it.' },
       space: spaceField, hash: hashField }, ['title'])],
@@ -431,13 +433,13 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
 
   // Title and icon of one record (kind scripts|apps|pages) or one space section (kind sections, key = its title). icon '' removes it.
-  // A section also takes widget, refs and notes (threat model row 72 e); any other kind given one is refused. "" or [] removes each.
+  // A section also takes widget, place, refs and notes (threat model row 72 e); any other kind given one is refused. "" or [] removes each.
   const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
   // picture (the name of a stored file, '' removes it) is the desktop form's alone: an agent's tool call is refused if it names one.
-  function update(kind, { key, section: sectionTitle, title, icon, picture, widget, refs, notes, hash }, by) {
-    if (!string(key, 200) || ![sectionTitle, title, icon, picture, widget, notes].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)
-      || (refs !== undefined && !Array.isArray(refs)) || (kind !== 'sections' && [widget, refs, notes].some((value) => value !== undefined))) return { error: 'request-refused' };
-    if ([title, icon, picture, widget, refs, notes].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes widget, refs or notes).' };
+  function update(kind, { key, section: sectionTitle, title, icon, picture, widget, place, refs, notes, hash }, by) {
+    if (!string(key, 200) || ![sectionTitle, title, icon, picture, widget, place, notes].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)
+      || (refs !== undefined && !Array.isArray(refs)) || (kind !== 'sections' && [widget, place, refs, notes].some((value) => value !== undefined))) return { error: 'request-refused' };
+    if ([title, icon, picture, widget, place, refs, notes].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes widget, place, refs or notes).' };
     if (kind !== 'scripts' && sectionTitle !== undefined) return { error: 'request-refused' };
     return edit(kind === 'sections' || sectionTitle !== undefined ? 'space' : 'registry', hash, (data) => {
       let entry, rest;
@@ -454,8 +456,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       if (title !== undefined) entry.title = title;
       if (icon === '') delete entry.icon; else if (icon !== undefined) entry.icon = icon;
       if (picture === '') delete entry.picture; else if (picture !== undefined) entry.picture = picture;
-      // A section's panel, references and notes key (threat model row 72 e): "" or [] removes; the SECTION table checks the rest below.
-      for (const [field, value] of Object.entries({ widget, refs, notes })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
+      // A section's panel, place, references and notes key (threat model row 72 e): "" or [] removes; the SECTION table checks the rest below.
+      for (const [field, value] of Object.entries({ widget, place, refs, notes })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
       const wrong = problem(entry, FIELDS[kind], false, current()?.page_schemes);
       if (wrong) return { error: 'invalid-record', detail: wrong };
       if (kind === 'sections' && rest.some((other) => typeof other?.title === 'string' && other.title.trim() === entry.title.trim())) return { error: 'duplicate-section', section: entry.title };
@@ -539,8 +541,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     add_button: (args) => add('scripts', args.record, args.section, args.hash),
     add_app: (args) => add('apps', args.record, undefined, args.hash),
     add_page: (args) => add('pages', args.record, undefined, args.hash),
-    add_section: ({ title, text, hash }) => {
-      const record = { title, ...(text !== undefined ? { text } : {}) };
+    add_section: ({ title, text, place, hash }) => {
+      const record = { title, ...(text !== undefined ? { text } : {}), ...(place !== undefined ? { place } : {}) };
       const wrong = problem(record, SECTION);
       if (wrong || !string(title, 200)) return { error: 'invalid-section', detail: wrong ?? 'title: at most 200 characters' };
       return edit('space', hash, (data) => {

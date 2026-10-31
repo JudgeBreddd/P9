@@ -400,7 +400,7 @@ function renderModal() {
   const top = m.kind === 'win' ? winTop[m.id] || 0 : body.dataset.kind === key ? body.scrollTop : 0;
   body.onscroll = null; body.dataset.kind = key; $('#mdlFoot').innerHTML = '';
   $('#mdlBack').hidden = !m.back; $('#mdlPrimary').hidden = m.kind !== 'chat' && m.kind !== 'file' || m.live;
-  const row = (i, a, b, c) => `<li><button data-i="${esc(i)}">${a}<span class="truncate">${b}</span><span class="sub truncate">${c}</span></button></li>`;
+  const row = listRow;
   if (m.kind === 'chat') {
     const s = S.sessions.find(x => x.id === m.id); if (!s) return closeModal();
     $('#mdlT').textContent = s.title; paint(body, [s]);
@@ -1168,6 +1168,7 @@ const UNCHECKED = { windows: 'P9 runs no workspace shell scripts on Windows', 'n
 // A space file owns Mission (row M4-b): scheduled-job checks are a built-in item, so there is nothing to report.
 const noticeLine = () => (H.unchecked === 'space-set' ? 'No notifications.' : H.unchecked ? 'Scheduled jobs not checked: ' + (UNCHECKED[H.unchecked] || H.unchecked) + '.' : H.on && !H.notices ? 'Checking scheduled jobs and setup…' : 'Every scheduled job reported in.');
 // A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
+const listRow = (i, a, b, c) => `<li><button data-i="${esc(i)}">${a}<span class="truncate">${b}</span><span class="sub truncate">${c}</span></button></li>`;
 const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function loadHub() {
@@ -1269,6 +1270,44 @@ const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
 // opens the full window.
 const PANELS = ['mlogs', 'musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
+const NEEDS = '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>';
+// The page from the space file: once any section has place col1, col2 or col3, the three columns hold the sections placed
+// in them, in file order, and nothing else; every other section is a tile in the top row. With none placed, the page is the
+// fixed layout below (waiting, Main project and Logs, then Usage, Apps and the cards).
+const PLACED = /^col[123]$/;
+const placed = () => (M.space || []).some(s => PLACED.test(s.place));
+const WIDGET_WIN = { usage: 'musage', apps: 'mlaunch', notifications: 'mnotes', primary: 'mprimary' };
+// A widget draws P9's own panel; any other section draws open: its title and Open (its window), its items under it.
+const placedHtml = s => s.widget === 'waiting' ? NEEDS : s.widget === 'usage' || s.widget === 'apps' ? winPanel(WIDGET_WIN[s.widget])
+  : s.widget ? `<div data-card="${WIDGET_WIN[s.widget]}"></div>`
+  : `<section class="mpanel" data-sec="${esc(s.title)}"><button class="phead" data-group="${esc(s.title)}"><h4>${esc(s.title)}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
+// In the placed layout a widget section left in the top row is a tile that opens its window.
+const widgetTile = s => { const id = WIDGET_WIN[s.widget], w = wins[id];
+  if (s.widget !== 'waiting' && w.show && !w.show()) return '';
+  const [big, , lvl] = s.widget === 'waiting' ? [S.reviews.length, '', S.reviews.length ? 'warn' : 'ok'] : w.card();
+  return `<button class="tile" data-wtile="${id || 'waiting'}"><span class="lvl" data-l="${lvl}"></span><b>${esc(s.title)}</b><span class="n">${esc(big)}</span></button>`; };
+const secPanel = g => [...document.querySelectorAll('#fMission [data-sec]')].find(p => p.dataset.sec === g);
+// A placed section's state (tile answers, card HTML, counts, a quick note's text), kept while its space entry is unchanged.
+const inlineSec = {};
+// On the page a redraw writes only changed markup; a field being typed in keeps its focus and caret across it.
+const writeKeep = (el, html) => {
+  if (written.get(el) === html) return false;
+  const a = document.activeElement, name = el.contains(a) && a.name, at = name && [a.selectionStart, a.selectionEnd];
+  setHTML(el, html);
+  const n = name && el.querySelector(`[name="${CSS.escape(name)}"]`);
+  if (n) { n.focus(); if (at[0] != null) n.setSelectionRange(at[0], at[1]); }
+  return true;
+};
+function secInline(g) {
+  const p = secPanel(g), sp = (M.space || []).find(s => s.title === g);
+  if (!p || !sp || !M.scripts[g]) return;
+  const key = JSON.stringify(sp);
+  let m = inlineSec[g];
+  if (m?.key !== key) { if (m) clearInterval(m.pulling); m = inlineSec[g] = { key }; }
+  // ponytail: a counted folder and a checklist are read once per version of the section here, not on each look as the window does.
+  sectionBody(m, p.querySelector('.pscroll'), g, { write: writeKeep, shown: () => inlineSec[g] === m && !!secPanel(g),
+    seen: () => S.focus === 'mission' && !document.hidden, redraw: () => secInline(g) });
+}
 // D9: an empty Mission (no buttons, apps, pages or waiting items yet) says what it is and how to set it up.
 const missionEmpty = () => window.p9?.mission && !sampleView && !Object.keys(M.scripts).length && !M.apps.length && !M.pages.length && !S.reviews.length
   && (live.on || /not set up/.test(live.note));
@@ -1444,18 +1483,20 @@ function renderMission() {
     if (!guide) loadGuide();
     return;
   }
-  const groups = Object.entries(M.scripts);
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  const lay = placed(), groups = Object.entries(M.scripts).filter(([g]) => !lay || !PLACED.test((M.space || []).find(x => x.title === g)?.place));
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${lay ? M.space.filter(s => s.widget && !PLACED.test(s.place)).map(widgetTile).join('') : ''}${groups.map(([g, l]) => `<button class="tile${worst(l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${worst(l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.on && H.hint && icmSpace() ? `<p class="muted sm" data-hub-hint>${esc(H.hint)}</p>` : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
-    + '<div class="mrow">' + (widgetOn('waiting') ? '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>' : '')
+    + (lay ? '<div class="mrow" data-placed>' + [1, 2, 3].map(n => `<div class="mcol" data-col="${n}">${M.space.filter(s => s.place === 'col' + n).map(placedHtml).join('')}</div>`).join('') + '</div>'
+      : '<div class="mrow">' + (widgetOn('waiting') ? NEEDS : '')
     + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
-    + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>');
+    + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>'));
   $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
+  $('#fMission').querySelectorAll('[data-wtile]').forEach(b => b.onclick = () => openModal(b.dataset.wtile === 'waiting' ? { kind: 'reviews' } : { kind: 'win', id: b.dataset.wtile }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
   const sort = $('#fMission [data-sort]'); // only where Waiting on you is drawn (finding 3a)
@@ -1489,13 +1530,16 @@ function bindWin(root, m) {
 // The parts that change: the queue and notices are the same S.reviews and S.alerts the cards use. Redraws the
 // section cards, and the open window's list in place (keeping its scroll).
 function missionLive() {
-  const box = $('#fMission .wins');
-  if (box) {
-    setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
-    setHTML($('#fMission [data-card="mprimary"]'), wins.mprimary.show() ? winCard('mprimary') : '');
-    for (const id of PANELS) { const p = $(`#fMission [data-panel="${id}"]`); p.hidden = !!wins[id].show && !wins[id].show(); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); }
+  const page = $('#fMission .mrow');
+  if (page) {
+    const box = page.querySelector('.wins'); // the fixed layout's cards
+    if (box) setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
+    page.querySelectorAll(':scope>.mcol>[data-card]').forEach(c => { const id = c.dataset.card; setHTML(c, !wins[id].show || wins[id].show() ? winCard(id) : ''); });
+    page.querySelectorAll('[data-panel]').forEach(p => { const id = p.dataset.panel; p.hidden = !!wins[id].show && !wins[id].show(); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); });
+    page.querySelectorAll('[data-sec]').forEach(p => secInline(p.dataset.sec));
     // With a space file the built-in layer is off, so Main project and Logs are gone: an empty column hides and the others widen.
-    $('#fMission').querySelectorAll('.mcol').forEach(col => { col.hidden = ![...col.children].some(k => !k.hidden && k.innerHTML.trim()); });
+    page.querySelectorAll('.mcol').forEach(col => { col.hidden = ![...col.children].some(k => !k.hidden && k.innerHTML.trim()); });
+    if (page.dataset.placed !== undefined) page.dataset.cols = page.querySelectorAll(':scope>.mcol:not([hidden])').length;
     $('#fMission').querySelectorAll('[data-win]').forEach(b => b.onclick = () => openModal({ kind: 'win', id: b.dataset.win }));
   }
   const set = (id, html) => { const b = $(`#mdl #${id} .pbody`); if (!b) return { querySelectorAll: () => [] }; return setHTML(b, html); };
@@ -1658,6 +1702,99 @@ async function saveNote(m, hash) {
   else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
   if (S.modal === m) renderModal();
 }
+// One section's items (notes, folders, refs, logs, scripts, tools, data tiles, cards, links, checklists, quick note): the body
+// of the section's window, and the same items drawn open in a page column (place col1 to col3). o says where they are drawn:
+// write(el, html) puts the markup in and says whether it changed; shown() is false once the window closed or the panel left
+// the page; seen() is whether it is on screen now (tiles and cards ask the daemon only then); redraw() draws it again; back is
+// what a window opened from here returns to.
+function sectionBody(m, body, g, o) {
+  const l = M.scripts[g], tools = g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === g);
+  // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is on screen, every 30 s.
+  // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
+  // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
+  m.tiles ||= {}; m.cardHtml ||= {}; m.ck ||= {}; m.counts ||= {}; m.frames ||= {}; m.sent ||= {};
+  const runs = [...(sp?.data || []), ...(sp?.cards || [])];
+  const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
+  // Row 76: typed text lives on m, so a tile answering (a redraw) does not wipe it. It sits under the section's text, so Save
+  // shows without scrolling.
+  const qn = sp?.quick_note; if (qn) m.qn ||= {};
+  const fresh = o.write(body, (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + (qn ? quickNoteHtml(esc, qn, m.qn, true) : '')
+    + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join('')}${(sp?.refs || []).map((r, i) => r.missing
+      ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
+      : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`
+    + (runs.length || sp?.links?.length ? `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>` : '')
+    // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
+    + (sp?.checklists?.length ? `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>` : ''));
+  // ponytail: the window draws whole, so there a card's frame is made again on each draw (a tile's answer, a checklist press)
+  // and gets the last JSON again; a card keeps no state of its own across draws. On the page the frame stays while the markup
+  // is unchanged, and a newer answer is posted into it.
+  for (const c of sp?.cards || []) {
+    const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html, at = box.querySelector('.card-frame');
+    if (typeof html !== 'string') continue;
+    const json = m.tiles[c.id]?.json;
+    if (!fresh && at.firstChild) { if (box.dataset.rendered === 'rendered' && json !== undefined && m.sent[c.id] !== json) { m.sent[c.id] = json; m.frames[c.id]?.contentWindow?.postMessage({ p9: 'data', json }, '*'); } continue; }
+    const frame = m.frames[c.id] = mountCard(at, c.title, html, { ...FRAME, onState: (kind, text) => {
+      box.dataset.rendered = kind;
+      const now = m.tiles[c.id]?.json;
+      if (kind === 'rendered' && now !== undefined) { m.sent[c.id] = now; frame.contentWindow?.postMessage({ p9: 'data', json: now }, '*'); }
+      if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
+    } });
+  }
+  if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
+    m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => o.shown() && o.redraw()); }
+  const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });
+  if (sp?.checklists?.length && !m.ckRead) { m.ckRead = true; Promise.all(sp.checklists.map(c => ckLoad(c.id))).then(() => o.shown() && o.redraw()); }
+  body.querySelectorAll('[data-ck] button').forEach(b => b.onclick = async () => {
+    const id = b.closest('[data-ck]').dataset.ck, act = checklistAction(b, m.ck[id], m.armed);
+    if (!act) return;
+    m.armed = act.arm || '';
+    if (act.arm) return o.redraw();
+    b.disabled = true;
+    const r = await window.p9.mission('checklistSet', act.body);
+    await ckLoad(id);
+    if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
+    if (o.shown()) o.redraw();
+  });
+  const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (o.shown()) o.redraw(); });
+  if (runs.length && !m.pulled && o.seen()) { m.pulled = true; runs.forEach(pull); }
+  if (runs.length && !m.pulling) m.pulling = setInterval(() => { if (!o.shown()) { clearInterval(m.pulling); m.pulling = 0; return; } if (o.seen()) { m.pulled = true; runs.forEach(pull); } }, 30000);
+  body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
+    window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); o.redraw(); }); });
+  body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
+  const form = qn && body.querySelector('[data-quicknote]');
+  if (form) {
+    form.oninput = () => { m.qn.title = form.elements.title.value; m.qn.body = form.elements.body.value; };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const file = quickNotePath(qn.path, m.qn.title || '');
+      const r = file ? await window.p9.mission('noteCreate', { root: qn.root, path: file, content: (m.qn.body || '').replace(/\s+$/, '') + '\n' }) : null;
+      m.qn = r?.status === 201 ? { status: quickNoteWords(r, file, qn) } : { ...m.qn, status: r ? quickNoteWords(r, file, qn) : 'Type a title first.' };
+      o.redraw();
+    };
+  }
+  const back = o.back;
+  body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back }));
+  body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back }));
+  body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back }));
+  body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
+  body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: g, back }));
+  // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section (on the page, once per
+  // version of the section).
+  for (const f of sp?.folders || []) if (!(f.id in m.counts)) {
+    m.counts[f.id] = null;
+    window.p9.mission('folder', { id: f.id }).then(r => { m.counts[f.id] = r.status === 200 ? r.body.total : '?'; if (o.shown()) o.redraw(); });
+  }
+  body.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => openModal({ kind: 'folder', f: sp.folders[+b.dataset.folder], back }));
+  // A reference (M2) opens what it names, the way its own tile does.
+  body.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => {
+    const r = sp.refs[+b.dataset.ref];
+    if (r.kind === 'scripts') { const s = Object.values(M.scripts).flat().find(x => x[0] === r.id); return s && openModal({ kind: 'script', s, back }); }
+    if (!live.on) return toast({ kind: 'launched', txt: r.title + ' (mock: nothing opens)', level: 'ok' }, true);
+    const page = r.kind === 'pages' ? M.pages.find(x => x[2] === r.id) : null;
+    if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back });
+    launchLive(r.title, { kind: r.kind, id: r.id });
+  });
+}
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
 function missionModal(m, body, row) {
   if (m.kind === 'win') {
@@ -1668,89 +1805,9 @@ function missionModal(m, body, row) {
     body.onscroll = () => { winTop[m.id] = body.scrollTop; };
   } else if (m.kind === 'scripts') {
     if (!M.scripts[m.g]) return closeModal();
-    const l = M.scripts[m.g], tools = m.g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === m.g);
-    const n = sectionRows(m.g, l), word = n > l.length ? 'item' : 'script';
+    const n = sectionRows(m.g, M.scripts[m.g]), word = n > M.scripts[m.g].length ? 'item' : 'script';
     $('#mdlT').textContent = `${m.g} · ${n} ${word}${n === 1 ? '' : 's'}`;
-    body.innerHTML = (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join('')}${(sp?.refs || []).map((r, i) => r.missing
-      ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
-      : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => row(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`;
-    // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is open on screen, every 30 s.
-    // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
-    // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
-    m.tiles ||= {}; m.cardHtml ||= {};
-    const runs = [...(sp?.data || []), ...(sp?.cards || [])];
-    const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
-    if (runs.length || sp?.links?.length) body.insertAdjacentHTML('beforeend', `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}"><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-card><h3>${esc(c.title)}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>`);
-    // ponytail: the modal draws whole, so a card's frame is made again on each draw (a tile's answer, a checklist press) and
-    // gets the last JSON again; a card keeps no state of its own across draws.
-    for (const c of sp?.cards || []) {
-      const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html;
-      if (typeof html !== 'string') continue;
-      const frame = mountCard(box.querySelector('.card-frame'), c.title, html, { ...FRAME, onState: (kind, text) => {
-        box.dataset.rendered = kind;
-        if (kind === 'rendered' && m.tiles[c.id]?.json !== undefined) frame.contentWindow?.postMessage({ p9: 'data', json: m.tiles[c.id].json }, '*');
-        if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
-      } });
-    }
-    if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
-      m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => S.modal === m && renderModal()); }
-    // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
-    m.ck ||= {};
-    if (sp?.checklists?.length) body.insertAdjacentHTML('beforeend', `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>`);
-    const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });
-    if (sp?.checklists?.length && !m.ckRead) { m.ckRead = true; Promise.all(sp.checklists.map(c => ckLoad(c.id))).then(() => S.modal === m && renderModal()); }
-    body.querySelectorAll('[data-ck] button').forEach(b => b.onclick = async () => {
-      const id = b.closest('[data-ck]').dataset.ck, act = checklistAction(b, m.ck[id], m.armed);
-      if (!act) return;
-      m.armed = act.arm || '';
-      if (act.arm) return renderModal();
-      b.disabled = true;
-      const r = await window.p9.mission('checklistSet', act.body);
-      await ckLoad(id);
-      if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
-      if (S.modal === m) renderModal();
-    });
-    const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (S.modal === m) renderModal(); });
-    if (runs.length && !m.pulling) { runs.forEach(pull); m.pulling = setInterval(() => { if (S.modal !== m) return clearInterval(m.pulling); if (!document.hidden) runs.forEach(pull); }, 30000); }
-    body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
-      window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); renderModal(); }); });
-    body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
-    if (sp?.quick_note) {
-      // Row 76: typed text lives on the modal, so a tile answering (renderModal) does not wipe it. It sits under the
-      // section's text, so Save shows without scrolling.
-      const qn = sp.quick_note, lead = body.querySelector(':scope>[data-space-text]'); m.qn ||= {};
-      (lead || body).insertAdjacentHTML(lead ? 'afterend' : 'afterbegin', quickNoteHtml(esc, qn, m.qn, true));
-      const form = body.querySelector('[data-quicknote]');
-      form.oninput = () => { m.qn.title = form.elements.title.value; m.qn.body = form.elements.body.value; };
-      form.onsubmit = async e => {
-        e.preventDefault();
-        const file = quickNotePath(qn.path, m.qn.title || '');
-        const r = file ? await window.p9.mission('noteCreate', { root: qn.root, path: file, content: (m.qn.body || '').replace(/\s+$/, '') + '\n' }) : null;
-        m.qn = r?.status === 201 ? { status: quickNoteWords(r, file, qn) } : { ...m.qn, status: r ? quickNoteWords(r, file, qn) : 'Type a title first.' };
-        renderModal();
-      };
-    }
-    body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back: m }));
-    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back: m }));
-    body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { kind: 'space', name: b.dataset.slog }, back: m }));
-    body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
-    body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: m.g, back: m }));
-    // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section.
-    m.counts ||= {};
-    for (const f of sp?.folders || []) if (!(f.id in m.counts)) {
-      m.counts[f.id] = null;
-      window.p9.mission('folder', { id: f.id }).then(r => { m.counts[f.id] = r.status === 200 ? r.body.total : '?'; if (S.modal === m) renderModal(); });
-    }
-    body.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => openModal({ kind: 'folder', f: sp.folders[+b.dataset.folder], back: m }));
-    // A reference (M2) opens what it names, the way its own tile does.
-    body.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => {
-      const r = sp.refs[+b.dataset.ref];
-      if (r.kind === 'scripts') { const s = Object.values(M.scripts).flat().find(x => x[0] === r.id); return s && openModal({ kind: 'script', s, back: m }); }
-      if (!live.on) return toast({ kind: 'launched', txt: r.title + ' (mock: nothing opens)', level: 'ok' }, true);
-      const page = r.kind === 'pages' ? M.pages.find(x => x[2] === r.id) : null;
-      if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back: m });
-      launchLive(r.title, { kind: r.kind, id: r.id });
-    });
+    sectionBody(m, body, m.g, { write: (el, html) => { el.innerHTML = html; return true; }, shown: () => S.modal === m, seen: () => !document.hidden, redraw: renderModal, back: m });
   } else if (m.kind === 'folder') {
     $('#mdlT').textContent = m.f.title;
     if (m.list === undefined) { m.list = null; window.p9.mission('folder', { id: m.f.id }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
@@ -1938,7 +1995,7 @@ try { localStorage.removeItem('p9-focus-looks'); } catch {}
 function setFocus(f, stay = false) {
   if (!settings.focus[f]) return; // turned off in Settings
   S.focus = f;
-  if (f === 'mission') refreshMission();
+  if (f === 'mission') { refreshMission(); if ($('#fMission .mrow[data-placed]')) missionLive(); }
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;

@@ -36,7 +36,13 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .mrow>*{min-height:0}.mrow .needs{display:flex;flex-direction:column}.mrow .needs [data-list]{flex:1;min-height:0;max-height:none}
 .bignum{font:300 40px/1 var(--display,inherit);color:var(--amber,var(--primary));margin:2px 0 8px}.bignum b{font-weight:400}
 [data-card=mprimary]>.win{width:100%}.mcol{display:flex;flex-direction:column;gap:10px;min-height:0}.mcol[hidden]{display:none}.mcol .wins{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
-@media (min-width:901px){.mrow:has(>.mcol[hidden]){grid-template-columns:minmax(260px,1fr) minmax(0,1.2fr)}}
+@media (min-width:901px){.mrow:has(>.mcol[hidden]){grid-template-columns:minmax(260px,1fr) minmax(0,1.2fr)}.mrow[data-cols="1"]{grid-template-columns:minmax(0,1fr)}}
+/* The placed layout (a section's place col1 to col3): Waiting on you and each open section share their column's height */
+.mcol>.needs,.mpanel[data-sec]{flex:1 1 0;min-height:160px}[data-card=mnotes]>.win{width:100%}
+.mpanel[data-sec]{container-type:size}.mpanel[data-sec]>.pscroll{flex:1}.mpanel[data-sec] .mlist{padding:0 0 8px}.mpanel[data-sec] .dtiles{padding:0 0 8px}.mpanel[data-sec] .cks{padding:0}
+.mpanel[data-sec] [data-space-text]{margin:0 0 6px}.mpanel[data-sec] .quick-note{display:grid;gap:8px;margin:0 0 8px}.mpanel[data-sec] .quick-note h3{margin:0;font-size:13px;font-weight:600}.mpanel[data-sec] .quick-note label{display:grid;gap:4px;font-size:12px;color:var(--muted-foreground)}.mpanel[data-sec] .quick-note button{justify-self:start}
+/* ponytail: the card frame does not report its height, so an open section's card gets the panel's height less its heading */
+.mpanel[data-sec] .card-frame .art-frame{height:max(160px,calc(100cqh - 72px))}
 .mpanel[hidden]{display:none}.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
 .mpanel[data-panel=mlogs]{flex:1}.mpanel[data-panel=musage],.mcol>.wins,.mcol>[data-card]{flex-shrink:0}.mpanel[data-panel=mlaunch]{flex:0 1 auto;min-height:120px}.pscroll{overflow:auto;min-height:0}
 .phead{display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11px;cursor:pointer}.phead h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.phead:hover{color:var(--foreground)}
