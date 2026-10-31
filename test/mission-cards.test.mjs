@@ -43,6 +43,7 @@ const space = (extra = []) => ({ sections: [{ id: 'home', title: 'Home', text: '
   { id: 'probe', title: 'Probe', html: 'cards/probe.html', script: 'nums' },
   { id: 'broken', title: 'Broken script', html: 'cards/inbox.html', script: 'oops' },
   { id: 'throws', title: 'Throws', html: 'cards/throws.html', script: 'nums' },
+  { id: 'tall', title: 'Tall', html: 'cards/tall.html', script: 'nums' },
   ...extra] }] });
 
 async function files(paths, port, extra) {
@@ -53,6 +54,7 @@ async function files(paths, port, extra) {
   await writeFile(path.join(w, 'projects/event-horizon/AGENTS.md'), '# P9\n\n**Status:** **Open**\n');
   await writeFile(path.join(w, 'cards/inbox.html'), CARD);
   await writeFile(path.join(w, 'cards/probe.html'), probe(port));
+  await writeFile(path.join(w, 'cards/tall.html'), '<!doctype html><style>body{margin:0}</style><div style="height:480px">Tall</div>');
   await writeFile(path.join(w, 'cards/throws.html'), '<!doctype html><p>Before the error</p><script>throw new Error("card boom")</script>');
   await writeFile(path.join(w, SETTINGS.space), JSON.stringify(space(extra)));
   await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify(SETTINGS));
@@ -77,7 +79,7 @@ test('M5 cards (server): the HTML file is read inside the workspace only; the sc
   });
   const overview = (await call(instance, '/mission')).body;
   const home = overview.space.find((section) => section.id === 'home');
-  assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'gone', 'linked'], 'a card with .. or a non-.html file is dropped');
+  assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'tall', 'gone', 'linked'], 'a card with .. or a non-.html file is dropped');
   assert.ok(overview.invalid.some((x) => x.cards !== undefined && x.reason === 'malformed-record'), JSON.stringify(overview.invalid));
 
   const card = await call(instance, '/mission/card?id=inbox');
@@ -99,7 +101,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   let hits = 0; const other = createServer((_q, s) => { hits++; s.end('ok'); }); await new Promise((r) => other.listen(0, '127.0.0.1', r)); t.after(() => other.close());
   const port = other.address().port;
   const server = await remoteDaemon(t, { setup: (paths) => files(paths, port) });
-  for (const id of ['inbox', 'probe', 'broken', 'throws']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
+  for (const id of ['inbox', 'probe', 'broken', 'throws', 'tall']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
 
   const profile = path.join(server.directory, 'electron-profile');
   await mkdir(profile); await versionSeen(profile);
@@ -121,7 +123,13 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     await card('broken').locator('.card-note', { hasText: 'printed something that is not JSON' }).waitFor({ timeout: 15000 });
     assert.match(await card('broken').locator('.card-note').innerText(), /oops, not JSON/, 'a bad script shows its error on the card');
     await card('throws').locator('.card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
-    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 4 items', 'the title counts cards');
+    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 5 items', 'the title counts cards');
+    // Wall 3: each card's box fits its content, not a fixed 200 px: the short inbox shrinks, the 480 px card grows.
+    const tall = async (id) => (await card(id).locator('iframe').boundingBox()).height;
+    for (const end = Date.now() + 10000; Date.now() < end && (await tall('inbox') >= 200 || await tall('tall') < 480); await sleep(200));
+    const [hi, ht] = [await tall('inbox'), await tall('tall')];
+    assert.ok(hi >= 60 && hi < 200, 'the short card shrinks to its content: ' + hi);
+    assert.ok(ht >= 480 && ht <= 490, 'the tall card grows to its content: ' + ht);
     const left = async (sel) => (await page.locator(sel).first().boundingBox()).x;
     assert.ok(Math.abs(await left('#mdlBody [data-space-text]') - await left('#mdlBody [data-card] h3')) <= 2, 'the section text lines up with the cards, not on the window edge');
 

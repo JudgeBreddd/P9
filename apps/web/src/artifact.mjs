@@ -64,7 +64,7 @@ const runtime = (base, name) => {
   return runtimes.get(name);
 };
 // what: the word in the navigation message (a Mission card, row M5, says "card").
-export function mountFrame(box, a, { page: src, base, onSelection, onState, what = 'artifact' }) {
+export function mountFrame(box, a, { page: src, base, onSelection, onState, onHeight, what = 'artifact' }) {
   const frame = document.createElement('iframe'), { html, runtimes: need } = frameDoc(a);
   frame.setAttribute('sandbox', 'allow-scripts'); // no allow-same-origin, allow-forms, allow-popups or allow-top-navigation
   frame.className = 'art-frame'; frame.title = a.title; frame.src = src;
@@ -83,6 +83,7 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState, what
     if (m.kind === 'ready') scripts.then(list => frame.contentWindow?.postMessage({ p9: 'render', html, scripts: list }, '*'), error => onState?.('error', error.message));
     else if (m.kind === 'selection') onSelection?.(text.slice(0, 4000));
     else if (m.kind === 'rendered' || m.kind === 'error') onState?.(m.kind, text.slice(0, 500));
+    else if (m.kind === 'height' && Number.isFinite(m.h)) onHeight?.(m.h);
   };
   addEventListener('message', hear);
   box.append(frame);
@@ -91,8 +92,11 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState, what
 // A Mission card (threat model row M5): a space file's HTML in this same frame. The appended rule gives it P9's light or
 // dark theme (html.dark; the host's CSS sets the same color-scheme on the frame, so it stays see-through); :where keeps
 // any color-scheme of the card's own ahead. A theme change shows on the card's next draw.
-export const mountCard = (box, title, html, opts) => mountFrame(box, { kind: 'html', title,
-  src: html + `<style>:where(:root){color-scheme:${document.documentElement.classList.contains('dark') ? 'dark' : 'light'}}</style>` }, { ...opts, what: 'card' });
+// Wall 3: the frame's box takes the card's content height, between 60 and 720 px (ponytail: a card sized to 100vh grows to
+// the cap, since its height follows the box).
+export const mountCard = (box, title, html, opts) => { const frame = mountFrame(box, { kind: 'html', title,
+  src: html + `<style>:where(:root){color-scheme:${document.documentElement.classList.contains('dark') ? 'dark' : 'light'}}</style>` },
+  { ...opts, what: 'card', onHeight: h => { frame.style.height = Math.min(720, Math.max(60, h)) + 'px'; } }); return frame; };
 
 // modes (desktop): [{ label, on, go }], the panel's Pin and Full screen toggles.
 // Highlight and comment: select text in the frame, write a comment, Add; collect several; Send comments sends them as
