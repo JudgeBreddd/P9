@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron, chromium } from '@playwright/test';
-import { remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
+import { remoteDaemon, passkeyDevice, enrollDevice, daemon, http, authenticated } from './helpers.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const F = '```';
@@ -327,4 +327,81 @@ test('artifacts: with an artifact panel open the notification cards sit below it
   }
   await page.evaluate(() => window.__side.close('artifact'));
   assert.equal(await cardsTop(), before, 'with no panel the cards are back where they were');
+});
+
+// Chat files (2026-10-30): the button left of a chat's Running label counts the artifacts it posted and the files it
+// wrote; its side panel lists them newest first, and each opens: the artifact as its chip does, the file read-only through
+// GET /files. Real Electron against a real daemon and the fake agent ("edit <name>" writes the file as Claude's adapter
+// reports it; any other prompt comes back as "echo:<text>", so an artifact block comes back as an artifact).
+test('artifacts: the chat files button lists the chat\'s artifact and the file it wrote, and opens each', { timeout: 120000 }, async (t) => {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    await mkdir(path.join(workspace, 'proj'));
+    return { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] };
+  });
+  const call = (route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
+    headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body) }).then(r => ({ status: r.status, ...JSON.parse(r.text) }));
+  const said = async (id, text) => {
+    const all = [];
+    for (let after = 0, page; (page = await call('/chat/events?after=' + after + '&only=' + id)).events.length; after = page.cursor) all.push(...page.events);
+    return all.some(e => e.type === 'update' && e.data.content?.text?.startsWith(text));
+  };
+  const until = async (check, what) => { for (const end = Date.now() + 15000; Date.now() < end; await wait(200)) if (await check()) return; assert.fail('timed out: ' + what); };
+  const id = (await call('/chat', 'POST', { provider: 'claude', folder: 'proj' })).conversation;
+  await call('/chat/' + id + '/prompt', 'POST', { text: 'edit notes.md' });
+  await until(() => said(id, 'edited'), 'the edit turn');
+  await call('/chat/' + id + '/prompt', 'POST', { text: `Here:\n${F}markdown artifact Release notes\n# Shipped\n\nThe list works.\n${F}` });
+  await until(() => said(id, 'echo:Here'), 'the artifact turn');
+
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-cf-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), wait(15000)]); proc.kill(); });
+  const page = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  const shot = async name => {
+    const png = await page.screenshot({ animations: 'disabled' });
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
+  };
+  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  const pane = page.locator('.pane[data-id="' + id + '"]');
+  // The button: in the chat's own toolbar, right before its Running / Stopped label, with the count.
+  const button = pane.locator('.ptool [data-chat-files]');
+  await button.waitFor({ timeout: 15000 });
+  assert.equal((await button.textContent()).trim(), '2');
+  assert.equal(await pane.locator('.ptool [data-chat-files] + .state').count(), 1, 'just left of the chat\'s state label');
+  await button.click();
+  const items = page.locator('#side .cf-item');
+  await items.nth(1).waitFor({ timeout: 8000 });
+  assert.equal(await page.locator('#side .stitle').textContent(), 'Artifacts and files');
+  assert.equal(await items.count(), 2);
+  assert.match(await items.nth(0).textContent(), /^MarkdownRelease notesArtifact$/, 'newest first: the artifact');
+  await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Created · proj' }).waitFor({ timeout: 8000 }); // once the workspace path is known
+  assert.match(await items.nth(1).textContent(), /^Filenotes\.mdCreated · proj$/);
+  assert.equal(await button.getAttribute('aria-pressed'), 'true');
+  await shot('chat-files-list');
+  // The artifact opens as its chip does.
+  await items.nth(0).click();
+  await page.locator('#side .art[data-rendered]').waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#side .art').getAttribute('data-rendered'), 'rendered');
+  let frame = await (await page.locator('#side .art-frame').elementHandle()).contentFrame();
+  assert.equal(await frame.locator('h1').textContent(), 'Shipped');
+  // Back to the list, then the file: read-only, rendered as Markdown, from the disk.
+  await page.locator('#side [data-art-mode]', { hasText: 'All files' }).click();
+  await items.nth(1).click();
+  await page.locator('#side .art-bar .art-title', { hasText: 'proj/notes.md' }).waitFor({ timeout: 8000 });
+  await page.locator('#side .art[data-rendered="rendered"]').waitFor({ timeout: 20000 });
+  frame = await (await page.locator('#side .art-frame').elementHandle()).contentFrame();
+  assert.equal((await frame.locator('body').textContent()).trim(), 'edited by the agent');
+  await shot('chat-files-file');
+  // The x closes it, and the chat no longer remembers it as open.
+  await page.locator('#side [data-side-close]').click();
+  assert.equal(await page.locator('#side').isHidden(), true);
+  await button.click(); await items.nth(1).waitFor({ timeout: 8000 });
+  await page.locator('#side [data-side-close]').click();
+  assert.equal(await page.evaluate(id => localStorage.getItem('p9-chat-files:' + id), id), null);
 });
