@@ -1117,8 +1117,23 @@ const CTP = ['#cba6f7', '#89b4fa', '#94e2d5', '#fab387', '#f5c2e7', '#a6e3a1', '
 const tint = s => ` style="--tint:${CTP[[...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % CTP.length]}"`;
 const worst = list => ['bad', 'warn', 'ok'].find(l => list.some(s => s[3] === l)) || 'ok';
 // A space section's level: the worst of its data tiles' and cards' last answers ('' when none is warn or bad), set by sectionBody.
-// ponytail: tiles run only while their section is drawn (row 70), so a top-row tile knows its level once its window was opened.
 const secLv = {};
+// A top-row tile knows its level before its window is opened (a tile is a light that shows red while there is an
+// issue): while Mission is on screen, each unplaced section's tiles and cards are asked every 30 s too. The tile is shown, so
+// row 70 still holds; the daemon answers a second ask within 30 s of its last run from that run, so an open window shares it.
+let topAt = 0;
+function pullTopLevels() {
+  if (S.focus !== 'mission' || document.hidden || !window.p9?.mission || Date.now() - topAt < 29000) return;
+  topAt = Date.now();
+  for (const s of M.space || []) {
+    const runs = PLACED.test(s.place) ? [] : [...(s.data || []), ...(s.cards || [])];
+    if (runs.length) Promise.all(runs.map(d => window.p9.mission('data', { id: d.id }).then(r => tileLevel(tileAnswer(r.status, r.body)), () => ''))).then(l => {
+      const lv = ['bad', 'warn'].find(x => l.includes(x)) || '';
+      if ((secLv[s.title] || '') !== lv) { secLv[s.title] = lv; renderMission(); }
+    });
+  }
+}
+setInterval(pullTopLevels, 30000);
 const secWorst = (g, l) => { const w = worst(l), v = secLv[g]; return w === 'bad' || v === 'bad' ? 'bad' : w === 'warn' || v === 'warn' ? 'warn' : w; };
 const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
 // Live data from the daemon (window.p9.mission) fills the lists once it answers; until then the page says why it is empty.
@@ -1568,6 +1583,7 @@ function renderMission() {
     if (!guide) loadGuide();
     return;
   }
+  pullTopLevels();
   const lay = placed(), groups = Object.entries(M.scripts).filter(([g]) => !lay || !PLACED.test((M.space || []).find(x => x.title === g)?.place));
   setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${lay ? M.space.filter(s => s.widget && !PLACED.test(s.place)).map(widgetTile).join('') : ''}${groups.map(([g, l]) => `<button class="tile${secWorst(g, l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${secWorst(g, l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')

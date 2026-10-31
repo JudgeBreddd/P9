@@ -331,8 +331,10 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     // A button a checklist runs as its Apply is not drawn again as its own row; it still runs by ID through the checklist.
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
-    // A card's feeder script and its title-bar buttons are not rows either; they come marked hidden, so a title-bar press still finds them.
-    const onCards = new Set(reg.space.flatMap((section) => (section.cards ?? []).flatMap((item) => [item.script, ...(item.buttons ?? [])])).filter(Boolean));
+    // A card's or data tile's feeder script and a card's title-bar buttons are not rows either; they come marked hidden, so a
+    // title-bar press still finds them.
+    const onCards = new Set(reg.space.flatMap((section) => [...(section.cards ?? []).flatMap((item) => [item.script, ...(item.buttons ?? [])]),
+      ...(section.data ?? []).map((item) => item.script)]).filter(Boolean));
     // A card file's version (its hash, cut short): an edit to the HTML changes the overview, so an open card draws again.
     const cardV = new Map();
     for (const item of reg.space.flatMap((section) => section.cards ?? [])) cardV.set(item.id, await readFile(workspace, item.html).then((file) => file.hash.slice(0, 12), () => ''));

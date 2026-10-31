@@ -53,6 +53,7 @@ test('M3 data tiles: nothing runs before Allow; each shape comes back; slow, ove
   const home = overview.space.find((section) => section.id === 'home');
   assert.deepEqual(home.data.map((d) => d.id).slice(0, 2), ['tile-stat', 'tile-list']);
   assert.deepEqual(home.links, [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }], 'the javascript: link is dropped');
+  assert.deepEqual(overview.scripts.filter((s) => !s.hidden).map((s) => s.id), [], 'a data tile\'s feeder is not drawn again as a row');
 
   // Asked once per tile: no run before the user's Allow, and an agent's space cannot hold the answer.
   const first = await tile(instance, 'stat');

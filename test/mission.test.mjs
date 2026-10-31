@@ -69,9 +69,10 @@ test('settings file: Builder and Teammate layouts list the same items from their
       status: '**Open** — phase 5 in work' });
     assert.deepEqual([overview.scripts.map((s) => s.id), overview.apps.map((a) => a.id), overview.pages.map((p) => p.id)], [['hello'], ['editor'], ['dash']]);
   }
-  const bare = await daemon(t);
-  assert.equal((await call(bare, '/mission')).status, 503);
-  console.log('PASS phase5 settings: Builder (_tyler) and Teammate (_waiting) layouts each list their queue, primary card, scripts, apps, pages; no settings file = 503');
+  // A fresh profile (M4) is not an error: Mission answers with nothing in it, and the page draws only the onboarding card.
+  const bare = await call(await daemon(t), '/mission');
+  assert.deepEqual([bare.status, JSON.parse(bare.text).empty], [200, true], bare.text);
+  console.log('PASS phase5 settings: Builder and Teammate layouts each list their queue, primary card, scripts, apps, pages; no settings file = empty Mission');
 });
 
 test('script button runs its fixed argv and streams output; _tyler answer lands on A. and a concurrent edit is kept', async (t) => {
