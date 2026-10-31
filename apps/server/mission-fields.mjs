@@ -80,7 +80,9 @@ export const PAGE = {
 export const LOG = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The log view label.' },
-  path: { ...relative('The workspace file whose last 200 lines it shows.'), required: true },
+  path: { ...relative('The file whose last 200 lines it shows, inside root or the workspace.'), required: true },
+  root: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
+    doc: 'A key of settings.notes_roots (allow_folder asks the user to add one, e.g. a logs folder in the home folder): path is inside that folder. Without it, the workspace.' },
 };
 // A folder list (threat model row M2-a): file names and times only, read through packages/files, never written.
 export const FOLDER = {

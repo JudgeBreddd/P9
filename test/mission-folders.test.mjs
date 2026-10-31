@@ -4,6 +4,8 @@ import { mkdir, writeFile, readFile, symlink, utimes, realpath } from 'node:fs/p
 import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { daemon, http, authenticated, root, remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
+import os from 'node:os';
+import { rootRefused } from '../apps/server/mission.mjs';
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
@@ -11,7 +13,8 @@ import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelc
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
 const SPACE = { sections: [
-  { title: 'Plans', refs: ['hello', 'editor', 'dash', 'gone'], quick_note: { root: 'vault', path: 'plans' }, folders: [
+  { title: 'Plans', refs: ['hello', 'editor', 'dash', 'gone'], quick_note: { root: 'vault', path: 'plans' },
+    logs: [{ id: 'vault-log', title: 'Vault log', root: 'vault', path: 'plans/a.md' }, { id: 'no-root-log', title: 'No root', root: 'nope', path: 'x.log' }], folders: [
     { id: 'open-plans', title: 'Open plans', root: 'vault', path: 'plans', pattern: '*.md', recursive: true, match: 'Status: open' },
     { id: 'all-plans', title: 'All plans', root: 'vault', path: 'plans', pattern: '*.md' },
     { id: 'run-logs', title: 'Run logs', path: 'logs', pattern: 'run-??.log' },
@@ -80,6 +83,19 @@ test('folder list: workspace folders, ? patterns, refused roots and malformed it
   assert.match(invalid.join('\n'), /pattern: /);
   assert.match(invalid.join('\n'), /where is not a field of this record/);
   console.log('PASS folder list: ? pattern, a root holding the workspace 403, unknown id 404, bad id 400, malformed items dropped');
+});
+
+// Wall 10: logs outside the workspace (~/icm-logs, ~/.local/state/sprint). allow_folder takes a folder in the home folder,
+// never the home folder itself, and a log view reads its file inside an allowed root.
+test('log view root: a log in an allowed folder shows; a root not allowed does not; a home subfolder can be allowed', { timeout: 60000 }, async (t) => {
+  const home = os.homedir(), guard = { workspace: path.join(home, 'no-such-workspace'), recovery: path.join(home, 'no-such-recovery') };
+  assert.deepEqual([await rootRefused(path.join(home, 'icm-logs'), guard), await rootRefused(path.join(home, '.local/state/sprint'), guard), await rootRefused(home, guard)], [false, false, true]);
+  const instance = await start(t);
+  const log = (name) => call(instance, '/mission/hub/text?' + new URLSearchParams({ kind: 'space', name }));
+  const shown = await log('vault-log');
+  assert.equal(shown.status, 200);
+  assert.match(shown.body.text, /Status: open/);
+  assert.deepEqual([(await log('no-root-log')).status, (await log('no-root-log')).body.error], [404, 'unknown-root']);
 });
 
 test('refs: found ones name their script, app or page; a missing ID says so', { timeout: 60000 }, async (t) => {

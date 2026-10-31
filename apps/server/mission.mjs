@@ -126,7 +126,7 @@ export function parseSpace(text) {
       if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
-      if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path }); });
+      if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path, ...(record.root ? { root: record.root } : {}) }); });
     // Data tiles and links (M3): a bad one is dropped and named, the rest of the section stays.
     const items = { data: [], cards: [], links: [] };
     for (const [key, fields, what] of [['data', DATA, 'a data tile'], ['cards', CARD, 'a card'], ['links', WEBLINK, 'a link']]) {
@@ -358,7 +358,9 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (typeof id !== 'string' || !ID.test(id)) return { status: 400, error: 'request-refused' };
     const log = (await registry()).space.flatMap((section) => section.logs).find((record) => record.id === id);
     if (!log) return { status: 404, error: 'unknown-id' };
-    try { return { status: 200, text: (await readFile(workspace, log.path)).content.split('\n').slice(-200).join('\n') }; }
+    const base = log.root ? await namedRoot(log.root) : { root: workspace }; // wall 10: a log in an allowed folder outside the workspace
+    if (base.error) return base;
+    try { return { status: 200, text: (await readFile(base.root, log.path)).content.split('\n').slice(-200).join('\n') }; }
     catch { return { status: 404, error: 'not-found' }; }
   }
 
