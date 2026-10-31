@@ -145,7 +145,10 @@ export const CARD = {
   title: { type: 'string', required: true, check: text, doc: 'The card label.' },
   html: { ...relative('The workspace .html file the card draws (256 KiB at most). An agent writes it with its own file tool, which the user approves; Mission tools never write it.'), required: true, check: (value) => relativePath(value) && /\.html$/i.test(value) },
   script: { ...DATA.script, doc: 'The ID of a registry script or space button with no args, confirm, terminal or detach, run under the data tile rules: only after the user answers Allow on the card, '
-    + 'only while Mission shows it, at most every 30 s, stopped at 10 s, 64 KiB read. It prints any JSON. The card reads it as window.p9data, and gets a p9data event (event.detail) on each run. '
+    + 'only while Mission shows it, at most every 30 s, stopped at 10 s, 64 KiB read. It prints any JSON. The card reads it as window.p9data, and gets a p9data event (event.detail) on each run: '
+    + 'both are the parsed JSON value (an object, array, string or number, never the raw text); before the first run window.p9data is undefined. '
+    + 'The card is as wide as its section and as tall as its content (60 to 720 px; a page sized to 100vh grows to 720). Its page gets color-scheme light or dark from P9\'s theme, '
+    + 'so system colours (Canvas, CanvasText) follow it; P9\'s own theme colours are not passed in. '
     + 'The card runs with no network (no fetch, no images or CSS from the web), no access to P9 and no navigation, like a chat artifact: put styles and scripts inline. '
     + 'This script is not drawn as its own button row.' },
   buttons: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 4 && value.every((item) => typeof item === 'string' && ID.test(item)),

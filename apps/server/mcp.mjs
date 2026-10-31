@@ -47,25 +47,28 @@ const input = (properties, required = []) => ({ type: 'object', properties, requ
 // Scratch spaces (threat model row 71): these tools write a named draft instead of the live space when given space.
 const spaceField = { type: 'string', description: 'Optional. Write this scratch space instead of the space Mission shows (' + SPACE_NAME_RULE
   + '), made on the first write. The user picks it in Mission\'s space picker; the live space is untouched.' };
-const SPACE_TOOLS = new Set(['add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items']);
+const SPACE_TOOLS = new Set(['validate_space', 'add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items']);
 const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons' && key !== 'widget');
 const TOOLS = [
   ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
     input({ text: { type: 'string', description: 'The whole registry JSON. Default: the file on disk.' } })],
   ['validate_space', 'Dry-run a space file with Mission Control\'s own parser (the current registry included). Nothing is written.',
-    input({ text: { type: 'string', description: 'The whole space JSON. Default: the file on disk.' } })],
+    input({ text: { type: 'string', description: 'The whole space JSON. Default: the file on disk.' }, space: { type: 'string', description: 'Optional. Check this scratch space\'s file instead of the space Mission shows.' } })],
   ['add_button', 'Add a script button to the registry, or to a space section. Refused if Mission Control would drop it.',
     input({ record: jsonSchema(RECORD, {}, true), section: sectionField, space: spaceField, hash: hashField }, ['record'])],
   ['add_app', 'Add an app to the registry.', input({ record: jsonSchema(RECORD, {}, true), hash: hashField }, ['record'])],
   ['add_page', 'Add a link to the registry.', input({ record: jsonSchema(PAGE, {}, true), hash: hashField }, ['record'])],
   ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, place: placeField, space: spaceField, hash: hashField }, ['title'])],
   ['update_button', 'Change a script button\'s title or icon in the registry, or in a space section. icon "" removes the icon.',
-    input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField, space: spaceField, hash: hashField }, ['id'])],
+    input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField,
+      move_to: { type: 'string', description: 'Move the button (with section, its current section) into the space section with this title, in one write, so nothing points at a missing ID in between.' },
+      space: spaceField, hash: hashField }, ['id'])],
   ['update_app', 'Change an app\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
   ['update_page', 'Change a link\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
   ['update_section', 'Change a space section: rename it (new_title), change its icon, draw one of P9\'s built-in panels as it (widget), place it on the page (place), show registry entries in it (refs) or show a notes folder (notes). "" or [] removes a field.',
     input({ title: { type: 'string', description: 'The section\'s current title.' }, new_title: { type: 'string' }, icon: iconField,
+      text: { type: 'string', description: 'The paragraph under the heading. "" removes it.' },
       widget: { type: 'string', description: 'One of ' + WIDGETS.join(', ') + '. "" removes it.' },
       place: { ...placeField, description: placeField.description + ' "" removes it.' },
       refs: { type: 'array', items: { type: 'string' }, description: 'IDs of registry scripts, apps or pages (read them from p9://registry) or of space buttons, at most 64. [] removes them.' },
@@ -169,11 +172,13 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
 
   async function validate(kind, text) {
     if (text !== undefined && !string(text, 6 * 1024 * 1024)) return { error: 'request-refused' };
-    const settings = need(), { registry, space } = await files(settings);
+    const draft = kind === 'space' ? drafting.getStore() : undefined, settings = need(), { registry, space } = await files(settings, draft);
     if (kind === 'space') {
-      if (text === undefined && !settings.space) return { ok: false, ...noSpace() };
+      // Wall 8: a scratch space (space) is checked as its own file, so Main need not exist.
+      if (text === undefined && draft !== undefined && !space) return { ok: false, error: 'no-space-file', detail: 'No scratch space named ' + draft + ' yet: its first write makes it.' };
+      if (text === undefined && !settings.space && draft === undefined) return { ok: false, ...noSpace() };
       if (text === undefined && !space) return { ok: false, ...missingSpace(settings.space) };
-      const subject = text === undefined ? 'The space file ' + settings.space : 'The text';
+      const subject = text === undefined ? 'The space file ' + (draft ?? settings.space) : 'The text';
       if (!(text ?? space.content).trim()) return { ok: false, ...spaceWords(subject, 'empty') };
       try { parseSpace(text ?? space.content); } catch (error) { return { ok: false, ...spaceWords(subject, error) }; }
     }
@@ -436,10 +441,11 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   // A section also takes widget, place, refs and notes (threat model row 72 e); any other kind given one is refused. "" or [] removes each.
   const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
   // picture (the name of a stored file, '' removes it) is the desktop form's alone: an agent's tool call is refused if it names one.
-  function update(kind, { key, section: sectionTitle, title, icon, picture, widget, place, refs, notes, hash }, by) {
-    if (!string(key, 200) || ![sectionTitle, title, icon, picture, widget, place, notes].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)
-      || (refs !== undefined && !Array.isArray(refs)) || (kind !== 'sections' && [widget, place, refs, notes].some((value) => value !== undefined))) return { error: 'request-refused' };
-    if ([title, icon, picture, widget, place, refs, notes].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes widget, place, refs or notes).' };
+  function update(kind, { key, section: sectionTitle, title, icon, picture, widget, place, refs, notes, text, move_to: moveTo, hash }, by) {
+    if (!string(key, 200) || ![sectionTitle, title, icon, picture, widget, place, notes, moveTo].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)
+      || (text !== undefined && !string(text, 4000)) || (refs !== undefined && !Array.isArray(refs)) || (kind !== 'sections' && [widget, place, refs, notes, text].some((value) => value !== undefined))
+      || (moveTo !== undefined && (kind !== 'scripts' || sectionTitle === undefined))) return { error: 'request-refused' };
+    if ([title, icon, picture, widget, place, refs, notes, text, moveTo].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes text, widget, place, refs or notes; a space button move_to).' };
     if (kind !== 'scripts' && sectionTitle !== undefined) return { error: 'request-refused' };
     return edit(kind === 'sections' || sectionTitle !== undefined ? 'space' : 'registry', hash, (data) => {
       let entry, rest;
@@ -451,13 +457,19 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         const hits = target?.filter((item) => item?.id === key) ?? [];
         if (hits.length !== 1) return { error: hits.length ? 'duplicate-id' : 'unknown-id', id: key };
         entry = hits[0];
+        // Wall 12: move a space button to another section in the same write.
+        if (moveTo !== undefined) {
+          const to = section(data, moveTo); if (to.error) return to;
+          if (!Array.isArray(to.entry.buttons ?? [])) return { error: 'invalid-space' };
+          target.splice(target.indexOf(entry), 1); (to.entry.buttons ??= []).push(entry);
+        }
       }
       const before = { ...entry };
       if (title !== undefined) entry.title = title;
       if (icon === '') delete entry.icon; else if (icon !== undefined) entry.icon = icon;
       if (picture === '') delete entry.picture; else if (picture !== undefined) entry.picture = picture;
       // A section's panel, place, references and notes key (threat model row 72 e): "" or [] removes; the SECTION table checks the rest below.
-      for (const [field, value] of Object.entries({ widget, place, refs, notes })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
+      for (const [field, value] of Object.entries({ text, widget, place, refs, notes })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
       const wrong = problem(entry, FIELDS[kind], false, current()?.page_schemes);
       if (wrong) return { error: 'invalid-record', detail: wrong };
       if (kind === 'sections' && rest.some((other) => typeof other?.title === 'string' && other.title.trim() === entry.title.trim())) return { error: 'duplicate-section', section: entry.title };

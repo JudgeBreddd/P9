@@ -250,6 +250,16 @@ for (const provider of ['claude', 'codex']) {
     set = await tool('update_section', { title: 'Operations', widget: '', refs: [], notes: '' });
     const cleared = JSON.parse(await file(instance, SETTINGS.space)).sections[0];
     assert.deepEqual(['widget', 'refs', 'notes'].filter((key) => key in cleared), []);
+    // Wall 8 (walls table 6, 12): a section's text, and a space button moved to another section in one write.
+    assert.equal((await tool('update_section', { title: 'Operations', text: 'Sprint things.' })).record.text, 'Sprint things.');
+    await tool('add_section', { title: 'Other' });
+    const moved = await tool('update_button', { id: 'ops-up', section: 'Operations', move_to: 'Other' });
+    assert.equal(moved.error, undefined, JSON.stringify(moved));
+    const after = JSON.parse(await file(instance, SETTINGS.space)).sections;
+    assert.deepEqual([after[0].text, (after[0].buttons ?? []).some((b) => b.id === 'ops-up'), after.find((x) => x.title === 'Other').buttons.map((b) => b.id)], ['Sprint things.', false, ['ops-up']]);
+    assert.equal((await tool('update_button', { id: 'ops-up', move_to: 'Other' })).error, 'request-refused', 'move_to needs the current section');
+    assert.equal((await tool('update_button', { id: 'ops-up', section: 'Other', move_to: 'Nope' })).error, 'unknown-section');
+    assert.equal((await tool('update_section', { title: 'Operations', text: '' })).record.text, undefined, '"" removes the text');
     await call(instance, '/agent-lock', 'POST', { on: true });
     assert.equal((await tool('update_app', { id: 'editor', icon: 'E' })).error, 'agent-lock-on');
     const locked = await file(instance, SETTINGS.space);
@@ -382,6 +392,11 @@ test('M1 first space write: makes mission-space.json at mode 600 and names it in
   assert.equal((await tool('add_section', { title: 'Home' })).error, 'agent-lock-on');
   await call(instance, '/agent-lock', 'POST', { on: false });
   await assert.rejects(access(made), 'nothing made while refused');
+  // Wall 8 (walls table 8): a scratch space is checked on its own, with no Main space file.
+  assert.match((await tool('validate_space', { space: 'scratch' })).detail, /No scratch space named scratch yet/);
+  assert.equal((await tool('add_section', { title: 'Try', space: 'scratch' })).error, undefined);
+  assert.equal((await tool('validate_space', { space: 'scratch' })).ok, true);
+  assert.equal((await tool('validate_space')).error, 'no-space-file', 'Main is still not made');
   const added = await tool('add_section', { title: 'Home lab' });
   assert.equal(added.isError, false, JSON.stringify(added));
   assert.equal(added.file, made);
