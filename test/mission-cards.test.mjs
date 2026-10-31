@@ -3,6 +3,8 @@
 // Screen: a probe card tries the network, P9 and the top window and gets none of them; the JSON arrives; a bad script
 // and a card that throws show their error on the card. Desktop 1280 in a dark and a light theme, the phone at 390x844.
 // Wall 4: a card's feeder script and its title-bar buttons are not rows; the buttons sit in the card's title bar.
+// Wall 15: a card opens one of its folder's files in P9's text viewer on a click; a call with no click, or a file outside
+// the folder, opens nothing.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
@@ -47,6 +49,7 @@ const space = (extra = []) => ({ sections: [{ id: 'home', title: 'Home', text: '
   { id: 'broken', title: 'Broken script', html: 'cards/inbox.html', script: 'oops' },
   { id: 'throws', title: 'Throws', html: 'cards/throws.html', script: 'nums' },
   { id: 'tall', title: 'Tall', html: 'cards/tall.html', script: 'homefeed' },
+  { id: 'logs', title: 'Logs', html: 'cards/logs.html', script: 'nums', folder: { path: 'logs', pattern: '*.log' } },
   ...extra] }] });
 
 async function files(paths, port, extra) {
@@ -57,6 +60,11 @@ async function files(paths, port, extra) {
   await writeFile(path.join(w, 'projects/event-horizon/AGENTS.md'), '# P9\n\n**Status:** **Open**\n');
   await writeFile(path.join(w, 'cards/inbox.html'), CARD);
   await writeFile(path.join(w, 'cards/probe.html'), probe(port));
+  await mkdir(path.join(w, 'logs'), { recursive: true });
+  await writeFile(path.join(w, 'logs/a.log'), 'line one of a.log\nthe whole log, not its last lines\n');
+  await writeFile(path.join(w, 'logs/b.txt'), 'not a log');
+  await writeFile(path.join(w, 'cards/logs.html'), '<!doctype html><script>p9open("logs/a.log")</script><button id="a" onclick="p9open(\'logs/a.log\')">a.log</button>'
+    + '<button id="b" onclick="p9open(\'logs/b.txt\')">b.txt</button>');
   await writeFile(path.join(w, 'cards/tall.html'), '<!doctype html><style>body{margin:0}</style><div style="height:480px">Tall</div>');
   await writeFile(path.join(w, 'cards/throws.html'), '<!doctype html><p>Before the error</p><script>throw new Error("card boom")</script>');
   await writeFile(path.join(w, SETTINGS.space), JSON.stringify(space(extra)));
@@ -82,7 +90,7 @@ test('M5 cards (server): the HTML file is read inside the workspace only; the sc
   });
   const overview = (await call(instance, '/mission')).body;
   const home = overview.space.find((section) => section.id === 'home');
-  assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'tall', 'gone', 'linked'], 'a card with .. or a non-.html file is dropped');
+  assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'tall', 'logs', 'gone', 'linked'], 'a card with .. or a non-.html file is dropped');
   assert.ok(overview.invalid.some((x) => x.cards !== undefined && x.reason === 'malformed-record'), JSON.stringify(overview.invalid));
   const hidden = overview.scripts.filter((x) => x.hidden).map((x) => x.id).sort();
   assert.deepEqual(hidden, ['hello', 'homefeed', 'nums', 'oops', 'ship'], 'feeders and title-bar buttons come marked hidden; plain stays a row');
@@ -94,6 +102,8 @@ test('M5 cards (server): the HTML file is read inside the workspace only; the sc
   const linked = await call(instance, '/mission/card?id=linked');
   assert.ok(linked.status !== 200 && !JSON.stringify(linked.body).includes('outside the workspace'), 'a symlink out of the workspace is not read: ' + JSON.stringify(linked));
   assert.equal((await call(instance, '/mission/card?id=nope')).status, 404);
+  assert.match((await call(instance, '/mission/folder/file?id=logs&path=logs%2Fa.log')).body.text, /the whole log/, 'a card\'s folder file reads under the card\'s ID');
+  assert.equal((await call(instance, '/mission/folder/file?id=logs&path=logs%2Fb.txt')).status, 404, 'a file the pattern leaves out does not');
 
   const first = await call(instance, '/mission/data?id=inbox');
   assert.deepEqual([first.status, first.body.error], [409, 'allow-required'], 'the card\'s script waits for Allow');
@@ -107,7 +117,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   let hits = 0; const other = createServer((_q, s) => { hits++; s.end('ok'); }); await new Promise((r) => other.listen(0, '127.0.0.1', r)); t.after(() => other.close());
   const port = other.address().port;
   let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, port); } });
-  for (const id of ['inbox', 'probe', 'broken', 'throws', 'tall']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
+  for (const id of ['inbox', 'probe', 'broken', 'throws', 'tall', 'logs']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
 
   const profile = path.join(server.directory, 'electron-profile');
   await mkdir(profile); await versionSeen(profile);
@@ -129,7 +139,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     await card('broken').locator('.card-note', { hasText: 'printed something that is not JSON' }).waitFor({ timeout: 15000 });
     assert.match(await card('broken').locator('.card-note').innerText(), /oops, not JSON/, 'a bad script shows its error on the card');
     await card('throws').locator('.card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
-    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 6 items', 'the title counts cards and the one plain row');
+    assert.equal(await page.locator('#mdlT').innerText(), 'Home · 7 items', 'the title counts cards and the one plain row');
     assert.deepEqual(await page.locator('#mdlBody .mlist [data-i]').allInnerTexts().then((x) => x.map((t) => t.split('\n')[0])), ['Plain row'], 'feeders and title-bar buttons are not rows');
     assert.deepEqual(await card('inbox').locator('h3 .cbtn').allInnerTexts(), ['Say hi', 'Ship it', 'ghost not found']);
     assert.ok(await card('inbox').locator('h3 .cbtn', { hasText: 'not found' }).isDisabled(), 'an ID nothing has is a dead chip');
@@ -176,6 +186,21 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     await page.click('#mdlFoot [data-run]');
     assert.equal(await page.locator('#mdlFoot [data-run]').innerText(), 'Confirm run', 'the first press only arms it');
     if (theme === 'event-horizon-prime') shot('wall4-ship-window', await page.screenshot());
+    if (theme === 'event-horizon-prime') { // wall 15: the card's load-time p9open opened nothing; a click opens the whole file
+      await page.click('#mdlBack');
+      const logs = card('logs').frameLocator('iframe');
+      await card('logs').scrollIntoViewIfNeeded();
+      await sleep(1000);
+      assert.equal(await page.locator('#mdlT').innerText(), 'Home · 7 items', 'p9open with no click opens nothing');
+      await logs.locator('#a').click();
+      await page.locator('#mdlBody pre', { hasText: 'the whole log, not its last lines' }).waitFor({ timeout: 10000 });
+      assert.equal(await page.locator('#mdlT').innerText(), 'a.log');
+      shot('wall15-log-open', await page.screenshot());
+      await page.click('#mdlBack');
+      await card('logs').scrollIntoViewIfNeeded();
+      await logs.locator('#b').click();
+      await page.locator('#mdlBody pre', { hasText: 'Could not read it' }).waitFor({ timeout: 10000 });
+    }
     await page.keyboard.press('Escape');
     await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 });
   }

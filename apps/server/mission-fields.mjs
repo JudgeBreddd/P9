@@ -146,6 +146,11 @@ export const CARD = {
   buttons: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 4 && value.every((item) => typeof item === 'string' && ID.test(item)),
     doc: 'Up to 4 IDs of registry scripts or space buttons, drawn as small buttons in the card\'s title bar instead of as rows. A press opens the button\'s run window, '
     + 'which still asks before a confirm button runs. An ID nothing has shows "not found".', example: ['sprint-start', 'sprint-close'] },
+  folder: { type: 'object', check: (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    && Object.entries(value).every(([key, item]) => ['root', 'path', 'pattern', 'recursive', 'match'].includes(key) && FOLDER[key].check(item)),
+    doc: 'Files the card may open in P9\'s text viewer: root, path, pattern, recursive and match as in a folder list, drawn as no row. The card calls '
+    + 'p9open(path) from a click (a call with no click is ignored), path as the folder list gives it (from the root or the workspace). A file outside the list does not open.',
+    example: { path: 'logs', pattern: '*.log' } },
 };
 // A plain web link (M3): http and https only, so javascript:, file: and data: never open from a section.
 export const WEBLINK = {

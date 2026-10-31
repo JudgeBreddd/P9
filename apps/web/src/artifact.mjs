@@ -64,7 +64,7 @@ const runtime = (base, name) => {
   return runtimes.get(name);
 };
 // what: the word in the navigation message (a Mission card, row M5, says "card").
-export function mountFrame(box, a, { page: src, base, onSelection, onState, onHeight, what = 'artifact' }) {
+export function mountFrame(box, a, { page: src, base, onSelection, onState, onHeight, onOpen, what = 'artifact' }) {
   const frame = document.createElement('iframe'), { html, runtimes: need } = frameDoc(a);
   frame.setAttribute('sandbox', 'allow-scripts'); // no allow-same-origin, allow-forms, allow-popups or allow-top-navigation
   frame.className = 'art-frame'; frame.title = a.title; frame.src = src;
@@ -84,6 +84,7 @@ export function mountFrame(box, a, { page: src, base, onSelection, onState, onHe
     else if (m.kind === 'selection') onSelection?.(text.slice(0, 4000));
     else if (m.kind === 'rendered' || m.kind === 'error') onState?.(m.kind, text.slice(0, 500));
     else if (m.kind === 'height' && Number.isFinite(m.h)) onHeight?.(m.h);
+    else if (m.kind === 'open' && typeof m.path === 'string') onOpen?.(m.path.slice(0, 1024));
   };
   addEventListener('message', hear);
   box.append(frame);

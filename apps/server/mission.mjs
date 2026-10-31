@@ -408,7 +408,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   const FOLDER_MATCHED = 200;
   async function folderFiles(id) {
     if (typeof id !== 'string' || !ID.test(id)) return refused;
-    const item = (await registry()).space.flatMap((section) => section.folders).find((folder) => folder.id === id);
+    // Wall 15: a card's folder is listed under the card's ID, so the card can open its own files and no others.
+    const item = (await registry()).space.flatMap((section) => [...section.folders, ...(section.cards ?? []).filter((card) => card.folder).map((card) => ({ ...card.folder, id: card.id }))]).find((folder) => folder.id === id);
     if (!item) return { status: 404, error: 'unknown-id' };
     const target = item.root ? await namedRoot(item.root) : { root: workspace };
     if (target.error) return target;
