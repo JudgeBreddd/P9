@@ -100,7 +100,7 @@ test('M5 cards (server): the HTML file is read inside the workspace only; the sc
 test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the card; desktop and phone', { timeout: 180000 }, async (t) => {
   let hits = 0; const other = createServer((_q, s) => { hits++; s.end('ok'); }); await new Promise((r) => other.listen(0, '127.0.0.1', r)); t.after(() => other.close());
   const port = other.address().port;
-  const server = await remoteDaemon(t, { setup: (paths) => files(paths, port) });
+  let ws; const server = await remoteDaemon(t, { setup: (paths) => { ws = paths.workspace; return files(paths, port); } });
   for (const id of ['inbox', 'probe', 'broken', 'throws', 'tall']) assert.equal((await server.desk('/mission/data/allow', 'POST', { id })).status, 200);
 
   const profile = path.join(server.directory, 'electron-profile');
@@ -130,6 +130,11 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     const [hi, ht] = [await tall('inbox'), await tall('tall')];
     assert.ok(hi >= 60 && hi < 200, 'the short card shrinks to its content: ' + hi);
     assert.ok(ht >= 480 && ht <= 490, 'the tall card grows to its content: ' + ht);
+    if (theme === 'event-horizon-prime') { // an edit to the card file shows on its own, within one 20 s poll
+      await writeFile(path.join(ws, 'cards/inbox.html'), CARD.replace('notes in the inbox', 'notes, edited live'));
+      await inbox.locator('p', { hasText: 'notes, edited live' }).waitFor({ timeout: 30000 });
+      await inbox.locator('#count', { hasText: '12' }).waitFor({ timeout: 10000 });
+    }
     const left = async (sel) => (await page.locator(sel).first().boundingBox()).x;
     assert.ok(Math.abs(await left('#mdlBody [data-space-text]') - await left('#mdlBody [data-card] h3')) <= 2, 'the section text lines up with the cards, not on the window edge');
 

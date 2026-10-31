@@ -1798,6 +1798,10 @@ function sectionBody(m, body, g, o) {
   // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
   m.tiles ||= {}; m.cardHtml ||= {}; m.ck ||= {}; m.counts ||= {}; m.frames ||= {}; m.sent ||= {};
   const runs = [...(sp?.data || []), ...(sp?.cards || [])];
+  // A card file edited on disk (its v changed in the overview): read it again and make its frame again.
+  const cardsKey = (sp?.cards || []).map(c => c.id + ':' + c.v).join();
+  if (m.cardsKey !== undefined && m.cardsKey !== cardsKey) { for (const id in m.frames) m.frames[id]?.remove(); m.frames = {}; m.sent = {}; m.cardHtml = {}; m.cardsRead = false; }
+  m.cardsKey = cardsKey;
   const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
   // Row 76: typed text lives on m, so a tile answering (a redraw) does not wipe it. It sits under the section's text, so Save
   // shows without scrolling.

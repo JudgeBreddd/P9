@@ -331,10 +331,13 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     // A button a checklist runs as its Apply is not drawn again as its own row; it still runs by ID through the checklist.
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
+    // A card file's version (its hash, cut short): an edit to the HTML changes the overview, so an open card draws again.
+    const cardV = new Map();
+    for (const item of reg.space.flatMap((section) => section.cards ?? [])) cardV.set(item.id, await readFile(workspace, item.html).then((file) => file.hash.slice(0, 12), () => ''));
     return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map(strip), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
       space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget, place, quick_note }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(place ? { place } : {}), ...(quick_note ? { quick_note } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name, root }) => ({ id, title: name, ...(root ? { root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
-        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(links ? { links } : {}),
+        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name }) => ({ id, title: name, v: cardV.get(id) })) } : {}), ...(links ? { links } : {}),
         ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts), mainFile: Boolean(settings.space),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
