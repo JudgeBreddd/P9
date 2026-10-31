@@ -225,17 +225,17 @@ test('c18 row 66: the phone\'s Security settings: one toggle each, protection of
   assert.deepEqual([await daemonSide(), await local(), asked.length], [[false, true], [null, null, null, null], before]);
 
   // Mission Control files: the desktop's rows; a value saves when the box is left, a refused one keeps its reason.
-  const host = page.locator('#phoneSettings [data-mission="server_host"]');
+  const host = page.locator('#phoneSettings [data-mission="waiting"]');
   await host.fill('box'); await host.blur();
-  await page.waitForFunction(() => document.querySelector('#phoneSettings [data-mission="server_host"]')?.value === 'box' && !document.querySelector('[data-mission-err]'));
-  for (let i = 0; i < 30 && (await onDisk(server)).server_host !== 'box'; i++) await page.waitForTimeout(100);
-  assert.deepEqual(await onDisk(server), { ...SETTINGS, server_host: 'box' });
-  await host.fill('a b'); await host.blur();
+  await page.waitForFunction(() => document.querySelector('#phoneSettings [data-mission="waiting"]')?.value === 'box' && !document.querySelector('[data-mission-err]'));
+  for (let i = 0; i < 30 && (await onDisk(server)).waiting !== 'box'; i++) await page.waitForTimeout(100);
+  assert.deepEqual(await onDisk(server), { ...SETTINGS, waiting: 'box' });
+  await host.fill('../b'); await host.blur();
   await page.waitForSelector('#phoneSettings [data-mission-err]');
-  assert.match(await page.locator('#phoneSettings [data-mission-err]').innerText(), /^Not saved: server_host/);
-  assert.deepEqual(await onDisk(server), { ...SETTINGS, server_host: 'box' });
+  assert.match(await page.locator('#phoneSettings [data-mission-err]').innerText(), /^Not saved: waiting/);
+  assert.deepEqual(await onDisk(server), { ...SETTINGS, waiting: 'box' });
   await page.locator('#phoneSettings [data-mission-err]').scrollIntoViewIfNeeded(); await shot(page, 'phone-mission-files');
   await page.reload(); await page.waitForSelector('h1:text("Chats")'); await open();
-  assert.equal(await page.locator('#phoneSettings [data-mission="server_host"]').inputValue(), 'box', 'kept over a reload');
+  assert.equal(await page.locator('#phoneSettings [data-mission="waiting"]').inputValue(), 'box', 'kept over a reload');
   console.log('PASS c18 row 66: phone toggles; protection off asks (Cancel keeps it); Unrestricted on/off with one confirm, kept over a reload; a Mission row saved, a bad one refused');
 });

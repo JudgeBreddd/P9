@@ -8,10 +8,9 @@ import { TEMPLATES } from '../apps/server/mission-fields.mjs';
 import { BUILD_PROMPT, buildPrompt, GUIDE } from '../apps/server/templates/guide.mjs';
 import { missionKeys } from '../apps/web/src/mission-files.mjs';
 
-// D10: the Settings rows say "remote", never "server" (the settings.json key server_host stays: files already use it).
+// D10: the Settings rows say "remote", never "server" (server_host has no row since the built-in hub went, 0.1.6).
 test('D10: no Mission Control files row says server in its name or tip', { timeout: 5000 }, () => {
   const rows = missionKeys();
-  assert.ok(rows.some(([k]) => k === 'server_host'));
   for (const [key, name, , tip] of rows) assert.doesNotMatch(name + ' ' + (tip ?? ''), /server/i, key);
 });
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';

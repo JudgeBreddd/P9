@@ -73,12 +73,12 @@ test('P2: a 401 on Send answer keeps the typed Mission answers and the new idea 
   const server = await remoteDaemon(t, { setup: missionSetup });
   const { page } = await phone(t, server, { touchScreen: false });
   await page.click('[data-nav="mission"]');
-  await page.click('[data-open="work"]', { timeout: 15000 });
-  await page.click('#w-work summary:text("+ New idea")');
-  await page.fill('#w-work form[data-idea] [name="name"]', 'kept-idea');
-  await page.fill('#w-work form[data-idea] [name="text"]', 'an idea typed before the session ended');
-  await page.check('#w-work form[data-idea] [name="needs"]');
-  await page.click('#w-work [data-close]');
+  await page.click('[data-open="idea"]', { timeout: 15000 });
+  await page.click('#w-idea summary:text("+ New idea")');
+  await page.fill('#w-idea form[data-idea] [name="name"]', 'kept-idea');
+  await page.fill('#w-idea form[data-idea] [name="text"]', 'an idea typed before the session ended');
+  await page.check('#w-idea form[data-idea] [name="needs"]');
+  await page.click('#w-idea [data-close]');
   await page.click('[data-open="queue"]');
   for (const [title, text] of [['Pick a size', 'large, typed before the session ended'], ['Pick a color', 'blue, typed before the session ended']]) {
     await page.click(`#w-queue summary:text("${title}")`);
@@ -91,12 +91,12 @@ test('P2: a 401 on Send answer keeps the typed Mission answers and the new idea 
   await page.click('#login');
   await page.waitForURL(/\/phone\//, { timeout: 15000 });
   // Both windows open, stacked: the idea on top, Back shows the answers under it.
-  const idea = page.locator('#w-work form[data-idea]');
+  const idea = page.locator('#w-idea form[data-idea]');
   await idea.locator('[data-note]:text("Kept through sign-in, not sent")').waitFor({ timeout: 15000 });
   assert.deepEqual([await idea.locator('[name="name"]').inputValue(), await idea.locator('[name="text"]').inputValue(), await idea.locator('[name="needs"]').isChecked()],
     ['kept-idea', 'an idea typed before the session ended', true]);
   console.log('P9_SHOT p2-idea-kept ' + (await page.screenshot()).toString('base64'));
-  await page.click('#w-work [data-close]');
+  await page.click('#w-idea [data-close]');
   const color = page.locator('#w-queue details:has(summary:text("Pick a color"))');
   await color.locator('[data-note]:text("Kept through sign-in, not sent")').waitFor({ timeout: 15000 });
   assert.equal(await color.locator('textarea').inputValue(), 'blue, typed before the session ended');
@@ -129,27 +129,27 @@ test('P2: a phone Mission refresh keeps the typed answer and idea; a saved idea 
   const answer = page.locator('#w-queue details:has(summary:text("Pick a color")) textarea');
   await answer.fill('blue, typed before a refresh');
   await page.click('#w-queue [data-close]');
-  await page.click('[data-open="work"]');
-  await page.click('#w-work summary:text("+ New idea")');
-  await page.fill('#w-work form[data-idea] [name="name"]', 'refresh-idea');
-  await page.fill('#w-work form[data-idea] [name="text"]', 'an idea typed before a refresh');
-  await page.click('#w-work [data-close]');
-  const fresh = Promise.all([page.waitForResponse(/\/mission$/), page.waitForResponse(/\/mission\/hub$/)]);
+  await page.click('[data-open="idea"]');
+  await page.click('#w-idea summary:text("+ New idea")');
+  await page.fill('#w-idea form[data-idea] [name="name"]', 'refresh-idea');
+  await page.fill('#w-idea form[data-idea] [name="text"]', 'an idea typed before a refresh');
+  await page.click('#w-idea [data-close]');
+  const fresh = page.waitForResponse(/\/mission$/);
   await page.click('#refreshMission');
-  await fresh; await page.waitForTimeout(300); // the hub draws after its answer is read
+  await fresh; await page.waitForTimeout(300); // Mission draws after its answer is read
   assert.equal(await answer.inputValue(), 'blue, typed before a refresh');
   assert.equal(await answer.isVisible(), false, 'its window is closed');
   await page.click('[data-open="queue"]');
   assert.equal(await answer.isVisible(), true, 'the row holding the kept text is open');
   await page.click('#w-queue [data-close]');
-  await page.click('[data-open="work"]');
-  const idea = page.locator('#w-work form[data-idea]');
+  await page.click('[data-open="idea"]');
+  const idea = page.locator('#w-idea form[data-idea]');
   assert.deepEqual([await idea.locator('[name="name"]').inputValue(), await idea.locator('[name="text"]').inputValue()], ['refresh-idea', 'an idea typed before a refresh']);
   console.log('P9_SHOT p2-refresh-kept ' + (await page.screenshot()).toString('base64'));
   await idea.locator('button[type="submit"]').click();
   await page.waitForFunction(() => document.querySelector('#mission form[data-idea] [data-note]')?.textContent, null, { timeout: 10000 });
   assert.match(await idea.locator('[data-note]').innerText(), /^Saved /);
-  await page.waitForResponse(/\/mission\/hub$/, { timeout: 10000 }); await page.waitForTimeout(300); // the redraw 900 ms after a save
+  // A saved idea empties the form at once (no redraw since the built-in hub went, 0.1.6).
   assert.deepEqual([await idea.locator('[name="name"]').inputValue(), await idea.locator('[name="text"]').inputValue()], ['', ''], 'a saved idea does not come back');
   assert.ok((await readdir(path.join(server.workspace, '_ideas'))).some((name) => name.startsWith('refresh-idea')), 'the idea was written');
   console.log('PASS P2: a Mission refresh kept the typed answer and idea; the saved idea left the form');

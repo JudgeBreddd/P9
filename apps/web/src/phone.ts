@@ -1178,7 +1178,8 @@ async function loadMission(cached = false) {
         return row(`${escape(ref.title)}<small>app · on the laptop</small>`, '<p class="muted">Apps start on the laptop: open it from Mission there.</p>', attrs);
       });
       const quick = space.quick_note ? [`<div class="tile-row" data-qn="${escape(JSON.stringify(space.quick_note))}">${quickNoteHtml(escape, space.quick_note, quickTyped[space.quick_note.root + '/' + space.quick_note.path])}</div>`] : [];
-      groups.set(space.title, [...(groups.get(space.title) ?? []), ...quick, ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs]);
+      // What the section shows comes first and its buttons after them (Builder, 2026-10-31: actions under the information).
+      groups.set(space.title, [...quick, ...folder, ...space.logs.map((log) => row(escape(log.title), lazy({ name: log.id }))), ...tiles, ...cards, ...webLinks, ...lists, ...checks, ...refs, ...(groups.get(space.title) ?? [])]);
       names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
         ...(space.folders ?? []).map((list) => list.title), ...(space.checklists ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
@@ -1189,6 +1190,7 @@ async function loadMission(cached = false) {
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
     const widgets = ((data.space ?? []) as { widget?: string }[]).some((s) => s.widget), icm = widgets || (!!data.icmFiles && !widgets);
+    const order = ((data.space ?? []) as { title: string }[]).map((s) => s.title), spaceRank = (title: string) => { const i = order.indexOf(title); return i < 0 ? order.length : i; };
     // Item 14: a laptop is updating this server's P9; it restarts once no chat is mid-turn (apps/server/update.mjs).
     // A fresh profile shows only the onboarding card (M4, threat model row 72).
     if (data.empty) {
@@ -1203,7 +1205,8 @@ async function loadMission(cached = false) {
       // + New idea writes to _ideas: an ICM widget, shown only where the desktop shows the ICM widgets (finding 3a).
       + (icm ? win('idea', 'New idea', '+', 'Saved to _ideas/', row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>')) : '')
       + '<div id="sprint"></div>'
-      + [...groups].map(([group, rows], index) => win('g' + index, escape(group), rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
+      // The space's sections come first, in the order of its file (so Reviews sits under Sprint), then the other groups.
+      + [...groups].sort(([a], [b]) => spaceRank(a) - spaceRank(b)).map(([group, rows], index) => win('g' + index, escape(group), rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
       + win('pages', 'Pages', data.pages.length, escape(data.pages.map((item: Item) => item.title).join(' · ')) || 'No pages.',`<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
     missionDrawn = true;

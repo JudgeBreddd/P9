@@ -233,7 +233,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   // Phase 16 short Mission: every section is a tile that opens a full-screen window and closes again.
   await page.waitForSelector('#mission [data-open="idea"]');
   const phoneWins = await page.locator('#mission [data-open]').evaluateAll((tiles) => tiles.map((tile) => [tile.dataset.open, tile.querySelector('span').textContent]));
-  assert.deepEqual(phoneWins.map(([, title]) => title), ['Waiting on you', 'Main project', 'New idea', 'Health', 'Backups', 'Notes', 'Pages']);
+  assert.deepEqual(phoneWins.map(([, title]) => title), ['Waiting on you', 'Main project', 'New idea', 'Backups', 'Notes', 'Health', 'Pages']);
   for (const [id, title] of phoneWins) {
     await page.click(`#mission [data-open="${id}"]`);
     assert.equal(await page.locator(`#w-${id}[open] > header .title h1`).innerText(), title);
