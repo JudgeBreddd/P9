@@ -1824,8 +1824,11 @@ function sectionBody(m, body, g, o) {
     if (!fresh && at.firstChild) { if (box.dataset.rendered === 'rendered' && json !== undefined && m.sent[c.id] !== json) { m.sent[c.id] = json; m.frames[c.id]?.contentWindow?.postMessage({ p9: 'data', json }, '*'); } continue; }
     // Wall 15: p9open(path) from the card opens one of its folder's files, only right after a click in this card (the click
     // activates this window too and focuses the frame; a click elsewhere, such as the one that opened the section, does not
-    // count), so a card cannot pop windows on its own. The daemon opens only files the folder lists.
-    const onOpen = p => navigator.userActivation?.isActive && document.activeElement === m.frames[c.id] && openModal({ kind: 'hubtext', title: p.split('/').pop(), req: { id: c.id, path: p }, call: 'folderFile', back: o.back });
+    // count), so a card cannot pop windows on its own. The daemon opens only files the folder lists. The frame is another
+    // process: its message can come before this page hears the frame took focus, so focus gets 1 s to arrive (256 ms seen in the dev space).
+    const onOpen = (p, since = performance.now()) => navigator.userActivation?.isActive && document.activeElement === m.frames[c.id]
+      ? openModal({ kind: 'hubtext', title: p.split('/').pop(), req: { id: c.id, path: p }, call: 'folderFile', back: o.back })
+      : performance.now() - since < 1000 && setTimeout(() => onOpen(p, since), 25);
     const frame = m.frames[c.id] = mountCard(at, c.title, html, { ...FRAME, onOpen, onState: (kind, text) => {
       box.dataset.rendered = kind;
       const now = m.tiles[c.id]?.json;

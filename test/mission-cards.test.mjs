@@ -65,7 +65,7 @@ async function files(paths, port, extra) {
   await writeFile(path.join(w, 'logs/a.log'), 'line one of a.log\nthe whole log, not its last lines\n');
   await writeFile(path.join(w, 'logs/b.txt'), 'not a log');
   await writeFile(path.join(w, 'cards/logs.html'), '<!doctype html><script>p9open("logs/a.log")</script><button id="a" onclick="p9open(\'logs/a.log\')">a.log</button>'
-    + '<button id="b" onclick="p9open(\'logs/b.txt\')">b.txt</button>');
+    + '<button id="b" onclick="p9open(\'logs/b.txt\')">b.txt</button><script>document.body.dataset.ready = 1</script>');
   await writeFile(path.join(w, 'cards/tall.html'), '<!doctype html><style>body{margin:0}</style><div style="height:480px">Tall</div>');
   await writeFile(path.join(w, 'cards/throws.html'), '<!doctype html><p>Before the error</p><script>throw new Error("card boom")</script>');
   await writeFile(path.join(w, SETTINGS.space), JSON.stringify(space(extra)));
@@ -199,12 +199,15 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       shot('wall15-log-open', await page.screenshot());
       await page.click('#mdlBack');
       await card('logs').scrollIntoViewIfNeeded();
+      await logs.locator('body[data-ready]').waitFor({ timeout: 10000 }); // Back draws the window whole: a new frame
       await logs.locator('#b').click();
       await page.locator('#mdlBody pre', { hasText: 'Could not read it' }).waitFor({ timeout: 10000 });
       assert.equal(await page.locator('#mdlFoot [data-fix]').count(), 0, 'no Fix with Claude on a file that did not open');
       await page.click('#mdlBack');
       await card('logs').scrollIntoViewIfNeeded();
+      await logs.locator('body[data-ready]').waitFor({ timeout: 10000 });
       await logs.locator('#a').click();
+      await page.locator('#mdlT', { hasText: 'a.log' }).waitFor({ timeout: 10000 });
       await page.locator('#mdlFoot [data-fix]').click({ timeout: 10000 });
       await page.locator('#mdlBody', { hasText: 'Find why this log failed.' }).waitFor({ timeout: 30000 });
       assert.match(await page.locator('#mdlBody').innerText(), /Find why this log failed\.[\s\S]*logs\/a\.log[\s\S]*the whole log, not its last lines/);
