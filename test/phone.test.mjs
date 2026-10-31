@@ -73,10 +73,19 @@ async function signedInPage(browser, server) {
   const session = await enrollDevice(server, device);
   await device.context.addCookies([{ name: 'p9s', value: session.token, url: server.origin, httpOnly: true, secure: true, sameSite: 'Strict' }]);
   await device.page.goto(server.origin + '/phone/');
+  // The dev space runs with network "none", where Chromium's navigator.onLine is false and the phone shows itself offline.
+  // context.setOffline blocks the traffic; the CDP session's network conditions set navigator.onLine. They go on after
+  // goto (the app's own renderer), with latency 1, since Playwright's online call (latency 0) clears the override.
+  const cdp = await device.context.newCDPSession(device.page);
+  const setOffline = async (offline) => {
+    await device.context.setOffline(offline);
+    await cdp.send('Network.emulateNetworkConditions', { offline, latency: 1, downloadThroughput: -1, uploadThroughput: -1 });
+  };
+  await setOffline(false);
   await device.page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf);
   await device.page.reload();
   await device.page.setViewportSize({ width: 390, height: 844 });
-  return { ...device, session };
+  return { ...device, session, setOffline };
 }
 
 test('Phase 11: phone editor, offline cursor replay, operation retry and usage states', async (t) => {
@@ -86,7 +95,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await seedLimits(server.directory);
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const { page, context, session } = await signedInPage(browser, server);
+  const { page, context, session, setOffline } = await signedInPage(browser, server);
 
   await page.waitForSelector('h1:text("Chats")');
   const usage = await server.remote('/usage', { session: (await enrollDevice(server, await passkeyDevice(browser, server, 'usage-reader'))) });
@@ -408,11 +417,11 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.equal(await readFile(path.join(server.workspace, 'note.txt'), 'utf8'), 'competing');
   await page.screenshot({ path: path.join(evidence, 'phone-editor.png') });
 
-  await context.setOffline(true); await page.waitForSelector('#stale:not([hidden])');
+  await setOffline(true); await page.waitForSelector('#stale:not([hidden])');
   assert.equal(await page.locator('#save').isDisabled(), true);
   // Offline the Send button queues the message instead (PH2, phone-continue.test.mjs).
   assert.equal(await page.locator('#composer button').textContent(), 'Queue message');
-  await context.setOffline(false); await page.waitForFunction(() => document.getElementById('stale').hidden);
+  await setOffline(false); await page.waitForFunction(() => document.getElementById('stale').hidden);
 
   await edit('retry once');
   const ids = [];
@@ -496,7 +505,7 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   const server = await remoteDaemon(t, { setup });
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const { page, context } = await signedInPage(browser, server);
+  const { page, context, setOffline } = await signedInPage(browser, server);
   const screen = () => page.locator('#screen .xterm-rows').innerText();
   const shows = (text) => page.waitForFunction((want) => document.querySelector('#screen .xterm-rows')?.textContent.includes(want), text, { timeout: 10000 });
   const type = async (line) => { await page.click('#screen'); await page.keyboard.type(line); await page.keyboard.press('Enter'); };
@@ -548,10 +557,10 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   await page.waitForTimeout(300);
   assert.deepEqual(await page.evaluate(() => window.p9calls), { clip: 0, confirm: 0, open: 0 });
   // Case 3: keys typed while offline are dropped, not replayed when the terminal reconnects.
-  await context.setOffline(true);
+  await setOffline(true);
   await page.waitForFunction(() => document.querySelector('#termState').textContent.startsWith('Offline'));
   await type('echo P9-OFF-4""2');
-  await context.setOffline(false);
+  await setOffline(false);
   await page.click('#refreshTerminal');
   await connected();
   await type('echo P9-ON-4""2');
