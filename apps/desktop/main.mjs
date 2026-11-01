@@ -279,7 +279,8 @@ export async function createDesktop({ state, open } = {}) {
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
-  // D15a (remote-install.mjs, threat model row 67): the asked-first install on this remote, its last event for the status poll.
+  // D15a (remote-install.mjs, threat model row 67; U6: no separate yes): the install on this remote, its last event for the
+  // status poll; phase 'starting' while setUp tries startServer first.
   let remoteInstall = null;
   // P9's own package.json, not app.getVersion(): started as electron start.cjs (scripts/p9.mjs, the tests) that is Electron's version.
   const ownVersion = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
@@ -287,12 +288,15 @@ export async function createDesktop({ state, open } = {}) {
   // Row 78: the ssh login waiting on the password window: { id, prompt, again, resolve }. One at a time; a new connect ends it.
   // dropped: the connection was up and fell (said in the password window). keyOffer: { host, id }, after a password login.
   let sshAsk = null, sshAsks = 0, dropped = false, keyOffer = null;
+  // U6: set when runInstall exists (below); a connect that fails before then retries in 1 s and gets it.
+  let setUp = () => {};
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
       const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; dropped = true; connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
       server = s; serverError = null; dropped = false;
+      if (/^(starting|done)$/.test(remoteInstall?.phase)) remoteInstall = null; // U6: a later no-P9 sets up again
       keeper.connected(serverHost, !!s.background);
       if (!serverUpdating) {
         // Item 14 (server-update.mjs): an older server is updated from this app; a newer one only says to update this app.
@@ -321,13 +325,14 @@ export async function createDesktop({ state, open } = {}) {
         return;
       }
       if (serverError === 'ssh-login-needed') { serverError = 'ssh-failed'; return; }
+      if (serverError === 'server-no-p9') setUp(serverHost);
       setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
     }
   };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
     // A finished install stays for its own remote while it reconnects, so the window says installed, not Install again.
-    serverUpdate = null; if (remoteInstall?.phase !== 'running' && !(remoteInstall?.phase === 'done' && host === serverHost)) remoteInstall = null;
+    serverUpdate = null; if (remoteInstall?.phase !== 'running' && !(/^(done|starting)$/.test(remoteInstall?.phase) && host === serverHost)) remoteInstall = null;
     sshAsk?.resolve(null); sshAsk = null; dropped = false; if (keyOffer?.host !== host) keyOffer = null;
     server = null; serverError = null; serverHost = host; serverLast = host ?? serverLast;
     state = host ? serverFolder(host) : localState;
@@ -769,7 +774,7 @@ export async function createDesktop({ state, open } = {}) {
     setTimeout(() => { if (!window.isDestroyed()) window.webContents.reload(); });
     return { ok: true };
   });
-  // D15a: the connecting screen's Install P9 there, after the person said yes. Only this window's remote, only while it
+  // D15a, since U6 run by setUp below (pressing Connect is the yes). Only this window's remote, only while it
   // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
   // download its version. started: when it began, for the window's elapsed time; a throw ends it failed, never stuck running.
   // admin: row I2's password, after the install stopped at an admin step; passed to installRemote once, kept nowhere.
@@ -786,6 +791,22 @@ export async function createDesktop({ state, open } = {}) {
       remoteInstall = { phase: 'failed', error: error.message, started };
     }
     return { ok: true };
+  };
+  // U6 (threat model row 50 U6): pressing Connect is the yes. A remote that answers without a running P9 gets it started
+  // (startServer); if that finds nothing to start, or P9 still does not answer 30 s after it said started, it is installed
+  // or updated (runInstall, row 67's script). Once per Connect or Try again: a failed or stopped one stays in remoteInstall,
+  // shown with Try again, until useServer clears it.
+  setUp = host => {
+    if (!remoteInstall) {
+      const started = Date.now();
+      remoteInstall = { phase: 'starting', started };
+      startServer(host, sshCommand).then(r => {
+        if (serverHost !== host || remoteInstall?.started !== started) return;
+        if (r !== 'ok') return void runInstall();
+        remoteInstall = { phase: 'starting', started, until: Date.now() + 30000 };
+        useServer(host);
+      });
+    } else if (remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
   };
   ipcMain.handle('p9:remote-install', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');

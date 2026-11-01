@@ -157,53 +157,66 @@ const asks = async (s) => (await s.calls()).filter((c) => 'askpass' in c).length
 // The window reloads onto the remote it is sent to, which ends the call's page; main has it by then.
 const reconnect = (page) => page.evaluate(() => window.p9.server('password-host')).catch(() => {});
 
-test('Key offer, Yes: P9 makes its key, adds one line to the remote, and connects with no password; a key the remote no longer has asks again and offers again', { skip, timeout: 120000 }, async (t) => {
+// U6 (threat model row 50 U6): the key offer is a checkbox, ticked, on the window after connecting. This remote is not in
+// background mode, so the Temporary or Always on question is not due: the window is titled Connected, with Done.
+const keyWindow = async (page) => {
+  await page.locator('dialog#keepDlg[open]').waitFor({ timeout: 30000 });
+  assert.equal(await page.locator('#keepT').textContent(), 'Connected to password-host');
+  assert.equal(await page.locator('#keepKeyRow').isVisible(), true);
+  assert.equal(await page.locator('#keepKeyRow').textContent(), ' Log in without a password next time');
+  assert.equal(await page.locator('#keepKey').isChecked(), true, 'ticked by default');
+  assert.deepEqual(await page.locator('#keepDlg .dlg-foot button:visible').allTextContents(), ['Done']);
+};
+const keyLines = async (s, want) => {
+  let lines = [];
+  for (const end = Date.now() + 30000; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 250))) {
+    lines = await readFile(s.keys, 'utf8').then((text) => text.split('\n').filter(Boolean), () => []);
+    if (lines.length === want) break;
+  }
+  return lines;
+};
+
+test('Key checkbox ticked: Done makes P9\'s key, adds one line to the remote, and connects with no password; a key the remote no longer has asks again and offers again', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
   await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host' }));
   const page = await launch(t, s, local);
   await typePassword(page);
-  await page.locator('dialog#keyDlg[open]').waitFor({ timeout: 30000 });
-  assert.equal(await page.locator('#keyT').textContent(), 'Connect to password-host without a password?');
-  assert.equal(await page.locator('#keyYes').textContent(), 'Yes, add a key');
-  await both(page, 'ssh-key-offer', page);
-  await page.click('#keyYes');
-  await page.locator('#keyMsg', { hasText: 'Done. P9 logs in to password-host with its own key from now on.' }).waitFor({ timeout: 30000 });
-  assert.equal(await page.locator('#keyNever').isVisible(), false, 'Don\'t ask again goes once the key is added');
-  await both(page, 'ssh-key-done', page);
-  const lines = (await readFile(s.keys, 'utf8')).split('\n').filter(Boolean);
+  await keyWindow(page);
+  await both(page, 'u6-key-checkbox', page);
+  await page.click('#keepDone');
+  await page.locator('dialog#keepDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  const lines = await keyLines(s, 1);
   assert.equal(lines.length, 1);
   assert.equal(lines[0], (await readFile(path.join(s.profile, 'ssh', 'p9_ed25519.pub'), 'utf8')).trim());
   assert.equal((await stat(path.join(s.profile, 'ssh', 'p9_ed25519'))).mode & 0o777, 0o600);
-  await page.click('#keyYes');
-  await page.locator('dialog#keyDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  assert.equal(await page.locator('#keepNote').isVisible(), false, 'success says nothing');
   // The login gone (as after 10 idle minutes): the key alone connects, and nothing asks.
   await rm(s.master, { force: true });
   const before = await asks(s);
   await reconnect(page);
   await connected(page);
   assert.equal(await asks(s), before, 'no password asked');
-  assert.equal(await page.locator('dialog#sshDlg[open], dialog#keyDlg[open]').count(), 0);
-  // The remote dropped the key: the password window again, then the offer again. A second Yes adds one line, not two.
+  await page.waitForTimeout(6000); // more than one status poll
+  assert.equal(await page.locator('dialog#sshDlg[open], dialog#keepDlg[open]').count(), 0);
+  // The remote dropped the key: the password window again, then the checkbox again. A second Done adds one line, not two.
   await writeFile(s.keys, '');
   await rm(s.master, { force: true });
   await reconnect(page);
   await typePassword(page);
-  await page.locator('dialog#keyDlg[open]').waitFor({ timeout: 30000 });
-  await page.click('#keyYes');
-  await page.locator('#keyMsg', { hasText: 'Done.' }).waitFor({ timeout: 30000 });
-  assert.equal((await readFile(s.keys, 'utf8')).split('\n').filter(Boolean).length, 1);
+  await keyWindow(page);
+  await page.click('#keepDone');
+  assert.equal((await keyLines(s, 1)).length, 1);
 });
 
-test('Key offer, No with Don\'t ask again: nothing is made or added, the next password login offers nothing, and Settings > Remote offers it again', { skip, timeout: 120000 }, async (t) => {
+test('Key checkbox unticked: nothing is made or added, the next password login offers nothing, and Settings > Remote offers it again', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
   await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host', remotes: ['password-host'] }));
   const page = await launch(t, s, local);
   await typePassword(page);
-  await page.locator('dialog#keyDlg[open]').waitFor({ timeout: 30000 });
-  assert.equal(await page.locator('#keyLater').textContent(), 'Settings > Remote Connect can offer it again.');
-  await page.check('#keyNever');
-  await page.click('#keyNo');
-  await page.locator('dialog#keyDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await keyWindow(page);
+  await page.uncheck('#keepKey');
+  await page.click('#keepDone');
+  await page.locator('dialog#keepDlg').waitFor({ state: 'hidden', timeout: 5000 });
   for (const end = Date.now() + 10000; Date.now() < end && !(await page.evaluate(() => window.p9.server())).noKey?.length;) await page.waitForTimeout(250);
   assert.deepEqual((await page.evaluate(() => window.p9.server())).noKey, ['password-host']);
   await assert.rejects(stat(path.join(s.profile, 'ssh', 'p9_ed25519')), 'no key made');
@@ -213,7 +226,7 @@ test('Key offer, No with Don\'t ask again: nothing is made or added, the next pa
   await typePassword(page);
   await connected(page);
   await page.waitForTimeout(6000); // more than one status poll
-  assert.equal(await page.locator('dialog#keyDlg[open]').count(), 0, 'not offered again');
+  assert.equal(await page.locator('dialog#keepDlg[open]').count(), 0, 'not offered again');
   await page.click('#setBtn');
   const again = page.locator('#setDlg [data-key-again="password-host"]');
   await page.click('[data-set-page="Remote Connect"]');
@@ -296,7 +309,7 @@ test('Windows: a remote with no key from this computer says how to add one; no p
   const text = (await why.textContent()) + ' ' + (await page.locator('#connSteps').textContent());
   for (const said of ['password-host needs an ssh key from this computer', 'ssh-keygen -t ed25519', 'authorized_keys', 'ssh password-host', 'Try again']) assert.ok(text.includes(said), said);
   assert.equal(await page.locator('dialog#sshDlg[open]').count(), 0, 'no password window');
-  assert.equal(await page.locator('dialog#keyDlg[open]').count(), 0, 'no key offer');
+  assert.equal(await page.locator('dialog#keepDlg[open]').count(), 0, 'no key offer');
   const calls = await s.calls();
   assert.ok(!calls.some((c) => c.argv.includes('BatchMode=no') || 'askpass' in c), 'no password login was started');
   assert.equal(calls.filter((c) => c.argv.at(-1)?.includes('desktop.json')).length, 1, 'no timed retry');

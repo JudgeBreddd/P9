@@ -11,7 +11,7 @@ import { chmod, lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/prom
 import { randomBytes } from 'node:crypto';
 import net from 'node:net';
 import path from 'node:path';
-import { HOST, LOGIN, CHANGED, knownHostsLine, CONTROL_DIR, sshOptions } from './remote.mjs';
+import { HOST, LOGIN, CHANGED, knownHostsLine, CONTROL_DIR, sshOptions, TOFU } from './remote.mjs';
 
 const q = (s) => "'" + String(s).replaceAll("'", "'\\''") + "'";
 // The helper's own code: argv is ssh's prompt and the socket path; an empty answer (Cancel) exits 1, which stops ssh asking.
@@ -43,7 +43,7 @@ export async function sshLogin({ host, ssh = 'ssh', ask, dir = CONTROL_DIR }) {
     const err = await open(log, 'w', 0o600);
     const code = await new Promise((resolve) => {
       // detached: no controlling terminal, so an older ssh uses the helper too. The master keeps running after this exits.
-      const child = spawn(ssh, ['-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=3', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
+      const child = spawn(ssh, ['-o', 'BatchMode=no', ...TOFU, '-o', 'NumberOfPasswordPrompts=3', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
         '-o', 'ControlMaster=auto', '-o', 'ControlPersist=600', '-o', 'ControlPath=' + dir + '/%C', host, 'exit 0'],
       { env: { ...process.env, SSH_ASKPASS: helper, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: process.env.DISPLAY || ':0' }, stdio: ['ignore', 'ignore', err.fd], detached: true });
       const timer = setTimeout(() => child.kill(), 300000); // ponytail: 5 minutes for the whole login, the window included
@@ -82,6 +82,6 @@ export async function installKey({ host, ssh = 'ssh', file }) {
   if (!/^ssh-ed25519 [A-Za-z0-9+/=]+ p9-event-horizon$/.test(pub)) return 'failed';
   const added = await new Promise((resolve) => execFile(ssh, [...sshOptions(), host, ADD], { timeout: 60000 }, (error) => resolve(!error)).stdin.end(pub + '\n'));
   if (!added) return 'failed';
-  return new Promise((resolve) => execFile(ssh, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ControlPath=none', '-o', 'IdentitiesOnly=yes', '-o', 'IdentityFile=' + file, host, 'exit 0'],
+  return new Promise((resolve) => execFile(ssh, ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=10', '-o', 'ControlPath=none', '-o', 'IdentitiesOnly=yes', '-o', 'IdentityFile=' + file, host, 'exit 0'],
     { timeout: 30000 }, (error) => resolve(error ? 'not-accepted' : 'ok')));
 }

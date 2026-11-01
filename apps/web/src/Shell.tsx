@@ -20,7 +20,7 @@ const REMOTE_WHY: Record<string, string> = {
   'ssh-failed': 'ssh could not log in to the remote. Check its name or address, then press Try again.',
   'ssh-host-key-changed': 'The remote\'s ssh host key has changed, so P9 will not connect or ask for a password.',
   'ssh-key-needed': 'The remote needs an ssh key from this computer: on Windows, P9 connects with keys only.',
-  'server-no-p9': 'The remote answered, but P9 is not running there. If P9 is installed there, start it; if not, install it from here.',
+  'server-no-p9': 'P9 is not running there yet. Setting it up…',
   'server-not-answering': 'The tunnel opened, but P9 on the remote did not answer.',
   'server-host-refused': 'ssh refused that host name.',
   'server-dropped': 'Lost the remote: connecting again.',
@@ -67,70 +67,39 @@ const askSsh = (host: string, ask: SshAsk) => {
   (key ? document.getElementById('sshOk')! : pw).focus();
 };
 
-// Row 79: the offer after a password login. Yes makes P9's key and adds it to host, and the window says how that went;
-// No (or Esc) changes nothing. Don't ask again is kept for this remote; Settings > Remote Connect offers it again.
+// Row 79, since U6 (threat model row 50 U6): the key offer is a checkbox on the keep window (below). When adding the key
+// fails, the status bar says so for 30 s; success says nothing.
 const KEY_SAID: Record<string, string> = {
-  'key-not-made': 'This computer could not make the key (ssh-keygen failed). Nothing was added to HOST.',
-  'key-not-accepted': 'The key was added to HOST, but HOST does not accept it, so P9 still asks for your password there.',
-};
-const offerKey = (host: string, dialog: HTMLDialogElement) => {
-  const yes = document.getElementById('keyYes') as HTMLButtonElement, no = document.getElementById('keyNo')!, never = document.getElementById('keyNever') as HTMLInputElement, said = document.getElementById('keyMsg')!;
-  document.getElementById('keyT')!.textContent = 'Connect to ' + host + ' without a password?';
-  // The approved copy: what a key is and what Yes does, here and there, for someone new to ssh keys. No hint at No.
-  document.getElementById('keyP')!.textContent = 'An ssh key is a pair of matching files that proves it is you, in place of your password.';
-  document.getElementById('keyWhat')!.textContent = 'Yes makes a key for P9 on this computer, in P9\'s own folder. On ' + host + ', it adds the key\'s public half '
-    + 'to your account\'s list of allowed keys (~/.ssh/authorized_keys). After that, P9 connects to ' + host + ' without your password. '
-    + 'To undo it, delete the line marked p9-event-horizon from that list.';
-  never.checked = false; said.hidden = true; no.hidden = false; yes.disabled = false; yes.textContent = 'Yes, add a key';
-  // style, not hidden: .keep-again sets its own display.
-  for (const id of ['keyNeverRow', 'keyLater']) document.getElementById(id)!.style.display = '';
-  dialog.returnValue = '';
-  let done = false;
-  yes.onclick = e => {
-    if (done) return;
-    e.preventDefault(); yes.disabled = true; no.hidden = true; said.hidden = false;
-    for (const id of ['keyNeverRow', 'keyLater']) document.getElementById(id)!.style.display = 'none';
-    said.textContent = 'Making the key and adding it to ' + host + '…';
-    void (window.p9?.sshKey?.(true, never.checked) ?? Promise.reject(new Error('no-bridge'))).catch(() => ({ error: 'key-failed' })).then((r?: { ok?: boolean; error?: string }) => {
-      done = true; yes.disabled = false; yes.textContent = 'Close';
-      said.textContent = r?.ok ? 'Done. P9 logs in to ' + host + ' with its own key from now on.'
-        : (KEY_SAID[r?.error ?? ''] ?? 'The key could not be added to HOST, and nothing changed there. P9 asks for your password next time.').replaceAll('HOST', host);
-    });
-  };
-  dialog.onclose = () => { if (!done) void window.p9?.sshKey?.(false, never.checked).catch(() => {}); };
-  dialog.showModal();
+  'key-not-made': 'This computer could not make the key, so P9 asks for your password on HOST next time',
+  'key-not-accepted': 'HOST did not accept P9\'s key, so P9 asks for your password there next time',
 };
 
-// D15a (desktop/remote-install.mjs): the asked-first install of P9 on a remote that has none, as the status poll reports it.
-type RemoteInstall = { phase: 'running' | 'done' | 'failed' | 'already-there' | 'admin'; line?: string; tail?: string; error?: string; started?: number; need?: string[]; command?: string };
+// D15a (desktop/remote-install.mjs), since U6 run by main on Connect (main.mjs setUp): starting is main trying the start
+// first, then the install, as the status poll reports it. Plain words; the steps stay in connStep and, on a failure, connLog.
+type RemoteInstall = { phase: 'starting' | 'running' | 'done' | 'failed' | 'already-there' | 'admin'; line?: string; tail?: string; error?: string; started?: number; need?: string[]; command?: string };
 // P9_INSTALL and P9_ADMIN lines are for main, not for people.
 const lastLine = (text = '') => text.split('\n').filter(l => l.trim() && !l.startsWith('P9_')).pop() ?? '';
 const needNames = (need: string[] = []) => need.map(n => n.split(':')[0]).join(', ');
 const installWhy = (host: string, i: RemoteInstall) => ({
-  running: 'Installing P9 on ' + host + '. This takes a few minutes; this window shows each step and connects when it is done.',
-  done: 'P9 is installed on ' + host + '. Connecting…',
-  admin: host + ' is missing ' + (needNames(i.need) || 'a few tools') + ', and installing ' + ((i.need?.length ?? 0) > 1 ? 'them' : 'it') + ' needs an admin password. Continue asks for it.',
-  'already-there': host + ' already has a ~/p9 folder that this app did not make, so it was left alone. If it is P9 installed there, Start P9 there runs it.',
-  failed: 'The install on ' + host + ' stopped' + ({ 'timed-out': ' after 30 minutes', 'server-unreachable': ': ssh lost the remote', 'ssh-failed': ': ssh did not start', 'install-failed': '', 'missing-tools': ': ' + host + ' is missing ' + (needNames(i.need) || 'tools P9 needs') + ' and has no package manager P9 knows', 'not-allowed': ': your account there cannot install software' }[i.error ?? ''] ?? ' (' + i.error + ')')
-    + '. ' + (i.error === 'not-allowed' || i.error === 'missing-tools' ? 'Someone who administers ' + host + ' must install ' + (needNames(i.need) || 'them') + ', then Try again.' : (i.tail ? 'Its last lines are below.' : '') + ' Try again.'),
+  starting: 'Starting P9 on ' + host + '…',
+  running: 'Setting up P9 on ' + host + '. The first time takes a few minutes.',
+  done: 'P9 is ready on ' + host + '. Connecting…',
+  admin: host + ' needs ' + (needNames(i.need) || 'a few tools') + ' before P9 can run there, and only an admin can add ' + ((i.need?.length ?? 0) > 1 ? 'them' : 'it') + '. Press Continue.',
+  'already-there': host + ' has a ~/p9 folder this app did not make, so P9 leaves it alone. Rename or remove that folder there, then press Try again.',
+  failed: 'Setting up P9 on ' + host + ' stopped' + ({ 'timed-out': ' after 30 minutes', 'server-unreachable': ': the connection was lost', 'ssh-failed': ': ssh did not start', 'install-failed': '', 'missing-tools': ': ' + host + ' is missing ' + (needNames(i.need) || 'tools P9 needs') + ' and has no package manager P9 knows', 'not-allowed': ': your account there cannot install software' }[i.error ?? ''] ?? ' (' + i.error + ')')
+    + '. ' + (i.error === 'not-allowed' || i.error === 'missing-tools' ? 'Someone who administers ' + host + ' must install ' + (needNames(i.need) || 'them') + ', then press Try again.' : (i.tail ? 'Its last lines are below. ' : '') + 'Press Try again.'),
 }[i.phase]);
-// D15a: why pressing Install started nothing, in words. A window whose app files were updated while it ran has the new
-// button but not the main process that answers it, until P9 is quit fully and opened again.
-const installRefused = (error: string) => /No handler registered/.test(error)
-  ? 'This P9 window is older than its app files, so it cannot start the install. Quit P9 fully (every window), open it again, then press Install.'
-  : error === 'remote-install-refused' ? 'P9 did not start the install: it runs only while this remote answers without P9, and one at a time. Wait a few seconds and try again.'
-    : 'The install could not start (' + error + ').';
-// Row I1: P9 on a remote in background mode stops when nobody uses it. One line in the status bar says so, with Keep it
-// running; after the first connect there, one question. keeping: the last switch main ran there (desktop main.mjs applyKeep).
+// Row I1: P9 on a remote in background mode stops when nobody uses it. One line in the status bar says so, with Make it
+// always on; after the first connect there, one question (Temporary or Always on, U6). keeping: the last switch main ran there (desktop main.mjs applyKeep).
 type Keeping = { action: 'keep' | 'release'; phase: 'running' | 'ok' | 'refused' | 'no-start' | 'failed' | 'wrong-password' | 'not-allowed'; command?: string };
 const keepLine = (host: string, background?: boolean, k?: Keeping): [string, string] | null => {
-  if (k?.phase === 'running') return [k.action === 'keep' ? 'Keeping P9 running on ' + host + '…' : 'Switching P9 on ' + host + ' to run only while connected…', ''];
-  if (k?.phase === 'refused') return ['Keeping P9 running on ' + host + ' needs an admin password', 'Use admin password'];
+  if (k?.phase === 'running') return [k.action === 'keep' ? 'Making P9 always on on ' + host + '…' : 'Making P9 on ' + host + ' temporary…', ''];
+  if (k?.phase === 'refused') return ['Always on for ' + host + ' needs an admin password', 'Use admin password'];
   if (k?.phase === 'wrong-password') return ['That admin password did not work on ' + host, 'Use admin password'];
-  if (k?.phase === 'not-allowed') return ['Your account on ' + host + ' cannot keep P9 running; someone who administers it can allow it', ''];
+  if (k?.phase === 'not-allowed') return ['Your account on ' + host + ' cannot make P9 always on; someone who administers it can allow it', ''];
   if (k?.phase === 'no-start') return ['P9 on ' + host + ' was installed before this choice existed, so it cannot switch', ''];
   if (k?.phase === 'failed') return ['Could not change how P9 runs on ' + host, 'Try again'];
-  return background ? ['P9 on ' + host + ' stops when you disconnect', 'Keep it running'] : null;
+  return background ? ['P9 on ' + host + ' is temporary: it stops when you disconnect', 'Make it always on'] : null;
 };
 // Row I2: the password window for one admin step on host. need: "name: reason" lines; command: exactly what runs as admin.
 // The password goes to main once (p9:remote-admin) and the field is emptied whenever the window closes.
@@ -173,8 +142,8 @@ const elapsed = (started?: number) => {
 export default function Shell() {
   useEffect(() => {
     const dispose = mountShell({ askAdmin });
-    let keepAsked = false, adminAsked = '', sshAsked = 0, keyAsked = 0;
-    let active = true, waited = false, connected = false, asking = false, starting = false, refused = '', startSaid = '', timer: ReturnType<typeof setTimeout> | undefined;
+    let keepAsked = false, adminAsked = '', sshAsked = 0, keyAsked = 0, keySaid = '';
+    let active = true, waited = false, connected = false, timer: ReturnType<typeof setTimeout> | undefined;
     // D20: the remote this window has shown.
     let shown = '';
     // The title-bar badge (Remote · host or Local) and its machine menu: controller.mjs, serverMenu.
@@ -195,60 +164,30 @@ export default function Shell() {
           const person = !!result.sshAsk || /^ssh-(refused|cancelled|failed)$/.test(result.error ?? '');
           if (layer && !ok && (!known || person)) {
             document.getElementById('connT')!.textContent = (/^ssh-(host-key-changed|key-needed)$/.test(result.error ?? '') ? 'Not connecting to ' : known ? 'Reconnecting to ' : 'Connecting to ') + result.host;
-            const why = document.getElementById('connWhy')!, install = document.getElementById('connInstall') as HTMLButtonElement, no = document.getElementById('connNo')!;
+            const why = document.getElementById('connWhy')!, cont = document.getElementById('connAdmin') as HTMLButtonElement;
             const host = result.host ?? '', i = result.install, phase = i?.phase;
-            if (phase === 'running') refused = '';
-            const busy = starting || phase === 'running' || phase === 'done';
-            // Row I2: the install stopped at an admin step. The window opens once for each stop; Continue opens it again.
+            // U6 (threat model row 50 U6): Connect is the yes. Main starts or installs P9 there on its own; this layer shows the
+            // black hole, one plain line and the progress. Only the admin step and errors need the person.
+            const busy = phase === 'starting' || phase === 'running' || phase === 'done' || (result.error === 'server-no-p9' && !i);
+            // Row I2: the set-up stopped at an admin step. The window opens once for each stop; Continue opens it again.
             const admin = phase === 'admin' && !!i?.command && !!window.p9?.remoteAdmin;
-            const openAdmin = () => askAdmin(host, 'Install what P9 needs on ' + host, host + ' is missing what P9 needs to install, and only an admin can add it:',
+            const openAdmin = () => askAdmin(host, 'P9 needs a few tools on ' + host, 'Only an admin can add them. Type your admin password and P9 adds them, then carries on:',
               i?.need ?? [], i?.command ?? '', 'Install', i?.error === 'wrong-password' ? 'That password did not work. Check it and try again.' : '', ask);
             if (admin && adminAsked !== i!.started + (i!.error ?? '')) { adminAsked = i!.started + (i!.error ?? ''); openAdmin(); }
-            // Row 78: the ssh login's question opens the password window once; a refused or cancelled login offers Try again.
+            cont.hidden = !admin; cont.onclick = openAdmin;
+            // Row 78 and U6: a refused or cancelled login, or a set-up that stopped, offers Try again (main starts over).
             const retry = document.getElementById('connRetry') as HTMLButtonElement;
-            retry.hidden = !/^ssh-(refused|cancelled|failed|host-key-changed|key-needed)$/.test(result.error ?? '');
+            retry.hidden = !/^ssh-(refused|cancelled|failed|host-key-changed|key-needed)$/.test(result.error ?? '') && phase !== 'failed' && phase !== 'already-there';
+            if (retry.hidden) retry.disabled = false;
             retry.onclick = () => { retry.disabled = true; void window.p9?.server?.(host); };
-            // D15a: Install P9 there asks first, in place: what happens, where, and what it never does. Then the poll shows its
-            // progress (a reopened window too: main keeps it): the button stays off, a spinner, the last line, the time so far.
-            if (!asking) why.textContent = refused || startSaid || (result.sshAsk?.dropped ? 'The connection to ' + host + ' dropped. No ssh key works there, so P9 needs your password to connect again.' : '') || (result.error === 'ssh-host-key-changed' ? keyChanged(host, result.knownHosts) : result.error === 'ssh-key-needed' ? keyNeeded(host) : '') || (i ? installWhy(host, i) : REMOTE_WHY[result.error ?? ''] ?? 'Not connected yet (' + result.error + ')');
-            keySteps(host, !asking && result.error === 'ssh-key-needed');
-            install.hidden = !(busy || asking || result.error === 'server-no-p9') || !window.p9?.remoteInstall;
-            install.disabled = busy;
-            install.textContent = admin ? 'Continue' : phase === 'done' ? 'Connecting…' : busy ? 'Installing…' : asking ? 'Install' : phase === 'failed' || refused ? 'Try again' : 'Install P9 there';
-            no.hidden = !asking;
-            // Start P9 there: a P9 that is installed but stopped (or a ~/p9 this app did not make), never a terminal command.
-            const start = document.getElementById('connStart') as HTMLButtonElement;
-            start.hidden = busy || asking || !(result.error === 'server-no-p9' || phase === 'already-there') || !window.p9?.remoteStart;
-            start.onclick = () => {
-              start.disabled = true; start.textContent = 'Starting…';
-              void (window.p9?.remoteStart?.() ?? Promise.resolve({ result: 'failed' })).then((r: { result?: string; error?: string }) => {
-                start.disabled = false; start.textContent = 'Start P9 there';
-                if (r?.result === 'ok') return void (why.textContent = 'P9 started on ' + host + '. Connecting…');
-                startSaid = r?.result === 'none' ? 'P9 is not set up to run on ' + host + ' yet. Install P9 there sets it up.' : 'P9 did not start on ' + host + '. Try again, or install it from here.';
-                why.textContent = startSaid;
-              }, () => { start.disabled = false; start.textContent = 'Start P9 there'; });
-            };
+            why.textContent = (result.sshAsk?.dropped ? 'The connection to ' + host + ' dropped. No ssh key works there, so P9 needs your password to connect again.' : '') || (result.error === 'ssh-host-key-changed' ? keyChanged(host, result.knownHosts) : result.error === 'ssh-key-needed' ? keyNeeded(host) : '') || (i ? installWhy(host, i) : REMOTE_WHY[result.error ?? ''] ?? 'Not connected yet (' + result.error + ')');
+            keySteps(host, result.error === 'ssh-key-needed');
             const progress = document.getElementById('connProgress')!, log = document.getElementById('connLog')!;
             progress.hidden = !busy;
-            document.getElementById('connStep')!.textContent = phase === 'done' ? 'Installed' : lastLine(i?.line) || 'Starting…';
+            document.getElementById('connStep')!.textContent = phase === 'done' ? 'Ready' : phase === 'running' ? lastLine(i?.line) || 'Setting up' : 'Starting P9';
             document.getElementById('connTime')!.textContent = elapsed(i?.started);
-            log.hidden = asking || phase !== 'failed' || !i?.tail;
+            log.hidden = phase !== 'failed' || !i?.tail;
             log.textContent = (i?.tail ?? '').split('\n').filter(l => !l.startsWith('P9_')).join('\n');
-            install.onclick = () => {
-              if (admin) return openAdmin();
-              if (!asking) {
-                asking = true; refused = ''; startSaid = ''; install.textContent = 'Install'; no.hidden = false; log.hidden = true;
-                why.textContent = 'Install P9 on ' + host + '? Over your ssh login, P9 puts its source in ~/p9 there, builds it and starts its background service for your user. '
-                  + 'If it needs anything only an admin can install, it shows you what and asks for your password first. It takes a few minutes.';
-                return;
-              }
-              asking = false; starting = true; no.hidden = true; install.disabled = true; install.textContent = 'Installing…'; progress.hidden = false;
-              why.textContent = 'Installing P9 on ' + host + '…';
-              const stop = (error: string) => { starting = false; refused = installRefused(error); why.textContent = refused; install.disabled = false; install.textContent = 'Try again'; progress.hidden = true; };
-              void (window.p9?.remoteInstall?.() ?? Promise.reject(new Error('no-install')))
-                .then((r: { error?: string } | undefined) => r?.error ? stop(r.error) : void (starting = false), (e: Error) => stop(e?.message ?? String(e)));
-            };
-            no.onclick = () => { asking = false; no.hidden = true; install.textContent = 'Install P9 there'; why.textContent = REMOTE_WHY[result.error ?? ''] ?? ''; };
             document.getElementById('connLocal')!.onclick = () => void window.p9?.server?.(null);
             if (!layer.open) { layer.addEventListener('cancel', e => e.preventDefault()); layer.showModal(); }
             // After the layer opens, so the password window sits on top of it.
@@ -260,10 +199,7 @@ export default function Shell() {
             label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
             label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Settings > Remote Connect switches back to this computer.';
           }
-          // Row 79: the key offer, once per password login, before Keep P9 running's question.
-          const keyDlg = document.getElementById('keyDlg') as HTMLDialogElement | null;
-          if (ok && result.keyOffer && result.keyOffer.id !== keyAsked && keyDlg && !keyDlg.open && window.p9?.sshKey) { keyAsked = result.keyOffer.id; offerKey(result.host ?? '', keyDlg); }
-          const note = document.getElementById('keepNote'), line = ok ? keepLine(result.host ?? '', result.background, result.keeping) : null;
+          const note = document.getElementById('keepNote'), line: [string, string] | null = ok ? (keySaid ? [keySaid, ''] : keepLine(result.host ?? '', result.background, result.keeping)) : null;
           if (note && window.p9?.remoteKeep) {
             note.hidden = !line;
             document.getElementById('keepText')!.textContent = line?.[0] ?? '';
@@ -271,21 +207,40 @@ export default function Shell() {
             button.hidden = !line?.[1]; button.textContent = line?.[1] ?? '';
             const k = result.keeping, host = result.host ?? '';
             button.onclick = (k?.phase === 'refused' || k?.phase === 'wrong-password') && k.command
-              ? () => askAdmin(host, 'Keep P9 running on ' + host, 'For P9 to keep running after you sign out, your account there needs one admin setting.',
-                [], k.command!, 'Keep it running', k.phase === 'wrong-password' ? 'That password did not work. Check it and try again.' : '', ask)
+              ? () => askAdmin(host, 'Make P9 always on for ' + host, 'For P9 to keep running after you sign out, your account there needs one admin setting.',
+                [], k.command!, 'Make it always on', k.phase === 'wrong-password' ? 'That password did not work. Check it and try again.' : '', ask)
               : () => { button.hidden = true; void window.p9?.remoteKeep?.(true, false).finally(ask); };
-            const dialog = document.getElementById('keepDlg') as HTMLDialogElement | null;
-            if (ok && result.ask && !keepAsked && dialog && !dialog.open && !keyDlg?.open) {
-              keepAsked = true;
-              document.getElementById('keepT')!.textContent = 'Keep P9 running on ' + result.host + '?';
-              (document.getElementById('keepRemember') as HTMLInputElement).checked = false;
-              dialog.onclose = () => {
-                const v = dialog.returnValue;
-                if (v === 'yes' || v === 'no') void window.p9?.remoteKeep?.(v === 'yes', (document.getElementById('keepRemember') as HTMLInputElement).checked).finally(ask);
-              };
-              dialog.returnValue = '';
-              dialog.showModal();
-            }
+          }
+          // U6 (row I1 and row 79, threat model row 50 U6): one window after connecting. Temporary or Always on when that question
+          // is due; after a password login, the key checkbox (ticked). Only the checkbox due: the same window titled Connected, with Done.
+          const dialog = document.getElementById('keepDlg') as HTMLDialogElement | null;
+          const askKeep = ok && !!result.ask && !keepAsked && !!window.p9?.remoteKeep;
+          const offer = ok && !!result.keyOffer && result.keyOffer.id !== keyAsked && !!window.p9?.sshKey;
+          if (dialog && !dialog.open && (askKeep || offer)) {
+            const host = result.host ?? '', box = document.getElementById('keepKey') as HTMLInputElement, remember = document.getElementById('keepRemember') as HTMLInputElement;
+            if (askKeep) keepAsked = true;
+            if (offer) keyAsked = result.keyOffer!.id;
+            document.getElementById('keepT')!.textContent = askKeep ? 'How should P9 run on ' + host + '?' : 'Connected to ' + host;
+            // style, not hidden: .keep-ways and .keep-again set their own display.
+            for (const id of ['keepP', 'keepWays', 'keepRememberRow', 'keepNo', 'keepYes']) document.getElementById(id)!.style.display = askKeep ? '' : 'none';
+            document.getElementById('keepDone')!.style.display = askKeep ? 'none' : '';
+            document.getElementById('keepKeyRow')!.style.display = offer ? '' : 'none';
+            box.checked = true; remember.checked = false;
+            dialog.onclose = () => {
+              const v = dialog.returnValue;
+              if (askKeep && (v === 'yes' || v === 'no')) void window.p9?.remoteKeep?.(v === 'yes', remember.checked).finally(ask);
+              if (!offer) return;
+              // Esc adds nothing and asks again after the next password login; unticked adds nothing and is remembered.
+              if (!v || !box.checked) return void window.p9?.sshKey?.(false, !!v).catch(() => {});
+              void (window.p9?.sshKey?.(true, false) ?? Promise.reject(new Error('no-bridge'))).catch(() => ({ error: 'key-failed' })).then((r?: { ok?: boolean; error?: string }) => {
+                if (r?.ok) return;
+                keySaid = (KEY_SAID[r?.error ?? ''] ?? 'P9\'s key could not be added to HOST, so P9 asks for your password there next time').replaceAll('HOST', host);
+                setTimeout(() => { keySaid = ''; }, 30000);
+              });
+            };
+            dialog.returnValue = '';
+            dialog.showModal();
+            (askKeep ? document.getElementById('keepYes')! : document.getElementById('keepDone')!).focus();
           }
           timer = setTimeout(ask, ok ? 5000 : 1000);
           return;

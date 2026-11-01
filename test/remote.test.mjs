@@ -55,9 +55,10 @@ test('Server mode: the forward, its files and the ssh it runs', { skip }, async 
   // Owner-only: the folders 0700, the credentials and the forwarded socket 0600.
   assert.deepEqual([await mode(path.dirname(server.state)), await mode(server.state), await mode(path.join(server.state, 'desktop.json')), await mode(saved.socketPath)],
     [0o700, 0o700, 0o600, 0o600]);
-  // Fixed argv, BatchMode on every call; the tunnel forwards exactly the server daemon's socket.
+  // Fixed argv, BatchMode and trust on first use (U6: accept-new, a changed key still refuses) on every call; the tunnel
+  // forwards exactly the server daemon's socket.
   const calls = await s.calls();
-  assert.ok(calls.length >= 2 && calls.every(c => c.argv.includes('BatchMode=yes') && c.argv.includes('test-host')), JSON.stringify(calls));
+  assert.ok(calls.length >= 2 && calls.every(c => c.argv.includes('BatchMode=yes') && c.argv.includes('StrictHostKeyChecking=accept-new') && c.argv.includes('test-host')), JSON.stringify(calls));
   const tunnel = calls.find(c => c.argv.includes('-N'));
   assert.equal(tunnel.argv[tunnel.argv.indexOf('-L') + 1], saved.socketPath + ':' + path.join(s.server, 'p9-foundation', 'daemon.sock'));
   assert.ok(tunnel.argv.includes('StreamLocalBindMask=0177') && tunnel.argv.includes('ExitOnForwardFailure=yes'));
@@ -164,10 +165,10 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {}, noKey: [] });
 });
 
-// Rows I1 and I2 in the window: the Keep P9 running question, the status line with Keep it running, the admin password window
+// Rows I1 and I2 in the window: the Temporary or Always on question (U6), the status line with Make it always on, the admin password window
 // it opens when the remote needs one, and the Settings choice, in both themes. Main's status, keep and admin answers are
 // replayed here (remote-keep.test.mjs and remote-admin.test.mjs test what they run).
-test('Keep P9 running in the window: the question, the status line, the admin password window, the Settings choice', { skip, timeout: 120000 }, async (t) => {
+test('Temporary or Always on in the window: the question, the status line, the admin password window, the Settings choice', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
   const profile = path.join(s.directory, 'profile');
   await mkdir(profile);
@@ -190,21 +191,24 @@ test('Keep P9 running in the window: the question, the status line, the admin pa
   });
   const calls = () => app.evaluate(() => globalThis.keepTest.calls);
   const line = (text) => page.locator('#keepNote:not([hidden]) #keepText', { hasText: text }).waitFor({ timeout: 15000 });
-  // The question, once: Only while connected without Do not ask again stores nothing.
+  // The question, once: Temporary without Do not ask again stores nothing. No password login, so no key checkbox.
   await page.locator('#keepDlg[open]').waitFor({ timeout: 15000 });
-  assert.equal(await page.locator('#keepT').textContent(), 'Keep P9 running on test-host?');
+  assert.equal(await page.locator('#keepT').textContent(), 'How should P9 run on test-host?');
+  assert.deepEqual(await page.locator('#keepDlg .dlg-foot button:visible').allTextContents(), ['Temporary', 'Always on']);
+  assert.deepEqual(await page.locator('#keepDlg dt').allTextContents(), ['Temporary', 'Always on']);
+  assert.equal(await page.locator('#keepKeyRow').isVisible(), false, 'no key checkbox without a password login');
   await shot('c34-keep-modal-event-horizon-prime', page.locator('#keepDlg'));
   await set({ background: true, ask: true });
   await page.locator('#keepDlg button[value="no"]').click();
   for (const end = Date.now() + 5000; Date.now() < end && !(await calls()).length;) await page.waitForTimeout(100);
   assert.deepEqual(await calls(), [['keep', false, false]]);
-  // Background mode: the line says P9 there stops, with Keep it running; the question is not asked again this run.
-  await line('P9 on test-host stops when you disconnect');
-  assert.equal(await page.locator('#keepBtn').textContent(), 'Keep it running');
+  // Background mode: the line says P9 there is temporary, with Make it always on; the question is not asked again this run.
+  await line('P9 on test-host is temporary: it stops when you disconnect');
+  assert.equal(await page.locator('#keepBtn').textContent(), 'Make it always on');
   await shot('c34-keep-line-event-horizon-prime', page.locator('.statusbar'));
   await set({ background: true, ask: false, keeping: { action: 'keep', phase: 'refused', command } });
   await page.locator('#keepBtn').click();
-  await line('Keeping P9 running on test-host needs an admin password');
+  await line('Always on for test-host needs an admin password');
   assert.equal((await calls()).at(-1).join(), 'keep,true,false');
   assert.equal(await page.locator('#keepDlg').evaluate((d) => d.open), false, 'asked once per run');
   // Use admin password: the window names the remote and the exact command; the field is emptied when it closes.
@@ -235,7 +239,7 @@ test('Keep P9 running in the window: the question, the status line, the admin pa
   // The same pieces in the light theme.
   await page.click('#themeBtn'); await page.click('[data-theme-pick="daylight"]'); await page.keyboard.press('Escape');
   await set({ background: true, ask: false });
-  await line('P9 on test-host stops when you disconnect');
+  await line('P9 on test-host is temporary: it stops when you disconnect');
   await shot('c34-keep-line-daylight', page.locator('.statusbar'));
   await set({ background: true, ask: false, keeping: { action: 'keep', phase: 'wrong-password', command } });
   await line('That admin password did not work on test-host');
@@ -295,70 +299,100 @@ test('Remote mode: a long chat loads its newest blocks over the ssh link; Show e
   assert.equal(all.split('question 150.').length, 2, 'no block twice');
 });
 
-test('Remote mode connecting: a turning black hole and the reason until the remote answers, then the remote', { skip, timeout: 90000 }, async (t) => {
-  const local = await daemon(t), remote = await daemon(t), s = await stage(null);
+test('Remote mode connecting: a turning black hole and one line while P9 is set up there on its own, Try again after a failure, then the remote', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(null), home = path.join(s.directory, 'home');
   const profile = path.join(s.directory, 'profile');
-  await mkdir(profile);
+  await mkdir(profile); await mkdir(home);
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
   // D15a: the stand-in install reads the source sent, prints two steps, waits, then fails the first time and finishes the next.
+  // FAKE_HOME: the remote's home has nothing to start, so the set-up goes straight to the install.
   const fakeInstall = path.join(s.directory, 'install.sh'), tries = path.join(s.directory, 'tries');
   await writeFile(fakeInstall, 'cat > ' + JSON.stringify(path.join(s.directory, 'sent.tgz')) + '\nn=$(cat ' + JSON.stringify(tries) + ' 2>/dev/null || echo 0); echo $((n+1)) > ' + JSON.stringify(tries)
     + '\necho "P9_INSTALL unpacked"; echo "Installing the web app\'s packages"; sleep 9\nif [ "$n" = 0 ]; then echo "npm ERR! code ENOSPC"; echo "npm ERR! no space left on device"; exit 1; fi\necho "Building P9"; sleep 3; echo "P9_INSTALL done"\n');
-  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_INSTALL: fakeInstall }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_INSTALL: fakeInstall, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
-  const layer = page.locator('dialog#connecting[open]');
+  const layer = page.locator('dialog#connecting[open]'), progress = page.locator('#connProgress:not([hidden])'), retry = page.locator('#connRetry');
   await layer.waitFor({ timeout: 20000 });
   assert.equal(await page.locator('#connT').textContent(), 'Connecting to test-host');
-  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there\. If P9 is installed there, start it; if not, install it from here/);
-  await page.waitForTimeout(600); // a turn of the ring in the shot
-  await evidence(page, 'd20-connecting');
-  // D15a: Install P9 there asks first, in place, saying where and what it never does; Not now goes back and installs nothing.
-  await page.locator('#connInstall', { hasText: 'Install P9 there' }).click({ timeout: 10000 });
-  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\? Over your ssh login, P9 puts its source in ~\/p9 there.*only an admin can install, it shows you what and asks for your password first/);
-  assert.equal(await page.locator('#connInstall').textContent(), 'Install');
-  await page.waitForTimeout(1500); // the status poll does not overwrite the question
-  assert.match(await page.locator('#connWhy').textContent(), /^Install P9 on test-host\?/);
-  await evidence(page, 'd15a-ask');
-  await page.click('#connNo');
-  assert.equal(await page.locator('#connNo').isVisible(), false);
-  assert.match(await page.locator('#connWhy').textContent(), /P9 is not running there/);
-  assert.equal(await page.evaluate(() => window.p9.getStatus().then((r) => r.install ?? null)), null, 'Not now ran nothing');
-  // D15a progress: Install is a primary button; once pressed it stays off while a spinner shows the last line and the time,
-  // in a reloaded window too. A failed install shows its last lines and Try again; the next try ends installed, connecting.
-  assert.equal(await page.locator('#connInstall').getAttribute('data-variant'), 'default', 'Install P9 there is the primary button');
-  const install = page.locator('#connInstall'), progress = page.locator('#connProgress:not([hidden])');
-  const go = async () => { await install.click({ timeout: 10000 }); await page.locator('#connInstall', { hasText: /^Install$/ }).click({ timeout: 10000 }); };
-  await go();
-  await page.locator('#connStep', { hasText: "Installing the web app's packages" }).waitFor({ timeout: 15000 });
-  assert.equal(await install.isDisabled(), true); assert.equal(await install.textContent(), 'Installing…');
+  // U6: no Install, no Start, no question: the black hole, one plain line and the progress.
+  await page.locator('#connStep', { hasText: "Installing the web app's packages" }).waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#connWhy').textContent(), 'Setting up P9 on test-host. The first time takes a few minutes.');
+  assert.deepEqual(await page.locator('#connecting button:visible').allTextContents(), ['Use this computer instead'], 'no button but the way out');
   await page.waitForTimeout(1200);
   assert.match(await page.locator('#connTime').textContent(), /^0:0[1-9]$/);
-  await evidence(page, 'd15a-running');
+  await evidence(page, 'u6-connecting');
   await page.reload();
   await progress.waitFor({ timeout: 10000 });
-  assert.equal(await page.locator('#connInstall').isDisabled(), true, 'a reloaded window still shows it running');
+  // A failed set-up shows its last lines and Try again, and waits: it is not retried on a timer.
   await page.locator('#connLog:not([hidden])', { hasText: 'no space left on device' }).waitFor({ timeout: 20000 });
-  assert.equal(await install.textContent(), 'Try again'); assert.equal(await install.isDisabled(), false);
+  assert.equal(await retry.textContent(), 'Try again'); assert.equal(await retry.isVisible(), true); assert.equal(await retry.isDisabled(), false);
   assert.equal(await progress.count(), 0);
-  assert.match(await page.locator('#connWhy').textContent(), /^The install on test-host stopped\. Its last lines are below\./);
+  assert.equal(await page.locator('#connWhy').textContent(), 'Setting up P9 on test-host stopped. Its last lines are below. Press Try again.');
   assert.equal(await page.locator('#toasts .toast').count(), 0, 'no chat setup toast under the connecting screen');
-  await evidence(page, 'd15a-failed');
-  await go();
-  await page.locator('#connInstall', { hasText: 'Connecting…' }).waitFor({ timeout: 30000 });
-  assert.equal(await install.isDisabled(), true);
-  assert.match(await page.locator('#connWhy').textContent(), /^P9 is installed on test-host\. Connecting/);
-  await evidence(page, 'd15a-done');
+  await evidence(page, 'u6-failed');
+  await page.waitForTimeout(3000);
+  assert.equal((await readFile(tries, 'utf8')).trim(), '1', 'no second install without Try again');
+  await retry.click();
+  await page.locator('#connStep', { hasText: 'Ready' }).waitFor({ timeout: 30000 });
+  assert.match(await page.locator('#connWhy').textContent(), /^P9 is ready on test-host\. Connecting/);
+  assert.equal(await retry.isVisible(), false);
+  await evidence(page, 'u6-done');
   assert.ok((await stat(path.join(s.directory, 'sent.tgz'))).size > 1000, 'the source went over ssh');
+  // The start came first each time (nothing to start in this home), then the install: two of each, no more.
+  const ran = await s.calls(), count = (word) => ran.filter((c) => c.argv.some((a) => a.includes(word))).length;
+  assert.deepEqual([count('P9_START'), count('P9_INSTALL')], [2, 2], JSON.stringify(ran.map((c) => c.argv.at(-1)?.slice(0, 40))));
   // P9 starts on the remote: the next try connects, the layer goes, the window is on the remote.
   await symlink(remote.state, path.join(s.server, 'p9-foundation'));
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 45000 });
   await page.locator('dialog#connecting[open]').waitFor({ state: 'detached', timeout: 45000 });
   assert.equal(await page.locator('dialog#connecting[open]').count(), 0);
   await evidence(page, 'd20-connected');
-  console.log('PASS remote connecting: the layer while not answering, gone once on the remote');
+  console.log('PASS remote connecting: set up on its own, Try again after a failure, then on the remote');
+});
+
+// U6 (threat model row 50 U6): a fresh remote. Connect is the only click: P9 is installed there (in background mode, as the
+// install does without keep), the window connects, and the one question is Temporary or Always on.
+test('U6: a fresh remote goes Connect, install, the Temporary or Always on question, with no other click', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(null), home = path.join(s.directory, 'home');
+  const profile = path.join(s.directory, 'profile'), run = path.join(home, '.local/share/p9/run');
+  await mkdir(profile); await mkdir(home);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'test-host', remotes: ['test-host'] }));
+  // The stand-in install leaves what the real one does in background mode: the marker, a start script, P9's runtime folder.
+  const fakeInstall = path.join(s.directory, 'install.sh');
+  await writeFile(fakeInstall, 'cat > /dev/null\necho "P9_INSTALL unpacked"; echo "Building P9"; sleep 4\nmkdir -p ' + JSON.stringify(run) + '; touch ' + JSON.stringify(path.join(run, 'background'))
+    + '; printf "exit 0\\n" > ' + JSON.stringify(path.join(run, 'start')) + '; ln -s ' + JSON.stringify(remote.state) + ' ' + JSON.stringify(path.join(run, 'p9-foundation')) + '\necho "P9_INSTALL done"\n');
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_INSTALL: fakeInstall, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor({ timeout: 20000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  // The one click: Connect in the machine menu.
+  await page.locator('#serverBadge').click();
+  await page.locator('#serverPop [data-server-go="test-host"]').click();
+  await page.locator('#connStep', { hasText: 'Building P9' }).waitFor({ timeout: 30000 });
+  assert.equal(await page.locator('#connWhy').textContent(), 'Setting up P9 on test-host. The first time takes a few minutes.');
+  await evidence(page, 'u6-fresh-connecting');
+  // No other click: the window connects and asks the one question.
+  await page.locator('#keepDlg[open]').waitFor({ timeout: 60000 });
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#keepT').textContent(), 'How should P9 run on test-host?');
+  assert.deepEqual(await page.locator('#keepDlg .dlg-foot button:visible').allTextContents(), ['Temporary', 'Always on']);
+  assert.equal(await page.locator('#keepKeyRow').isVisible(), false, 'a key login: no key checkbox');
+  await page.waitForTimeout(400);
+  await evidence(page, 'u6-keep');
+  const ran = await s.calls();
+  assert.equal(ran.filter((c) => c.argv.some((a) => a.includes('P9_INSTALL'))).length, 1, 'installed once');
+  assert.ok(ran.every((c) => !c.argv.length || c.argv.includes('StrictHostKeyChecking=accept-new')), 'trust on first use on every ssh');
+  // Temporary: the status line says so, with Make it always on.
+  await page.locator('#keepDlg button[value="no"]').click();
+  await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'P9 on test-host is temporary: it stops when you disconnect' }).waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#keepBtn').textContent(), 'Make it always on');
+  console.log('PASS U6 fresh remote: Connect, install, the keep question, no other click');
 });
 
 // D3: Settings > Remote lists only what this person has: the remotes added here and their own ~/.ssh/config Hosts, none built

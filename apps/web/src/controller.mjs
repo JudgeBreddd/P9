@@ -2436,7 +2436,7 @@ function serverRow() {
   const { host, connected, error, hosts, remotes = [], keep = {}, noKey = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
   // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
   const keepPick = h => window.p9?.remoteKeepSetting ? '<select data-slot="select" data-remote-keep="' + esc(h) + '" aria-label="P9 on ' + esc(h) + ' when you disconnect" title="What P9 on ' + esc(h) + ' does when you disconnect">'
-    + [['', 'Ask'], ['keep', 'Keeps running'], ['stop', 'Stops']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
+    + [['', 'Ask'], ['keep', 'Always on'], ['stop', 'Temporary']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
   const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
     : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
   const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>' + keepPick(h)

@@ -20,7 +20,9 @@ export const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
 export const CONTROL_DIR = path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'p9-ssh-' + (process.getuid?.() ?? 0));
 const WINDOWS = process.platform === 'win32';
 const CONTROL = WINDOWS ? [] : ['-o', 'ControlPath=' + CONTROL_DIR + '/%C'];
-const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', ...CONTROL];
+// U6 (threat model row 50 U6): trust on first use. An unknown host key is accepted and recorded; a changed one still refuses (CHANGED).
+export const TOFU = ['-o', 'StrictHostKeyChecking=accept-new'];
+const SSH_OPTIONS = ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', ...CONTROL];
 // Row 79: P9's own key (main sets the path; ssh-login.mjs makes it only after a yes). Any IdentityFile on the command line
 // stops ssh trying its default key files, so the ones that exist are listed first, in ssh's order: the person's keys still go first.
 let KEY = null;
@@ -57,7 +59,7 @@ export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; b=' + RUN + '; 
 // reads it (the cookie stays there). Fixed argv, no shell here, BatchMode, 4 s to connect, 8 s in all; only three words come back.
 // A background-mode P9 (row I1) counts as there: it may be stopped, and connecting starts it.
 export const PROBE = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; { test -e "$r/p9-foundation/desktop.json" || test -f ' + RUN + '/background; } && echo p9; exit 0';
-export const probeServer = (host, ssh = 'ssh') => new Promise(resolve => execFile(ssh, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', ...CONTROL, ...identity(), host, PROBE], { timeout: 8000 },
+export const probeServer = (host, ssh = 'ssh') => new Promise(resolve => execFile(ssh, ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=4', ...CONTROL, ...identity(), host, PROBE], { timeout: 8000 },
   (error, out) => resolve(error ? 'unreachable' : out.trim() === 'p9' ? 'p9' : 'no-p9')));
 
 // Host aliases from ~/.ssh/config (no wildcards, no negations), for the Settings list. Include files are not followed.
