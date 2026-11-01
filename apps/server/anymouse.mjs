@@ -59,9 +59,10 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
       });
       if (!res.ok) {
         console.error(JSON.stringify({ event: 'P9_ANYMOUSE_REFUSED', status: res.status }));
-        // 401/403: the token itself was refused (wrong or expired, or without Issues write); the box then offers GitHub's own page.
-        if (res.status === 401 || res.status === 403) return { status: 502, refused: true, error: 'GitHub refused the token P9 files notes with ('
-          + res.status + (res.status === 401 ? ': wrong or expired' : ': it lacks Issues write on ' + REPO)
+        // 401/403/404: the token itself was refused (wrong or expired, without Issues write, or without access to the repository:
+        // GitHub answers 404, not 403, to a token that cannot see it); the box then offers GitHub's own page.
+        if ([401, 403, 404].includes(res.status)) return { status: 502, refused: true, error: 'GitHub refused the token P9 files notes with ('
+          + res.status + ({ 401: ': wrong or expired', 403: ': it lacks Issues write on ' + REPO, 404: ': it cannot see ' + REPO })[res.status]
           + '). Fix: on GitHub, give the token Repository permissions, Issues: Read and write, for ' + REPO
           + ' (README, Anymouse). Your note is still here: Open on GitHub files it under your own login.' };
         return { status: 502, error: 'GitHub refused it (' + res.status + ')' };

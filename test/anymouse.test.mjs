@@ -69,15 +69,17 @@ test('Anymouse limits: an unknown kind is an idea, the rate limit holds, a GitHu
   assert.deepEqual(await createAnymouse({ token: TOKEN, api: failing.api })({ text: 'd' }), { status: 502, error: 'GitHub refused it (500)' });
 });
 
-// Correction 13: a refused token (401, 403) says why and what to do, and the same note can go the tokenless way instead.
+// Correction 13: a refused token (401, 403, and 404 for a token that cannot see the repository) says why and what to do,
+// and the same note can go the tokenless way instead.
 test('Anymouse on a refused token: the reply says why and the fix, and browser: true returns the prefilled page', async (t) => {
-  for (const status of [401, 403]) {
+  const why = { 401: 'wrong or expired', 403: 'it lacks Issues write on ' + REPO, 404: 'it cannot see ' + REPO };
+  for (const status of [401, 403, 404]) {
     const gh = await fakeGitHub(t, status);
     const send = createAnymouse({ token: TOKEN, api: gh.api });
     const refused = await send({ kind: 'bug', text: 'the save button' });
     assert.equal(refused.status, 502);
     assert.equal(refused.refused, true);
-    assert.match(refused.error, new RegExp('^GitHub refused the token P9 files notes with \\(' + status + ': ' + (status === 401 ? 'wrong or expired' : 'it lacks Issues write on ' + REPO) + '\\)'));
+    assert.match(refused.error, new RegExp('^GitHub refused the token P9 files notes with \\(' + status + ': ' + why[status] + '\\)'));
     assert.match(refused.error, /Issues: Read and write/);
     assert.match(refused.error, /Open on GitHub/);
     assert.equal(refused.error.includes(TOKEN), false);
