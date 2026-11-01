@@ -68,7 +68,7 @@ export const RECORD = {
   detach: { type: 'boolean', check: flag, doc: 'Scripts: let what it starts outlive the run.' },
   url_delay: { type: 'integer', check: (value) => Number.isSafeInteger(value) && value >= 0 && value <= 30000, doc: 'Apps: milliseconds to wait before opening url, 0 to 30000.' },
   desc: { type: 'string', check: text, doc: 'One line shown under the title.' },
-  group: { type: 'string', check: text, doc: 'The heading it is listed under. A space button takes its section title instead.' },
+  group: { type: 'string', check: text, doc: 'The heading it is listed under. A registry group named like a space section joins that section (the first one with the title). A space button keeps its group but draws in its own section.' },
   where: { type: 'string', check: text, doc: 'Which machine it runs on, shown to the user.' },
 };
 export const PAGE = {
@@ -195,12 +195,13 @@ export function dataShape(value) {
 }
 // A section's items: each array or key below with an example is one item type. describe_mission shows every one, so a
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
-export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications', 'primary'];
+// The last three are P9's built-in tiles (W-D): + New idea, Sprint status, Edit names and icons.
+export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications', 'primary', 'idea', 'sprint', 'edit'];
 // Where a section draws on the desktop page: a top-row tile that opens its window, or open in one of the three columns.
 export const PLACES = ['tile', 'col1', 'col2', 'col3'];
 export const SECTION = {
   id: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
-    doc: 'The section\'s id: lowercase letters, digits and dashes, unique among sections. Optional: P9 makes one from the title.' },
+    doc: 'The section\'s id: lowercase letters, digits and dashes, unique among sections, and the key the tools and the page use (titles may repeat). Optional: P9 makes one from the title and saves it on the first write.' },
   title: { type: 'string', required: true, check: (value) => typeof value === 'string' && Boolean(value.trim()), doc: 'The section heading. Not blank.' },
   icon,
   picture,
@@ -231,10 +232,13 @@ export const SECTION = {
   // Fresh-install finding 3a (threat model row 72): P9's built-in panels draw on a space only where a section names them.
   widget: { type: 'string', check: (value) => WIDGETS.includes(value),
     doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage), apps (Apps and pages) or notifications (Notifications)'
-      + ' or primary (the Main project card). Without a space the first four show; on a space only the ones a section names.', example: 'waiting' },
+      + ' or primary (the Main project card). Without a space the first four show; on a space only the ones a section names. Or one of P9\'s built-in tiles, '
+      + 'drawn where the section is under its title: idea (+ New idea), sprint (Sprint status; its window runs this section\'s buttons and script refs, '
+      + 'or sprint-start, sprint-close and sprint-heavy when it has none) or edit (Edit names and icons). While no section names a built-in tile, all three '
+      + 'show at the end of the top row; once one does, only the named ones show.', example: 'waiting' },
   widgets: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= WIDGETS.length && value.every((item) => WIDGETS.includes(item)),
     doc: 'Built-in panels drawn inside this section, after its other parts unless order says otherwise; unlike widget, the section keeps its title, icon, text and buttons. Any of ' + WIDGETS.join(', ')
-      + '. A panel named here shows as if a section named it in widget. The phone leaves them out.', example: ['notifications'] },
+      + ' (idea, sprint and edit draw their tile\'s button). A panel named here shows as if a section named it in widget. The phone leaves them out.', example: ['notifications'] },
   order: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 32 && value.every((item) => typeof item === 'string'),
     doc: 'The order the section\'s parts draw in, by field name, any of: ' + PARTS.join(', ') + ' (buttons are its button rows, widgets its panels). Parts left out follow '
       + 'the named ones in their usual order, the order of that list; an unknown name is ignored. At most 32. The phone keeps it too.', example: ['cards', 'checklists', 'folders', 'buttons'] },
@@ -326,7 +330,7 @@ export const SCHEMAS = {
     properties: { scripts: list(jsonSchema(RECORD), 'Buttons whose output Mission Control shows.'), apps: list(jsonSchema(RECORD), 'Programs launched and left running.'),
       pages: list(jsonSchema(PAGE), 'Links.') } },
   space: { type: 'object', required: ['sections'], additionalProperties: false, description: 'The space: free-form sections. A malformed section, button or log view, '
-    + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field of a section or an item is listed by name and kept as it is.',
+    + 'and a section repeating an earlier one\'s id, is dropped (titles may repeat) and listed as invalid. An unknown field of a section or an item is listed by name and kept as it is.',
     properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD) }, logs: { items: jsonSchema(LOG) }, folders: { items: jsonSchema(FOLDER) },
       data: { items: jsonSchema(DATA) }, cards: { items: jsonSchema(CARD) }, links: { items: jsonSchema(WEBLINK) }, checklists: { items: jsonSchema(CHECKLIST) },
       widgets: { items: { type: 'string', enum: WIDGETS } } }), 'Sections in order.') } },
@@ -340,7 +344,8 @@ export function describeMission() {
   return {
     about: 'Mission Control shows the space: one JSON file of sections in order. Each section has a title, optional text and icon, and items of the types below. '
       + 'A section\'s order field sets the order its parts draw in, and its widgets field draws P9\'s own panels inside it. Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
-      + 'A second section with the same title or id is refused. An unknown field is named by validate_space but kept, never dropped. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
+      + 'patch_section, patch_item, move_section and move_button set any field and reorder. A section is named by its id (or by its title while only one section has it); '
+      + 'a second section with the same id is refused, titles may repeat. An unknown field is named by validate_space but kept, never dropped. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
     file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', place: SECTION.place.example, buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
     items, templates: TEMPLATES, schema: SCHEMAS.space,
   };

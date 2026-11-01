@@ -253,3 +253,36 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   assert.equal(await page.locator('[data-bar="files"] h1').innerText(), 'Workspace');
   assert.deepEqual(misses, []);
 });
+
+// Wave 2 on the phone: two sections titled alike are two windows, each with its own buttons (W-C); a space button with its own group
+// stays in its section (W-J); the sprint window runs the buttons and script refs of the section naming sprint (W-M).
+test('Phone wave 2: two Tools windows each with its own button, a grouped space button in its section, the sprint section\'s scripts', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => {
+    const started = await setup(paths);
+    await writeFile(path.join(paths.workspace, 'p9', 'mission-space.json'), JSON.stringify({ sections: [
+      { id: 'tools-a', title: 'Tools', buttons: [{ id: 'a-up', title: 'A up', group: 'Custom', cmd: ['true'] }] },
+      { id: 'sprints', title: 'Sprints', widget: 'sprint', refs: ['health'], buttons: [{ id: 'go-sprint', title: 'Go sprint', cmd: ['true'] }] },
+      { id: 'tools-b', title: 'Tools', buttons: [{ id: 'b-up', title: 'B up', cmd: ['true'] }] }] }));
+    const status = path.join(paths.directory, '.local', 'state', 'sprint', 'status.json');
+    await mkdir(path.dirname(status), { recursive: true });
+    await writeFile(status, JSON.stringify({ sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', chunks: [{ id: 'c1', title: 'One', state: 'merged', percent: 100 }] }));
+    return started;
+  } });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page } = await signedInPage(browser, server);
+  await page.click('[data-nav="mission"]');
+  await page.locator('#sprint [data-open="sprint"]').waitFor({ timeout: 10000 });
+  await shot(page, 'phone-wave2-mission');
+  const tools = page.locator('#mission .tile[data-open]').filter({ has: page.locator('span:text-is("Tools")') });
+  assert.equal(await tools.count(), 2, 'both sections titled Tools draw');
+  assert.equal(await page.locator('#mission .tile[data-open]').filter({ has: page.locator('span:text-is("Custom")') }).count(), 0, 'a-up draws in its section, not a Custom window');
+  const lines = await tools.locator('small').allInnerTexts();
+  assert.deepEqual(lines, ['A up', 'B up']);
+  await page.locator('#sprint [data-open="sprint"]').click();
+  const dialog = page.locator('#w-sprint[open]');
+  await dialog.waitFor({ timeout: 5000 });
+  assert.deepEqual(await dialog.locator('.sprint-acts form button').allInnerTexts(), ['Go sprint (asks first)', 'Health check (asks first)']);
+  await shot(page, 'phone-wave2-sprint');
+  console.log('PASS phone wave 2: two Tools windows (A up, B up), no Custom window, sprint acts Go sprint + Health check');
+});

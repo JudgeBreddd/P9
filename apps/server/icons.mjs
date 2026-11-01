@@ -217,13 +217,13 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
     } catch { return null; }
   }
 
-  // The art for the tiles now: {pages, apps, sections} each {key: {picture?, auto?}}, key = id (section: title). A tile with a
+  // The art for the tiles now: {pages, apps, sections} each {key: {picture?, auto?}}, key = id (a section's too, W-C). A tile with a
   // picture or a text icon is not fetched for. programs (not Linux): apps left for the desktop to ask the OS about.
   async function collect({ pages, apps, sections }, { platform = process.platform, env = process.env } = {}) {
     const art = { pages: {}, apps: {}, sections: {} }, programs = [];
     const put = (kind, key, field, value) => { if (value) (art[kind][key] ??= {})[field] = value; };
     await Promise.all([
-      ...sections.map(async (item) => put('sections', item.title, 'picture', item.picture && await picture(item.picture))),
+      ...sections.map(async (item) => put('sections', item.id, 'picture', item.picture && await picture(item.picture))),
       ...pages.map(async (item) => {
         put('pages', item.id, 'picture', item.picture && await picture(item.picture));
         if (!item.picture && !item.icon) put('pages', item.id, 'auto', await site(item.url));

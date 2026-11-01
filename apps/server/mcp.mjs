@@ -27,6 +27,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const rpcError = (code, message) => Object.assign(new Error(message), { rpc: { code, message } });
 const string = (value, max = 4000) => typeof value === 'string' && value.length <= max;
 const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+// A title or a section name: any length, as in the file (W-O); the request body's own limit bounds it.
+const words = (value) => typeof value === 'string';
 
 const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission before building the space (it also reads as p9://schema/space; the registry\'s is p9://schema/registry), '
   + 'and dry-run a whole file with validate_registry or validate_space. Every write tool says what changed and returns the file\'s new '
@@ -37,7 +39,8 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission b
   + 'language); it runs sandboxed with no network, React may import only react and react-dom, and the user\'s comments come back as one message.';
 
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
-const sectionField = { type: 'string', description: 'A space section title. Without it the button goes to (or comes from) the registry\'s scripts.' };
+const sectionName = 'A space section: its id, or its title while only one section has it (two with the same title are named by id).';
+const sectionField = { type: 'string', description: sectionName + ' Without it the button goes to (or comes from) the registry\'s scripts.' };
 const placeField = { type: 'string', description: 'Where it draws on the desktop page: ' + PLACES.join(', ') + '. tile (the default) is a top-row tile; col1 to col3 draws it open in that column.' };
 const orderField = { type: 'array', items: { type: 'string' }, maxItems: 32, description: SECTION.order.doc };
 const widgetsField = { type: 'array', items: { type: 'string', enum: WIDGETS }, maxItems: WIDGETS.length, description: SECTION.widgets.doc };
@@ -50,7 +53,8 @@ const input = (properties, required = []) => ({ type: 'object', properties, requ
 const spaceField = { type: 'string', description: 'Optional. Without it a tool reads and writes the space Mission shows (the main space, or the scratch space '
   + 'picked in Mission\'s space picker); every reply names the file. A name (' + SPACE_NAME_RULE + ') writes that scratch space instead, made on the first write; '
   + '"" writes the main space while a scratch space is shown.' };
-const SPACE_TOOLS = new Set(['validate_space', 'add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items']);
+const SPACE_TOOLS = new Set(['validate_space', 'add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items', 'patch_section', 'patch_item', 'move_section', 'move_button']);
+const setField = { type: 'object', description: 'The fields to write, by name, each to its new value; null removes one. Checked by the same tables as the file (describe_mission).' };
 const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons' && key !== 'widget');
 const TOOLS = [
   ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
@@ -62,16 +66,16 @@ const TOOLS = [
     input({ record: jsonSchema(RECORD, {}, true), section: sectionField, space: spaceField, hash: hashField }, ['record'])],
   ['add_app', 'Add an app to the registry.', input({ record: jsonSchema(RECORD, {}, true), hash: hashField }, ['record'])],
   ['add_page', 'Add a link to the registry.', input({ record: jsonSchema(PAGE, {}, true), hash: hashField }, ['record'])],
-  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, place: placeField, order: orderField, widgets: widgetsField, space: spaceField, hash: hashField }, ['title'])],
+  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, id: { type: 'string', description: SECTION.id.doc }, text: { type: 'string' }, place: placeField, order: orderField, widgets: widgetsField, space: spaceField, hash: hashField }, ['title'])],
   ['update_button', 'Change a script button\'s title or icon in the registry, or in a space section. icon "" removes the icon.',
     input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField,
-      move_to: { type: 'string', description: 'Move the button (with section, its current section) into the space section with this title, in one write, so nothing points at a missing ID in between.' },
+      move_to: { type: 'string', description: 'Move the button (with section, its current section) into this space section (its id, or a title only one section has), in one write, so nothing points at a missing ID in between.' },
       space: spaceField, hash: hashField }, ['id'])],
   ['update_app', 'Change an app\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
   ['update_page', 'Change a link\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
   ['update_section', 'Change a space section: rename it (new_title), change its icon, draw one of P9\'s built-in panels as it (widget) or inside it (widgets), place it on the page (place), '
     + 'set the order of its parts (order), show registry entries in it (refs) or show a notes folder (notes). "" or [] removes a field.',
-    input({ title: { type: 'string', description: 'The section\'s current title.' }, new_title: { type: 'string' }, icon: iconField,
+    input({ title: { type: 'string', description: sectionName }, new_title: { type: 'string' }, icon: iconField,
       text: { type: 'string', description: 'The paragraph under the heading. "" removes it.' },
       widget: { type: 'string', description: 'One of ' + WIDGETS.join(', ') + '. "" removes it.' },
       place: { ...placeField, description: placeField.description + ' "" removes it.' },
@@ -82,7 +86,7 @@ const TOOLS = [
   ['remove_button', 'Remove a script button by ID from the registry, or from a space section.', input({ id: { type: 'string' }, section: sectionField, space: spaceField, hash: hashField }, ['id'])],
   ['remove_app', 'Remove an app by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
   ['remove_page', 'Remove a link by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
-  ['remove_section', 'Remove a space section, its buttons and log views, by title.', input({ title: { type: 'string' }, space: spaceField, hash: hashField }, ['title'])],
+  ['remove_section', 'Remove a space section, its buttons and log views, by id (or a title only one section has).', input({ title: { type: 'string', description: sectionName }, space: spaceField, hash: hashField }, ['title'])],
   ['allow_folder', 'Ask the user, in this chat, to let Mission Control list a folder outside the workspace: read-only, except that a space checklist can change review and mark lines in it. On yes it is added to settings.notes_roots '
     + 'as name: use name as a space folders item\'s root, or as a section\'s notes. A folder holding the workspace, the home folder or P9\'s own files is refused.',
     input({ name: { type: 'string', description: 'The root\'s name: 1 to 64 of a-z 0-9 -, starting with a letter or digit, not already in settings.notes_roots.' },
@@ -90,8 +94,17 @@ const TOOLS = [
   ['set_section_items', 'Replace one kind of item in a space section with this list ([] removes them): ' + ITEM_KINDS.join(', ')
     + '. describe_mission gives each kind\'s fields and an example (a card or data tile with frame false draws without its own box). A field P9 does not know is kept and named in the reply. '
     + 'A data tile runs only after the user answers Allow on it in Mission.',
-    input({ title: { type: 'string', description: 'The section\'s title.' }, kind: { type: 'string', enum: ITEM_KINDS },
+    input({ title: { type: 'string', description: sectionName }, kind: { type: 'string', enum: ITEM_KINDS },
       items: { type: 'array', items: { type: 'object' } }, space: spaceField, hash: hashField }, ['title', 'kind', 'items'])],
+  ['patch_section', 'Set any fields of a space section in one write (null removes one): every field of describe_mission, quick_note and id included, and its item lists whole. '
+    + 'A field P9 does not know is kept and named in the reply.', input({ section: { type: 'string', description: sectionName }, set: setField, space: spaceField, hash: hashField }, ['section', 'set'])],
+  ['patch_item', 'Set any fields of a script button, app or page in one write (null removes one), as add_button, add_app and add_page check them. A button in a space section needs section.',
+    input({ kind: { type: 'string', enum: ['scripts', 'apps', 'pages'] }, id: { type: 'string' }, section: sectionField, set: setField, space: spaceField, hash: hashField }, ['kind', 'id', 'set'])],
+  ['move_section', 'Move a space section to a place in the file\'s order: index 0 is first. The page draws its tiles and columns in this order.',
+    input({ section: { type: 'string', description: sectionName }, index: { type: 'integer', minimum: 0 }, space: spaceField, hash: hashField }, ['section', 'index'])],
+  ['move_button', 'Move a space button to index within its section (0 is first), or into another section with to (at index, default last).',
+    input({ id: { type: 'string' }, section: { type: 'string', description: 'The button\'s section. ' + sectionName }, to: { type: 'string', description: 'The section to move it into. ' + sectionName },
+      index: { type: 'integer', minimum: 0 }, space: spaceField, hash: hashField }, ['id', 'section'])],
   ['run_script', 'Run a Mission Control script or space button by ID, after the user allows it in this chat. Waits up to 45 s; follow a longer run with status.',
     input({ id: { type: 'string' }, args: { type: 'array', items: { type: 'string' }, maxItems: 4, description: 'The values for the script\'s args, in order.' } }, ['id'])],
   ['list_needs_you', 'The needs-you items waiting for the user, with each one\'s hash and whether it has an empty answer line.', input({})],
@@ -356,16 +369,20 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
   // The list at data[key], made if absent; null when the file holds something else there.
   const list = (data, key) => { if (data[key] === undefined) data[key] = []; return Array.isArray(data[key]) ? data[key] : null; };
-  function section(data, title) {
+  // A section by its id, else by its title while only one section has it (W-C); an ambiguous title names the ids to use.
+  function section(data, key) {
     const sections = list(data, 'sections');
     if (!sections) return { error: 'invalid-space' };
-    const found = sections.filter((entry) => typeof entry?.title === 'string' && entry.title.trim() === title.trim());
-    return found.length === 1 ? { entry: found[0], sections } : { error: found.length ? 'ambiguous-section' : 'unknown-section', section: title };
+    const byId = sections.filter((entry) => object(entry) && entry.id === key);
+    if (byId.length === 1) return { entry: byId[0], sections };
+    const found = sections.filter((entry) => typeof entry?.title === 'string' && entry.title.trim() === key.trim()), ids = found.map((entry) => entry.id);
+    return found.length === 1 ? { entry: found[0], sections } : found.length
+      ? { error: 'ambiguous-section', section: key, ids, detail: ids.length + ' sections are titled "' + key.trim() + '": name one by its id (' + ids.join(', ') + ').' } : { error: 'unknown-section', section: key };
   }
   function add(kind, record, sectionTitle, hash) {
     const wrong = problem(record, kind === 'pages' ? PAGE : RECORD, true);
     if (wrong) return { error: 'invalid-record', detail: wrong };
-    if (sectionTitle !== undefined && !string(sectionTitle, 200)) return { error: 'request-refused' };
+    if (sectionTitle !== undefined && !words(sectionTitle)) return { error: 'request-refused' };
     return edit(sectionTitle === undefined ? 'registry' : 'space', hash, (data) => {
       let target;
       if (sectionTitle === undefined) target = list(data, kind);
@@ -377,7 +394,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     });
   }
   function remove(kind, id, sectionTitle, hash) {
-    if (!string(id, 200) || (sectionTitle !== undefined && !string(sectionTitle, 200))) return { error: 'request-refused' };
+    if (!string(id, 200) || (sectionTitle !== undefined && !words(sectionTitle))) return { error: 'request-refused' };
     return edit(sectionTitle === undefined ? 'registry' : 'space', hash, (data) => {
       let target;
       if (sectionTitle === undefined) target = list(data, kind);
@@ -394,8 +411,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
   // picture (the name of a stored file, '' removes it) is the desktop form's alone: an agent's tool call is refused if it names one.
   function update(kind, { key, section: sectionTitle, title, icon, picture, widget, place, refs, notes, text, order, widgets, move_to: moveTo, hash }, by) {
-    if (!string(key, 200) || ![sectionTitle, title, icon, picture, widget, place, notes, moveTo].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)
-      || (text !== undefined && !string(text, 4000)) || [refs, order, widgets].some((value) => value !== undefined && !Array.isArray(value))
+    if (!words(key) || ![sectionTitle, title, icon, picture, widget, place, notes, moveTo, text].every((value) => value === undefined || words(value)) || (picture !== undefined && !by?.user) || [refs, order, widgets].some((value) => value !== undefined && !Array.isArray(value))
       || (kind !== 'sections' && [widget, place, refs, notes, text, order, widgets].some((value) => value !== undefined))
       || (moveTo !== undefined && (kind !== 'scripts' || sectionTitle === undefined))) return { error: 'request-refused' };
     if ([title, icon, picture, widget, place, refs, notes, text, order, widgets, moveTo].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes text, widget, widgets, place, order, refs or notes; a space button move_to).' };
@@ -425,9 +441,83 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       for (const [field, value] of Object.entries({ text, widget, place, refs, notes, order, widgets })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
       const wrong = problem(entry, FIELDS[kind], false, current()?.page_schemes);
       if (wrong) return { error: 'invalid-record', detail: wrong };
-      if (kind === 'sections' && rest.some((other) => typeof other?.title === 'string' && other.title.trim() === entry.title.trim())) return { error: 'duplicate-section', section: entry.title };
       return { changed: { action: 'updated', kind, [kind === 'sections' ? 'section' : 'id']: key, record: entry, was: before },
-        accepted: (all) => (kind === 'sections' ? all.space.some((item) => item.title === entry.title.trim()) : all[kind].some((item) => item.id === key)) };
+        accepted: (all) => (kind === 'sections' ? all.space.some((item) => item.id === entry.id) : all[kind].some((item) => item.id === key)) };
+    }, by);
+  }
+
+  // The generic patch (W-E, W-N): set names fields and their new values, null removes one. A section takes any field, known or not
+  // (an unknown one is kept and named, W-F), and its item lists whole, each item checked as set_section_items checks it. A button, app
+  // or page takes only its table's fields, as add_* does; an unknown key the record already has stays. The same rules as the specific
+  // tools hold: the field tables, picture from the desktop form only, unique ids, and Mission Control's own merge keeping the result.
+  function patch(kind, { key, section: where, set, hash }, by) {
+    const fields = FIELDS[kind];
+    if (!fields || !words(key) || (where !== undefined && (kind !== 'scripts' || !words(where))) || !object(set) || !Object.keys(set).length || ('picture' in set && !by?.user)) {
+      return { error: 'request-refused', detail: 'kind: scripts, apps, pages or sections; set: an object of fields (picture only from the desktop form); section only for a space button.' };
+    }
+    const added = kind !== 'sections' && Object.keys(set).find((name) => !Object.hasOwn(fields, name) && set[name] !== null);
+    if (added) return { error: 'invalid-record', detail: unknownFields({ [added]: set[added] }, fields, 'this record')[0] };
+    return edit(kind === 'sections' || where !== undefined ? 'space' : 'registry', hash, (data) => {
+      let entry, others;
+      if (kind === 'sections') { const found = section(data, key); if (found.error) return found; entry = found.entry; others = found.sections; }
+      else {
+        let target;
+        if (where === undefined) target = list(data, kind);
+        else { const found = section(data, where); if (found.error) return found; target = list(found.entry, 'buttons'); }
+        const hits = target?.filter((item) => item?.id === key) ?? [];
+        if (hits.length !== 1) return { error: hits.length ? 'duplicate-id' : 'unknown-id', id: key };
+        entry = hits[0]; others = target;
+      }
+      const before = structuredClone(entry);
+      for (const [name, value] of Object.entries(set)) if (value === null) delete entry[name]; else entry[name] = value;
+      const wrong = kind === 'sections' && entry.id === undefined ? 'id: a section keeps its id; set a new one instead' : problem(entry, fields, false, current()?.page_schemes);
+      if (wrong) return { error: 'invalid-record', detail: wrong };
+      if (others.some((other) => other !== entry && other?.id === entry.id)) return { error: kind === 'sections' ? 'duplicate-section' : 'duplicate-id', id: entry.id };
+      const unknown = kind === 'sections' ? unknownFields(Object.fromEntries(Object.entries(set).filter(([, value]) => value !== null)), SECTION, 'a section').map((detail) => ({ detail })) : [];
+      for (const name of kind === 'sections' ? Object.keys(set).filter((name) => SECTION[name]?.fields && set[name] !== null) : []) {
+        for (const [index, item] of entry[name].entries()) {
+          const bad = problem(item, SECTION[name].fields, false, current()?.page_schemes), had = (before[name] ?? []).find((old) => object(old) && old.id === item?.id);
+          if (bad) return { error: 'invalid-item', kind: name, index, detail: bad };
+          // A button is a command: no field add_button would refuse, unless that button already had it.
+          const extra = Object.keys(item).find((field) => !Object.hasOwn(RECORD, field) && !(had && Object.hasOwn(had, field)));
+          if (name === 'buttons' && extra) return { error: 'invalid-item', kind: name, index, detail: unknownFields({ [extra]: item[extra] }, RECORD, 'a button')[0] };
+          if (name !== 'buttons') unknown.push(...unknownFields(item, SECTION[name].fields, 'this record').map((detail) => ({ kind: name, index, detail })));
+        }
+      }
+      return { changed: { action: 'patched', kind, [kind === 'sections' ? 'section' : 'id']: entry.id, record: entry, was: before, ...(unknown.length ? { unknown } : {}) },
+        accepted: (all) => {
+          if (kind !== 'sections') return all[kind].some((item) => item.id === entry.id);
+          const kept = all.space.find((item) => item.id === entry.id);
+          return Boolean(kept) && Object.keys(set).filter((name) => SECTION[name]?.fields).every((name) => (name === 'buttons'
+            ? (entry.buttons ?? []).every((button) => all.scripts.some((item) => item.id === button.id && item.section === entry.id)) : (kept[name]?.length ?? 0) === (entry[name]?.length ?? 0)));
+        } };
+    }, by);
+  }
+  // Reorder (W-E): a section to index in the file, or a space button to index in its section or, with to, in another one.
+  function move({ section: key, id, to, index, hash }, by) {
+    if (!words(key) || (id !== undefined && !string(id, 200)) || (to !== undefined && (id === undefined || !words(to))) || (index !== undefined && !(Number.isSafeInteger(index) && index >= 0))
+      || (id === undefined && index === undefined)) return { error: 'request-refused', detail: 'section; index (0 is first); for a button id, and to for another section.' };
+    return edit('space', hash, (data) => {
+      const found = section(data, key);
+      if (found.error) return found;
+      const { entry, sections } = found;
+      if (id === undefined) {
+        if (index >= sections.length) return { error: 'request-refused', detail: 'index: 0 to ' + (sections.length - 1) };
+        sections.splice(sections.indexOf(entry), 1); sections.splice(index, 0, entry);
+        return { changed: { action: 'moved', kind: 'section', section: entry.id, index, order: sections.map((item) => item?.id) }, accepted: (all) => all.space.some((item) => item.id === entry.id) };
+      }
+      const into = to === undefined ? found : section(data, to);
+      if (into.error) return into;
+      const from = list(entry, 'buttons'), target = list(into.entry, 'buttons');
+      if (!from || !target) return { error: 'not-a-list', detail: 'buttons is not a list' };
+      const hits = from.filter((item) => item?.id === id);
+      if (hits.length !== 1) return { error: hits.length ? 'duplicate-id' : 'unknown-id', id };
+      from.splice(from.indexOf(hits[0]), 1);
+      const at = index ?? target.length;
+      if (at > target.length) return { error: 'request-refused', detail: 'index: 0 to ' + target.length };
+      target.splice(at, 0, hits[0]);
+      return { changed: { action: 'moved', kind: 'button', id, section: into.entry.id, index: at, order: target.map((item) => item?.id) },
+        accepted: (all) => all.scripts.some((item) => item.id === id && item.section === into.entry.id) };
     }, by);
   }
 
@@ -506,24 +596,25 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     add_button: (args) => add('scripts', args.record, args.section, args.hash),
     add_app: (args) => add('apps', args.record, undefined, args.hash),
     add_page: (args) => add('pages', args.record, undefined, args.hash),
-    add_section: ({ title, text, place, order, widgets, hash }) => {
-      const record = { title, ...(text !== undefined ? { text } : {}), ...(place !== undefined ? { place } : {}), ...(order !== undefined ? { order } : {}), ...(widgets !== undefined ? { widgets } : {}) };
+    // A title may repeat (W-C): the new section gets its own id, given or made from the title.
+    add_section: ({ title, id, text, place, order, widgets, hash }) => {
+      const record = { ...(id !== undefined ? { id } : {}), title, ...(text !== undefined ? { text } : {}), ...(place !== undefined ? { place } : {}), ...(order !== undefined ? { order } : {}), ...(widgets !== undefined ? { widgets } : {}) };
       const wrong = problem(record, SECTION);
-      if (wrong || !string(title, 200)) return { error: 'invalid-section', detail: wrong ?? 'title: at most 200 characters' };
+      if (wrong) return { error: 'invalid-section', detail: wrong };
       return edit('space', hash, (data) => {
-        const found = section(data, title);
-        if (found.error === 'invalid-space') return found;
-        if (!found.error || found.error === 'ambiguous-section') return { error: 'duplicate-section', section: title };
         const sections = list(data, 'sections');
+        if (!sections) return { error: 'invalid-space' };
         // ids are unique among sections (M1); every section has one by now (edit() added any missing).
-        const entry = { id: sectionId(record.title.trim(), new Set(sections.map((other) => other?.id))), ...record };
+        const taken = new Set(sections.map((other) => other?.id));
+        if (id !== undefined && taken.has(id)) return { error: 'duplicate-section', id, detail: 'Another section already has the id ' + id + '.' };
+        const entry = { id: id ?? sectionId(record.title.trim(), taken), ...record };
         sections.push(entry);
-        return { changed: { action: 'added', kind: 'section', record: entry }, accepted: (all) => all.space.some((entry) => entry.title === title.trim()) };
+        return { changed: { action: 'added', kind: 'section', record: entry }, accepted: (all) => all.space.some((item) => item.id === entry.id) };
       });
     },
     set_section_items: ({ title, kind, items, hash }) => {
-      if (!string(title, 200) || !ITEM_KINDS.includes(kind) || !Array.isArray(items) || items.length > 64) {
-        return { error: 'request-refused', reason: 'title: a section title; kind: one of ' + ITEM_KINDS.join(', ') + '; items: a list of at most 64' };
+      if (!words(title) || !ITEM_KINDS.includes(kind) || !Array.isArray(items)) {
+        return { error: 'request-refused', reason: 'title: a section id or title; kind: one of ' + ITEM_KINDS.join(', ') + '; items: a list' };
       }
       // Each item is checked before anything is written, so a javascript: link is named, not dropped. An unknown field is kept, as the parser
       // keeps it (W-F), and named in the reply so a typo shows.
@@ -536,8 +627,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         const found = section(data, title);
         if (found.error) return found;
         if (items.length) found.entry[kind] = items; else delete found.entry[kind];
-        return { changed: { action: 'updated', kind, section: found.entry.title, items, ...(unknown.length ? { unknown } : {}) },
-          accepted: (all) => (all.space.find((entry) => entry.title === found.entry.title.trim())?.[kind]?.length ?? 0) === items.length };
+        return { changed: { action: 'updated', kind, section: found.entry.id, items, ...(unknown.length ? { unknown } : {}) },
+          accepted: (all) => (all.space.find((entry) => entry.id === found.entry.id)?.[kind]?.length ?? 0) === items.length };
       });
     },
     update_button: ({ id, section, ...rest }) => update('scripts', { key: id, section, ...rest }),
@@ -548,7 +639,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     remove_app: (args) => remove('apps', args.id, undefined, args.hash),
     remove_page: (args) => remove('pages', args.id, undefined, args.hash),
     remove_section: ({ title, hash }) => {
-      if (!string(title, 200)) return { error: 'request-refused' };
+      if (!words(title)) return { error: 'request-refused' };
       return edit('space', hash, (data) => {
         const found = section(data, title);
         if (found.error) return found;
@@ -556,6 +647,10 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         return { changed: { action: 'removed', kind: 'section', record: found.entry } };
       });
     },
+    patch_section: ({ section: key, set, hash }) => patch('sections', { key, set, hash }),
+    patch_item: ({ kind, id, section: where, set, hash }) => (['scripts', 'apps', 'pages'].includes(kind) ? patch(kind, { key: id, section: where, set, hash }) : { error: 'request-refused', detail: 'kind: scripts, apps or pages' }),
+    move_section: ({ section: key, index, hash }) => (index === undefined ? { error: 'request-refused', detail: 'index: 0 is first' } : move({ section: key, index, hash })),
+    move_button: ({ id, section: key, to, index, hash }) => (id === undefined ? { error: 'request-refused' } : move({ section: key, id, to, index, hash })),
     run_script: (args, conversation, signal) => runScript(conversation, args, signal),
     allow_folder: (args, conversation, signal) => allowFolder(conversation, args, signal),
     list_needs_you: async () => { need(); return { items: (await currentMission().overview()).queue.map(({ name, title, age, hash, answerable, content }) => ({ name, title, age, hash, answerable, content })) }; },
@@ -661,7 +756,10 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   // The desktop's edit form (/mission/edit): the file hashes it edits against (the space Mission shows, W-B), and the same update() the tools use.
   async function editState() {
     const { registry, space } = await files(need());
-    return { registry: registry.hash, space: space?.hash ?? null, protection: protection() };
+    // The records as the files hold them, for the field editor (W-N): each section, app and page whole, unknown keys included.
+    const read = (file) => { try { const data = JSON.parse(stripBom(file?.content ?? '{}')); return object(data) ? data : {}; } catch { return {}; } };
+    const reg = read(registry), spc = read(space), lists = (data, key) => (Array.isArray(data[key]) ? data[key].filter(object) : []);
+    return { registry: registry.hash, space: space?.hash ?? null, protection: protection(), records: { apps: lists(reg, 'apps'), pages: lists(reg, 'pages'), sections: lists(spc, 'sections') } };
   }
-  return { handle, update, editState, install, deleteSpace, saveTemplate, userTemplates };
+  return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates };
 }

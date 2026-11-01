@@ -72,7 +72,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 24);
+  assert.equal((await client.listTools()).tools.length, 28);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -120,7 +120,8 @@ test('MCP writes: File protection and the agent lock refuse them; the parser, a 
   assert.ok((await call(instance, '/mission')).body.scripts.some((script) => script.id === 'build'));
   const section = await tool('add_button', { record: { id: 'ops-down', title: 'Down', cmd: ['true'] }, section: ' Ops ' });
   assert.equal(section.file, SETTINGS.space);
-  assert.equal((await tool('add_section', { title: 'Ops' })).error, 'duplicate-section');
+  // Titles may repeat (W-C); an id may not.
+  assert.equal((await tool('add_section', { title: 'Ops', id: 'ops' })).error, 'duplicate-section');
   assert.equal((await tool('remove_button', { id: 'build' })).records[0].id, 'build');
   assert.equal((await tool('remove_section', { title: 'Ops' })).action, 'removed');
   assert.deepEqual(JSON.parse(await file(instance, SETTINGS.space)).sections, []);
@@ -318,7 +319,8 @@ test('The edit form route: File protection asks first, a stale hash is refused, 
   const instance = await start(t);
   const registry = await file(instance, SETTINGS.registry);
   const state = (await call(instance, '/mission/edit')).body;
-  assert.deepEqual(state, { registry: hash(registry), space: hash(await file(instance, SETTINGS.space)), protection: true });
+  assert.deepEqual({ ...state, records: undefined }, { registry: hash(registry), space: hash(await file(instance, SETTINGS.space)), protection: true, records: undefined });
+  assert.deepEqual(state.records.sections.map((section) => section.title), ['Ops'], 'the records as the files hold them, for the Fields editor');
   const edit = (body) => call(instance, '/mission/edit', 'POST', { hash: state.registry, ...body });
   const asked = await edit({ kind: 'apps', key: 'editor', icon: 'E' });
   assert.deepEqual([asked.status, asked.body.error], [403, 'registry-read-only']);
@@ -442,12 +444,12 @@ test('M1 strict space: unknown fields and duplicates come back named; an old fil
   assert.equal(strict.ok, false);
   assert.ok(details.some((detail) => /^feed is not a field of a section\. Known fields: id, title/.test(detail)), details.join(' | '));
   assert.ok(details.some((detail) => /^titel is not a field of a section\. Did you mean title\?/.test(detail)));
-  assert.ok(details.some((detail) => /^Another section is already titled "Feed"/.test(detail)));
+  assert.ok(!details.some((detail) => /titled "Feed"/.test(detail)), 'a repeated title is not a problem (W-C)');
   assert.ok(details.some((detail) => /^Another section already has the id same/.test(detail)));
   // Migration (blast radius: every section, button and log kept). The fixture's Ops section has no id.
   const old = await file(instance, SETTINGS.space);
   await call(instance, '/file-protection', 'POST', { on: false });
-  assert.equal((await tool('add_section', { title: 'Ops ' })).error, 'duplicate-section');
+  assert.equal((await tool('add_section', { title: 'Two', id: 'ops' })).error, 'duplicate-section');
   assert.equal(await file(instance, SETTINGS.space), old, 'a refused write migrates nothing');
   assert.equal((await tool('add_section', { title: 'Two' })).isError, false);
   const now = JSON.parse(await file(instance, SETTINGS.space)).sections;
@@ -532,4 +534,99 @@ test('M3 set_section_items: data tiles and links go in through the lock and File
   assert.equal((await tool('set_section_items', { title: 'Ops', kind: 'links', items: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] })).isError, false);
   const ops = JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.title === 'Ops');
   assert.deepEqual([ops.data, ops.links], [tiles.items, [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }]]);
+});
+
+// W-C, W-J: a section is named by its id; a title works while only one section has it. Two sections may share a title and both draw;
+// a space button keeps its own group and names its section.
+test('W-C and W-J: sections by id, a repeated title both draw, an ambiguous title names the ids; a space button keeps its group', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const second = await tool('add_section', { title: 'Ops' });
+  assert.deepEqual([second.isError, second.record.id], [false, 'ops-2']);
+  assert.equal((await tool('add_section', { title: 'Other', id: 'Bad Id' })).error, 'invalid-section');
+  const ambiguous = await tool('add_button', { record: { id: 'two-up', title: 'Two up', cmd: ['true'] }, section: 'Ops' });
+  assert.deepEqual([ambiguous.error, ambiguous.ids], ['ambiguous-section', ['ops', 'ops-2']]);
+  assert.match(ambiguous.detail, /^2 sections are titled "Ops": name one by its id \(ops, ops-2\)\.$/);
+  assert.equal((await tool('add_button', { record: { id: 'two-up', title: 'Two up', group: 'Custom', cmd: ['true'] }, section: 'ops-2' })).isError, false);
+  for (const [name, args] of [['update_section', { title: 'Ops', text: 'x' }], ['remove_section', { title: 'Ops' }], ['set_section_items', { title: 'Ops', kind: 'links', items: [] }],
+    ['patch_section', { section: 'Ops', set: { text: 'x' } }], ['move_section', { section: 'Ops', index: 0 }]]) assert.equal((await tool(name, args)).error, 'ambiguous-section', name);
+  assert.equal((await tool('update_section', { title: 'ops-2', new_title: 'Ops', text: 'Second' })).isError, false);
+  const mission = (await call(instance, '/mission')).body;
+  assert.deepEqual(mission.space.map((section) => [section.id, section.title]), [['ops', 'Ops'], ['ops-2', 'Ops']], 'both draw');
+  assert.deepEqual(mission.scripts.filter((script) => script.section).map((script) => [script.id, script.group, script.section]), [['ops-up', '', 'ops'], ['two-up', 'Custom', 'ops-2']]);
+  // The file's own check: a repeated id is still dropped and named.
+  const dup = await tool('validate_space', { text: JSON.stringify({ sections: [{ id: 'a', title: 'Same' }, { id: 'b', title: 'Same' }, { id: 'a', title: 'Again' }] }) });
+  assert.deepEqual(dup.invalid.map((entry) => [entry.index, entry.reason]), [[2, 'duplicate-section']]);
+  console.log('PASS W-C/W-J: Ops twice (ops, ops-2) both drawn; 6 tools named the ids for the ambiguous title; two-up keeps group Custom in section ops-2');
+});
+
+// W-E, W-N, W-O: one patch for any field of a section or record, moves, and no limit tighter than the file's.
+test('W-E patch and move: any section field (unknown kept and named), items whole, records by their table; sections and buttons reorder; no tighter limits', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  const sections = async () => JSON.parse(await file(instance, SETTINGS.space)).sections;
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { text: 'x' } })).error, 'registry-read-only', 'File protection on');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { text: 'x' } })).error, 'agent-lock-on');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  const patched = await tool('patch_section', { section: 'Ops', set: { text: 'Ops text', quick_note: { root: 'vault', path: 'inbox' }, order: ['buttons', 'text'], widgets: ['notifications', 'sprint'],
+    data: [{ id: 'tile', title: 'Tile', script: 'mark', frame: false }], mood: 'calm' } });
+  assert.deepEqual([patched.isError, patched.action, patched.unknown.map((entry) => entry.detail.split(' ')[0])], [false, 'patched', ['mood']]);
+  let [ops] = await sections();
+  assert.deepEqual([ops.text, ops.quick_note, ops.order, ops.widgets, ops.data, ops.mood, ops.buttons.length], ['Ops text', { root: 'vault', path: 'inbox' }, ['buttons', 'text'], ['notifications', 'sprint'],
+    [{ id: 'tile', title: 'Tile', script: 'mark', frame: false }], 'calm', 1]);
+  assert.equal((await tool('patch_section', { section: 'ops', set: { mood: null, quick_note: null, id: 'ops-main' } })).isError, false);
+  [ops] = await sections();
+  assert.deepEqual([ops.id, 'mood' in ops, 'quick_note' in ops], ['ops-main', false, false]);
+  // The same checks as the specific tools: the field table, a button's own table, picture from the desktop form only, unique ids.
+  assert.match((await tool('patch_section', { section: 'ops-main', set: { widgets: ['nope'] } })).detail, /^widgets:/);
+  assert.match((await tool('patch_section', { section: 'ops-main', set: { data: [{ id: 'd', title: 'D', script: 'mark', frame: 'no' }] } })).detail, /^frame:/);
+  assert.match((await tool('patch_section', { section: 'ops-main', set: { buttons: [{ id: 'ops-up', title: 'Up', cmd: ['true'], shell: 'rm' }] } })).detail, /^shell is not a field of a button/);
+  assert.match((await tool('patch_section', { section: 'ops-main', set: { buttons: [{ id: 'ops-up', title: 'Up', cmd: ['true'], args: ['a', 'b', 'c', 'd', 'e'] }] } })).detail, /^args:/);
+  assert.equal((await tool('patch_section', { section: 'ops-main', set: { picture: 'x.png' } })).error, 'request-refused');
+  assert.equal((await tool('patch_section', { section: 'ops-main', set: { id: null } })).error, 'invalid-record');
+  assert.equal((await tool('add_section', { title: 'Two' })).isError, false);
+  assert.equal((await tool('patch_section', { section: 'two', set: { id: 'ops-main' } })).error, 'duplicate-section');
+  assert.equal((await tool('patch_section', { section: 'two', set: { buttons: [{ id: 'hello', title: 'Clash', cmd: ['true'] }] } })).error, 'not-accepted', 'a registry id');
+  assert.equal((await tool('patch_section', { section: 'two', set: { buttons: [{ id: 'two-up', title: 'Two up', cmd: ['true'] }, { id: 'two-down', title: 'Two down', cmd: ['true'] }] } })).isError, false);
+
+  // patch_item: a record's table, closed for new keys; a space button by its section.
+  const app = await tool('patch_item', { kind: 'apps', id: 'editor', set: { title: 'My editor', desc: 'Edits' } });
+  assert.deepEqual([app.isError, JSON.parse(await file(instance, SETTINGS.registry)).apps[0]], [false, { id: 'editor', title: 'My editor', cmd: ['true'], desc: 'Edits' }]);
+  assert.match((await tool('patch_item', { kind: 'apps', id: 'editor', set: { comand: ['x'] } })).detail, /^comand is not a field of this record\. Did you mean cmd\?/);
+  assert.match((await tool('patch_item', { kind: 'pages', id: 'dash', set: { url: 'javascript:alert(1)' } })).detail, /^url:/);
+  assert.equal((await tool('patch_item', { kind: 'scripts', id: 'two-up', section: 'two', set: { title: 'Two up!', group: 'Custom', confirm: true } })).isError, false);
+  assert.deepEqual((await sections())[1].buttons[0], { id: 'two-up', title: 'Two up!', cmd: ['true'], group: 'Custom', confirm: true });
+  assert.equal((await tool('patch_item', { kind: 'scripts', id: 'two-up', set: { title: 'x' } })).error, 'unknown-id', 'without section: the registry');
+
+  // Moves: a section to an index, a button within its section and into another; out of range refused.
+  assert.deepEqual((await tool('move_section', { section: 'two', index: 0 })).order, ['two', 'ops-main']);
+  assert.equal((await tool('move_section', { section: 'two', index: 2 })).error, 'request-refused');
+  assert.deepEqual((await tool('move_button', { id: 'two-down', section: 'two', index: 0 })).order, ['two-down', 'two-up']);
+  const moved = await tool('move_button', { id: 'two-up', section: 'two', to: 'ops-main', index: 0 });
+  assert.deepEqual([moved.section, moved.order], ['ops-main', ['two-up', 'ops-up']]);
+  assert.equal((await tool('move_button', { id: 'two-up', section: 'ops-main', index: 9 })).error, 'request-refused');
+  assert.deepEqual((await sections()).map((section) => [section.id, section.buttons.map((button) => button.id)]), [['two', ['two-down']], ['ops-main', ['two-up', 'ops-up']]]);
+  assert.equal((await call(instance, '/mission')).body.scripts.find((script) => script.id === 'two-up').section, 'ops-main');
+
+  // W-O: titles and text as long as the file takes them, and a list longer than 64.
+  const long = 'L'.repeat(300);
+  assert.equal((await tool('update_section', { title: 'two', new_title: long, text: 'T'.repeat(5000) })).isError, false);
+  assert.equal((await tool('add_button', { record: { id: 'long', title: long, cmd: ['true'] }, section: long })).isError, false);
+  const links = Array.from({ length: 70 }, (_, i) => ({ id: 'l' + i, title: 'L' + i, url: 'https://example.com/' + i }));
+  assert.equal((await tool('set_section_items', { title: 'two', kind: 'links', items: links })).isError, false);
+  assert.equal((await sections())[0].links.length, 70);
+  // The desktop form's patch and move: the same guards (a picture never goes through set).
+  assert.equal((await call(instance, '/mission/edit', 'POST', { kind: 'sections', key: 'two', set: { text: 'From the form' } })).status, 200);
+  assert.equal((await call(instance, '/mission/edit', 'POST', { kind: 'sections', key: 'two', set: { picture: 'x.png' } })).status, 400);
+  assert.equal((await call(instance, '/mission/edit', 'POST', { kind: 'sections', key: 'two', set: { text: 'y' }, index: 1 })).status, 400);
+  assert.equal((await call(instance, '/mission/edit', 'POST', { kind: 'apps', key: 'editor', index: 1 })).status, 400);
+  assert.equal((await call(instance, '/mission/edit', 'POST', { kind: 'sections', key: 'two', index: 1, hash: hash('stale') })).status, 409);
+  assert.equal((await call(instance, '/mission/edit', 'POST', { kind: 'sections', key: 'two', index: 1 })).status, 200);
+  assert.deepEqual((await sections()).map((section) => [section.id, section.text]), [['ops-main', 'Ops text'], ['two', 'From the form']]);
+  const state = (await call(instance, '/mission/edit')).body;
+  assert.deepEqual([state.records.sections.map((section) => section.id), state.records.apps[0].desc], [['ops-main', 'two'], 'Edits']);
+  console.log('PASS W-E/W-N/W-O: patch set 6 fields (mood named), removed 2, renamed the id; 7 refusals kept the file; 2 moves each kind; 300-char titles, 5000-char text, 70 links; form patch/move 200, picture/mixed/stale refused');
 });

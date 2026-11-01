@@ -1129,7 +1129,7 @@ function pullTopLevels() {
     const runs = PLACED.test(s.place) ? [] : [...(s.data || []), ...(s.cards || [])];
     if (runs.length) Promise.all(runs.map(d => window.p9.mission('data', { id: d.id }).then(r => tileLevel(tileAnswer(r.status, r.body)), () => ''))).then(l => {
       const lv = ['bad', 'warn'].find(x => l.includes(x)) || '';
-      if ((secLv[s.title] || '') !== lv) { secLv[s.title] = lv; renderMission(); }
+      if ((secLv[s.id] || '') !== lv) { secLv[s.id] = lv; renderMission(); }
     });
   }
 }
@@ -1204,6 +1204,9 @@ const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="
 // The modal's buttons: each is a registry script (asks first, like any script), found by its fixed id.
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
 const scriptById = id => M.cardScripts?.[id] ?? Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
+// W-M: a sprint tile a section names runs that section's buttons and script refs; with none (or the default tile), the three above.
+const sprintScripts = sec => { const sp = spaceOf(sec), own = sp ? [...(M.scripts[sec] || []), ...(sp.refs || []).filter(r => r.kind === 'scripts').map(r => scriptById(r.id)).filter(Boolean)] : [];
+  return own.length ? own.map(r => [r[0], r[1], r]) : SPRINT_SCRIPTS.map(([id, label]) => [id, label, scriptById(id)]); };
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
 let lastArt = '';
 async function loadArt() {
@@ -1215,15 +1218,19 @@ async function loadArt() {
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
   live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting?.split('/').pop() ?? null; // no waiting folder on a fresh install
-  M.scripts = {}; M.tools = []; M.cardScripts = {}; // hidden: a card's feeder or title-bar button, not a row
+  M.scripts = {}; M.tools = []; M.cardScripts = {}; M.title = {}; // hidden: a card's feeder or title-bar button, not a row
+  // W-C: a group's key is its section's id (titles may repeat; M.title says what each key is called). A space button names its
+  // section; a registry group named like a section joins the first one with that title; any other is 'g:' + its name (an id has no ':').
+  const named = {}; for (const s of o.space || []) { named[s.title] ??= s.id; M.title[s.id] = s.title; }
   for (const x of o.scripts) { const row = [x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }];
-    if (x.hidden) M.cardScripts[x.id] = row; else (M.scripts[x.group || 'Other'] ||= []).push(row); }
+    const name = x.group || 'Other', key = x.section ?? named[name] ?? 'g:' + name; M.title[key] ??= name;
+    if (x.hidden) M.cardScripts[x.id] = row; else (M.scripts[key] ||= []).push(row); }
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
   M.space = o.space || []; M.icmFiles = !!o.icmFiles;
   live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null; live.mainFile = o.mainFile === true;
-  for (const s of M.space) if (!s.widget) M.scripts[s.title] ||= []; // a widget section is its panel, not a tile
+  for (const s of M.space) if (!s.widget) M.scripts[s.id] ||= []; // a widget section is its panel or built-in tile, not a group tile
   applyQueue(o);
 }
 // M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
@@ -1264,7 +1271,9 @@ function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'p
 const noticeLine = () => 'No notifications.';
 // A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
 const listRow = (i, a, b, c) => `<li><button data-i="${esc(i)}">${a}<span class="truncate">${b}</span><span class="sub truncate">${c}</span></button></li>`;
-const sectionRows = (g, l) => { const sp = (M.space || []).find(x => x.title === g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
+// A group's title, and its space section (none for a registry-only group); sample mode keys groups by title and has no space.
+const gTitle = g => M.title?.[g] ?? g, spaceOf = g => (M.space || []).find(x => x.id === g);
+const sectionRows = (g, l) => { const sp = spaceOf(g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
 const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
 async function answerLive(r) {
   if (r.gone) return toast({ kind: 'not saved', txt: r.file + ' was answered or removed elsewhere. Copy your text from the box; nothing was written.', level: 'warn' }, true);
@@ -1302,7 +1311,10 @@ const sample = () => (sampleView ? ' · sample' : '');
 // names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
 // written. A fresh install has neither, so it gets none.
 // A section names a panel with widget (the section is the panel) or widgets (the panel sits inside the section, W-I).
-const namesPanel = s => s.widget || s.widgets?.length;
+// idea, sprint and edit are P9's built-in tiles (W-D), not panels: naming one decides the top row's tiles, not the panels.
+const TILE_WIDGETS = ['idea', 'sprint', 'edit'], panelW = w => !TILE_WIDGETS.includes(w);
+const namesPanel = s => (s.widget && panelW(s.widget)) || s.widgets?.some(panelW);
+const namesTile = () => (M.space || []).some(s => TILE_WIDGETS.includes(s.widget) || s.widgets?.some(w => !panelW(w)));
 const widgetOn = w => sampleView || M.space.some(s => s.widget === w || s.widgets?.includes(w)) || (M.icmFiles && !M.space.some(namesPanel));
 // + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
 const icmSpace = () => sampleView || M.space.some(namesPanel) || M.icmFiles && !M.space.some(namesPanel);
@@ -1343,15 +1355,40 @@ const PLACED = /^col[123]$/;
 const placed = () => (M.space || []).some(s => PLACED.test(s.place));
 const WIDGET_WIN = { usage: 'musage', apps: 'mlaunch', notifications: 'mnotes', primary: 'mprimary' };
 // A widget draws P9's own panel; any other section draws open: its title and Open (its window), its items under it.
+// data-sec and data-group carry the title; data-key, the section's id, is what a click and a redraw use (W-C).
 const placedHtml = s => s.widget === 'waiting' ? NEEDS : s.widget === 'usage' || s.widget === 'apps' ? winPanel(WIDGET_WIN[s.widget])
+  : TILE_WIDGETS.includes(s.widget) ? builtinTile(s.widget, s)
   : s.widget ? `<div data-card="${WIDGET_WIN[s.widget]}"></div>`
-  : `<section class="mpanel" data-sec="${esc(s.title)}"><button class="phead" data-group="${esc(s.title)}"><h4>${esc(s.title)}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
+  : `<section class="mpanel" data-sec="${esc(s.title)}" data-key="${esc(s.id)}"><button class="phead" data-group="${esc(s.title)}" data-key="${esc(s.id)}"><h4>${esc(s.title)}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
+// P9's built-in tiles (W-D). Named by a section (s), each draws there under the section's title; idea shows because the file asks for it,
+// sprint still only while there is a sprint status file. Unnamed, the three keep their own titles and today's rules.
+const BUILTIN = { idea: '+ New idea', sprint: 'Sprint status', edit: 'Edit names and icons' };
+const builtinTile = (w, s) => !live.on || (w === 'idea' && !s && !icmSpace()) || (w === 'sprint' && !SP.on) ? ''
+  : w === 'idea' ? `<button class="tile" data-idea><span></span><b>${esc(s?.title ?? BUILTIN.idea)}</b></button>`
+  : w === 'sprint' ? `<button class="tile" data-sprint="${esc(s?.id ?? '')}"><span class="lvl" data-l="${SP.data ? 'ok' : 'bad'}"></span><b>${esc(s?.title ?? BUILTIN.sprint)}</b><span class="n">${SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!'}</span></button>`
+  : `<button class="tile" data-medit><span></span><b>${esc(s?.title ?? BUILTIN.edit)}</b></button>`;
+// What a built-in tile (or its button inside a section's widgets) opens; sec is the section naming sprint, whose buttons its window runs.
+const builtinModal = (w, sec) => w === 'idea' ? { kind: 'idea', name: '', text: '', needs: false } : w === 'sprint' ? { kind: 'sprint', sec } : { kind: 'medit', items: editItems(M) };
+// A group's top-row tile: g is its M.scripts key, l its rows.
+const groupTile = (g, l) => { const sp = spaceOf(g), a = art('sections', g);
+  return `<button class="tile${secWorst(g, l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(gTitle(g))}" data-key="${esc(g)}"><span class="lvl" data-l="${secWorst(g, l)}"></span><b>${a.picture ? `<img class="sec-ico" src="${esc(a.picture)}" alt=""> ` : ''}${!a.picture && sp?.icon ? `<span data-icon>${esc(sp.icon)}</span> ` : ''}${esc(gTitle(g))}</b><span class="n">${sectionRows(g, l)}</span></button>`; };
+// The top row (W-D): registry-only groups, then the sections in file order (one placed in a column is drawn there), each as its group
+// tile, its panel's tile (the placed layout) or its built-in tile. Where no section names a built-in tile, the three end the row as before.
+const topRow = lay => Object.entries(M.scripts).filter(([g]) => !spaceOf(g)).map(([g, l]) => groupTile(g, l)).join('')
+  + (M.space || []).filter(s => !lay || !PLACED.test(s.place)).map(s => (TILE_WIDGETS.includes(s.widget) ? builtinTile(s.widget, s) : s.widget && lay ? widgetTile(s) : '')
+    // A widget section's own buttons keep their tile, as before; a sprint section's are its window's buttons (W-M).
+    + (M.scripts[s.id] && s.widget !== 'sprint' ? groupTile(s.id, M.scripts[s.id]) : '')).join('')
+  + (namesTile() ? '' : TILE_WIDGETS.map(w => builtinTile(w)).join(''));
+// W-H: with nothing placed, the fixed layout's boxes keep their columns, but within one they follow the file order of the sections
+// naming them (a box none names keeps its place after those). A space naming none draws exactly the old layout.
+const fileRank = w => { const i = (M.space || []).findIndex(s => s.widget === w || s.widgets?.includes(w)); return i < 0 ? Infinity : i; };
+const byFile = boxes => boxes.map((b, i) => [b, i]).sort((x, y) => fileRank(x[0][0]) - fileRank(y[0][0]) || x[1] - y[1]).map(([b]) => b[1]).join('');
 // In the placed layout a widget section left in the top row is a tile that opens its window.
 const widgetTile = s => { const id = WIDGET_WIN[s.widget], w = wins[id];
   if (s.widget !== 'waiting' && w.show && !w.show()) return '';
   const [big, , lvl] = s.widget === 'waiting' ? [S.reviews.length, '', S.reviews.length ? 'warn' : 'ok'] : w.card();
   return `<button class="tile" data-wtile="${id || 'waiting'}"><span class="lvl" data-l="${lvl}"></span><b>${esc(s.title)}</b><span class="n">${esc(big)}</span></button>`; };
-const secPanel = g => [...document.querySelectorAll('#fMission [data-sec]')].find(p => p.dataset.sec === g);
+const secPanel = g => [...document.querySelectorAll('#fMission [data-sec]')].find(p => p.dataset.key === g);
 // A placed section's state (tile answers, card HTML, counts, a quick note's text), kept while its space entry is unchanged.
 const inlineSec = {};
 // On the page a redraw writes only changed markup; a field being typed in keeps its focus and caret across it.
@@ -1364,7 +1401,7 @@ const writeKeep = (el, html) => {
   return true;
 };
 function secInline(g) {
-  const p = secPanel(g), sp = (M.space || []).find(s => s.title === g);
+  const p = secPanel(g), sp = spaceOf(g);
   if (!p || !sp || !M.scripts[g]) return;
   const key = JSON.stringify(sp);
   let m = inlineSec[g];
@@ -1550,8 +1587,8 @@ function renderMission() {
     return;
   }
   pullTopLevels();
-  const lay = placed(), groups = Object.entries(M.scripts).filter(([g]) => !lay || !PLACED.test((M.space || []).find(x => x.title === g)?.place));
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${lay ? M.space.filter(s => s.widget && !PLACED.test(s.place)).map(widgetTile).join('') : ''}${groups.map(([g, l]) => `<button class="tile${secWorst(g, l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(g)}"><span class="lvl" data-l="${secWorst(g, l)}"></span><b>${art('sections', g).picture ? `<img class="sec-ico" src="${esc(art('sections', g).picture)}" alt=""> ` : ''}${!art('sections', g).picture && (M.space || []).find(x => x.title === g)?.icon ? `<span data-icon>${esc(M.space.find(x => x.title === g).icon)}</span> ` : ''}${esc(g)}</b><span class="n">${sectionRows(g, l)}</span></button>`).join('')}${live.on ? (icmSpace() ? '<button class="tile" data-idea><span></span><b>+ New idea</b></button>' : '') + (SP.on ? '<button class="tile" data-sprint><span class="lvl" data-l="' + (SP.data ? 'ok' : 'bad') + '"></span><b>Sprint status</b><span class="n">' + (SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!') + '</span></button>' : '') + '<button class="tile" data-medit><span></span><b>Edit names and icons</b></button>' : ''}</div>`
+  const lay = placed();
+  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${topRow(lay)}</div>`
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
@@ -1559,9 +1596,9 @@ function renderMission() {
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
     + (lay ? '<div class="mrow" data-placed>' + [1, 2, 3].map(n => `<div class="mcol" data-col="${n}">${M.space.filter(s => s.place === 'col' + n).map(placedHtml).join('')}</div>`).join('') + '</div>'
       : '<div class="mrow">' + (widgetOn('waiting') ? NEEDS : '')
-    + '<div class="mcol"><div data-card="mprimary"></div>' + PANELS.slice(0, 1).map(winPanel).join('') + '</div>'
-    + '<div class="mcol">' + PANELS.slice(1).map(winPanel).join('') + '<div class="wins" aria-label="Mission sections"></div></div></div>'));
-  $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.group }));
+    + '<div class="mcol">' + byFile([['primary', '<div data-card="mprimary"></div>'], ['usage', winPanel('musage')]]) + '</div>'
+    + '<div class="mcol">' + byFile([['apps', winPanel('mlaunch')], ['notifications', '<div class="wins" aria-label="Mission sections"></div>']]) + '</div></div>'));
+  $('#fMission').querySelectorAll('[data-group]').forEach(b => b.onclick = () => openModal({ kind: 'scripts', g: b.dataset.key ?? b.dataset.group }));
   $('#fMission').querySelectorAll('[data-wtile]').forEach(b => b.onclick = () => openModal(b.dataset.wtile === 'waiting' ? { kind: 'reviews' } : { kind: 'win', id: b.dataset.wtile }));
   $('#fMission').querySelectorAll('[data-restart-btn]').forEach(b => b.onclick = () => restartP9(b));
   $('#fMission').querySelectorAll('[data-mission-docs]').forEach(b => b.onclick = () => window.p9.openDocs('buttons-apps-and-pages').catch(() => {}));
@@ -1570,7 +1607,7 @@ function renderMission() {
   // New idea on the page itself, where workspace-hub had it (Builder, 2026-10-18: it was hidden in the Workspace window).
   $('#fMission').querySelectorAll('[data-idea]').forEach(b => b.onclick = () => openModal({ kind: 'idea', name: '', text: '', needs: false }));
   $('#fMission').querySelectorAll('[data-medit]').forEach(b => b.onclick = () => openModal({ kind: 'medit', items: editItems(M) }));
-  $('#fMission').querySelectorAll('[data-sprint]').forEach(b => b.onclick = () => openModal({ kind: 'sprint' }));
+  $('#fMission').querySelectorAll('[data-sprint]').forEach(b => b.onclick = () => openModal({ kind: 'sprint', sec: b.dataset.sprint || undefined }));
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
 }
@@ -1597,7 +1634,7 @@ function missionLive() {
     if (box) setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
     page.querySelectorAll(':scope>.mcol>[data-card]').forEach(c => { const id = c.dataset.card; setHTML(c, !wins[id].show || wins[id].show() ? winCard(id) : ''); });
     page.querySelectorAll('[data-panel]').forEach(p => { const id = p.dataset.panel; p.hidden = !!wins[id].show && !wins[id].show(); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); });
-    page.querySelectorAll('[data-sec]').forEach(p => secInline(p.dataset.sec));
+    page.querySelectorAll('[data-sec]').forEach(p => secInline(p.dataset.key));
     // With a space file the built-in layer is off, so Main project and Logs are gone: an empty column hides and the others widen.
     page.querySelectorAll('.mcol').forEach(col => { col.hidden = ![...col.children].some(k => !k.hidden && k.innerHTML.trim()); });
     if (page.dataset.placed !== undefined) page.dataset.cols = page.querySelectorAll(':scope>.mcol:not([hidden])').length;
@@ -1626,6 +1663,8 @@ function fillWidgets(root, back) {
     else if (w === 'usage') setHTML(b, wins.musage.inline());
     else if (w === 'apps') bindWin(setHTML(b, wins.mlaunch.body()), back ?? { kind: 'win', id: 'mlaunch' });
     else if (w === 'primary') setHTML(b, live.primary ? wins.mprimary.body() : '<p class="empty">No main project.</p>');
+    else if (TILE_WIDGETS.includes(w)) setHTML(b, w === 'sprint' && !SP.on ? '<p class="empty">No sprint status file.</p>' : `<button data-slot="button" data-variant="outline" data-wopen>${esc(BUILTIN[w])}</button>`)
+      .querySelectorAll('[data-wopen]').forEach(x => x.onclick = () => openModal(builtinModal(w, box.dataset.wkey)));
   });
 }
 // Notes (threat model row 34): a folder outside the workspace, named in settings.notes_roots; the daemon checks every path.
@@ -1786,7 +1825,7 @@ async function saveNote(m, hash) {
 // Which box each part draws in (no box: on its own); the classes are the boxes' CSS.
 const SECTION_BOX = { notes: 'mlist', folders: 'mlist', refs: 'mlist', logs: 'mlist', buttons: 'mlist', data: 'dtiles', cards: 'dtiles', links: 'dtiles', checklists: 'cks', widgets: 'wdgs' };
 function sectionBody(m, body, g, o) {
-  const l = M.scripts[g], tools = g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === g);
+  const l = M.scripts[g], tools = g === 'Tools' ? M.tools : [], sp = spaceOf(g);
   // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is on screen, every 30 s.
   // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
   // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
@@ -1820,7 +1859,7 @@ function sectionBody(m, body, g, o) {
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
     checklists: (sp?.checklists || []).map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join(''),
     // P9's own panels inside the section (W-I), filled by fillWidgets below.
-    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}"><h3>${esc(w === 'waiting' ? 'Waiting on you' : wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
+    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}" data-wkey="${esc(g)}"><h3>${esc(w === 'waiting' ? 'Waiting on you' : BUILTIN[w] ?? wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
   };
   // An empty part draws nothing and does not split its neighbours; the list of rows is still drawn once, empty, when no part has a row (as before).
   const boxes = [], rows = Object.keys(part).some(k => SECTION_BOX[k] === 'mlist' && part[k]);
@@ -1892,7 +1931,7 @@ function sectionBody(m, body, g, o) {
   body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back }));
   body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { name: b.dataset.slog }, call: 'spaceLog', back }));
   body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
-  body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: g, back }));
+  body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: gTitle(g), back }));
   // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section (on the page, once per
   // version of the section).
   for (const f of sp?.folders || []) if (!(f.id in m.counts)) {
@@ -1922,7 +1961,7 @@ function missionModal(m, body, row) {
   } else if (m.kind === 'scripts') {
     if (!M.scripts[m.g]) return closeModal();
     const n = sectionRows(m.g, M.scripts[m.g]), word = n > M.scripts[m.g].length ? 'item' : 'script';
-    $('#mdlT').textContent = `${m.g} · ${n} ${word}${n === 1 ? '' : 's'}`;
+    $('#mdlT').textContent = `${gTitle(m.g)} · ${n} ${word}${n === 1 ? '' : 's'}`;
     sectionBody(m, body, m.g, { write: (el, html) => { el.innerHTML = html; return true; }, shown: () => S.modal === m, seen: () => !document.hidden, redraw: renderModal, back: m });
   } else if (m.kind === 'folder') {
     $('#mdlT').textContent = m.f.title;
@@ -1994,9 +2033,10 @@ function missionModal(m, body, row) {
     $('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
     body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
       : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
-    $('#mdlFoot').innerHTML = SPRINT_SCRIPTS.map(([id, label]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${id}"${scriptById(id) ? '' : ` disabled title="Add a ${id} button to the registry"`}>${label}</button>`).join('')
+    const runs = sprintScripts(m.sec);
+    $('#mdlFoot').innerHTML = runs.map(([id, label, row]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${esc(id)}"${row ? '' : ` disabled title="Add a ${esc(id)} button to the registry"`}>${esc(label)}</button>`).join('')
       + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
-    $('#mdlFoot').querySelectorAll('[data-sprint-run]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: scriptById(b.dataset.sprintRun), back: m }));
+    $('#mdlFoot').querySelectorAll('[data-sprint-run]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: runs.find(r => r[0] === b.dataset.sprintRun)[2], back: m }));
     $('#mdlFoot [data-sprint-tmux]').onclick = async () => {
       const r = await window.p9.mission('sprintTmux');
       if (r.status === 201) { closeModal(); showTerminal(r.body.terminal); }

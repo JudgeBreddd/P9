@@ -873,7 +873,15 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.post('/mission/edit', editing, async (c) => {
     const { kind, confirm, ...rest } = (await json(c)) ?? {};
     if (!['apps', 'pages', 'sections'].includes(kind) || (confirm !== undefined && typeof confirm !== 'boolean')
-      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'picture', 'hash'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'picture', 'hash', 'set', 'index'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+    // The field editor (W-N): set is the MCP patch, index moves a section, each with every guard the tools have. A picture comes only from the upload below.
+    const answer = ({ error, ...result }) => c.json(error ? { error, ...result } : result, !error ? 200 : error === 'hash-conflict' ? 409 : error === 'registry-read-only' ? 403 : 400);
+    if (rest.set !== undefined || rest.index !== undefined) {
+      const { key, set, index, hash, ...other } = rest;
+      if (Object.keys(other).length || (set !== undefined) === (index !== undefined) || (index !== undefined && kind !== 'sections')
+        || (set !== undefined && (!set || typeof set !== 'object' || 'picture' in set))) return c.json({ error: 'request-refused' }, 400);
+      return answer(await (set !== undefined ? mcp.patch(kind, { key, set, hash }, { user: true, confirm }) : mcp.move({ section: key, index, hash }, { user: true, confirm })));
+    }
     // A picture is '' (back to the automatic icon) or {data: base64}. The file is stored only after File protection's confirm and a
     // matching hash, so a refused save leaves nothing behind; the record then names it by the name P9 gave it.
     const { picture } = rest;
@@ -887,8 +895,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       if (stored.error) return c.json(stored, 400);
       rest.picture = stored.name;
     }
-    const { error, ...result } = await mcp.update(kind, rest, { user: true, confirm });
-    return c.json(error ? { error, ...result } : result, !error ? 200 : error === 'hash-conflict' ? 409 : error === 'registry-read-only' ? 403 : 400);
+    return answer(await mcp.update(kind, rest, { user: true, confirm }));
   });
   app.route('/', api);
 

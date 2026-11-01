@@ -1036,9 +1036,12 @@ one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = tru
 
 // Mission: the same daemon routes the desktop uses. Native <details> rows open in place; scripts stream output from
 // /runs/:id. Terminal scripts and laptop apps open windows on the laptop, so the phone lists them as laptop-only.
-type Item = { id: string; title: string; desc: string; group: string; args: string[]; confirm: boolean; terminal: boolean; url: string };
+type Item = { id: string; title: string; desc: string; group: string; section?: string; args: string[]; confirm: boolean; terminal: boolean; url: string };
 type Waiting = { name: string; title: string; project: string; age: string; hash: string; content: string; answerable: boolean };
-let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: string[] } = { queue: [], scripts: [] };
+let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: string[]; space?: { id: string; widget?: string; widgets?: string[]; refs?: { id: string; kind?: string }[] }[] } = { queue: [], scripts: [] };
+// P9's built-in tiles a section may name (W-D); naming any decides which show. The phone has no editor, so edit is the desktop's alone.
+const TILE_WIDGETS = ['idea', 'sprint', 'edit'];
+const naming = (s: { widget?: string; widgets?: string[] }, w: string) => s.widget === w || !!s.widgets?.includes(w);
 const row = (summary: string, body: string, attrs = '') => `<details class="row"${attrs}><summary>${summary}</summary><div class="body">${body}</div></details>`;
 // Each section is a small tile that opens it as a full-screen window (Builder, 2026-10-17: "group everything so that
 // its in a window i can open"). Callers escape title and line.
@@ -1136,6 +1139,11 @@ async function loadMission(cached = false) {
         : '<p class="muted">Open this one on the desktop: it has no empty answer line.</p>'))).join('');
     const groups = new Map<string, string[]>(), names = new Map<string, string[]>(); // a section's rows, and their titles for its detail line
     const scriptParts = new Map<string, [string, string]>(); // a script's summary and body by id, for a space section that references it
+    // W-C, W-J: keyed by section id (titles may repeat). A space button names its section; a registry group named like a section joins
+    // the first with that title; any other is 'g:' + its name (an id has no ':'). titles: what each key is called.
+    const titles = new Map<string, string>(), byTitle = new Map<string, string>();
+    for (const s of (data.space ?? []) as { id: string; title: string }[]) { titles.set(s.id, s.title); if (!byTitle.has(s.title)) byTitle.set(s.title, s.id); }
+    const keyOf = (item: Item) => { const name = item.group || 'Scripts', key = item.section ?? byTitle.get(name) ?? 'g:' + name; if (!titles.has(key)) titles.set(key, name); return key; };
     (data.scripts as Item[]).forEach((item, index) => {
       const inputs = (item.args as unknown as (string | { label: string; choices?: string[] })[]).map((arg) => typeof arg === 'string'
         ? `<label>${escape(arg)}<input maxlength="8000" autocomplete="off" /></label>`
@@ -1146,15 +1154,16 @@ async function loadMission(cached = false) {
       // Spec §6: the closed row has a Run pill at its right. A script with fields keeps its Run button by them; the pill opens the row there.
       const pill = item.terminal ? '' : `<button type="button" class="pill" data-run-now>${item.confirm ? 'Run…' : 'Run'}</button>`;
       scriptParts.set(item.id, [escape(item.title) + pill, body]);
-      groups.set(item.group || 'Scripts', [...(groups.get(item.group || 'Scripts') ?? []), row(escape(item.title) + pill, body)]);
-      names.set(item.group || 'Scripts', [...(names.get(item.group || 'Scripts') ?? []), item.title]);
+      const key = keyOf(item);
+      groups.set(key, [...(groups.get(key) ?? []), row(escape(item.title) + pill, body)]);
+      names.set(key, [...(names.get(key) ?? []), item.title]);
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>(), counts = new Map<string, number>();
     // The phone's own order of a section's parts (information first, its buttons last); widgets are the desktop's alone.
     const PHONE_PARTS = ['text', 'quick_note', 'notes', 'logs', 'data', 'cards', 'links', 'folders', 'checklists', 'refs', 'buttons'];
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
-    for (const space of (data.space ?? []) as { title: string; text: string; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
+    for (const space of (data.space ?? []) as { id: string; title: string; text: string; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
       const text = space.text ? [`<p class="muted" data-space-text>${escape(space.text)}</p>`] : [];
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
@@ -1183,12 +1192,12 @@ async function loadMission(cached = false) {
       // What the section shows comes first and its buttons after them (Builder, 2026-10-31: actions under the information).
       // The section's order field (the desktop's too) moves these; the text is not a row, so it is not counted.
       const parts: Record<string, string[]> = { text, quick_note: quick, notes: folder, logs: space.logs.map((log) => row(escape(log.title), lazy({ name: log.id }))), data: tiles, cards, links: webLinks,
-        folders: lists, checklists: checks, refs, buttons: groups.get(space.title) ?? [] };
+        folders: lists, checklists: checks, refs, buttons: groups.get(space.id) ?? [] };
       const ordered = partOrder(space.order, PHONE_PARTS).flatMap((part) => parts[part]);
-      if (ordered[0] === text[0] && text.length) { notes.set(space.title, text[0]); ordered.shift(); }
-      groups.set(space.title, ordered);
-      counts.set(space.title, ordered.length - (ordered.includes(text[0]) ? 1 : 0));
-      names.set(space.title, [...(names.get(space.title) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
+      if (ordered[0] === text[0] && text.length) { notes.set(space.id, text[0]); ordered.shift(); }
+      groups.set(space.id, ordered);
+      counts.set(space.id, ordered.length - (ordered.includes(text[0]) ? 1 : 0));
+      names.set(space.id, [...(names.get(space.id) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
         ...(space.folders ?? []).map((list) => list.title), ...(space.checklists ?? []).map((list) => list.title), ...(space.refs ?? []).map((ref) => ref.title ?? ref.id)]);
     }
     const links = [...data.pages, ...data.apps.filter((item: Item) => item.url)].map((item: Item) => (/^https?:\/\//i.test(item.url)
@@ -1197,8 +1206,11 @@ async function loadMission(cached = false) {
       : `<li><button type="button" class="link" data-open-page="${escape(item.id)}" data-url="${escape(item.url)}">${escape(item.title)} (opens on the laptop)</button></li>`)).join('');
     const laptopApps = data.apps.filter((item: Item) => !item.url).length;
     const status = escape(String(data.primary?.status ?? '').replace(/\*\*/g, ''));
-    const widgets = ((data.space ?? []) as { widget?: string; widgets?: string[] }[]).some((s) => s.widget || s.widgets?.length), icm = widgets || (!!data.icmFiles && !widgets);
-    const order = ((data.space ?? []) as { title: string }[]).map((s) => s.title), spaceRank = (title: string) => { const i = order.indexOf(title); return i < 0 ? order.length : i; };
+    // A panel named anywhere is the ICM rule's signal; a built-in tile is not a panel. Once a section names a tile, only the named ones show.
+    const space = (data.space ?? []) as { id: string; widget?: string; widgets?: string[] }[], panel = (w?: string) => !!w && !TILE_WIDGETS.includes(w);
+    const widgets = space.some((s) => panel(s.widget) || s.widgets?.some(panel)), tiles = TILE_WIDGETS.some((w) => space.some((s) => naming(s, w)));
+    const icm = tiles ? space.some((s) => naming(s, 'idea')) : widgets || (!!data.icmFiles && !widgets), sprintOn = !tiles || space.some((s) => naming(s, 'sprint'));
+    const order = space.map((s) => s.id), spaceRank = (key: string) => { const i = order.indexOf(key); return i < 0 ? order.length : i; };
     // Item 14: a laptop is updating this server's P9; it restarts once no chat is mid-turn (apps/server/update.mjs).
     // A fresh profile shows only the onboarding card (M4, threat model row 72).
     if (data.empty) {
@@ -1212,9 +1224,9 @@ async function loadMission(cached = false) {
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
       // + New idea writes to _ideas: an ICM widget, shown only where the desktop shows the ICM widgets (finding 3a).
       + (icm ? win('idea', 'New idea', '+', 'Saved to _ideas/', row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>')) : '')
-      + '<div id="sprint"></div>'
+      + (sprintOn ? '<div id="sprint"></div>' : '')
       // The space's sections come first, in the order of its file (so Reviews sits under Sprint), then the other groups.
-      + [...groups].sort(([a], [b]) => spaceRank(a) - spaceRank(b)).map(([group, rows], index) => win('g' + index, escape(group), counts.get(group) ?? rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
+      + [...groups].sort(([a], [b]) => spaceRank(a) - spaceRank(b)).map(([group, rows], index) => win('g' + index, escape(titles.get(group) ?? group), counts.get(group) ?? rows.length, escape((names.get(group) ?? []).join(' · ')),(notes.get(group) ?? '') + rows.join(''))).join('')
       + win('pages', 'Pages', data.pages.length, escape(data.pages.map((item: Item) => item.title).join(' · ')) || 'No pages.',`<ul class="list">${links}</ul>` + (laptopApps ? `<p class="muted">${laptopApps} laptop apps open from the desktop.</p>` : ''))
       + '</div>'; });
     missionDrawn = true;
@@ -1238,8 +1250,11 @@ async function loadSprint() {
   const rings = data ? data.chunks.map((c) => `<div class="spr" data-state="${escape(['running', 'waiting', 'merged', 'blocked'].includes(c.state) ? c.state : 'unknown')}"><div class="ring" role="img" aria-label="${escape(c.id)} ${escape(c.state)} ${c.percent}%" style="--p:${Number(c.percent)}"><b>${Number(c.percent)}%</b></div>`
     + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}${c.activity ? ` · <span data-activity="${escape(c.activity)}">${escape(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${escape(c.steps)}</span>` : ''}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
   const overall = data && Number.isFinite(data.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${Number(data.overall)}%" style="--p:${Number(data.overall)}" data-overall><b>${Number(data.overall)}%</b></div><div class="spt"><b>Whole sprint</b><small class="muted">${data.chunks.filter((c) => c.state === 'merged').length} of ${data.chunks.length} merged</small></div></div>` : '';
-  const scripts = SPRINT_SCRIPTS.map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
-    return index < 0 ? `<p class="muted">${label}: add a ${id} button to the registry.</p>` : `<form data-run="${index}"><button type="submit">${label} (asks first)</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`; }).join('');
+  // W-M: the section naming sprint runs its own buttons and script refs; with none, the three above.
+  const sec = mission.space?.find((s) => naming(s, 'sprint')), own = sec ? [...mission.scripts.filter((item) => item.section === sec.id).map((item) => item.id),
+    ...(sec.refs ?? []).filter((ref) => ref.kind === 'scripts').map((ref) => ref.id)] : [];
+  const scripts = (own.length ? own.map((id) => [id, mission.scripts.find((item) => item.id === id)?.title ?? id]) : SPRINT_SCRIPTS).map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
+    return index < 0 ? `<p class="muted">${escape(label)}: add a ${escape(id)} button to the registry.</p>` : `<form data-run="${index}"><button type="submit">${escape(label)} (asks first)</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`; }).join('');
   const merged = data ? data.chunks.filter((c) => c.state === 'merged').length : 0;
   keepOpen(() => { target.innerHTML = win('sprint', data ? 'Sprint · ' + escape(data.sprint || 'unnamed') : 'Sprint', data ? `${merged}/${data.chunks.length}` : '!',
     data ? `merged · updated ${escape(data.updatedAt || 'unknown')}` : 'status file unreadable',

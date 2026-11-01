@@ -106,24 +106,25 @@ export function oneLineChange(before, after, kind) {
 // A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file;
 // notes names a folder from settings.notes_roots by its key, never by path.
 // Strict (M1): an unknown field is listed by name (kept, so an older or newer file still draws), and a section repeating an
-// earlier one's title or id is dropped. A section with no id gets one from its title here, in memory only (withIds).
+// earlier one's id is dropped; titles may repeat (W-C), the id is the key. A section with no id gets one from its title here,
+// in memory only (withIds). A button keeps its own group (W-J); section names the section it sits in.
 export function parseSpace(text) {
   const space = JSON.parse(stripBom(text));
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
   const result = { sections: [], invalid: [] };
   for (const detail of unknownFields(space, { sections: true }, 'the space')) result.invalid.push({ kind: 'space', reason: 'unknown-field', detail });
-  const titles = new Set(), ids = new Set();
+  const ids = new Set();
   withIds(space.sections).forEach((section, index) => {
     const wrong = problem(section, SECTION);
     if (wrong) return result.invalid.push({ kind: 'space', index, reason: 'malformed-section', detail: wrong });
     const title = section.title.trim(), buttons = [], logs = [], folders = [];
-    if (titles.has(title) || ids.has(section.id)) return result.invalid.push({ kind: 'space', index, reason: 'duplicate-section',
-      detail: (titles.has(title) ? 'Another section is already titled "' + title + '"' : 'Another section already has the id ' + section.id) + '; titles and ids must be unique. This one is not shown.' });
-    titles.add(title); ids.add(section.id);
+    if (ids.has(section.id)) return result.invalid.push({ kind: 'space', index, reason: 'duplicate-section',
+      detail: 'Another section already has the id ' + section.id + '; ids must be unique (titles may repeat). This one is not shown.' });
+    ids.add(section.id);
     for (const detail of unknownFields(section, SECTION, 'a section')) result.invalid.push({ kind: 'space', index, reason: 'unknown-field', detail });
     (section.buttons ?? []).forEach((record, button) => { const detail = recordProblem(record, 'scripts');
       for (const extra of unknownFields(record, RECORD, 'a button')) result.invalid.push({ kind: 'space', index, button, reason: 'unknown-field', detail: extra });
-      if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
+      if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, section: section.id }); });
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ ...record }); });
@@ -334,8 +335,8 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   }
   async function overview() {
     const reg = await registry(), waiting = await queue();
-    const strip = ({ id, title, icon, picture, desc = '', group = '', args = [], confirm = false, terminal = false, url = '' }) =>
-      ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
+    const strip = ({ id, title, icon, picture, desc = '', group = '', section, args = [], confirm = false, terminal = false, url = '' }) =>
+      ({ id, title, ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), desc, group, ...(section ? { section } : {}), args: args.map((arg) => (typeof arg === 'string' ? arg : arg.choices ? { label: arg.label, choices: arg.choices } : arg.label)), confirm, terminal, url });
     // A button a checklist runs as its Apply is not drawn again as its own row; it still runs by ID through the checklist.
     const applies = new Set(reg.space.flatMap((section) => (section.checklists ?? []).map((item) => item.apply).filter(Boolean)));
     // A card's or data tile's feeder script and a card's title-bar buttons are not rows either; they come marked hidden, so a
