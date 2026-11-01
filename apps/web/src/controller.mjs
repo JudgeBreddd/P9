@@ -2128,8 +2128,10 @@ $('#dHide').onclick = toggleTerm;
 try { localStorage.removeItem('p9-focus-looks'); } catch {}
 // All three focus panes stay in the DOM; switching only flips visibility, so nothing re-renders.
 // A pick (rail, keys, CLI, landing) leaves the landing page and is kept as the last focus; `stay` is the app's own switching.
+// U8: the slim Temporary P9 on a remote has no Mission Control (Always on installs the full P9, which has it).
+const focusOn = f => !!settings.focus[f] && !(f === 'mission' && serverInfo?.slim);
 function setFocus(f, stay = false) {
-  if (!settings.focus[f]) return; // turned off in Settings
+  if (!focusOn(f)) return; // turned off in Settings, or not on this remote
   S.focus = f;
   if (f === 'mission') { refreshMission(); if ($('#fMission .mrow[data-placed]')) missionLive(); }
   if (!stay) { try { localStorage.setItem('p9-last-focus', f); } catch {} leaveLanding(); }
@@ -2334,8 +2336,8 @@ async function saveSettings(next) {
   applySettings();
 }
 function applySettings() {
-  document.querySelectorAll('[data-focus-btn]').forEach(b => { b.hidden = !settings.focus[b.dataset.focusBtn]; });
-  if (!settings.focus[S.focus]) setFocus(Object.keys(settings.focus).find(f => settings.focus[f]), true);
+  document.querySelectorAll('[data-focus-btn]').forEach(b => { b.hidden = !focusOn(b.dataset.focusBtn); });
+  if (!focusOn(S.focus)) setFocus(Object.keys(settings.focus).find(focusOn), true);
   if ($('#setDlg').open) renderSettings();
   loadPetLook();
 }
@@ -2627,7 +2629,7 @@ if (LAND_BG === 'video') {
 const sky = LAND_BG === 'video' ? NO_SKY : createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
 const LAND = { started: false, raf: 0, v: { ...SKY_MAIN }, from: null, to: null, t0: 0, ms: 0, drawn: 0, spin: 0 };
 if (!landOn) land.removeAttribute('data-pending');
-const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return settings.focus[f] ? f : Object.keys(focusNames).find(k => settings.focus[k]); };
+const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return focusOn(f) ? f : Object.keys(focusNames).find(focusOn); };
 function landingStart() {
   if (LAND.started) return;
   LAND.started = true;
@@ -2647,7 +2649,7 @@ function openLanding(intro) {
   if (!land.open) land.showModal();
   land.focus();
   landGreeting(); landStatus(); landPets();
-  land.querySelectorAll('[data-land]').forEach(b => { b.hidden = !settings.focus[b.dataset.land]; });
+  land.querySelectorAll('[data-land]').forEach(b => { b.hidden = !focusOn(b.dataset.land); });
   LAND.v = intro ? { uDist: 30, uShift: 0, uIgnite: 0, uStars: 0, uDim: 1 } : { ...SKY_MAIN };
   if (intro) { tweenSky({ uDist: 22, uIgnite: 1, uStars: 1 }, 2400); LAND.intro = setTimeout(landMain, 2600); }
   if (!sky.ok) return;
@@ -2700,7 +2702,7 @@ land.addEventListener('keydown', e => {
   if (e.ctrlKey || e.altKey || e.metaKey) return; // Ctrl 1-3 is the global switch
   if (land.dataset.stage === 'intro') { if (e.code === 'Space') { e.preventDefault(); landMain(); } return; }
   const f = { Digit1: 'chat', Digit2: 'dev', Digit3: 'mission', Numpad1: 'chat', Numpad2: 'dev', Numpad3: 'mission' }[e.code];
-  if (f && settings.focus[f]) { e.preventDefault(); setFocus(f); }
+  if (f && focusOn(f)) { e.preventDefault(); setFocus(f); }
 });
 land.querySelectorAll('[data-land]').forEach(b => {
   b.querySelector('.ic').innerHTML = svg[{ chat: 'chat', dev: 'code', mission: 'gauge' }[b.dataset.land]];
@@ -3487,7 +3489,7 @@ function moveReloaded() {
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); }, () => {});
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); if (r?.slim) applySettings(); }, () => {});
 // The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
 // each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
 // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
@@ -3513,13 +3515,16 @@ async function renderServerMenu() {
     + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
   pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
     + all.map(h => row(h, h === host ? SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable'] : probed(h) ? ['wait', 'Checking…'] : ['off', 'Not connected'], h === host)).join('')
-    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
+    + '<hr data-slot="separator" style="margin:6px 0">' + (host ? '<button class="item" role="menuitem" id="serverDisconnect">Disconnect from ' + esc(host) + '</button>' : '')
+    + '<button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
   pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
   pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
   all.filter(probed).forEach(h => window.p9.remoteState?.(h).then(st => {
     const b = pop.querySelector('[data-server-go="' + CSS.escape(h) + '"]'), [dot, say] = PROBE_STATE[st] ?? PROBE_STATE.unreachable;
     if (b) { b.querySelector('.srv-dot').dataset.s = dot; b.querySelector('.muted').textContent = say; }
   }, () => {}));
+  // U9: the same switch as This computer above, said plainly.
+  if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); window.p9.server(null); };
   $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }
 if (chatOn()) side.open('dan-chat', danChat);

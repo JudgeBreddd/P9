@@ -49,10 +49,12 @@ async function push(state, checkout, target) {
 // tell(event): { phase, ... } for the window. live(): false once this connection is gone or replaced, which ends the follow.
 // check(): the tunnel's health check, which picks up the restarted daemon's new credentials (remote.mjs).
 // deadline: how long the follow waits for the server's end, then says so (timed-out) instead of waiting for ever.
-export async function updateServer({ state, check, version, checkout, host, tell = () => {}, live = () => true, deadline = FOLLOW_MS }) {
+// reinstall(): U8, the slim Temporary P9 there has no source to build; an older one is installed again from this app instead.
+export async function updateServer({ state, check, version, checkout, host, tell = () => {}, live = () => true, deadline = FOLLOW_MS, reinstall = null }) {
   const health = await check().catch(() => null);
   if (!health?.version) return { phase: 'unknown' };
   if (newer(health.version, version)) return tell({ phase: 'app-older', host, server: health.version, app: version }) ?? { phase: 'app-older' };
+  if (reinstall) { if (!newer(version, health.version)) return { phase: 'current' }; reinstall(); return { phase: 'reinstall' }; }
   const target = await offer({ checkout, version });
   if (!target || !newer(target.version, health.version)) return { phase: 'current' };
   const status = await daemonRequest(state, 'GET', '/update/status').catch(() => null);

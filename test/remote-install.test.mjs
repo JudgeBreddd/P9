@@ -3,10 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, readdir, writeFile, access } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile, access } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { installRemote, script, sourceArchive } from '../apps/desktop/remote-install.mjs';
+import { installRemote, script, slimArchive, sourceArchive } from '../apps/desktop/remote-install.mjs';
 
 const skip = process.platform === 'win32' ? 'sh' : false;
 
@@ -89,4 +89,101 @@ test('D15a source: a copy without .git sends its files under one folder, without
   const files = out.split('\n').filter((f) => f && !f.endsWith('/')).sort();
   assert.deepEqual(files, ['app/.gitignore', 'app/apps/web/src/b.mjs', 'app/scripts/install.sh']);
   console.log('PASS D15a source: a copy sends ' + files.length + ' files, nothing .gitignore excludes');
+});
+
+// U8 (threat model row 50 U8 and U9): the slim Temporary P9. A stand-in daemon folder (bundleDaemon's out): slimArchive
+// sends only its named files, and the stand-in install.sh records its arguments and writes a slim start that logs stop.
+async function slimFolder(dir, name, extra = {}) {
+  const folder = path.join(dir, name);
+  const files = {
+    'apps/server/main.mjs': 'main\n', 'agents.json': '{}\n', 'package.json': '{}\n',
+    'scripts/install.sh': 'echo "ARGS $*" > "$HOME/slim-args.txt"; s="$HOME/.local/share/p9"; mkdir -p "$s/run"\n'
+      + 'printf "%s\\n" "checkout=$4" "slim=1" "echo stop >> $HOME/stops.txt" > "$s/run/start"\n',
+    // Never sent: this computer's own agents' binaries and anything not named in SLIM.
+    'node_modules/@openai/codex-linux-x64/codex': 'bin\n', 'AGENTS.md': 'private\n', 'node': 'bin\n', ...extra,
+  };
+  for (const [f, text] of Object.entries(files)) { await mkdir(path.dirname(path.join(folder, f)), { recursive: true }); await writeFile(path.join(folder, f), text); }
+  return folder;
+}
+const tree = async (dir) => (await readdir(dir, { recursive: true, withFileTypes: true })).filter((e) => e.isFile()).map((e) => path.relative(dir, path.join(e.parentPath, e.name))).sort();
+
+test('U8: a Temporary remote gets the slim P9 in ~/.local/share/p9/remote, no ~/p9; a newer one replaces it whole; an older one is refused unless forced', { skip, timeout: 60000 }, async () => {
+  const s = await stage(), remote = path.join(s.home, '.local', 'share', 'p9', 'remote');
+  const first = await slimFolder(s.dir, 'v1', { 'apps/server/old-only.mjs': 'old\n' });
+  const result = await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(first), version: '0.1.6', slim: true });
+  assert.equal(result.phase, 'done', JSON.stringify(result));
+  assert.equal(await exists(path.join(s.home, 'p9')), false, 'no ~/p9');
+  assert.equal(await readFile(path.join(s.home, 'slim-args.txt'), 'utf8'), 'ARGS --headless --background --slim ' + remote + '\n');
+  assert.deepEqual(await tree(remote), ['.p9-version', 'agents.json', 'apps/server/main.mjs', 'apps/server/old-only.mjs', 'package.json', 'scripts/install.sh']);
+  assert.equal(await readFile(path.join(remote, '.p9-version'), 'utf8'), '0.1.6\n');
+  // A newer app: the whole folder is swapped, so a file only the old one had is gone; the old daemon is told to stop.
+  await writeFile(path.join(s.home, 'stops.txt'), '');
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(await slimFolder(s.dir, 'v2')), version: '0.1.7', slim: true })).phase, 'done');
+  assert.equal(await exists(path.join(remote, 'apps', 'server', 'old-only.mjs')), false, 'nothing of the old version stays');
+  assert.equal(await readFile(path.join(remote, '.p9-version'), 'utf8'), '0.1.7\n');
+  assert.equal(await readFile(path.join(s.home, 'stops.txt'), 'utf8'), 'stop\n');
+  assert.deepEqual((await readdir(path.join(s.home, '.local', 'share', 'p9'))).filter((n) => n.startsWith('.remote-')), [], 'no work folder left');
+  // An older app never downgrades it, and nothing changes there; force does.
+  const older = await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(first), version: '0.1.6', slim: true });
+  assert.deepEqual(older, { phase: 'failed', error: 'newer-there', server: '0.1.7' });
+  assert.equal(await readFile(path.join(remote, '.p9-version'), 'utf8'), '0.1.7\n');
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(first), version: '0.1.6', slim: true, force: true })).phase, 'done');
+  assert.equal(await readFile(path.join(remote, '.p9-version'), 'utf8'), '0.1.6\n');
+  // A pre-release is older than its release.
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(first), version: '0.1.6-rc.1', slim: true })).error, 'newer-there');
+});
+
+test('U8: slimArchive sends only the named files, never the bundled node, this computer\'s agent binaries or other files', { skip, timeout: 20000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-rslim-')), folder = await slimFolder(dir, 'd');
+  const list = spawn('tar', ['-tzf', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
+  slimArchive(folder).pipe(list.stdin);
+  let out = ''; list.stdout.setEncoding('utf8').on('data', (c) => { out += c; });
+  await new Promise((resolve) => list.once('close', resolve));
+  assert.deepEqual(out.split('\n').filter((f) => f && !f.endsWith('/')).sort(), ['agents.json', 'apps/server/main.mjs', 'package.json', 'scripts/install.sh']);
+  assert.throws(() => slimArchive(dir), /slim-bundle-incomplete/);
+});
+
+test('U8: a remote with the full P9 says full-there and gets no slim copy beside it', { skip, timeout: 30000 }, async () => {
+  const s = await stage();
+  await mkdir(path.join(s.home, 'p9')); await writeFile(path.join(s.home, 'p9', '.p9-remote-install'), '0.1.5\n');
+  const result = await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(await slimFolder(s.dir, 'v1')), version: '0.1.6', slim: true });
+  assert.equal(result.phase, 'full-there');
+  assert.equal(await exists(path.join(s.home, '.local', 'share', 'p9', 'remote')), false);
+});
+
+test('U8: Always on after the slim P9 stops it, installs the full one and removes the slim folder; a failed install puts its background marker back', { skip, timeout: 60000 }, async () => {
+  const s = await stage(), p9s = path.join(s.home, '.local', 'share', 'p9');
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(await slimFolder(s.dir, 'v1')), version: '0.1.6', slim: true })).phase, 'done');
+  await writeFile(path.join(p9s, 'run', 'background'), ''); await writeFile(path.join(s.home, 'stops.txt'), '');
+  // The full install fails first: the slim one runs again on the next connect (its marker is back), its folder stays.
+  const good = await readFile(path.join(s.dir, 'src', 'p9', 'scripts', 'install.sh'), 'utf8');
+  await writeFile(path.join(s.dir, 'src', 'p9', 'scripts', 'install.sh'), 'exit 1\n');
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6', keep: true })).phase, 'failed');
+  assert.equal(await exists(path.join(p9s, 'run', 'background')), true, 'the background marker is back');
+  assert.equal(await exists(path.join(p9s, 'remote')), true);
+  await writeFile(path.join(s.dir, 'src', 'p9', 'scripts', 'install.sh'), good);
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6', keep: true })).phase, 'done');
+  assert.equal(await readFile(path.join(s.home, 'stops.txt'), 'utf8'), 'stop\nstop\n', 'the slim daemon was stopped before each install');
+  assert.equal(await readFile(path.join(s.home, 'args.txt'), 'utf8'), 'ARGS --headless\n');
+  assert.equal(await exists(path.join(p9s, 'remote')), false, 'the slim folder went');
+  assert.equal(await readFile(path.join(s.home, 'p9', '.p9-remote-install'), 'utf8'), '0.1.6\n');
+});
+
+test('U8: the full ~/p9 records its version, refuses an older one unless forced, and drops files the new source no longer has', { skip, timeout: 60000 }, async () => {
+  const s = await stage(), d = path.join(s.home, 'p9');
+  await writeFile(path.join(s.dir, 'src', 'p9', 'gone-later.mjs'), 'x\n');
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.7' })).phase, 'done');
+  assert.equal(await readFile(path.join(d, '.p9-remote-install'), 'utf8'), '0.1.7\n');
+  await writeFile(path.join(d, 'built-there.txt'), 'built\n');
+  const older = await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' });
+  assert.deepEqual(older, { phase: 'failed', error: 'newer-there', server: '0.1.7' });
+  // A newer source without gone-later.mjs: it goes; what install.sh built there (never in the list) stays.
+  await rm(path.join(s.dir, 'src', 'p9', 'gone-later.mjs'));
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.8' })).phase, 'done');
+  assert.equal(await exists(path.join(d, 'gone-later.mjs')), false);
+  assert.equal(await readFile(path.join(d, 'built-there.txt'), 'utf8'), 'built\n');
+  assert.equal(await exists(path.join(d, 'README.md')), true);
+  // An install from before U8 (an empty marker) is replaced as before; force installs an older version.
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6', force: true })).phase, 'done');
+  assert.equal(await readFile(path.join(d, '.p9-remote-install'), 'utf8'), '0.1.6\n');
 });

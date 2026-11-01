@@ -7,7 +7,7 @@ const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
@@ -76,7 +76,7 @@ const KEY_SAID: Record<string, string> = {
 
 // D15a (desktop/remote-install.mjs), since U6 run by main on Connect (main.mjs setUp): starting is main trying the start
 // first, then the install, as the status poll reports it. Plain words; the steps stay in connStep and, on a failure, connLog.
-type RemoteInstall = { phase: 'starting' | 'running' | 'done' | 'failed' | 'already-there' | 'admin'; line?: string; tail?: string; error?: string; started?: number; need?: string[]; command?: string };
+type RemoteInstall = { phase: 'starting' | 'running' | 'done' | 'failed' | 'already-there' | 'admin'; line?: string; tail?: string; error?: string; started?: number; need?: string[]; command?: string; server?: string };
 // P9_INSTALL and P9_ADMIN lines are for main, not for people.
 const lastLine = (text = '') => text.split('\n').filter(l => l.trim() && !l.startsWith('P9_')).pop() ?? '';
 const needNames = (need: string[] = []) => need.map(n => n.split(':')[0]).join(', ');
@@ -86,20 +86,23 @@ const installWhy = (host: string, i: RemoteInstall) => ({
   done: 'P9 is ready on ' + host + '. Connecting…',
   admin: host + ' needs ' + (needNames(i.need) || 'a few tools') + ' before P9 can run there, and only an admin can add ' + ((i.need?.length ?? 0) > 1 ? 'them' : 'it') + '. Press Continue.',
   'already-there': host + ' has a ~/p9 folder this app did not make, so P9 leaves it alone. Rename or remove that folder there, then press Try again.',
-  failed: 'Setting up P9 on ' + host + ' stopped' + ({ 'timed-out': ' after 30 minutes', 'server-unreachable': ': the connection was lost', 'ssh-failed': ': ssh did not start', 'install-failed': '', 'missing-tools': ': ' + host + ' is missing ' + (needNames(i.need) || 'tools P9 needs') + ' and has no package manager P9 knows', 'not-allowed': ': your account there cannot install software' }[i.error ?? ''] ?? ' (' + i.error + ')')
+  failed: 'Setting up P9 on ' + host + ' stopped' + ({ 'timed-out': ' after 30 minutes', 'server-unreachable': ': the connection was lost', 'ssh-failed': ': ssh did not start', 'install-failed': '', 'missing-tools': ': ' + host + ' is missing ' + (needNames(i.need) || 'tools P9 needs') + ' and has no package manager P9 knows', 'not-allowed': ': your account there cannot install software', 'newer-there': ': ' + host + ' has P9 ' + (i.server ?? '') + ', newer than this app, and P9 never replaces it with an older one. Update this app first' }[i.error ?? ''] ?? ' (' + i.error + ')')
     + '. ' + (i.error === 'not-allowed' || i.error === 'missing-tools' ? 'Someone who administers ' + host + ' must install ' + (needNames(i.need) || 'them') + ', then press Try again.' : (i.tail ? 'Its last lines are below. ' : '') + 'Press Try again.'),
 }[i.phase]);
 // Row I1: P9 on a remote in background mode stops when nobody uses it. One line in the status bar says so, with Make it
 // always on; after the first connect there, one question (Temporary or Always on, U6). keeping: the last switch main ran there (desktop main.mjs applyKeep).
-type Keeping = { action: 'keep' | 'release'; phase: 'running' | 'ok' | 'refused' | 'no-start' | 'failed' | 'wrong-password' | 'not-allowed'; command?: string };
-const keepLine = (host: string, background?: boolean, k?: Keeping): [string, string] | null => {
+// full (U8): Always on asked on the slim Temporary P9, so main installs the full one (the connecting screen shows it).
+type Keeping = { action: 'keep' | 'release'; phase: 'running' | 'ok' | 'refused' | 'no-start' | 'failed' | 'wrong-password' | 'not-allowed' | 'full'; command?: string };
+// slim (U8): the small Temporary P9 there has no Mission Control; Always on installs the full P9, which has it.
+const keepLine = (host: string, background?: boolean, k?: Keeping, slim?: boolean): [string, string] | null => {
+  if (k?.phase === 'full' && background) return ['Installing the full P9 on ' + host + ' for Always on…', ''];
   if (k?.phase === 'running') return [k.action === 'keep' ? 'Making P9 always on on ' + host + '…' : 'Making P9 on ' + host + ' temporary…', ''];
   if (k?.phase === 'refused') return ['Always on for ' + host + ' needs an admin password', 'Use admin password'];
   if (k?.phase === 'wrong-password') return ['That admin password did not work on ' + host, 'Use admin password'];
   if (k?.phase === 'not-allowed') return ['Your account on ' + host + ' cannot make P9 always on; someone who administers it can allow it', ''];
   if (k?.phase === 'no-start') return ['P9 on ' + host + ' was installed before this choice existed, so it cannot switch', ''];
   if (k?.phase === 'failed') return ['Could not change how P9 runs on ' + host, 'Try again'];
-  return background ? ['P9 on ' + host + ' is temporary: it stops when you disconnect', 'Make it always on'] : null;
+  return background ? ['P9 on ' + host + ' is temporary' + (slim ? ' (no Mission Control)' : '') + ': it stops when you disconnect', 'Make it always on'] : null;
 };
 // Row I2: the password window for one admin step on host. need: "name: reason" lines; command: exactly what runs as admin.
 // The password goes to main once (p9:remote-admin) and the field is emptied whenever the window closes.
@@ -150,8 +153,8 @@ export default function Shell() {
     // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
     const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
       .catch(() => ({ status: 'unavailable' as const }))
-      .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; ask?: boolean; keeping?: Keeping }) => {
-        const label = document.getElementById('daemonStatus');
+      .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping }) => {
+        const label = document.getElementById('daemonStatus'), disconnect = document.getElementById('disconnectBtn');
         if (!active) return;
         // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
         if (result.mode === 'server') {
@@ -197,12 +200,19 @@ export default function Shell() {
           if (ok) { connected = true; shown = result.host ?? ''; if (layer?.open) layer.close(); } else waited = true;
           if (label && (ok || !known)) {
             label.textContent = result.status === 'ok' ? 'Connected to ' + result.host : (REMOTE_WHY[result.error ?? ''] ?? 'Remote unavailable (' + result.error + ')');
-            label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Settings > Remote Connect switches back to this computer.';
+            label.title = 'Remote mode: chats, Mission Control and the terminal run on ' + result.host + '. Disconnect switches back to this computer.';
           }
-          const note = document.getElementById('keepNote'), line: [string, string] | null = ok ? (keySaid ? [keySaid, ''] : keepLine(result.host ?? '', result.background, result.keeping)) : null;
+          // U9: Disconnect beside the label, the same switch as Settings > Remote Connect's This computer (p9:server(null)). A
+          // Temporary P9 there stops on its own 5 minutes after its last client (row I1, --idle-exit 300).
+          if (disconnect && ok) {
+            disconnect.hidden = false;
+            disconnect.title = 'Back to this computer.' + (result.background ? ' P9 on ' + result.host + ' is temporary, so it stops there 5 minutes later.' : ' P9 keeps running on ' + result.host + '.');
+            disconnect.onclick = () => { (disconnect as HTMLButtonElement).disabled = true; void window.p9?.server?.(null); };
+          }
+          const note = document.getElementById('keepNote'), line: [string, string] | null = ok ? (keySaid ? [keySaid, ''] : keepLine(result.host ?? '', result.background, result.keeping, result.slim)) : null;
           if (note && window.p9?.remoteKeep) {
             note.hidden = !line;
-            document.getElementById('keepText')!.textContent = line?.[0] ?? '';
+            const keepText = document.getElementById('keepText')!; keepText.textContent = keepText.title = line?.[0] ?? '';
             const button = document.getElementById('keepBtn') as HTMLButtonElement;
             button.hidden = !line?.[1]; button.textContent = line?.[1] ?? '';
             const k = result.keeping, host = result.host ?? '';
@@ -245,6 +255,7 @@ export default function Shell() {
           timer = setTimeout(ask, ok ? 5000 : 1000);
           return;
         }
+        if (disconnect) disconnect.hidden = true;
         // The saved folder was not there when the daemon started (an unplugged drive, an offline share): it runs on the default.
         if (label && result.status === 'ok' && result.savedWorkspace) {
           label.textContent = 'Workspace folder not found: ' + result.savedWorkspace + '. Using ' + result.workspace + ' for now';

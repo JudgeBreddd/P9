@@ -5,11 +5,15 @@
 # --headless: a server with no screen. The daemon only, no Electron download; desktops and phones connect to it.
 # --background: the desktop's "No" to Keep P9 running there (threat model row I1): no linger and no service; P9 runs as a
 # background process while a desktop is connected, the way VS Code's server runs. Without it, a server keeps P9 running.
+# --slim FOLDER (U8): this is the small Temporary P9 the desktop sent (remote-install.mjs slimScript), unpacked beside
+# FOLDER, which it replaces afterwards: no pnpm, no build, no service; the agents' binary packages come from agents.mjs, and
+# start names FOLDER. Goes with --headless --background.
 # --admin-stdin (row I2): the admin password the person typed into the desktop's install window is stdin's first line.
 # Without it, --headless stops where an admin is needed: P9_ADMIN need and P9_ADMIN command lines, exit 5.
 set -euo pipefail
-headless= background= admin_stdin= p9_pw=
-while case "${1:-}" in --headless) headless=1 ;; --background) background=1 ;; --admin-stdin) admin_stdin=1 ;; *) false ;; esac; do shift; done
+headless= background= admin_stdin= p9_pw= slim=
+while case "${1:-}" in --headless) headless=1 ;; --background) background=1 ;; --admin-stdin) admin_stdin=1 ;; --slim) shift; slim=${1:-} ;; *) false ;; esac; do shift; done
+[ -z "$slim" ] || [ -n "$background" ] || { echo "--slim goes with --headless --background."; exit 1; }
 [ -z "$background$admin_stdin" ] || [ -n "$headless" ] || { echo "--background and --admin-stdin go with --headless."; exit 1; }
 # Before anything else can read stdin; never echoed (no set -x anywhere here).
 if [ -n "$admin_stdin" ]; then IFS= read -r p9_pw || true; exec </dev/null; fi
@@ -32,12 +36,12 @@ workspace=$(realpath -m -- "${1:-$HOME/work}")
 cd "$(dirname -- "$0")/.."
 
 # The tools from before Node exists (apps/desktop/tools.sh), each with its reason; then the one command for all of them.
-p9_tools
+p9_tools ${slim:+slim}
 if [ -n "$P9_TOOLS_NEED" ]; then
   echo "P9 needs these on this machine:"
   printf '%s' "$P9_TOOLS_NEED" | while IFS= read -r line; do need "$line"; done
   admin_run "$(p9_install_command "$P9_TOOLS_PACKAGES")" || true
-  p9_tools
+  p9_tools ${slim:+slim}
   [ -z "$P9_TOOLS_NEED" ] || { echo "P9 cannot install without them. Install them with this machine's package manager, then run this again."; exit 1; }
 fi
 # A non-interactive ssh session (a desktop's Install on a remote) can come without XDG_RUNTIME_DIR; systemd's own
@@ -82,7 +86,8 @@ write_start() {
   {
     echo '#!/bin/sh'
     echo "# Written by P9's install.sh: sh start [up | keep | release | deps] (scripts/background.sh)."
-    echo "r=$(q "$run_dir") node=$(q "$node") checkout=$(q "$PWD")"
+    echo "r=$(q "$run_dir") node=$(q "$node") checkout=$(q "${slim:-$PWD}")"
+    if [ -n "$slim" ]; then echo "slim=1"; fi
     echo "workspace=$(q "$workspace") recovery=$(q "$HOME/.local/state/p9-foundation/conflicts")"
     echo "PATH=$(q "$PATH"); export PATH"
     cat apps/desktop/tools.sh scripts/background.sh
@@ -189,6 +194,15 @@ if ! node_error=$(node --version 2>&1 >/dev/null); then
   esac
 fi
 node=$(command -v node)
+# U8: the slim Temporary P9 is built already; it needs the agents for this machine, tmux and the editor server, then start.
+if [ -n "$slim" ]; then
+  "$node" scripts/agents.mjs || { echo "P9_INSTALL agents-failed"; exit 1; }
+  system_deps --headless || exit 1
+  "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
+  mkdir -p -- "$workspace"
+  write_start
+  exit 0
+fi
 if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] || { [ -n "$background" ] && [ -e "$run_dir/background" ]; }; then
   # An update checks the system again: a new version can need something the old one did not. Node is in place by now
   # (above), so the check never skips. An install from before the editor server was part of it gets it now (issue #14);

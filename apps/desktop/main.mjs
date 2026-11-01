@@ -11,7 +11,7 @@ import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTa
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
 import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
-import { installRemote, sourceArchive, adminLocal, adminArgs } from './remote-install.mjs';
+import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
@@ -274,7 +274,9 @@ export async function createDesktop({ state, open } = {}) {
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
   // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
-  const keeper = createKeeper({ saved: saved?.keep, named, run: (h, action, password) => remoteMode(h, action, sshCommand, password), save: () => keepServer() });
+  // U8: Keep on the slim Temporary P9 there (P9_KEEP full) is the full install, with keep and this password if any.
+  const keeper = createKeeper({ saved: saved?.keep, named, save: () => keepServer(), run: (h, action, password) => remoteMode(h, action, sshCommand, password)
+    .then(r => { if (r.phase === 'full' && h === serverHost) runInstall(password, { full: true, keep: true }); return r; }) });
   const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey }), { mode: 0o600 });
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
@@ -290,6 +292,8 @@ export async function createDesktop({ state, open } = {}) {
   let sshAsk = null, sshAsks = 0, dropped = false, keyOffer = null;
   // U6: set when runInstall exists (below); a connect that fails before then retries in 1 s and gets it.
   let setUp = () => {};
+  // U8: the same for runInstall, which Keep on a slim remote and a slim remote's update call.
+  let runInstall = () => ({ ok: false });
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
@@ -303,6 +307,7 @@ export async function createDesktop({ state, open } = {}) {
         serverUpdating = true;
         updateServer({ state: s.state, check: s.check, version: ownVersion, host: serverHost, live: () => attempt === serverTry,
           checkout: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? fileURLToPath(new URL('../../', import.meta.url)) : null,
+          reinstall: s.slim ? () => { if (attempt === serverTry && remoteInstall?.phase !== 'running') runInstall(); } : null,
           tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
@@ -513,7 +518,7 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost) {
       const h = await server?.check().catch(() => null);
       // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
-      const there = { ...keeper.status(serverHost, !!server?.background), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
+      const there = { ...keeper.status(serverHost, !!server?.background), ...(server?.slim && { slim: true }), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
       return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
     }
     try {
@@ -765,7 +770,7 @@ export async function createDesktop({ state, open } = {}) {
   // the window reloads onto that daemon. Neither daemon is stopped.
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
-    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey };
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, slim: !!server?.slim, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey };
     endDock();
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
@@ -778,18 +783,36 @@ export async function createDesktop({ state, open } = {}) {
   // answered without P9, one at a time. An unpackaged app sends its own source (sourceArchive); a packaged app has the remote
   // download its version. started: when it began, for the window's elapsed time; a throw ends it failed, never stuck running.
   // admin: row I2's password, after the install stopped at an admin step; passed to installRemote once, kept nowhere.
-  const runInstall = (admin = null) => {
+  // U8: the folder the slim archive is made from. A packaged app has it (resources/daemon, bundleDaemon's out, with agents.json);
+  // an unpackaged one builds it from this checkout (bundle-daemon.mjs slimBundle; rolldown is a dev dependency) and removes
+  // it after. null: neither, so the full install runs, as before U8.
+  const slimFolder = async () => {
+    const packaged = path.join(process.resourcesPath ?? '', 'daemon');
+    if (app.isPackaged || process.env.P9_PACKAGED === '1') return await stat(path.join(packaged, 'agents.json')).then(() => ({ folder: packaged }), () => null);
+    try {
+      const { slimBundle } = await import('../../scripts/bundle-daemon.mjs');
+      return { folder: await slimBundle(fileURLToPath(new URL('../../', import.meta.url)), app.getPath('temp')), built: true };
+    } catch { return null; }
+  };
+  // U8: a remote that is not Always on gets the slim Temporary P9 (slimFolder), never ~/p9; Always on (keep), or full (that
+  // remote has the full P9 already, or Keep asked for it), gets row 67's full install as before.
+  runInstall = (admin = null, { full = false, keep = keeper.keep[serverHost] === true } = {}) => {
     const host = serverHost, started = Date.now(), asked = remoteInstall;
     remoteInstall = { phase: 'running', line: '', started };
-    try {
-      const archive = !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null;
-      // A wrong password keeps what the window showed: the same list and command, asked again.
-      installRemote({ host, ssh: sshCommand, version: ownVersion, archive, keep: keeper.keep[host] === true, admin,
-        tell: e => { if (serverHost === host) remoteInstall = { ...(/^(wrong-password|not-allowed)$/.test(e.error ?? '') && { need: asked?.need, command: asked?.command }), ...e, started }; } })
-        .then(e => { if (e.phase === 'done' && serverHost === host) useServer(host); });
-    } catch (error) {
-      remoteInstall = { phase: 'failed', error: error.message, started };
-    }
+    // A wrong password keeps what the window showed: the same list and command, asked again.
+    const tell = e => { if (serverHost === host) remoteInstall = { ...(/^(wrong-password|not-allowed)$/.test(e.error ?? '') && { need: asked?.need, command: asked?.command }), ...e, started }; };
+    (async () => {
+      const slim = full || keep ? null : await slimFolder();
+      try {
+        const e = slim ? await installRemote({ host, ssh: sshCommand, version: ownVersion, archive: slimArchive(slim.folder), slim: true, admin, tell })
+          : await installRemote({ host, ssh: sshCommand, version: ownVersion, keep, admin, tell,
+            archive: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null });
+        if (e.phase === 'full-there' && serverHost === host) return void runInstall(admin, { full: true, keep });
+        if (e.phase === 'done' && serverHost === host) useServer(host);
+      } finally {
+        if (slim?.built) await rm(slim.folder, { recursive: true, force: true }).catch(() => {});
+      }
+    })().catch(error => { remoteInstall = { phase: 'failed', error: error.message, started }; });
     return { ok: true };
   };
   // U6 (threat model row 50 U6): pressing Connect is the yes. A remote that answers without a running P9 gets it started
