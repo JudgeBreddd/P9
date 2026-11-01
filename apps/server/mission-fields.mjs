@@ -5,6 +5,8 @@ import icm from './templates/icm.json' with { type: 'json' };
 import obsidian from './templates/obsidian.json' with { type: 'json' };
 import homelab from './templates/homelab.json' with { type: 'json' };
 import blank from './templates/blank.json' with { type: 'json' };
+// A section's parts, in the order they draw when its order field names none; the page and the phone read the same list.
+import { PARTS } from '../../packages/protocol/index.mjs';
 
 export const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export function relativePath(value) {
@@ -136,6 +138,7 @@ export const DATA = {
       + '{"type":"stat","value":12,"label":"Inbox","unit":"notes"}, {"type":"list","rows":[{"title":"Note","subtitle":"2 h ago","link":"https://example.com","badge":"new"}]}, '
       + '{"type":"table","columns":["Name","State"],"rows":[["web","up"]]} or {"type":"rings","rings":[{"label":"Disk","percent":42}]}. Any of them may add "level":"ok", "warn" or "bad": warn or bad draws the tile, '
       + 'its section\'s panel and the section\'s top-row tile amber or red. Anything else shows what it printed.' },
+  frame: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'false draws the tile without its own box and title (its section\'s already says it); title-bar buttons still show. Default true.' },
 };
 // A custom card (M5, threat model row M5): a workspace .html file drawn in the chat-artifact frame (no network, no P9,
 // no navigation), fed one data script's JSON as data. The script runs under the data tile rules above.
@@ -159,6 +162,7 @@ export const CARD = {
     doc: 'Files the card may open in P9\'s text viewer: root, path, pattern, recursive, match and fix as in a folder list, drawn as no row. The card calls '
     + 'p9open(path) from a click (a call with no click is ignored), path as the folder list gives it (from the root or the workspace). A file outside the list does not open.',
     example: { path: 'logs', pattern: '*.log' } },
+  frame: { type: 'boolean', check: (value) => typeof value === 'boolean', doc: 'false draws the card without its own box and title (its section\'s already says it); title-bar buttons still show. Default true.' },
 };
 // A plain web link (M3): http and https only, so javascript:, file: and data: never open from a section.
 export const WEBLINK = {
@@ -228,6 +232,12 @@ export const SECTION = {
   widget: { type: 'string', check: (value) => WIDGETS.includes(value),
     doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage), apps (Apps and pages) or notifications (Notifications)'
       + ' or primary (the Main project card). Without a space the first four show; on a space only the ones a section names.', example: 'waiting' },
+  widgets: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= WIDGETS.length && value.every((item) => WIDGETS.includes(item)),
+    doc: 'Built-in panels drawn inside this section, after its other parts unless order says otherwise; unlike widget, the section keeps its title, icon, text and buttons. Any of ' + WIDGETS.join(', ')
+      + '. A panel named here shows as if a section named it in widget. The phone leaves them out.', example: ['notifications'] },
+  order: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 32 && value.every((item) => typeof item === 'string'),
+    doc: 'The order the section\'s parts draw in, by field name, any of: ' + PARTS.join(', ') + ' (buttons are its button rows, widgets its panels). Parts left out follow '
+      + 'the named ones in their usual order, the order of that list; an unknown name is ignored. At most 32. The phone keeps it too.', example: ['cards', 'checklists', 'folders', 'buttons'] },
   place: { type: 'string', check: (value) => PLACES.includes(value),
     doc: 'Where the section draws on the desktop Mission page: tile (the default) is a tile in the top row that opens the section\'s window; col1, col2 or col3 draws it open in that column, '
       + 'its items shown in place (a widget section draws its panel there), in file order. Once any section has a column, the three columns hold only the sections placed in them. The phone ignores it.', example: 'col2' },
@@ -280,6 +290,8 @@ export function unknownFields(record, fields, what) {
     return key + ' is not a field of ' + what + '.' + guess + ' Known fields: ' + Object.keys(fields).join(', ') + '.';
   });
 }
+// The fields of record that fields does not know, kept as they are (W-F): an older or newer file's extra keys survive a read.
+export const extras = (record, fields) => Object.fromEntries(Object.entries(record ?? {}).filter(([key]) => !Object.hasOwn(fields, key)));
 // Edit distance, for "did you mean".
 function distance(a, b) {
   let row = Array.from({ length: b.length + 1 }, (_, index) => index);
@@ -314,20 +326,21 @@ export const SCHEMAS = {
     properties: { scripts: list(jsonSchema(RECORD), 'Buttons whose output Mission Control shows.'), apps: list(jsonSchema(RECORD), 'Programs launched and left running.'),
       pages: list(jsonSchema(PAGE), 'Links.') } },
   space: { type: 'object', required: ['sections'], additionalProperties: false, description: 'The space: free-form sections. A malformed section, button or log view, '
-    + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field is listed as invalid by name.',
-    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD, {}, true) }, logs: { items: jsonSchema(LOG, {}, true) }, folders: { items: jsonSchema(FOLDER, {}, true) },
-      data: { items: jsonSchema(DATA, {}, true) }, cards: { items: jsonSchema(CARD, {}, true) }, links: { items: jsonSchema(WEBLINK, {}, true) } }, true), 'Sections in order.') } },
+    + 'and a section repeating an earlier one\'s title or id, is dropped and listed as invalid. An unknown field of a section or an item is listed by name and kept as it is.',
+    properties: { sections: list(jsonSchema(SECTION, { buttons: { items: jsonSchema(RECORD) }, logs: { items: jsonSchema(LOG) }, folders: { items: jsonSchema(FOLDER) },
+      data: { items: jsonSchema(DATA) }, cards: { items: jsonSchema(CARD) }, links: { items: jsonSchema(WEBLINK) }, checklists: { items: jsonSchema(CHECKLIST) },
+      widgets: { items: { type: 'string', enum: WIDGETS } } }), 'Sections in order.') } },
 };
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
 export function describeMission() {
-  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place').map(([key, field]) => ({
+  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place' && key !== 'order' && key !== 'widgets').map(([key, field]) => ({
     item: key, about: field.doc, ...(field.fields ? { fields: jsonSchema(field.fields).properties } : {}),
     example: { id: 'example-' + key, title: 'Example ' + key, [key]: field.example } }));
   return {
     about: 'Mission Control shows the space: one JSON file of sections in order. Each section has a title, optional text and icon, and items of the types below. '
-      + 'Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
-      + 'Unknown fields and a second section with the same title or id are refused. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
+      + 'A section\'s order field sets the order its parts draw in, and its widgets field draws P9\'s own panels inside it. Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
+      + 'A second section with the same title or id is refused. An unknown field is named by validate_space but kept, never dropped. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
     file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', place: SECTION.place.example, buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
     items, templates: TEMPLATES, schema: SCHEMAS.space,
   };

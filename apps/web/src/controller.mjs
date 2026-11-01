@@ -20,6 +20,7 @@ import './components/landing-v5/background.css';
 import { phoneDialogBody } from './phone-link.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
+import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 
 // The admin password window (Shell.tsx, row I2), for row 61 on a remote.
@@ -1300,9 +1301,11 @@ const sample = () => (sampleView ? ' · sample' : '');
 // Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
 // names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
 // written. A fresh install has neither, so it gets none.
-const widgetOn = w => sampleView || M.space.some(s => s.widget === w) || (M.icmFiles && !M.space.some(s => s.widget));
+// A section names a panel with widget (the section is the panel) or widgets (the panel sits inside the section, W-I).
+const namesPanel = s => s.widget || s.widgets?.length;
+const widgetOn = w => sampleView || M.space.some(s => s.widget === w || s.widgets?.includes(w)) || (M.icmFiles && !M.space.some(namesPanel));
 // + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
-const icmSpace = () => sampleView || M.space.some(s => s.widget) || M.icmFiles && !M.space.some(s => s.widget);
+const icmSpace = () => sampleView || M.space.some(namesPanel) || M.icmFiles && !M.space.some(namesPanel);
 const allNotes = () => S.alerts;
 const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
@@ -1602,11 +1605,28 @@ function missionLive() {
   }
   const set = (id, html) => { const b = $(`#mdl #${id} .pbody`); if (!b) return { querySelectorAll: () => [] }; return setHTML(b, html); };
   const needs = $('#fMission .needs [data-list]'); $('#fMission .needs [data-n]')?.replaceChildren(String(S.reviews.length)); $('#fMission .needs [data-unit]')?.replaceChildren(S.reviews.length === 1 ? ' item' : ' items');
-  (needs ? setHTML(needs, S.reviews.length ? `<ul class="plist">${S.reviews.map((r, i) => `<li><button data-i="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted"> · ${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>') : { querySelectorAll: () => [] })
+  (needs ? setHTML(needs, reviewList('data-i')) : { querySelectorAll: () => [] })
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'review', i: +b.dataset.i }, 'reviews'));
   const notes = allNotes();
-  set('mnotes', notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button data-i="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`)
+  set('mnotes', noteList(notes, 'data-i'))
     .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'alert', a: notes[+b.dataset.i], back: S.modal }));
+  fillWidgets($('#fMission'));
+  if (S.modal?.kind === 'scripts' && mdl.open) fillWidgets($('#mdlBody'), S.modal);
+}
+// Waiting on you and Notifications as lists; at is the attribute each row's button carries (a section's widgets use their own, W-I).
+const reviewList = at => S.reviews.length ? `<ul class="plist">${S.reviews.map((r, i) => `<li><button ${at}="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted"> · ${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>';
+const noteList = (notes, at) => notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button ${at}="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`;
+// A section's widgets (W-I): P9's own panels inside the section, on the page and in its window. sectionBody draws each empty and
+// calls this; missionLive calls it again, so a new notification or waiting item shows where the section is. back: what a row returns to.
+function fillWidgets(root, back) {
+  root?.querySelectorAll('.wdg[data-widget]').forEach(box => {
+    const w = box.dataset.widget, b = box.querySelector('.wbody'), notes = allNotes();
+    if (w === 'notifications') setHTML(b, noteList(notes, 'data-wnote')).querySelectorAll('[data-wnote]').forEach(x => x.onclick = () => openModal({ kind: 'alert', a: notes[+x.dataset.wnote], back: back ?? S.modal }));
+    else if (w === 'waiting') setHTML(b, reviewList('data-wreview')).querySelectorAll('[data-wreview]').forEach(x => x.onclick = () => openModal({ kind: 'review', i: +x.dataset.wreview }, 'reviews'));
+    else if (w === 'usage') setHTML(b, wins.musage.inline());
+    else if (w === 'apps') bindWin(setHTML(b, wins.mlaunch.body()), back ?? { kind: 'win', id: 'mlaunch' });
+    else if (w === 'primary') setHTML(b, live.primary ? wins.mprimary.body() : '<p class="empty">No main project.</p>');
+  });
 }
 // Notes (threat model row 34): a folder outside the workspace, named in settings.notes_roots; the daemon checks every path.
 // The preview goes through md, which shows raw HTML as text and links and images as plain text (row 18).
@@ -1763,6 +1783,8 @@ async function saveNote(m, hash) {
 // write(el, html) puts the markup in and says whether it changed; shown() is false once the window closed or the panel left
 // the page; seen() is whether it is on screen now (tiles and cards ask the daemon only then); redraw() draws it again; back is
 // what a window opened from here returns to.
+// Which box each part draws in (no box: on its own); the classes are the boxes' CSS.
+const SECTION_BOX = { notes: 'mlist', folders: 'mlist', refs: 'mlist', logs: 'mlist', buttons: 'mlist', data: 'dtiles', cards: 'dtiles', links: 'dtiles', checklists: 'cks', widgets: 'wdgs' };
 function sectionBody(m, body, g, o) {
   const l = M.scripts[g], tools = g === 'Tools' ? M.tools : [], sp = (M.space || []).find(s => s.title === g);
   // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is on screen, every 30 s.
@@ -1770,8 +1792,8 @@ function sectionBody(m, body, g, o) {
   // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
   m.tiles ||= {}; m.cardHtml ||= {}; m.ck ||= {}; m.counts ||= {}; m.frames ||= {}; m.sent ||= {};
   const runs = [...(sp?.data || []), ...(sp?.cards || [])];
-  // A tile or card named like its section is the section's body: it drops its own frame and title (2026-10-31: "cramped").
-  const same = t => String(t.title).trim().toLowerCase() === String(g).trim().toLowerCase() ? ' data-same' : '';
+  // A tile or card with frame false is the section's body: no box and no title of its own (W-K; absent draws the frame).
+  const bare = t => t.frame === false ? ' data-noframe' : '';
   // A card file edited on disk (its v changed in the overview): read it again and make its frame again.
   const cardsKey = (sp?.cards || []).map(c => c.id + ':' + c.v).join();
   if (m.cardsKey !== undefined && m.cardsKey !== cardsKey) { for (const id in m.frames) m.frames[id]?.remove(); m.frames = {}; m.sent = {}; m.cardHtml = {}; m.cardsRead = false; }
@@ -1780,13 +1802,34 @@ function sectionBody(m, body, g, o) {
   // Row 76: typed text lives on m, so a tile answering (a redraw) does not wipe it. It sits under the section's text, so Save
   // shows without scrolling.
   const qn = sp?.quick_note; if (qn) m.qn ||= {};
-  const fresh = o.write(body, (sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '') + (qn ? quickNoteHtml(esc, qn, m.qn, true) : '')
-    + `<ul class="mlist">${sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : ''}${(sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join('')}${(sp?.refs || []).map((r, i) => r.missing
+  // The parts in the section's order field (PARTS when it names none). Neighbours that share a box share it, so the default order
+  // draws what it drew before order existed: one list of rows, one row of tiles, one block of checklists.
+  const part = {
+    text: sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '', quick_note: qn ? quickNoteHtml(esc, qn, m.qn, true) : '',
+    notes: sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : '',
+    folders: (sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join(''),
+    refs: (sp?.refs || []).map((r, i) => r.missing
       ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
-      : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join('')}${(sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join('')}${l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')}${tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join('')}</ul>`
-    + (runs.length || sp?.links?.length ? `<div class="dtiles">${(sp.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"${same(d)}><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join('')}${(sp.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card${same(c)}><h3><span>${esc(c.title)}</span>${(c.buttons || []).map(id => { const s = scriptById(id); return s ? `<button class="cbtn" data-cbtn="${esc(id)}">${esc(s[1])}</button>` : `<button class="cbtn" disabled title="No script or button has this ID">${esc(id)} not found</button>`; }).join('')}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join('')}${(sp.links || []).map(l => linkHtml(l, esc)).join('')}</div>` : '')
+      : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join(''),
+    logs: (sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join(''),
+    buttons: l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')
+      + tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join(''),
+    data: (sp?.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"${bare(d)}><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join(''),
+    cards: (sp?.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card${bare(c)}><h3><span>${esc(c.title)}</span>${(c.buttons || []).map(id => { const s = scriptById(id); return s ? `<button class="cbtn" data-cbtn="${esc(id)}">${esc(s[1])}</button>` : `<button class="cbtn" disabled title="No script or button has this ID">${esc(id)} not found</button>`; }).join('')}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join(''),
+    links: (sp?.links || []).map(l => linkHtml(l, esc)).join(''),
     // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
-    + (sp?.checklists?.length ? `<div class="cks">${sp.checklists.map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join('')}</div>` : ''));
+    checklists: (sp?.checklists || []).map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join(''),
+    // P9's own panels inside the section (W-I), filled by fillWidgets below.
+    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}"><h3>${esc(w === 'waiting' ? 'Waiting on you' : wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
+  };
+  // An empty part draws nothing and does not split its neighbours; the list of rows is still drawn once, empty, when no part has a row (as before).
+  const boxes = [], rows = Object.keys(part).some(k => SECTION_BOX[k] === 'mlist' && part[k]);
+  for (const k of partOrder(sp?.order, PARTS)) {
+    const box = SECTION_BOX[k], last = boxes.at(-1);
+    if (!part[k] && (box !== 'mlist' || rows || boxes.some(b => b.box === 'mlist'))) continue;
+    if (box && last?.box === box) last.html += part[k]; else boxes.push({ box, html: part[k] });
+  }
+  const fresh = o.write(body, boxes.map(b => !b.box ? b.html : `<${b.box === 'mlist' ? 'ul' : 'div'} class="${b.box}">${b.html}</${b.box === 'mlist' ? 'ul' : 'div'}>`).join(''));
   // ponytail: the window draws whole, so there a card's frame is made again on each draw (a tile's answer, a checklist press)
   // and gets the last JSON again; a card keeps no state of its own across draws. On the page the frame stays while the markup
   // is unchanged, and a newer answer is posted into it.
@@ -1866,6 +1909,7 @@ function sectionBody(m, body, g, o) {
     if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back });
     launchLive(r.title, { kind: r.kind, id: r.id });
   });
+  fillWidgets(body, back);
 }
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
 function missionModal(m, body, row) {

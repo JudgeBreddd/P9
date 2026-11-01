@@ -12,8 +12,8 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { readFile, guardedSave, createFile } from '../../packages/files/index.mjs';
-import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt, draftAt, draftNames } from './mission.mjs';
-import { problem, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, WIDGETS, PLACES, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
+import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt, draftAt, draftNames, spaceFile } from './mission.mjs';
+import { problem, unknownFields, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, WIDGETS, PLACES, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -39,14 +39,17 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission b
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
 const sectionField = { type: 'string', description: 'A space section title. Without it the button goes to (or comes from) the registry\'s scripts.' };
 const placeField = { type: 'string', description: 'Where it draws on the desktop page: ' + PLACES.join(', ') + '. tile (the default) is a top-row tile; col1 to col3 draws it open in that column.' };
+const orderField = { type: 'array', items: { type: 'string' }, maxItems: 32, description: SECTION.order.doc };
+const widgetsField = { type: 'array', items: { type: 'string', enum: WIDGETS }, maxItems: WIDGETS.length, description: SECTION.widgets.doc };
 const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty string removes it.' };
 const cardIdField = { type: 'string', description: 'Your name for the card, like status or todo: 1 to 64 of A-Z a-z 0-9 . _ -' };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 // The section items an agent sets as a whole list: every SECTION list of records with an example except buttons, which
 // have their own tools. A new item type with fields and an example (M2, M3) joins this tool with nothing else to change.
 // Scratch spaces (threat model row 71): these tools write a named draft instead of the live space when given space.
-const spaceField = { type: 'string', description: 'Optional. Write this scratch space instead of the space Mission shows (' + SPACE_NAME_RULE
-  + '), made on the first write. The user picks it in Mission\'s space picker; the live space is untouched.' };
+const spaceField = { type: 'string', description: 'Optional. Without it a tool reads and writes the space Mission shows (the main space, or the scratch space '
+  + 'picked in Mission\'s space picker); every reply names the file. A name (' + SPACE_NAME_RULE + ') writes that scratch space instead, made on the first write; '
+  + '"" writes the main space while a scratch space is shown.' };
 const SPACE_TOOLS = new Set(['validate_space', 'add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items']);
 const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons' && key !== 'widget');
 const TOOLS = [
@@ -54,25 +57,27 @@ const TOOLS = [
   ['validate_registry', 'Dry-run a registry file with Mission Control\'s own parser (the current space included, for IDs shared between them). Nothing is written.',
     input({ text: { type: 'string', description: 'The whole registry JSON. Default: the file on disk.' } })],
   ['validate_space', 'Dry-run a space file with Mission Control\'s own parser (the current registry included). Nothing is written.',
-    input({ text: { type: 'string', description: 'The whole space JSON. Default: the file on disk.' }, space: { type: 'string', description: 'Optional. Check this scratch space\'s file instead of the space Mission shows.' } })],
+    input({ text: { type: 'string', description: 'The whole space JSON. Default: the file on disk.' }, space: { type: 'string', description: 'Optional. Check this scratch space\'s file ("" the main space\'s) instead of the space Mission shows.' } })],
   ['add_button', 'Add a script button to the registry, or to a space section. Refused if Mission Control would drop it.',
     input({ record: jsonSchema(RECORD, {}, true), section: sectionField, space: spaceField, hash: hashField }, ['record'])],
   ['add_app', 'Add an app to the registry.', input({ record: jsonSchema(RECORD, {}, true), hash: hashField }, ['record'])],
   ['add_page', 'Add a link to the registry.', input({ record: jsonSchema(PAGE, {}, true), hash: hashField }, ['record'])],
-  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, place: placeField, space: spaceField, hash: hashField }, ['title'])],
+  ['add_section', 'Add an empty section to the space.', input({ title: { type: 'string' }, text: { type: 'string' }, place: placeField, order: orderField, widgets: widgetsField, space: spaceField, hash: hashField }, ['title'])],
   ['update_button', 'Change a script button\'s title or icon in the registry, or in a space section. icon "" removes the icon.',
     input({ id: { type: 'string' }, section: sectionField, title: { type: 'string' }, icon: iconField,
       move_to: { type: 'string', description: 'Move the button (with section, its current section) into the space section with this title, in one write, so nothing points at a missing ID in between.' },
       space: spaceField, hash: hashField }, ['id'])],
   ['update_app', 'Change an app\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
   ['update_page', 'Change a link\'s title or icon. icon "" removes the icon.', input({ id: { type: 'string' }, title: { type: 'string' }, icon: iconField, hash: hashField }, ['id'])],
-  ['update_section', 'Change a space section: rename it (new_title), change its icon, draw one of P9\'s built-in panels as it (widget), place it on the page (place), show registry entries in it (refs) or show a notes folder (notes). "" or [] removes a field.',
+  ['update_section', 'Change a space section: rename it (new_title), change its icon, draw one of P9\'s built-in panels as it (widget) or inside it (widgets), place it on the page (place), '
+    + 'set the order of its parts (order), show registry entries in it (refs) or show a notes folder (notes). "" or [] removes a field.',
     input({ title: { type: 'string', description: 'The section\'s current title.' }, new_title: { type: 'string' }, icon: iconField,
       text: { type: 'string', description: 'The paragraph under the heading. "" removes it.' },
       widget: { type: 'string', description: 'One of ' + WIDGETS.join(', ') + '. "" removes it.' },
       place: { ...placeField, description: placeField.description + ' "" removes it.' },
       refs: { type: 'array', items: { type: 'string' }, description: 'IDs of registry scripts, apps or pages (read them from p9://registry) or of space buttons, at most 64. [] removes them.' },
       notes: { type: 'string', description: 'A key of settings.notes_roots (allow_folder asks the user to add one), never a path. "" removes it.' },
+      order: { ...orderField, description: orderField.description + ' [] removes it.' }, widgets: { ...widgetsField, description: widgetsField.description + ' [] removes them.' },
       space: spaceField, hash: hashField }, ['title'])],
   ['remove_button', 'Remove a script button by ID from the registry, or from a space section.', input({ id: { type: 'string' }, section: sectionField, space: spaceField, hash: hashField }, ['id'])],
   ['remove_app', 'Remove an app by ID.', input({ id: { type: 'string' }, hash: hashField }, ['id'])],
@@ -83,7 +88,8 @@ const TOOLS = [
     input({ name: { type: 'string', description: 'The root\'s name: 1 to 64 of a-z 0-9 -, starting with a letter or digit, not already in settings.notes_roots.' },
       folder: { type: 'string', description: 'The folder, as an absolute path.' } }, ['name', 'folder'])],
   ['set_section_items', 'Replace one kind of item in a space section with this list ([] removes them): ' + ITEM_KINDS.join(', ')
-    + '. describe_mission gives each kind\'s fields and an example. A data tile runs only after the user answers Allow on it in Mission.',
+    + '. describe_mission gives each kind\'s fields and an example (a card or data tile with frame false draws without its own box). A field P9 does not know is kept and named in the reply. '
+    + 'A data tile runs only after the user answers Allow on it in Mission.',
     input({ title: { type: 'string', description: 'The section\'s title.' }, kind: { type: 'string', enum: ITEM_KINDS },
       items: { type: 'array', items: { type: 'object' } }, space: spaceField, hash: hashField }, ['title', 'kind', 'items'])],
   ['run_script', 'Run a Mission Control script or space button by ID, after the user allows it in this chat. Waits up to 45 s; follow a longer run with status.',
@@ -130,7 +136,9 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   // The scratch space a tool call or the desktop form writes (threat model row 71); undefined: the main space.
   const drafts = settingsFile ? path.join(path.dirname(settingsFile), SPACES_DIR) : null;
   const drafting = new AsyncLocalStorage();
-  const badName = () => ({ error: 'request-refused', detail: 'space: ' + SPACE_NAME_RULE + '.' });
+  const badName = () => ({ error: 'request-refused', detail: 'space: ' + SPACE_NAME_RULE + ', or "" for the main space.' });
+  // The space a call reads and writes (W-A): its space argument ("" the main space), else the one Mission shows (settings.space_name).
+  const shown = () => drafting.getStore() ?? current()?.space_name ?? '';
   // Mission Control's own merge: a space that will not parse drops only the space (mission.mjs registry()), unless it is the file being checked.
   function merged(registryText, spaceText, strictSpace = false) {
     let space = empty();
@@ -139,10 +147,11 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     }
     return combine(parseRegistry(registryText, current()?.page_schemes), space);
   }
-  async function files(settings = need(), draft) {
-    const registry = settings.registry === undefined ? { content: '{}' } : await readFile(workspace, settings.registry), file = draft !== undefined ? draftAt(drafts, draft) : settings.space;
+  // draft: a scratch space's name, "" the main space. file: the space file it names (null for a bad name, undefined with no main space).
+  async function files(settings = need(), draft = shown()) {
+    const registry = settings.registry === undefined ? { content: '{}' } : await readFile(workspace, settings.registry), file = spaceFile(settings, drafts, draft);
     const space = file ? await readFile(...spaceAt(workspace, file)).catch(() => null) : null;
-    return { registry, space };
+    return { registry, space, file };
   }
   const counts = (all) => ({ scripts: all.scripts.length, apps: all.apps.length, pages: all.pages.length, sections: all.space.length, invalid: all.invalid.length });
 
@@ -151,9 +160,9 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     try { if (settingsFile) { parseSettings(await readText(settingsFile, 'utf8')); settings = 'ok'; } }
     catch (error) { if (error.code !== 'ENOENT') settings = 'invalid'; }
     const result = { version: pkg.version, agentLock: chat.lock().on, fileProtection: protection(), settings, missionControl: current() ? 'on' : 'off',
-      ...(current() ? { space: current().space ?? 'no space file yet: the first add_section creates one' } : {}) };
+      ...(current() ? { space: spaceFile(current(), drafts) ?? 'no space file yet: the first add_section creates one', ...(current().space_name ? { spaceName: current().space_name } : {}) } : {}) };
     if (current()) {
-      try { const { registry, space } = await files(); result.mission = counts(merged(registry.content, space?.content)); }
+      try { const { registry, space } = await files(current(), current().space_name ?? ''); result.mission = counts(merged(registry.content, space?.content)); }
       catch (error) { result.mission = unparsable(error); }
     }
     return result;
@@ -168,19 +177,19 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
 
   async function validate(kind, text) {
     if (text !== undefined && !string(text, 6 * 1024 * 1024)) return { error: 'request-refused' };
-    const draft = kind === 'space' ? drafting.getStore() : undefined, settings = need(), { registry, space } = await files(settings, draft);
+    const settings = need(), draft = shown(), { registry, space, file } = await files(settings, draft);
     if (kind === 'space') {
       // Wall 8: a scratch space (space) is checked as its own file, so Main need not exist.
-      if (text === undefined && draft !== undefined && !space) return { ok: false, error: 'no-space-file', detail: 'No scratch space named ' + draft + ' yet: its first write makes it.' };
-      if (text === undefined && !settings.space && draft === undefined) return { ok: false, ...noSpace() };
+      if (text === undefined && draft && !space) return { ok: false, file, error: 'no-space-file', detail: 'No scratch space named ' + draft + ' yet: its first write makes it.' };
+      if (text === undefined && !settings.space && !draft) return { ok: false, ...noSpace() };
       if (text === undefined && !space) return { ok: false, ...missingSpace(settings.space) };
-      const subject = text === undefined ? 'The space file ' + (draft ?? settings.space) : 'The text';
+      const subject = text === undefined ? 'The space file ' + (draft || settings.space) : 'The text';
       if (!(text ?? space.content).trim()) return { ok: false, ...spaceWords(subject, 'empty') };
       try { parseSpace(text ?? space.content); } catch (error) { return { ok: false, ...spaceWords(subject, error) }; }
     }
     try {
       const all = kind === 'registry' ? merged(text ?? registry.content, space?.content) : merged(registry.content, text ?? space?.content ?? '', true);
-      return { ok: !all.invalid.length, accepted: counts(all), invalid: all.invalid };
+      return { ok: !all.invalid.length, ...(kind === 'space' ? { file } : {}), accepted: counts(all), invalid: all.invalid };
     } catch (error) { return { ok: false, ...unparsable(error) }; }
   }
 
@@ -191,12 +200,12 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   async function edit(which, hash, change, by = {}) {
     if (chat.lock().on && !by.user) return { error: 'agent-lock-on', detail: 'The agent lock is on: the user turns it off on the desktop.' };
     if (hash !== undefined && !(typeof hash === 'string' && HASH.test(hash))) return { error: 'request-refused', detail: 'hash: 64 hex characters' };
-    // A tool's space argument, else (the desktop form only) the scratch space Mission shows.
-    const draft = drafting.getStore() ?? (by.user ? current()?.space_name : undefined);
-    let settings = need(), file = which === 'registry' ? settings.registry : draft !== undefined ? draftAt(drafts, draft) : settings.space;
+    // A tool's space argument, else the space Mission shows (W-A), for the tools and the desktop form alike. Only a named space refuses a registry write.
+    const draft = shown();
+    let settings = need(), file = which === 'registry' ? settings.registry : spaceFile(settings, drafts, draft);
     if (which === 'registry' && settings.registry === undefined) return { error: 'request-refused', detail: 'No registry file is set in settings.json.' };
-    if (draft !== undefined && which === 'registry') return { error: 'request-refused', detail: 'A scratch space holds sections only. Buttons outside a section, apps and pages go to the registry: leave space out.' };
-    if (draft !== undefined) {
+    if (drafting.getStore() && which === 'registry') return { error: 'request-refused', detail: 'A scratch space holds sections only. Buttons outside a section, apps and pages go to the registry: leave space out.' };
+    if (which === 'space' && draft) {
       // A draft is written under the same rules as the live space: the lock (above), then File protection on every write.
       if (!file) return badName();
       if (protection() && !(by.user && by.confirm)) return { error: 'registry-read-only', detail: 'File protection is on: P9 writes no space file then, scratch spaces included. The user turns it off on the desktop.' };
@@ -224,7 +233,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const before = which === 'space' && Array.isArray(data.sections) && data.sections.some((entry) => object(entry) && entry.id === undefined) ? disk.content : undefined;
     if (before !== undefined) data.sections = withIds(data.sections);
     const done = change(data);
-    if (done.error) return done;
+    if (done.error) return { file, ...done };
     // ponytail: the file is written back as 2-space JSON, so hand formatting is lost; a text-level splice if that matters.
     const text = JSON.stringify(data, null, 2) + '\n';
     let all;
@@ -318,7 +327,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   async function saveTemplate(name, about, replace) {
     if (!templatesDir || !spaceName(name)) return badName();
     if (TEMPLATES.some((entry) => entry.name === name)) return { error: 'builtin-template', detail: 'A built-in template has that name.' };
-    const settings = need(), { space } = await files(settings, settings.space_name);
+    const settings = need(), { space } = await files(settings);
     if (!space?.content) return noSpace();
     const check = await validate('space', space.content);
     if (!check.ok) return { error: 'invalid-space', detail: 'Mission Control would drop part of this space, so it was not saved as a template.', invalid: check.invalid ?? [] };
@@ -381,14 +390,15 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
 
   // Title and icon of one record (kind scripts|apps|pages) or one space section (kind sections, key = its title). icon '' removes it.
-  // A section also takes widget, place, refs and notes (threat model row 72 e); any other kind given one is refused. "" or [] removes each.
+  // A section also takes widget, widgets, place, order, refs and notes (threat model row 72 e); any other kind given one is refused. "" or [] removes each.
   const FIELDS = { scripts: RECORD, apps: RECORD, pages: PAGE, sections: SECTION };
   // picture (the name of a stored file, '' removes it) is the desktop form's alone: an agent's tool call is refused if it names one.
-  function update(kind, { key, section: sectionTitle, title, icon, picture, widget, place, refs, notes, text, move_to: moveTo, hash }, by) {
+  function update(kind, { key, section: sectionTitle, title, icon, picture, widget, place, refs, notes, text, order, widgets, move_to: moveTo, hash }, by) {
     if (!string(key, 200) || ![sectionTitle, title, icon, picture, widget, place, notes, moveTo].every((value) => value === undefined || string(value, 200)) || (picture !== undefined && !by?.user)
-      || (text !== undefined && !string(text, 4000)) || (refs !== undefined && !Array.isArray(refs)) || (kind !== 'sections' && [widget, place, refs, notes, text].some((value) => value !== undefined))
+      || (text !== undefined && !string(text, 4000)) || [refs, order, widgets].some((value) => value !== undefined && !Array.isArray(value))
+      || (kind !== 'sections' && [widget, place, refs, notes, text, order, widgets].some((value) => value !== undefined))
       || (moveTo !== undefined && (kind !== 'scripts' || sectionTitle === undefined))) return { error: 'request-refused' };
-    if ([title, icon, picture, widget, place, refs, notes, text, moveTo].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes text, widget, place, refs or notes; a space button move_to).' };
+    if ([title, icon, picture, widget, place, refs, notes, text, order, widgets, moveTo].every((value) => value === undefined)) return { error: 'nothing-to-change', detail: 'Give a title or an icon (a section also takes text, widget, widgets, place, order, refs or notes; a space button move_to).' };
     if (kind !== 'scripts' && sectionTitle !== undefined) return { error: 'request-refused' };
     return edit(kind === 'sections' || sectionTitle !== undefined ? 'space' : 'registry', hash, (data) => {
       let entry, rest;
@@ -412,7 +422,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       if (icon === '') delete entry.icon; else if (icon !== undefined) entry.icon = icon;
       if (picture === '') delete entry.picture; else if (picture !== undefined) entry.picture = picture;
       // A section's panel, place, references and notes key (threat model row 72 e): "" or [] removes; the SECTION table checks the rest below.
-      for (const [field, value] of Object.entries({ text, widget, place, refs, notes })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
+      for (const [field, value] of Object.entries({ text, widget, place, refs, notes, order, widgets })) if (value?.length === 0) delete entry[field]; else if (value !== undefined) entry[field] = value;
       const wrong = problem(entry, FIELDS[kind], false, current()?.page_schemes);
       if (wrong) return { error: 'invalid-record', detail: wrong };
       if (kind === 'sections' && rest.some((other) => typeof other?.title === 'string' && other.title.trim() === entry.title.trim())) return { error: 'duplicate-section', section: entry.title };
@@ -496,8 +506,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     add_button: (args) => add('scripts', args.record, args.section, args.hash),
     add_app: (args) => add('apps', args.record, undefined, args.hash),
     add_page: (args) => add('pages', args.record, undefined, args.hash),
-    add_section: ({ title, text, place, hash }) => {
-      const record = { title, ...(text !== undefined ? { text } : {}), ...(place !== undefined ? { place } : {}) };
+    add_section: ({ title, text, place, order, widgets, hash }) => {
+      const record = { title, ...(text !== undefined ? { text } : {}), ...(place !== undefined ? { place } : {}), ...(order !== undefined ? { order } : {}), ...(widgets !== undefined ? { widgets } : {}) };
       const wrong = problem(record, SECTION);
       if (wrong || !string(title, 200)) return { error: 'invalid-section', detail: wrong ?? 'title: at most 200 characters' };
       return edit('space', hash, (data) => {
@@ -515,16 +525,18 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       if (!string(title, 200) || !ITEM_KINDS.includes(kind) || !Array.isArray(items) || items.length > 64) {
         return { error: 'request-refused', reason: 'title: a section title; kind: one of ' + ITEM_KINDS.join(', ') + '; items: a list of at most 64' };
       }
-      // Each item is checked before anything is written, so a javascript: link or an unknown field is named, not dropped.
+      // Each item is checked before anything is written, so a javascript: link is named, not dropped. An unknown field is kept, as the parser
+      // keeps it (W-F), and named in the reply so a typo shows.
       for (const [index, item] of items.entries()) {
-        const wrong = problem(item, SECTION[kind].fields, true);
+        const wrong = problem(item, SECTION[kind].fields);
         if (wrong) return { error: 'invalid-item', kind, index, detail: wrong };
       }
+      const unknown = items.flatMap((item, index) => unknownFields(item, SECTION[kind].fields, 'this record').map((detail) => ({ index, detail })));
       return edit('space', hash, (data) => {
         const found = section(data, title);
         if (found.error) return found;
         if (items.length) found.entry[kind] = items; else delete found.entry[kind];
-        return { changed: { action: 'updated', kind, section: found.entry.title, items },
+        return { changed: { action: 'updated', kind, section: found.entry.title, items, ...(unknown.length ? { unknown } : {}) },
           accepted: (all) => (all.space.find((entry) => entry.title === found.entry.title.trim())?.[kind]?.length ?? 0) === items.length };
       });
     },
@@ -583,11 +595,12 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       catch (error) { return json({ path: settingsFile, text, ok: false, ...unparsable(error), detail: error.detail ?? String(error.message).slice(0, 300) }); }
     }
     if (uri === 'p9://registry' || uri === 'p9://space') {
-      const settings = need(), { registry, space } = await files(settings), file = uri === 'p9://registry' ? registry : space;
-      if (!file) return json({ path: settings.space ?? null, ...(uri === 'p9://registry' ? { error: 'unreadable-registry' } : settings.space ? missingSpace(settings.space) : noSpace()) });
+      // The space Mission shows (W-A), and path names its file.
+      const settings = need(), { registry, space, file: where } = await files(settings), file = uri === 'p9://registry' ? registry : space;
+      if (!file) return json({ path: where ?? null, ...(uri === 'p9://registry' ? { error: 'unreadable-registry' } : where ? missingSpace(where) : noSpace()) });
       let invalid;
       try { invalid = merged(registry.content, space?.content).invalid; } catch (error) { invalid = [unparsable(error)]; }
-      return json({ path: uri === 'p9://registry' ? settings.registry : settings.space, hash: file.hash, text: file.content, invalid });
+      return json({ path: uri === 'p9://registry' ? settings.registry : where, hash: file.hash, text: file.content, invalid });
     }
     if (uri === 'p9://daemon-log') {
       // Windows: the task's daemon.log, next to the state folder (install-windows.ps1). Linux: the unit's journal.
@@ -620,7 +633,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       const call = () => calls[params.name](args, conversation, signal);
       try {
         if (args.space === undefined || !SPACE_TOOLS.has(params.name)) result = await call();
-        else result = draftAt(drafts, args.space) ? await drafting.run(args.space, call) : badName();
+        else result = args.space === '' || draftAt(drafts, args.space) ? await drafting.run(args.space, call) : badName();
       }
       catch (error) { result = { error: error.code ?? error.message ?? 'failed' }; }
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: Boolean(result.error) };
@@ -645,7 +658,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     finally { if (inflight.get(key) === controller) inflight.delete(key); }
   }
 
-  // The desktop's edit form (/mission/edit): the file hashes it edits against, and the same update() the tools use.
+  // The desktop's edit form (/mission/edit): the file hashes it edits against (the space Mission shows, W-B), and the same update() the tools use.
   async function editState() {
     const { registry, space } = await files(need());
     return { registry: registry.hash, space: space?.hash ?? null, protection: protection() };

@@ -458,6 +458,58 @@ test('M1 strict space: unknown fields and duplicates come back named; an old fil
   console.log('PASS M1 strict: feed, titel (did you mean title), duplicate title and id named; migration kept Ops and its button, backup ' + copy + ' at 600');
 });
 
+// W-F: a field P9 does not know is named and kept on every item, on a read and through the tools. And the section shape fields
+// (order, widgets, frame): checked, documented, set and removed by the tools, and handed to the page.
+test('W-F and shape fields: unknown keys survive a read and MCP writes; order, widgets and frame are checked, documented, settable and reach /mission', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool } = await agent(t, instance);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const space = JSON.parse(await file(instance, SETTINGS.space));
+  space.sections.push({ id: 'rev', title: 'Reviews', mood: 'calm', order: ['cards', 'folders', 'nope'], widgets: ['notifications'],
+    folders: [{ id: 'plans', title: 'Plans', path: 'p1', tint: 'blue' }], checklists: [{ id: 'audit', title: 'Audit', path: 'p1/plan.md', tint: 'red' }],
+    logs: [{ id: 'run', title: 'Run', path: 'p1/run.log', tint: 'green' }], data: [{ id: 'inbox', title: 'Reviews', script: 'mark', frame: false, tint: 'grey' }] },
+  { id: 'bad', title: 'Bad', widgets: ['nope'] }, { id: 'bad2', title: 'Bad two', order: 'cards' }, { id: 'bad3', title: 'Bad three', data: [{ id: 'd', title: 'D', script: 'mark', frame: 'no' }] });
+  await writeFile(path.join(instance.workspace, SETTINGS.space), JSON.stringify(space, null, 2) + '\n');
+
+  const checked = await tool('validate_space');
+  const unknown = checked.invalid.filter((entry) => entry.reason === 'unknown-field').map((entry) => entry.detail);
+  for (const what of ['mood is not a field of a section', 'tint is not a field of a folder list', 'tint is not a field of a checklist', 'tint is not a field of a log view', 'tint is not a field of a data tile'])
+    assert.ok(unknown.some((detail) => detail.startsWith(what)), what + ' | ' + unknown.join(' | '));
+  const bad = checked.invalid.filter((entry) => entry.reason !== 'unknown-field').map((entry) => entry.index + ' ' + entry.reason + ' ' + entry.detail.split(':')[0]);
+  assert.deepEqual(bad, ['2 malformed-section widgets', '3 malformed-section order', '4 malformed-record frame']);
+
+  const mission = (await call(instance, '/mission')).body, rev = mission.space.find((section) => section.title === 'Reviews');
+  assert.deepEqual([rev.mood, rev.order, rev.widgets, rev.folders, rev.checklists, rev.logs, rev.data],
+    ['calm', ['cards', 'folders', 'nope'], ['notifications'], [{ tint: 'blue', id: 'plans', title: 'Plans' }], [{ tint: 'red', id: 'audit', title: 'Audit' }],
+      [{ tint: 'green', id: 'run', title: 'Run' }], [{ tint: 'grey', id: 'inbox', title: 'Reviews', frame: false }]]);
+  assert.equal(mission.space.find((section) => section.title === 'Ops').frame, undefined);
+
+  // The tools: an update elsewhere keeps every extra key; order and widgets set and come off; a bad value is refused.
+  assert.equal((await tool('update_section', { title: 'Reviews', order: ['checklists', 'folders'], widgets: ['waiting', 'notifications'] })).isError, false);
+  let saved = JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.id === 'rev');
+  assert.deepEqual([saved.mood, saved.folders[0].tint, saved.checklists[0].tint, saved.logs[0].tint, saved.data[0].tint, saved.order, saved.widgets],
+    ['calm', 'blue', 'red', 'green', 'grey', ['checklists', 'folders'], ['waiting', 'notifications']]);
+  assert.equal((await tool('update_section', { title: 'Reviews', widgets: ['nope'] })).error, 'invalid-record');
+  assert.equal((await tool('update_section', { title: 'Reviews', order: 'cards' })).error, 'request-refused');
+  assert.equal((await tool('update_section', { title: 'Reviews', order: [], widgets: [] })).isError, false);
+  saved = JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.id === 'rev');
+  assert.deepEqual([saved.order, saved.widgets, saved.mood], [undefined, undefined, 'calm']);
+  const made = await tool('add_section', { title: 'Logs', order: ['widgets', 'data'], widgets: ['notifications'] });
+  assert.deepEqual([made.action, made.record.order, made.record.widgets], ['added', ['widgets', 'data'], ['notifications']]);
+  assert.equal((await tool('add_section', { title: 'Nope', widgets: ['nope'] })).error, 'invalid-section');
+  const cards = await tool('set_section_items', { title: 'Logs', kind: 'data', items: [{ id: 'logs', title: 'Logs', script: 'mark', frame: false, note: 'kept' }] });
+  assert.deepEqual([cards.isError, cards.unknown.map((entry) => entry.detail.split(' ')[0])], [false, ['note']]);
+  assert.deepEqual(JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.title === 'Logs').data, [{ id: 'logs', title: 'Logs', script: 'mark', frame: false, note: 'kept' }]);
+
+  // describe_mission and the schema know the same fields.
+  const described = await tool('describe_mission'), sectionSchema = described.schema.properties.sections.items;
+  assert.deepEqual([sectionSchema.properties.order.type, sectionSchema.properties.widgets.items.enum.includes('notifications'), sectionSchema.properties.data.items.properties.frame.type,
+    sectionSchema.properties.cards.items.properties.frame.type], ['array', true, 'boolean', 'boolean']);
+  assert.ok(!described.items.some((item) => item.item === 'widgets'), 'a field, not an item type');
+  assert.match(described.about, /order field sets the order.*widgets field draws/);
+  console.log('PASS W-F and shape fields: 5 unknown keys named and kept through 4 writes; bad widgets, order and frame named; order and widgets set and removed; schema lists all three');
+});
+
 test('M3 set_section_items: data tiles and links go in through the lock and File protection; a javascript: link is refused by name', { timeout: 60000 }, async (t) => {
   const instance = await start(t);
   const { tool } = await agent(t, instance);
@@ -472,7 +524,10 @@ test('M3 set_section_items: data tiles and links go in through the lock and File
   const evil = await tool('set_section_items', { title: 'Ops', kind: 'links', items: [{ id: 'evil', title: 'Evil', url: 'javascript:alert(1)' }] });
   assert.deepEqual([evil.error, evil.index], ['invalid-item', 0]);
   assert.match(evil.detail, /^url: An http:\/\/ or https:\/\/ address/);
-  assert.equal((await tool('set_section_items', { ...tiles, items: [{ id: 'x', title: 'X', script: 'y', every: 5 }] })).detail, 'every is not a field of this record. Known fields: id, title, script.');
+  // An unknown field is kept and named (W-F), not refused; the next call replaces the list.
+  const extra = await tool('set_section_items', { ...tiles, items: [{ id: 'x', title: 'X', script: 'y', every: 5 }] });
+  assert.deepEqual([extra.isError, extra.unknown], [false, [{ index: 0, detail: 'every is not a field of this record. Known fields: id, title, script, frame.' }]]);
+  assert.equal(JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.title === 'Ops').data[0].every, 5);
   assert.equal((await tool('set_section_items', tiles)).isError, false);
   assert.equal((await tool('set_section_items', { title: 'Ops', kind: 'links', items: [{ id: 'docs', title: 'Docs', url: 'https://example.com/docs' }] })).isError, false);
   const ops = JSON.parse(await file(instance, SETTINGS.space)).sections.find((section) => section.title === 'Ops');

@@ -55,7 +55,9 @@ async function agent(t, instance) {
   const client = new Client({ name: 'p9-test', version: '1' });
   await client.connect(new StdioClientTransport({ command: entry.command, args: entry.args, env: Object.fromEntries(entry.env.map(({ name, value }) => [name, value])) }));
   t.after(() => client.close());
-  return async (name, args = {}) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  const tool = async (name, args = {}) => JSON.parse((await client.callTool({ name, arguments: args })).content[0].text);
+  tool.resource = async (uri) => JSON.parse((await client.readResource({ uri })).contents[0].text);
+  return tool;
 }
 const settingsOf = async (instance) => JSON.parse(await readFile(path.join(instance.directory, '.config/p9/settings.json'), 'utf8'));
 
@@ -128,8 +130,8 @@ test('M4a scratch spaces: a name never becomes a path; a draft write keeps the l
   await rm(drafts);
 
   for (const name of ['../settings', '/etc/x', 'a/b', 'a.json', 'A', '', '-a', 'con', 'lpt1', 'x'.repeat(33), 'a\0b', 7]) {
-    const result = await tool('add_section', { title: 'Bad', space: name });
-    assert.equal(result.error, 'request-refused', JSON.stringify(name));
+    // "" is the main space for the tools (W-A); the picker still refuses it as a scratch space's name.
+    if (name !== '') assert.equal((await tool('add_section', { title: 'Bad', space: name })).error, 'request-refused', JSON.stringify(name));
     assert.equal((await call(instance, '/mission/space', 'POST', { name })).status, 400, JSON.stringify(name));
   }
   assert.equal(await stat(drafts).catch(() => null), null, 'no drafts folder from a refused name');
@@ -164,6 +166,38 @@ test('M4a scratch spaces: a name never becomes a path; a draft write keeps the l
   assert.deepEqual([main.spaceName, main.space.map((s) => s.title)], [null, ['Ops']]);
   assert.equal(await readFile(livePath, 'utf8'), liveBytes);
   console.log('PASS M4a scratch: 12 bad names and a linked folder refused, lock and protection held, draft 0600 in 0700, switch and back left live bytes as they were');
+});
+
+// W-A and W-B: while the picker shows a scratch space, a tool with no space argument reads and writes that one, every reply
+// names the file, space "" still writes the main space, and the desktop's edit form hashes the shown file.
+test('W-A: with a scratch space shown, the tools default to it and name it; space "" writes main; the registry still takes buttons; the edit form hashes the shown file', { timeout: 90000 }, async (t) => {
+  const instance = await start(t, LIVE, { sections: [{ id: 'ops', title: 'Ops' }] });
+  const tool = await agent(t, instance);
+  const livePath = path.join(instance.workspace, 'mission/space.json'), draftPath = path.join(instance.directory, '.config/p9/spaces/draft.json');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  assert.equal((await tool('add_section', { title: 'Draft one', space: 'draft' })).action, 'added');
+  assert.equal((await call(instance, '/mission/space', 'POST', { name: 'draft' })).status, 200);
+  const liveBytes = await readFile(livePath, 'utf8');
+
+  const added = await tool('add_section', { title: 'Shown' });
+  assert.deepEqual([added.action, added.file], ['added', draftPath]);
+  assert.deepEqual(JSON.parse(await readFile(draftPath, 'utf8')).sections.map((s) => s.title), ['Draft one', 'Shown']);
+  assert.equal(await readFile(livePath, 'utf8'), liveBytes, 'the main space is untouched by a default write');
+  assert.equal((await call(instance, '/mission/edit')).body.space, added.hash, 'W-B: the edit form hashes the shown file');
+  const checked = await tool('validate_space'), status = await tool('status'), read = await tool.resource('p9://space');
+  assert.deepEqual([checked.ok, checked.file, checked.accepted.sections], [true, draftPath, 2]);
+  assert.deepEqual([status.space, status.spaceName, status.mission.sections], [draftPath, 'draft', 2]);
+  assert.deepEqual([read.path, read.hash], [draftPath, added.hash]);
+  assert.equal((await tool('update_section', { title: 'Ops', text: 'x' })).error, 'unknown-section', 'Ops is in main, not in the shown space');
+
+  const main = await tool('add_section', { title: 'Main two', space: '' });
+  assert.deepEqual([main.action, main.file], ['added', 'mission/space.json']);
+  assert.deepEqual(JSON.parse(await readFile(livePath, 'utf8')).sections.map((s) => s.title), ['Ops', 'Main two']);
+  assert.deepEqual([(await tool('validate_space', { space: '' })).file, (await tool('validate_space', { space: 'draft' })).file], ['mission/space.json', draftPath]);
+  const button = await tool('add_button', { record: { id: 'x', title: 'X', cmd: ['true'] } });
+  assert.deepEqual([button.action, button.file], ['added', 'mission/registry.json'], 'a registry write still works while a scratch space is shown');
+  assert.equal((await tool('add_button', { record: { id: 'y', title: 'Y', cmd: ['true'] }, space: 'draft' })).error, 'request-refused', 'a named scratch space still refuses one');
+  console.log('PASS W-A: default writes and reads named the shown scratch file, space "" wrote main, the registry took a button, the edit hash matched');
 });
 
 // Finding 4 adds (threat model rows A and B): Delete a space and user templates, on the server.

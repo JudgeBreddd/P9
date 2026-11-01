@@ -31,3 +31,10 @@ export const DEVICE_CODE = /^[A-Z0-9]{4,8}-[A-Z0-9]{4,8}$/;
 export function signInUrl(agent, text) {
   try { const url = new URL(text); return Object.hasOwn(SIGN_IN_ORIGINS, agent) && SIGN_IN_ORIGINS[agent].includes(url.origin) ? url.href : null; } catch { return null; }
 }
+// A space section's parts (mission-fields.mjs SECTION.order), in the order the desktop draws them when the section names none.
+export const PARTS = Object.freeze(['text', 'quick_note', 'notes', 'folders', 'refs', 'logs', 'buttons', 'data', 'cards', 'links', 'checklists', 'widgets']);
+// The parts in a section's order: the ones order names that defaults has, once each, then the rest in the order defaults lists them.
+export const partOrder = (order, defaults = PARTS) => {
+  const named = Array.isArray(order) ? order.filter((part, index) => defaults.includes(part) && order.indexOf(part) === index) : [];
+  return [...named, ...defaults.filter((part) => !named.includes(part))];
+};

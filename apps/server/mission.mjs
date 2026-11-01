@@ -9,7 +9,7 @@ import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
-import { ID, web, problem, unknownFields, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
+import { ID, web, problem, unknownFields, extras, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
 
 const windows = process.platform === 'win32';
 const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
@@ -126,22 +126,26 @@ export function parseSpace(text) {
       if (detail) result.invalid.push({ kind: 'space', index, button, reason: 'malformed-record', detail }); else buttons.push({ ...record, group: title }); });
     (section.logs ?? []).forEach((record, log) => { const detail = problem(record, LOG);
       for (const extra of unknownFields(record, LOG, 'a log view')) result.invalid.push({ kind: 'space', index, log, reason: 'unknown-field', detail: extra });
-      if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ id: record.id, title: record.title, path: record.path, ...(record.root ? { root: record.root } : {}) }); });
+      if (detail) result.invalid.push({ kind: 'space', index, log, reason: 'malformed-record', detail }); else logs.push({ ...record }); });
     // Data tiles and links (M3): a bad one is dropped and named, the rest of the section stays.
     const items = { data: [], cards: [], links: [] };
     for (const [key, fields, what] of [['data', DATA, 'a data tile'], ['cards', CARD, 'a card'], ['links', WEBLINK, 'a link']]) {
       (section[key] ?? []).forEach((record, n) => { const detail = problem(record, fields);
         for (const extra of unknownFields(record, fields, what)) result.invalid.push({ kind: 'space', index, [key]: n, reason: 'unknown-field', detail: extra });
         if (detail) result.invalid.push({ kind: 'space', index, [key]: n, reason: 'malformed-record', detail });
-        else items[key].push(Object.fromEntries(Object.keys(fields).filter((field) => field in record).map((field) => [field, record[field]]))); });
+        else items[key].push({ ...record }); });
     }
-    (section.folders ?? []).forEach((record, folder) => { const detail = problem(record, FOLDER, true);
+    // Folders and checklists take the same rule as every item (W-F): an unknown field is named and kept, never a reason to drop it.
+    (section.folders ?? []).forEach((record, folder) => { const detail = problem(record, FOLDER);
+      for (const extra of unknownFields(record, FOLDER, 'a folder list')) result.invalid.push({ kind: 'space', index, folder, reason: 'unknown-field', detail: extra });
       if (detail) result.invalid.push({ kind: 'space', index, folder, reason: 'malformed-record', detail }); else folders.push({ ...record }); });
     const checklists = [];
     (section.checklists ?? []).forEach((record, checklist) => {
-      const detail = problem(record, CHECKLIST, true) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
+      for (const extra of unknownFields(record, CHECKLIST, 'a checklist')) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'unknown-field', detail: extra });
+      const detail = problem(record, CHECKLIST) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
       if (detail) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'malformed-record', detail }); else checklists.push({ ...record }); });
-    result.sections.push({ id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.place ? { place: section.place } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}) });
+    result.sections.push({ ...extras(section, SECTION), id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.place ? { place: section.place } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}),
+      ...(section.order ? { order: section.order } : {}), ...(section.widgets?.length ? { widgets: section.widgets } : {}) });
   });
   return result;
 }
@@ -178,6 +182,9 @@ export function draftAt(drafts, name) {
   const file = path.join(drafts, name + '.json');
   return path.dirname(file) === drafts ? file : null;
 }
+// The space file a name points at (W-A): a scratch space by name, else ("" or absent) the main space. Mission draws
+// settings.space_name's, and every MCP default and the edit form use the same one, so what they read is what is shown.
+export const spaceFile = (settings, drafts, name = settings.space_name) => (name ? draftAt(drafts, name) : settings.space);
 // The scratch spaces there are, by name; a file whose name fails the rule is not one.
 export async function draftNames(drafts) {
   if (!drafts) return [];
@@ -291,7 +298,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const reg = parseRegistry((await settingFile('registry', (file) => readFile(workspace, file), { content: '{}' })).content, settings.page_schemes);
     let space = { sections: [], invalid: [] };
     // The space picker's scratch space (settings.space_name) is shown instead of the main one; the main file is not read then.
-    const file = settings.space_name ? draftAt(drafts, settings.space_name) : settings.space;
+    const file = spaceFile(settings, drafts);
     if (file || settings.space_name) {
       try { space = parseSpace((await readFile(...spaceAt(workspace, file))).content); }
       catch { space.invalid.push({ kind: 'space', reason: 'unreadable-space' }); }
@@ -340,9 +347,14 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     for (const item of reg.space.flatMap((section) => section.cards ?? [])) cardV.set(item.id, await readFile(workspace, item.html).then((file) => file.hash.slice(0, 12), () => ''));
     return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map((script) => ({ ...strip(script), ...(onCards.has(script.id) ? { hidden: true } : {}) })), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
-      space: reg.space.map(({ id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget, place, quick_note }) => ({ id, title, text, ...(widget ? { widget } : {}), ...(place ? { place } : {}), ...(quick_note ? { quick_note } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), logs: logs.map(({ id, title: name }) => ({ id, title: name })), folders: folders.map(({ id, title: name, root }) => ({ id, title: name, ...(root ? { root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
-        ...(data ? { data: data.map(({ id, title: name }) => ({ id, title: name })) } : {}), ...(cards ? { cards: cards.map(({ id, title: name, buttons }) => ({ id, title: name, v: cardV.get(id), ...(buttons ? { buttons } : {}) })) } : {}), ...(links ? { links } : {}),
-        ...(checklists ? { checklists: checklists.map(({ id, title: name }) => ({ id, title: name })) } : {}) })),
+      // Every field the parser kept goes to the page as it is (W-F), except a section's buttons (scripts above) and what P9 alone reads: a
+      // log's path, a folder's path and filters, a data tile's or card's script and file. Known fields are written last, so an extra cannot replace one.
+      space: reg.space.map(({ buttons, id, title, text, logs, notes, icon, picture, folders, refs, data, cards, links, checklists, widget, place, quick_note, order, widgets, ...rest }) => ({ ...rest, id, title, text,
+        ...(widget ? { widget } : {}), ...(place ? { place } : {}), ...(quick_note ? { quick_note } : {}), ...(icon ? { icon } : {}), ...(picture ? { picture } : {}), ...(order ? { order } : {}), ...(widgets ? { widgets } : {}),
+        logs: logs.map((item) => ({ ...extras(item, LOG), id: item.id, title: item.title })), folders: folders.map((item) => ({ ...extras(item, FOLDER), id: item.id, title: item.title, ...(item.root ? { root: item.root } : {}) })), refs: refs.map((id) => reference(reg, id)), ...(notes ? { notes } : {}),
+        ...(data ? { data: data.map((item) => ({ ...extras(item, DATA), id: item.id, title: item.title, ...(item.frame !== undefined ? { frame: item.frame } : {}) })) } : {}),
+        ...(cards ? { cards: cards.map((item) => ({ ...extras(item, CARD), id: item.id, title: item.title, v: cardV.get(item.id), ...(item.buttons ? { buttons: item.buttons } : {}), ...(item.frame !== undefined ? { frame: item.frame } : {}) })) } : {}),
+        ...(links ? { links } : {}), ...(checklists ? { checklists: checklists.map((item) => ({ ...extras(item, CHECKLIST), id: item.id, title: item.title })) } : {}) })),
       queue: waiting, primary: await primary(), spaceName: settings.space_name ?? null, spaces: await draftNames(drafts), mainFile: Boolean(settings.space),
       // A fresh profile (M4): nothing to show, so Mission draws only the onboarding card.
       empty: !settings.space_name && !reg.space.length && !reg.scripts.length && !reg.apps.length && !reg.pages.length && !waiting.length };

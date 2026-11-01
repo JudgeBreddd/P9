@@ -78,10 +78,12 @@ test('folder list: workspace folders, ? patterns, refused roots and malformed it
   assert.deepEqual([(await list(instance, 'wide')).status, (await list(instance, 'wide')).body.error], [403, 'root-refused']);
   assert.equal((await list(instance, 'nope')).status, 404);
   assert.equal((await list(instance, '../x')).status, 400);
-  const invalid = (await call(instance, '/mission')).body.invalid.filter((entry) => entry.reason === 'malformed-record').map((entry) => entry.detail);
-  assert.equal(invalid.length, 2);
+  const mission = (await call(instance, '/mission')).body;
+  const invalid = mission.invalid.filter((entry) => entry.reason === 'malformed-record').map((entry) => entry.detail);
+  assert.equal(invalid.length, 1);
   assert.match(invalid.join('\n'), /pattern: /);
-  assert.match(invalid.join('\n'), /where is not a field of this record/);
+  // An unknown field is kept, as on every item (W-F): the folder still lists, and the page gets the extra key.
+  assert.deepEqual(mission.space.find((section) => section.title === 'Bad').folders, [{ where: 'x', id: 'extra', title: 'Extra' }]);
   console.log('PASS folder list: ? pattern, a root holding the workspace 403, unknown id 404, bad id 400, malformed items dropped');
 });
 
