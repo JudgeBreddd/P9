@@ -286,3 +286,41 @@ test('Phone wave 2: two Tools windows each with its own button, a grouped space 
   await shot(page, 'phone-wave2-sprint');
   console.log('PASS phone wave 2: two Tools windows (A up, B up), no Custom window, sprint acts Go sprint + Health check');
 });
+
+// Wave 3 on the phone: a widget is a row opening the phone's own window for it, or a line saying where it is; a section that is only a
+// widget draws no window of its own (no second "Sprints" or empty "Waits"); a named sprint section with one button runs only that.
+test('Phone wave 3: widgets are rows to the phone\'s own windows, a widget-only section draws no extra window, the sprint window runs only its section', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: async (paths) => {
+    const started = await setup(paths);
+    await writeFile(path.join(paths.workspace, 'p9', 'mission-space.json'), JSON.stringify({ sections: [
+      { id: 'sprints', title: 'Sprints', widget: 'sprint', buttons: [{ id: 'go-sprint', title: 'Go sprint', cmd: ['true'] }] },
+      { id: 'waits', title: 'Waits', widget: 'waiting' },
+      { id: 'hub', title: 'Hub', text: 'Hub text.', widgets: ['waiting', 'usage'], buttons: [{ id: 'hub-go', title: 'Hub go', cmd: ['true'] }] }] }));
+    const status = path.join(paths.directory, '.local', 'state', 'sprint', 'status.json');
+    await mkdir(path.dirname(status), { recursive: true });
+    await writeFile(status, JSON.stringify({ sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', chunks: [{ id: 'c1', title: 'One', state: 'merged', percent: 100 }] }));
+    return started;
+  } });
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page } = await signedInPage(browser, server);
+  await page.click('[data-nav="mission"]');
+  await page.locator('#sprint [data-open="sprint"]').waitFor({ timeout: 10000 });
+  const titled = (title) => page.locator('#mission .tile[data-open]').filter({ has: page.locator(`span:text-is("${title}")`) });
+  await titled('Hub').waitFor({ timeout: 10000 });
+  await shot(page, 'phone-wave3-mission');
+  assert.deepEqual([await titled('Sprints').count(), await titled('Waits').count(), await titled('Hub').count()], [0, 0, 1], 'only Hub has a window of its own');
+  await page.locator('#sprint [data-open="sprint"]').click();
+  const sprint = page.locator('#w-sprint[open]');
+  await sprint.waitFor({ timeout: 5000 });
+  assert.deepEqual(await sprint.locator('.sprint-acts form button').allInnerTexts(), ['Go sprint (asks first)']);
+  await sprint.locator('[data-close]').click();
+  await titled('Hub').click();
+  const hub = page.locator('#mission dialog[open]');
+  await hub.locator('[data-widget="waiting"] [data-open="queue"]').waitFor({ timeout: 5000 });
+  assert.match(await hub.locator('[data-widget="usage"]').innerText(), /Usage has its own tab/);
+  await shot(page, 'phone-wave3-hub');
+  await hub.locator('[data-widget="waiting"] [data-open="queue"]').click();
+  await page.locator('#w-queue[open]').waitFor({ timeout: 5000 });
+  console.log('PASS phone wave 3: windows Hub only (no Sprints, no Waits), sprint acts Go sprint alone, Hub rows waiting (opened Waiting on you) and usage line');
+});
