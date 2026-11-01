@@ -527,6 +527,17 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     const sender = BrowserWindow.getAllWindows()[0].webContents;
     return ipcMain._invokeHandlers.get('p9:pet-import')({ sender, senderFrame: sender.mainFrame }, '/tmp').then(() => 'accepted', (e) => e.message);
   }), 'ipc-sender-refused');
+  // CODEX_HOME: Codex's own pets folder is offered too (petdex itself still writes ~/.codex/pets, so that one stays).
+  await pet(path.join(home, 'codex-home', 'pets'), 'ch-pet', {}, { 'spritesheet.png': png });
+  await app.evaluate(({}, dir) => { process.env.CODEX_HOME = dir; }, path.join(home, 'codex-home'));
+  await page.click('#setClose'); await page.click('#setBtn');
+  // The row redraws once main answers; until then it still reads the old count.
+  await page.waitForFunction(() => document.querySelector('#petImport')?.textContent === 'Import 2 new petdex pets', null, { timeout: 5000 })
+    .catch(async () => assert.equal(await page.locator('#petImport').textContent(), 'Import 2 new petdex pets', 'the CODEX_HOME pet is offered'));
+  await page.click('#petImport');
+  await page.locator('#toasts', { hasText: 'Added ch-pet.' }).waitFor({ timeout: 10000 });
+  assert.deepEqual((await readdir(path.join(pets, 'ch-pet'))).sort(), ['pet.json', 'spritesheet.png']);
+  await app.evaluate(() => { delete process.env.CODEX_HOME; });
   // Install (Builder, 2026-10-18: paste "the npm command from petdex.dev"): main fetches only petdex.dev's manifest and the pet's two
   // files from assets.petdex.dev (a stand-in fetch here), never runs npx, and each pet goes through Add's checks.
   await app.evaluate(({}, b64) => {
