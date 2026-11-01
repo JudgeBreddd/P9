@@ -10,8 +10,10 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
 import * as acp from '@agentclientprotocol/sdk';
 import { childEnv } from './child-env.mjs';
+import { agentDirs, claudeWindow } from './limits.mjs';
 import { imageType, protection } from '../../packages/files/index.mjs';
 import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
@@ -440,8 +442,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     });
     session.approve = ask('approval');
     const stream = acp.ndJsonStream(Writable.toWeb(proc.child.stdin), Readable.toWeb(proc.child.stdout));
+    // P5: claude-agent-acp sends usage_update.size as the model's whole window (1,000,000 on a 1M model), but Claude Code
+    // compacts at CLAUDE_CODE_AUTO_COMPACT_WINDOW and its /context shows that. The adapter gets childEnv() and reads its
+    // settings from HOME, so the window is read the same way, once per start (Claude Code reads it at its start too).
+    // Every meter (desktop, phone, /usage) reads the stored event, so it is sized here, once. session.window is set
+    // before the first ACP request, so no update can arrive ahead of it.
+    const sizing = conversation.provider === 'claude' ? claudeWindow(agentDirs(os.homedir(), childEnv()).claudeDir, childEnv()).catch(() => null) : null;
     session.agent = new acp.ClientSideConnection(() => ({
-      sessionUpdate: async ({ update }) => {
+      sessionUpdate: async ({ update: raw }) => {
+        // max(): a reading past the window still shows full, and stays a valid context for the ledger (used <= size).
+        const update = session.window && raw?.sessionUpdate === 'usage_update' && raw.size > session.window ? { ...raw, size: Math.max(session.window, Number(raw.used) || 0) } : raw;
         if (update?.sessionUpdate === 'config_option_update') models(session, conversation.id, update.configOptions);
         // Both adapters name the chat after its first turn (session_info_update.title); kept so the tab and list show it.
         if (update?.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
@@ -464,6 +474,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     exited.catch(() => {});
     const bounded = (step) => Promise.race([step, exited, limit]);
     try {
+      session.window = await bounded(Promise.resolve(sizing));
       const init = await bounded(session.agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }));
       // The chat's folder, checked again at every start like a file path (threat model row 24): a folder since swapped for a link fails.
       await bounded(folderCheck(conversation.folder ?? ''));
