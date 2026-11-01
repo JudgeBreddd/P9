@@ -7,7 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
-import { readFile, listDirectory, guardedSave, createFile, renameFile, HEAVY } from '../../packages/files/index.mjs';
+import { readFile, listDirectory, guardedSave, createFile, renameFile, WALK_SKIP } from '../../packages/files/index.mjs';
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 import { ID, web, problem, unknownFields, extras, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
 
@@ -47,8 +47,8 @@ export function parseSettings(text) {
 // The field tables (mission-fields.mjs) are the rules; an invalid entry's detail says which one failed.
 const recordProblem = (record, kind, schemes) => problem(record, kind === 'pages' ? PAGE : RECORD, false, schemes);
 
-// Folders the plans list never walks into: dependencies, archives, private and template trees (workspace-hub skipped the same).
-const PLAN_SKIP = new Set([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
+// Folders the plans list never walks into: the shared WALK_SKIP (K14), as the setup wizard's scan.
+const PLAN_SKIP = new Set(WALK_SKIP);
 
 // Malformed records and every record sharing a duplicated ID are dropped and reported, never run.
 export function parseRegistry(text, schemes = []) {

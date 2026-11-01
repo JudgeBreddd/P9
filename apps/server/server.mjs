@@ -11,7 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, HEAVY } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
@@ -610,7 +610,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // "Use what's here" (needs-done p9-wizard-respects-existing-workspace): with no settings in a folder that already has things
   // in it, what the wizard can point at instead of making its own: a workspace-hub checkout (its registry and folder), an
   // AGENTS.md at the top, a needs-you or waiting folder. Links are never followed; at most three folders deep.
-  const SKIP = new Set([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete']);
+  const SKIP = new Set(WALK_SKIP);
   // The folder names a workspace keeps what is waiting on its owner in (the kit's _tyler included; Mission Control labels come from the owner's own folder).
   const WAITING_NAMES = new Set(['needs-you', '_needs-you', 'waiting', '_waiting', '_tyler']);
   const byDepth = (a, b) => a.split('/').length - b.split('/').length;
