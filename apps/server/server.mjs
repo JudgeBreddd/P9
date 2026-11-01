@@ -134,7 +134,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       resolve(error ? { status: 500, error: 'build-failed', detail: String(stderr).trim().split('\n').slice(-3).join('\n').slice(0, 300) } : { status: 200, rebuilt: true });
     });
   });
-  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform });
+  // Settings > General: the shell's welcome message is shown unless the desktop hid it (createChat made the prefs table).
+  const greeting = () => ledger.db.prepare("SELECT value FROM prefs WHERE key = 'terminal-greeting'").get()?.value !== 'off';
+  const terminals = createTerminals({ ledger, workspace, lifecycle, socket: tmuxSocket, platform: terminalPlatform, greeting });
   const auth = remote ? createAuth({ ledger, rpID: remote.rpID, origin: remote.origin }) : null;
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
   const editor = transport === 'unix' && state ? daemonEditor({ socket: path.join(state, 'editor.sock'), unit: 'p9-editor-server-' + instance }) : null;
@@ -859,6 +861,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (!command) return reply(c, { status: 409, error: 'nothing-to-install' });
     const made = await terminals.create({}, { cwd: workspace, typed: command });
     return reply(c, made.terminal ? { status: 201, terminal: made.terminal, command } : { ...made, command });
+  });
+  // Desktop only: { show: boolean }, for terminals made from then on (a running shell keeps what it printed).
+  app.get('/terminal-greeting', (c) => c.json({ show: greeting() }));
+  app.post('/terminal-greeting', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).join() !== 'show' || typeof body.show !== 'boolean') return c.json({ error: 'request-refused' }, 400);
+    ledger.db.prepare("INSERT INTO prefs (key, value) VALUES ('terminal-greeting', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(body.show ? 'on' : 'off');
+    return c.json({ show: greeting() });
   });
   api.get('/file-protection', (c) => c.json({ on: protection() }));
   api.post('/file-protection', async (c) => {

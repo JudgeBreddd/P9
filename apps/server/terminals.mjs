@@ -24,9 +24,10 @@ export function resizeFrame(text) {
 
 // Every platform gets the same routes (issue #11): tmux on Linux, ConPTY on Windows, and anywhere else (or when the
 // Windows backend cannot load) a backend that answers every route with terminal-unavailable and the reason.
-export function createTerminals({ ledger, workspace, lifecycle, socket, platform = process.platform }) {
-  if (platform === 'linux') return tmuxTerminals({ ledger, workspace, lifecycle, socket });
-  if (platform === 'win32' && conpty?.spawnPty) return conptyTerminals({ ledger, workspace, lifecycle });
+// greeting(): false when Settings > General hid the shell's welcome message; read at each new terminal.
+export function createTerminals({ ledger, workspace, lifecycle, socket, platform = process.platform, greeting = () => true }) {
+  if (platform === 'linux') return tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting });
+  if (platform === 'win32' && conpty?.spawnPty) return conptyTerminals({ ledger, workspace, lifecycle, greeting });
   return unavailable(platform === 'win32' ? 'The Windows terminal could not load: ' + String(conpty?.error?.message ?? 'not loaded').slice(0, 200)
     : `P9 has no terminal for ${platform === 'darwin' ? 'macOS' : platform} yet.`);
 }
@@ -42,7 +43,7 @@ function unavailable(reason) {
   };
 }
 
-function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
+function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
   if (!SOCKET.test(socket)) throw new Error('invalid-tmux-socket');
   const db = ledger.db;
   db.exec(`CREATE TABLE IF NOT EXISTS terminals
@@ -115,7 +116,11 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
       await ensureServer();
       stillAuthorized();
       // -e PATH: a tmux server an older P9 started keeps its own PATH, without P9's bin folder (item 15).
-      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, '-e', 'PATH=' + childEnv().PATH, ...(start.phone ? ['-e', 'P9_PHONE=1'] : [])]);
+      // Welcome message hidden: the session has P9_NO_GREETING=1 for any shell config to check, and fish (whose greeting is a
+      // function, e.g. CachyOS's fastfetch) starts with it emptied. tmux's own default-shell is used; a default-command left alone.
+      const quiet = !greeting(), shell = quiet ? await quietShell() : [];
+      await tmux(['new-session', '-d', '-s', name(id), '-c', start.cwd ?? workspace, '-e', 'PATH=' + childEnv().PATH, ...(start.phone ? ['-e', 'P9_PHONE=1'] : []),
+        ...(quiet ? ['-e', 'P9_NO_GREETING=1'] : []), ...shell]);
       if (start.typed) await tmux(['send-keys', '-t', '=' + name(id) + ':', '-l', start.typed]);
       if (start.typed && start.run) await tmux(['send-keys', '-t', '=' + name(id) + ':', 'Enter']); // a fixed command from server.mjs (Sprint: Open tmux)
       db.prepare("UPDATE terminals SET state = 'running' WHERE id = ?").run(id);
@@ -125,6 +130,12 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
       db.prepare("UPDATE terminals SET state = 'cleanup-failed' WHERE id = ?").run(id);
       return { status: 500, error: 'terminal-start-failed' };
     } finally { release(); }
+  }
+
+  async function quietShell() {
+    const option = (key) => tmux(['show-options', '-gv', key]).then(({ stdout }) => stdout.trim(), () => '');
+    const [shell, command] = await Promise.all([option('default-shell'), option('default-command')]);
+    return !command && /(^|\/)fish$/.test(shell) ? [shell, '-l', '-C', 'function fish_greeting; end'] : [];
   }
 
   async function stop(id) {
@@ -226,7 +237,7 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket }) {
 // their pseudo consoles and their jobs sit inside the daemon's own Foundation job, so a daemon restart ends every one
 // and the ledger marks them stopped at start. A closed window or dock only detaches: the shell keeps running, and the
 // next attach gets its recent output replayed.
-function conptyTerminals({ ledger, workspace, lifecycle }) {
+function conptyTerminals({ ledger, workspace, lifecycle, greeting }) {
   const db = ledger.db;
   db.exec(`CREATE TABLE IF NOT EXISTS terminals
     (id TEXT PRIMARY KEY, state TEXT NOT NULL, created INTEGER NOT NULL);`);
@@ -244,7 +255,8 @@ function conptyTerminals({ ledger, workspace, lifecycle }) {
       stillAuthorized();
       db.prepare("INSERT INTO terminals VALUES (?, 'starting', ?)").run(id, Date.now());
       let pty;
-      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: { ...childEnv(), ...(start.phone ? { P9_PHONE: '1' } : {}) } }); } catch (error) {
+      // PowerShell always starts with -NoLogo (conpty.mjs); a hidden welcome message adds P9_NO_GREETING=1 for a profile to check.
+      try { pty = await conpty.spawnPty({ cwd: start.cwd ?? workspace, env: { ...childEnv(), ...(start.phone ? { P9_PHONE: '1' } : {}), ...(greeting() ? {} : { P9_NO_GREETING: '1' }) } }); } catch (error) {
         // spawnPty undoes its own partial start, so nothing is left running.
         db.prepare("UPDATE terminals SET state = 'stopped' WHERE id = ?").run(id);
         return { status: 503, error: 'terminal-unavailable', reason: 'The Windows terminal did not start: ' + String(error.message).slice(0, 200) };

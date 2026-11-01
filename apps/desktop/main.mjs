@@ -749,7 +749,9 @@ export async function createDesktop({ state, open } = {}) {
   const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
     ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
   ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
-  const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}] };
+  const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}],
+    // Settings > General: {} reads the welcome message setting, { show } changes it.
+    greeting: body => !Object.keys(body).length ? ['GET', '/terminal-greeting'] : Object.keys(body).join() === 'show' && typeof body.show === 'boolean' && ['POST', '/terminal-greeting', { show: body.show }] };
   ipcMain.handle('p9:terminal', async (event, ...args) => {
     const [action, payload = {}] = args;
     if (!fromApp(event) || args.length > 2 || !Object.hasOwn(terminalRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
