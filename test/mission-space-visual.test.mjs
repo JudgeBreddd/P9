@@ -208,3 +208,66 @@ test('Mission wave 2 on the desktop: repeated titles, file order and named built
   shot('mission-wave2-editor', await page.screenshot({ animations: 'disabled' }));
   console.log('PASS mission wave 2 desktop: top row in file order with named built-ins, two Tools each with its own button, sprint ran Go sprint + Doctor, Use before Main, Fields saved text, down moved tools-a');
 });
+
+// Wave 3 on the desktop: W-G four columns with span 2 (the wide one twice the others), W-M a named sprint section with no buttons
+// shows only Open tmux, W-N/W-O the edit form lists buttons (registry and space) and saves one, W-L no Tools tile from scripts alone.
+const WAVE3 = { sections: [
+  { id: 'left', title: 'Left', place: 'col1', text: 'Column one.' },
+  { id: 'wide', title: 'Wide', place: 'col2', span: 2, text: 'Twice as wide as the others.', buttons: [{ id: 'wide-run', title: 'Wide run', cmd: ['true'] }] },
+  { id: 'right', title: 'Right', place: 'col3', text: 'Column three.' },
+  { id: 'four', title: 'Four', place: 'col4', refs: ['doctor'] },
+  { id: 'sprints', title: 'Sprints', widget: 'sprint' },
+  { id: 'daily', title: 'Daily', widgets: ['edit'], buttons: [{ id: 'daily-go', title: 'Daily go', cmd: ['true'] }] }] };
+
+test('Mission wave 3 on the desktop: four columns with span, a named sprint with no buttons, buttons in the edit form', { timeout: 150000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async (dirs) => {
+    const status = path.join(dirs.directory, '.local', 'state', 'sprint', 'status.json');
+    await mkdir(path.dirname(status), { recursive: true });
+    await writeFile(status, JSON.stringify({ sprint: 'Test sprint', updatedAt: '2026-10-27T14:30:00-05:00', chunks: [{ id: 'c1', title: 'One', state: 'merged', percent: 100 }] }));
+    return seed(dirs, WAVE3);
+  });
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-wave3-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  await page.click('#rMission');
+  const row = page.locator('#fMission .mrow[data-placed]');
+  await row.locator('[data-sec="Four"]').waitFor({ timeout: 20000 });
+  const cols = await row.locator(':scope>.mcol').evaluateAll((all) => all.map((c) => [c.dataset.col, c.dataset.w, Math.round(c.getBoundingClientRect().width)]));
+  assert.deepEqual(cols.map((c) => c.slice(0, 2)), [['1', '1'], ['2', '2'], ['3', '1'], ['4', '1']]);
+  const [w1, w2, w3, w4] = cols.map((c) => c[2]);
+  assert.ok(Math.abs(w2 - 2 * w1) <= 0.1 * w2 && Math.abs(w1 - w3) <= 2 && Math.abs(w1 - w4) <= 2, 'widths ' + cols.map((c) => c[2]).join(','));
+  assert.equal(await page.locator('#fMission .tiles > button b', { hasText: /^Tools$/ }).count(), 0, 'W-L: no Tools tile');
+  shot('mission-wave3-columns', await page.screenshot({ animations: 'disabled' }));
+  const close = async () => { await page.keyboard.press('Escape'); await page.locator('#mdl[open]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {}); };
+
+  // W-M: the section names sprint and has no buttons, so its window offers Open tmux and nothing else.
+  await page.click('#fMission [data-sprint="sprints"]');
+  await page.locator('#mdl[open] #mdlFoot [data-sprint-tmux]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdlFoot [data-sprint-run]').count(), 0);
+  shot('mission-wave3-sprint-none', await page.screenshot({ animations: 'disabled' }));
+  await close();
+
+  // W-N/W-O: the edit form has a row for each button, the registry's and the space's, and saves a space button's title.
+  await page.click('#fMission .tiles [data-key="daily"]');
+  await page.click('#mdl[open] #mdlBody [data-widget="edit"] [data-wopen]');
+  await page.locator('#mdlBody [data-medit] [data-row]').first().waitFor({ timeout: 10000 });
+  const kinds = await page.locator('#mdlBody [data-row]').evaluateAll((all) => all.map((r) => r.querySelector('.kind').textContent + ':' + r.querySelector('[data-t]').value));
+  for (const want of ['button:Doctor', 'button:Continuity', 'button:Wide run', 'button:Daily go', 'section:Daily']) assert.ok(kinds.includes(want), want + ' in ' + kinds.join(' | '));
+  const daily = page.locator('#mdlBody [data-row]').filter({ has: page.locator('[data-t][value="Daily go"]') });
+  await daily.locator('[data-t]').fill('Daily went');
+  await daily.locator('[data-save]').click();
+  await page.locator('#mdlBody [data-save]', { hasText: 'Confirm save' }).click();
+  const space = () => readFile(path.join(instance.workspace, SETTINGS.space), 'utf8').then((text) => JSON.parse(text).sections);
+  let title;
+  for (let i = 0; i < 50 && (title = (await space()).find((s) => s.id === 'daily').buttons[0].title) !== 'Daily went'; i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(title, 'Daily went');
+  await page.locator('#mdlBody [data-medit] [data-row]').first().waitFor({ timeout: 10000 });
+  shot('mission-wave3-editor-buttons', await page.screenshot({ animations: 'disabled' }));
+  console.log('PASS mission wave 3 desktop: 4 columns, widths ' + cols.map((c) => c[2]).join('/') + ' (span 2 twice), no Tools tile, named sprint with no buttons only Open tmux, '
+    + kinds.filter((k) => k.startsWith('button')).length + ' button rows, Daily go renamed through the form');
+});

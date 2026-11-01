@@ -1201,12 +1201,14 @@ async function loadSprint() {
 const SPRINT_STATE = { running: 'running', waiting: 'waiting', merged: 'merged', blocked: 'blocked', unknown: 'unknown' };
 const sprintOverall = d => Number.isFinite(d.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${d.overall}%" style="--p:${d.overall}" data-overall><b>${d.overall}%</b></div><div class="spt"><b>Whole sprint</b><span class="sm muted">${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</span></div></div>` : '';
 const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}${c.activity ? ` · <span data-activity="${esc(c.activity)}">${esc(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${esc(c.steps)}</span>` : ''}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
-// The modal's buttons: each is a registry script (asks first, like any script), found by its fixed id.
+// The unnamed tile's buttons: each is a registry script (asks first, like any script), found by its fixed id.
 const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
 const scriptById = id => M.cardScripts?.[id] ?? Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
-// W-M: a sprint tile a section names runs that section's buttons and script refs; with none (or the default tile), the three above.
-const sprintScripts = sec => { const sp = spaceOf(sec), own = sp ? [...(M.scripts[sec] || []), ...(sp.refs || []).filter(r => r.kind === 'scripts').map(r => scriptById(r.id)).filter(Boolean)] : [];
-  return own.length ? own.map(r => [r[0], r[1], r]) : SPRINT_SCRIPTS.map(([id, label]) => [id, label, scriptById(id)]); };
+// W-M: a sprint tile a section names runs that section's buttons and script refs, and only those (none: Open tmux alone); the
+// fixed ids above are only the unnamed tile's, which no file asked for.
+const sprintScripts = sec => { const sp = spaceOf(sec);
+  return sp ? [...(M.scripts[sec] || []), ...(sp.refs || []).filter(r => r.kind === 'scripts').map(r => scriptById(r.id)).filter(Boolean)].map(r => [r[0], r[1], r])
+    : SPRINT_SCRIPTS.map(([id, label]) => [id, label, scriptById(id)]); };
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
 let lastArt = '';
 async function loadArt() {
@@ -1218,13 +1220,14 @@ async function loadArt() {
 // Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
 function applyOverview(o) {
   live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting?.split('/').pop() ?? null; // no waiting folder on a fresh install
-  M.scripts = {}; M.tools = []; M.cardScripts = {}; M.title = {}; // hidden: a card's feeder or title-bar button, not a row
+  M.scripts = {}; M.cardScripts = {}; M.title = {}; // hidden: a card's feeder or title-bar button, not a row
   // W-C: a group's key is its section's id (titles may repeat; M.title says what each key is called). A space button names its
   // section; a registry group named like a section joins the first one with that title; any other is 'g:' + its name (an id has no ':').
   const named = {}; for (const s of o.space || []) { named[s.title] ??= s.id; M.title[s.id] = s.title; }
   for (const x of o.scripts) { const row = [x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }];
     const name = x.group || 'Other', key = x.section ?? named[name] ?? 'g:' + name; M.title[key] ??= name;
     if (x.hidden) M.cardScripts[x.id] = row; else (M.scripts[key] ||= []).push(row); }
+  M.buttons = o.scripts.map(x => ({ id: x.id, title: x.title, icon: x.icon, section: x.section })); // the editor's button rows (W-N)
   M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
   M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
   // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
@@ -1348,11 +1351,17 @@ const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
 const PANELS = ['musage', 'mlaunch'];
 const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
 const NEEDS = '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>';
-// The page from the space file: once any section has place col1, col2 or col3, the three columns hold the sections placed
-// in them, in file order, and nothing else; every other section is a tile in the top row. With none placed, the page is the
-// fixed layout below (waiting, Main project and Logs, then Usage, Apps and the cards).
-const PLACED = /^col[123]$/;
+// The page from the space file: once any section has place col1 to col6, the columns hold the sections placed in them, in file
+// order, and nothing else; every other section is a tile in the top row. With none placed, the page is the fixed layout below
+// (waiting, Main project and Logs, then Usage, Apps and the cards), each box in the file order of the section naming it (W-H).
+const PLACED = /^col[1-6]$/;
 const placed = () => (M.space || []).some(s => PLACED.test(s.place));
+// W-G: as many columns as the highest one used (three at least, as before). A column's width is the largest span of its sections;
+// while no section has span and only col1 to col3 are used, the columns keep the CSS widths they always had (no data-w).
+const placedCols = () => { const used = M.space.filter(s => PLACED.test(s.place)), n = Math.max(3, ...used.map(s => +s.place.slice(3))),
+  own = n > 3 || used.some(s => Number.isInteger(s.span));
+  return Array.from({ length: n }, (_, i) => { const mine = used.filter(s => s.place === 'col' + (i + 1));
+    return { n: i + 1, mine, w: own ? Math.max(1, ...mine.map(s => Number.isInteger(s.span) && s.span >= 1 && s.span <= 6 ? s.span : 1)) : null }; }); };
 const WIDGET_WIN = { usage: 'musage', apps: 'mlaunch', notifications: 'mnotes', primary: 'mprimary' };
 // A widget draws P9's own panel; any other section draws open: its title and Open (its window), its items under it.
 // data-sec and data-group carry the title; data-key, the section's id, is what a click and a redraw use (W-C).
@@ -1594,7 +1603,7 @@ function renderMission() {
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
     + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
-    + (lay ? '<div class="mrow" data-placed>' + [1, 2, 3].map(n => `<div class="mcol" data-col="${n}">${M.space.filter(s => s.place === 'col' + n).map(placedHtml).join('')}</div>`).join('') + '</div>'
+    + (lay ? '<div class="mrow" data-placed>' + placedCols().map(c => `<div class="mcol" data-col="${c.n}"${c.w ? ` data-w="${c.w}"` : ''}>${c.mine.map(placedHtml).join('')}</div>`).join('') + '</div>'
       : '<div class="mrow">' + (widgetOn('waiting') ? NEEDS : '')
     + '<div class="mcol">' + byFile([['primary', '<div data-card="mprimary"></div>'], ['usage', winPanel('musage')]]) + '</div>'
     + '<div class="mcol">' + byFile([['apps', winPanel('mlaunch')], ['notifications', '<div class="wins" aria-label="Mission sections"></div>']]) + '</div></div>'));
@@ -1637,7 +1646,12 @@ function missionLive() {
     page.querySelectorAll('[data-sec]').forEach(p => secInline(p.dataset.key));
     // With a space file the built-in layer is off, so Main project and Logs are gone: an empty column hides and the others widen.
     page.querySelectorAll('.mcol').forEach(col => { col.hidden = ![...col.children].some(k => !k.hidden && k.innerHTML.trim()); });
-    if (page.dataset.placed !== undefined) page.dataset.cols = page.querySelectorAll(':scope>.mcol:not([hidden])').length;
+    if (page.dataset.placed !== undefined) {
+      const shown = [...page.querySelectorAll(':scope>.mcol:not([hidden])')];
+      page.dataset.cols = shown.length;
+      // W-G: the columns shown share the row by their weights (a hidden one gives its share to the others).
+      if (shown.some(col => col.dataset.w)) page.style.setProperty('--mcols', shown.map(col => `minmax(0,${col.dataset.w || 1}fr)`).join(' ')); else page.style.removeProperty('--mcols');
+    }
     $('#fMission').querySelectorAll('[data-win]').forEach(b => b.onclick = () => openModal({ kind: 'win', id: b.dataset.win }));
   }
   const set = (id, html) => { const b = $(`#mdl #${id} .pbody`); if (!b) return { querySelectorAll: () => [] }; return setHTML(b, html); };
@@ -1817,7 +1831,7 @@ async function saveNote(m, hash) {
   else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
   if (S.modal === m) renderModal();
 }
-// One section's items (notes, folders, refs, logs, scripts, tools, data tiles, cards, links, checklists, quick note): the body
+// One section's items (notes, folders, refs, logs, scripts, data tiles, cards, links, checklists, quick note): the body
 // of the section's window, and the same items drawn open in a page column (place col1 to col3). o says where they are drawn:
 // write(el, html) puts the markup in and says whether it changed; shown() is false once the window closed or the panel left
 // the page; seen() is whether it is on screen now (tiles and cards ask the daemon only then); redraw() draws it again; back is
@@ -1825,7 +1839,7 @@ async function saveNote(m, hash) {
 // Which box each part draws in (no box: on its own); the classes are the boxes' CSS.
 const SECTION_BOX = { notes: 'mlist', folders: 'mlist', refs: 'mlist', logs: 'mlist', buttons: 'mlist', data: 'dtiles', cards: 'dtiles', links: 'dtiles', checklists: 'cks', widgets: 'wdgs' };
 function sectionBody(m, body, g, o) {
-  const l = M.scripts[g], tools = g === 'Tools' ? M.tools : [], sp = spaceOf(g);
+  const l = M.scripts[g], sp = spaceOf(g);
   // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is on screen, every 30 s.
   // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
   // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
@@ -1851,8 +1865,7 @@ function sectionBody(m, body, g, o) {
       ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
       : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join(''),
     logs: (sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join(''),
-    buttons: l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join('')
-      + tools.map(t => `<li><button data-tool="${esc(t[0])}"><span class="kind">tool</span><span class="truncate">${esc(t[0])}</span><span class="sub truncate">${esc(t[1])}</span></button></li>`).join(''),
+    buttons: l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join(''),
     data: (sp?.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"${bare(d)}><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join(''),
     cards: (sp?.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card${bare(c)}><h3><span>${esc(c.title)}</span>${(c.buttons || []).map(id => { const s = scriptById(id); return s ? `<button class="cbtn" data-cbtn="${esc(id)}">${esc(s[1])}</button>` : `<button class="cbtn" disabled title="No script or button has this ID">${esc(id)} not found</button>`; }).join('')}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join(''),
     links: (sp?.links || []).map(l => linkHtml(l, esc)).join(''),
@@ -1930,7 +1943,6 @@ function sectionBody(m, body, g, o) {
   body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back }));
   body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back }));
   body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { name: b.dataset.slog }, call: 'spaceLog', back }));
-  body.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => toast({ kind: 'launched', txt: b.dataset.tool + ' (mock: nothing opens)', level: 'ok' }, true));
   body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: gTitle(g), back }));
   // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section (on the page, once per
   // version of the section).
