@@ -37,7 +37,7 @@ const quote = (text) => "'" + text.replace(/'/g, "'\\''") + "'";
 const TOOLS = readFileSync(new URL('./tools.sh', import.meta.url), 'utf8');
 
 // The remote's script. version: null when this app's source comes over ssh's stdin, else the release to download there.
-// A ~/p9 this install made (its marker file) gets install.sh again; any other ~/p9 is left alone.
+// A ~/p9 this install made (its marker file) gets the source unpacked over it and install.sh again; any other ~/p9 is left alone.
 // keep: the remembered Yes to Keep P9 running there (keep.mjs): linger and the service. Otherwise --background (row I1): no
 // linger, no service, until the person answers after the first connect.
 // admin: stdin's first line is the admin password (row I2), read before anything else; install.sh gets it the same way.
@@ -56,8 +56,10 @@ export function script(version, keep = false, admin = false) {
     'else p9_tools; if [ -n "$P9_TOOLS_NEED" ]; then c=$(p9_install_command "$P9_TOOLS_PACKAGES")',
     admin ? '  if [ -n "$c" ]; then p9_admin "$c" || true; fi'
       : '  printf "%s" "$P9_TOOLS_NEED" | while IFS= read -r l; do echo "P9_ADMIN need $l"; done; if [ -n "$c" ]; then echo "P9_ADMIN command $c"; exit 5; fi',
-    '  p9_tools; [ -z "$P9_TOOLS_NEED" ] || { echo "P9_INSTALL missing-tools"; exit 4; }; fi',
-    '  t=$(mktemp -d); trap \'rm -rf "$t"\' EXIT; ' + source + '; mkdir "$d"; : > "$d/.p9-remote-install"; tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; echo "P9_INSTALL unpacked"; fi',
+    '  p9_tools; [ -z "$P9_TOOLS_NEED" ] || { echo "P9_INSTALL missing-tools"; exit 4; }; fi; fi',
+    // Our own ~/p9 gets this app's source over it every time, so a retry after an update runs the new install.sh, not the
+    // one an older app left there. ponytail: files the new source dropped stay behind; nothing runs them by name.
+    't=$(mktemp -d); trap \'rm -rf "$t"\' EXIT; ' + source + '; [ -d "$d" ] || { mkdir "$d"; : > "$d/.p9-remote-install"; }; tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; echo "P9_INSTALL unpacked"',
     admin ? 'printf "%s\\n" "$p9_pw" | bash "$d/scripts/install.sh" ' + flags + ' --admin-stdin' : 'bash "$d/scripts/install.sh" ' + flags + ' </dev/null',
     'echo "P9_INSTALL done"',
   ].join('\n');

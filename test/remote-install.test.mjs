@@ -40,10 +40,13 @@ test('D15a: a checkout\'s source lands in ~/p9 there and install.sh runs headles
   // What the window shows names files, never where they are on the remote.
   const shown = JSON.stringify(events);
   assert.ok(shown.includes('build.log') && !shown.includes(s.dir), shown);
-  // A failed install can be tried again: its own ~/p9 gets install.sh again, nothing unpacked over it.
-  await writeFile(path.join(s.home, 'p9', 'README.md'), 'kept\n');
+  // A failed install can be tried again: its own ~/p9 gets this app's source over it, so an older app's install.sh
+  // (cortanabot, 2026-10-31: the old "XDG_RUNTIME_DIR: not set" at line 20 on every retry) is replaced before it runs.
+  await writeFile(path.join(s.home, 'p9', 'scripts', 'install.sh'), 'echo "XDG_RUNTIME_DIR: not set"; exit 1\n');
+  await writeFile(path.join(s.home, 'p9', 'node_modules-kept'), 'built\n');
   assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' })).phase, 'done');
-  assert.equal(await readFile(path.join(s.home, 'p9', 'README.md'), 'utf8'), 'kept\n');
+  assert.equal(await readFile(path.join(s.home, 'p9', 'scripts', 'install.sh'), 'utf8'), await readFile(path.join(s.dir, 'src', 'p9', 'scripts', 'install.sh'), 'utf8'));
+  assert.equal(await readFile(path.join(s.home, 'p9', 'node_modules-kept'), 'utf8'), 'built\n', 'what the last install built stays');
 });
 
 test('D15a: a ~/p9 this app did not make is left alone', { skip, timeout: 30000 }, async () => {
