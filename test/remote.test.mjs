@@ -439,12 +439,19 @@ test('U9 Disconnect on the remote label goes back to this computer; U8 the slim 
     ipcMain.removeHandler('p9:get-status'); ipcMain.handle('p9:get-status', () => ({ status: 'ok', mode: 'server', host: 'test-host', background: true, slim: true, ask: false }));
     ipcMain.removeHandler('p9:server'); ipcMain.handle('p9:server', (_, ...a) => { k.calls.push(a); return a.length ? { ok: true } : { host: 'test-host', last: 'test-host', connected: true, slim: true, error: null, hosts: [], remotes: ['test-host'], keep: {}, noKey: [] }; });
   });
+  // Ctrl K offers Mission before slim (the control for the check after it).
+  const missionCmds = async () => { await page.keyboard.press('Control+k'); await page.fill('#palIn', 'mission'); const names = await page.locator('#palList li[data-i]').allTextContents(); await page.keyboard.press('Escape'); return names; };
+  assert.ok((await missionCmds()).some((n) => n.includes('Mission Control')), 'Ctrl K offers Mission Control on a full P9');
   await page.reload();
   await page.locator('#rChat').waitFor({ timeout: 20000 });
   await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'P9 on test-host is temporary (no Mission Control): it stops when you disconnect' }).waitFor({ timeout: 15000 });
   await page.locator('#rMission').waitFor({ state: 'hidden', timeout: 10000 });
   assert.equal(await page.locator('#rChat').isVisible(), true);
   assert.match(await disconnect.getAttribute('title'), /temporary, so it stops there 5 minutes later/);
+  // The footer and Ctrl K do not claim Mission Control there.
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 10000 });
+  assert.doesNotMatch(await page.locator('#dataNote').textContent(), /Mission/);
+  assert.deepEqual(await missionCmds(), [], 'Ctrl K offers no Mission command on the slim P9');
   await evidence(page, 'u8-slim-no-mission');
   await disconnect.click();
   for (const end = Date.now() + 5000; Date.now() < end && !(await app.evaluate(() => globalThis.slimTest.calls.some((c) => c.length)));) await page.waitForTimeout(100);

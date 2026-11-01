@@ -2318,7 +2318,9 @@ const maintain = {
 };
 const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', () => $('#rSplit').click()], ['Browse files', () => $('#rSearch').click()], ['Toggle files pane', () => $('#rFiles').click()], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
 let palSel = 0;
-function renderPal() { const q = $('#palIn').value.toLowerCase(); const list = cmds.filter(c => c[0].toLowerCase().includes(q)); palSel = Math.min(palSel, Math.max(0, list.length - 1)); $('#palList').innerHTML = list.map((c, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${cmds.indexOf(c)}">${svg.bolt.replace('<svg', '<svg width="14" height="14"')}${esc(c[0])}${i === palSel ? '<kbd>↵</kbd>' : ''}</li>`).join('') || '<li class="muted">No matching command</li>'; $('#palList').querySelectorAll('li[data-i]').forEach(li => li.onclick = () => run(+li.dataset.i)); }
+// U8: no Mission commands on a slim Temporary remote, which has no Mission Control.
+const MISSION_CMDS = new Set(['Mission Control', 'Refresh Mission']);
+function renderPal() { const q = $('#palIn').value.toLowerCase(); const list = cmds.filter(c => c[0].toLowerCase().includes(q) && (!serverInfo?.slim || !MISSION_CMDS.has(c[0]))); palSel = Math.min(palSel, Math.max(0, list.length - 1)); $('#palList').innerHTML = list.map((c, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${cmds.indexOf(c)}">${svg.bolt.replace('<svg', '<svg width="14" height="14"')}${esc(c[0])}${i === palSel ? '<kbd>↵</kbd>' : ''}</li>`).join('') || '<li class="muted">No matching command</li>'; $('#palList').querySelectorAll('li[data-i]').forEach(li => li.onclick = () => run(+li.dataset.i)); }
 function run(i) { $('#palette').close(); cmds[i][1](); }
 function openPal() { $('#palIn').value = ''; palSel = 0; renderPal(); $('#palette').showModal(); $('#palIn').focus(); }
 $('#rCmd').onclick = openPal;
@@ -3094,7 +3096,7 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // load, then a long poll); the sample sessions go. Sends, answers and Stop go to window.p9.chat; what happened comes
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
-const dataNote = () => { $('#dataNote').textContent = [live.on && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
+const dataNote = () => { $('#dataNote').textContent = [live.on && !serverInfo?.slim && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 liveChat.call = async (action, payload = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
@@ -3489,7 +3491,7 @@ function moveReloaded() {
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
-if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); if (r?.slim) applySettings(); }, () => {});
+if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
 // The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
 // each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
 // the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
