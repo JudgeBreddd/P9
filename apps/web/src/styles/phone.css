@@ -346,3 +346,5 @@ section[data-view=files]:has(#fileView[data-image]:not([hidden])) :is(#save,#mor
 #imageView[hidden]{display:none}
 #imageView img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
 #imageView .note{max-width:32ch;text-align:center;color:var(--dim);font-size:14px;line-height:1.45}
+/* P21: the Waiting on you Sort, one line like the space pick. */
+.queue-sort{display:flex;align-items:center;gap:8px;justify-content:flex-end}.queue-sort select{width:auto}

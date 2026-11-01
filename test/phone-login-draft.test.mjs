@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, unlink, utimes, writeFile } from 'node:fs/promises';
 import { remoteDaemon } from './helpers.mjs';
 import { phone, CHAT, seedChat, stubPrompt, openChat } from './phone-c16-helpers.mjs';
 
@@ -104,6 +104,40 @@ test('P2: a 401 on Send answer keeps the typed Mission answers and the new idea 
   console.log('P9_SHOT p2-mission-kept ' + (await page.screenshot()).toString('base64'));
   assert.equal(await page.evaluate(() => localStorage.getItem('p9-mission-draft')), null, 'nothing left in storage once all is back');
   console.log('PASS P2: Mission answers and the new idea came back unsent; the gone item\'s answer is shown to copy');
+});
+
+// P21: Waiting on you has the desktop's Sort: Newest first by default, Project by file name, kept across a reload; an
+// answer box still belongs to its own item after the order changes.
+test('P21: the phone Waiting on you list sorts Newest or Project, and the pick is kept', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, { setup: missionSetup });
+  // p9-color.md is a day older than p9-size.md: Newest puts size first, Project (by name) puts color first.
+  const day = Date.now() / 1000 - 86400;
+  const waiting = path.join(server.workspace, JSON.parse(await readFile(path.join(server.directory, 'settings.json'), 'utf8')).waiting);
+  await utimes(path.join(waiting, 'p9-color.md'), day, day);
+  const { page } = await phone(t, server, { touchScreen: false });
+  await page.click('[data-nav="mission"]');
+  await page.click('[data-open="queue"]', { timeout: 15000 });
+  const order = () => page.locator('#w-queue details.row summary').evaluateAll((all) => all.map((s) => s.firstChild.textContent));
+  assert.equal(await page.locator('#w-queue [data-queue-sort]').inputValue(), 'updated');
+  assert.deepEqual(await order(), ['Pick a size', 'Pick a color'], 'Newest first');
+  await page.selectOption('#w-queue [data-queue-sort]', 'project');
+  await page.waitForFunction(() => document.querySelector('#w-queue details.row summary')?.firstChild.textContent === 'Pick a color', null, { timeout: 5000 });
+  assert.deepEqual(await order(), ['Pick a color', 'Pick a size'], 'by project');
+  assert.equal(await page.locator('#w-queue').evaluate((d) => d.open), true, 'the window stays open after a sort');
+  console.log('P9_SHOT p21-phone-sort ' + (await page.screenshot()).toString('base64'));
+  // The answer form under a row is that row's item: answer the first row (now Pick a color) and its file gets it.
+  await page.click('#w-queue summary:text("Pick a color")');
+  await page.fill('#w-queue details:has(summary:text("Pick a color")) textarea', 'Blue');
+  await page.click('#w-queue details:has(summary:text("Pick a color")) button[type="submit"]');
+  await page.waitForSelector('#w-queue [data-note]:text("Answer saved.")', { timeout: 10000 });
+  const read = (name) => readFile(path.join(waiting, name), 'utf8');
+  assert.match(await read('p9-color.md'), /^A\. Blue$/m);
+  assert.doesNotMatch(await read('p9-size.md'), /Blue/, 'the answer went to the other item');
+  await page.waitForSelector('#w-queue [data-note]:text("Answer saved.")', { state: 'detached', timeout: 10000 });
+  await page.reload();
+  await page.click('[data-nav="mission"]');
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-queue-sort')), 'project');
+  console.log('PASS P21: Newest by default, Project on pick, kept; answers land on their own item');
 });
 
 // A workspace with two answerable Mission items and a hub, so the phone shows Waiting on you and + New idea.
