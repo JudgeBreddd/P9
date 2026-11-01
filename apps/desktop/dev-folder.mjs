@@ -15,7 +15,7 @@ export function serverPath(typed) {
 export function folderError(error, server) {
   const there = server ? ' on the server' : '';
   return {
-    'root-refused': 'P9 does not open that folder: it holds the workspace, your home folder or P9\'s own files.',
+    'root-refused': 'P9 does not open that folder: it holds the workspace, your home folder or P9\'s own files. Turn on Unrestricted mode in Settings' + there + ' to open it; P9\'s own folders stay closed even then.',
     'root-not-found': 'No folder at that path' + there + '.',
     'path-not-absolute': 'Type the folder\'s full path on the server, starting with /.',
     'request-refused': 'That is not a folder path P9 can open.',

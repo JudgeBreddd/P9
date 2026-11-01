@@ -526,6 +526,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const { registry, space } = await files(), item = merged(registry.content, space?.content).scripts.find((entry) => entry.id === id);
     return item && (await currentMission().named([item]))[0];
   };
+  // Unrestricted mode (v0.1.6 U3, threat model row 33): the user turned the asks off, so the tool acts; every other check stays.
+  const allowed = (conversation, request, signal) => chat.loose() || chat.approve(conversation, request, signal);
   async function runScript(conversation, { id, args }, signal) {
     if (chat.lock().on) return { error: 'agent-lock-on' };
     if (!string(id, 64) || (args !== undefined && !Array.isArray(args))) return { error: 'request-refused' };
@@ -540,7 +542,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     // The user approves exactly what this shows, so it is never cut: a command too long to read is refused instead.
     const title = 'P9 Mission Control: run ' + id + ' (' + item.title + '): ' + shown;
     if (title.length > 5000) return { error: 'request-refused', reason: 'the command is too long to show the user in full; run it from Mission Control' };
-    if (!await chat.approve(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (!await allowed(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     // The command the user allowed, not one the file holds now.
     const again = await lookup(id);
     if (!again || JSON.stringify(argv(again)) !== JSON.stringify(argv(item))) return { error: 'changed-since-allowed', detail: 'The button changed after the user allowed it; nothing ran.' };
@@ -562,7 +564,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     if (!settingsFile || !changeSettings) return { error: 'settings-missing' };
     const real = await realpath(folder).catch(() => null);
     if (!real) return { error: 'folder-not-found', folder };
-    if (await rootRefused(real, { workspace, recovery, also: state ? [state] : [] })) return { error: 'root-refused', detail: 'It holds the workspace, the home folder or P9\'s own files.' };
+    if (await rootRefused(real, { workspace, recovery, also: state ? [state] : [], loose: chat.loose() })) return { error: 'root-refused', detail: 'It holds the workspace, the home folder or P9\'s own files.' };
     let before, roots;
     try { before = await readText(settingsFile, 'utf8'); roots = parseSettings(before).notes_roots ?? {}; }
     catch (error) { return { ...unparsable(error), error: 'settings-invalid' }; }
@@ -571,7 +573,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     // Threat model row M4-a: a checklist can write review and mark lines in a notes root, so the question says so.
     const title = 'P9 Mission Control: let Mission list the folder ' + real + ', named ' + name + '. Mission reads it, and a checklist in your space can change the review and mark lines of files in it, nothing else.';
     if (title.length > 5000) return { error: 'request-refused', reason: 'the folder is too long to show the user in full' };
-    if (!await chat.approve(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'edit' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (!await allowed(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'edit' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     if (await realpath(folder).catch(() => null) !== real) return { error: 'changed-since-allowed', detail: 'The folder changed after the user allowed it; nothing was added.' };
     const saved = await changeSettings((disk, text) => text !== before ? { error: 'hash-conflict', detail: 'settings.json changed while the user was asked; nothing was added.' }
       : { ...disk, notes_roots: { ...disk.notes_roots, [name]: real } });
@@ -583,7 +585,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     if (!string(name, 120) || !string(hash, 64) || !string(answer)) return { error: 'request-refused' };
     need();
     const title = 'P9 Mission Control: answer the needs-you item ' + name + ' with ' + JSON.stringify(answer); // never cut: the answer is at most 4,000 characters
-    if (!await chat.approve(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'edit' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (!await allowed(conversation, { toolCallId: 'p9-mcp-' + randomUUID(), title, kind: 'edit' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     const { status: code, diskContent, content, conflict, ...result } = await currentMission().answer({ name, hash, answer });
     return result.kind === 'saved' ? { action: 'answered', name, hash: result.hash } : result.kind === 'conflict' ? { error: result.reason, name, diskHash: result.diskHash }
       : result.error ? result : { error: result.reason ?? 'save-failed', code: result.code };

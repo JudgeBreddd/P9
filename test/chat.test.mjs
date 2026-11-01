@@ -757,3 +757,26 @@ for (const provider of ['claude', 'codex']) {
     console.log(`PASS chat list ${provider}: used first, sent flagged, close stops idle and used chats without moving them`);
   });
 }
+
+// v0.1.6 U4 (threat model row 24): in Unrestricted mode (agent lock off and File protection off) a new chat may start in any
+// folder, by its absolute path; off, that path is refused as before, and a chat made in one is refused at its next start.
+test('U4: a chat starts in a folder outside the workspace only in Unrestricted mode', async (t) => {
+  const instance = await start(t);
+  const outside = path.join(instance.directory, 'elsewhere');
+  await mkdir(outside);
+  assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside })).status, 400, 'mode off: refused as before');
+  assert.equal(JSON.parse((await call(instance, '/file-protection', 'POST', { on: false })).text).on, false);
+  for (const folder of [path.join(instance.directory, 'missing'), path.join(instance.directory, 'workspace', 'note.txt'), instance.state])
+    assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder })).status, 400, folder);
+  const made = await json(call(instance, '/chat', 'POST', { provider: 'claude', folder: outside }));
+  assert.equal(made.status, 201, made.text);
+  const id = made.body.conversation;
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 202);
+  const hit = await until(instance, said(id, 'cwd:'));
+  assert.equal(hit.hit.data.content.text, 'cwd:new:' + outside);
+  await until(instance, (e) => e.type === 'turn-end' && e.conversation === id, hit.cursor - 1);
+  assert.equal((await call(instance, `/chat/${id}/stop`, 'POST')).status, 200);
+  await call(instance, '/file-protection', 'POST', { on: true });
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 502, 'mode off again: refused at start');
+  console.log('PASS U4: outside folder 400 with the mode off; with it on, 3 bad folders 400 and the agent starts in it; off again, refused at start');
+});

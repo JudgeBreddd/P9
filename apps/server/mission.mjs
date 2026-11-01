@@ -252,13 +252,16 @@ export const inside = (parent, child) => { const relative = path.relative(parent
 // A folder P9 reaches outside the workspace (notes, threat model row 34; the Dev Focus root, row 41). One that holds the
 // workspace, the recovery folder, the home folder or one of `also` (a drive root holds them all), or sits inside recovery or
 // `also`, would reach P9's own files, and guardedSave keeps its drafts only outside the folder it saves in.
-export async function rootRefused(root, { workspace, recovery, also = [] }) {
+// loose (v0.1.6 U1, Unrestricted mode: chat.loose()): any folder may hold them, home and a drive root included; packages/files
+// then refuses every path inside P9's own folders (U5). One inside recovery or `also` is refused either way.
+export async function rootRefused(root, { workspace, recovery, also = [], loose = false }) {
   const home = await realpath(os.homedir()).catch(() => os.homedir());
-  return [workspace, recovery, home, ...also].some((guarded) => inside(root, guarded)) || [recovery, ...also].some((folder) => inside(folder, root));
+  return (!loose && [workspace, recovery, home, ...also].some((guarded) => inside(root, guarded))) || [recovery, ...also].some((folder) => inside(folder, root));
 }
 
 // allowed: the file holding the user's Allow answers for data tiles (threat model row 70), beside settings.json; none keeps them in memory.
-export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed, drafts }) {
+// loose: Unrestricted mode, asked at each use (server.mjs passes chat.loose()).
+export function createMission({ workspace, recovery, settings, instance = 'test', lifecycle, allowed, drafts, loose = () => false }) {
   // The settings file is read again when it changes (M2); setSettings swaps the parsed value, the next request sees it.
   const setSettings = (next) => { settings = next; plansCache.at = 0; };
   const runs = new Map();
@@ -396,7 +399,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!folder) return { status: 404, error: 'unknown-root' };
     let root;
     try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
-    if (await rootRefused(root, { workspace, recovery })) return { status: 403, error: 'root-refused' };
+    if (await rootRefused(root, { workspace, recovery, loose: loose() })) return { status: 403, error: 'root-refused' };
     return { root };
   }
   // ponytail: a breadth-first walk of at most 2,000 folders, 8 deep; the newest 500 notes are sent, with the total found.

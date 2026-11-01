@@ -5,13 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
-import { constants as fsConstants, existsSync } from 'node:fs';
+import { constants as fsConstants, existsSync, realpathSync } from 'node:fs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, HEAVY } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, HEAVY } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
@@ -111,7 +111,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const allowed = settingsFile ? path.join(path.dirname(settingsFile), 'mission-allowed.json') : undefined;
   // Scratch spaces (threat model row 71): <settings folder>/spaces/<name>.json.
   const drafts = settingsFile ? path.join(path.dirname(settingsFile), SPACES_DIR) : undefined;
-  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts });
+  // Unrestricted mode (v0.1.6 U1): chat is made on the next line; Mission asks only at request time.
+  const loose = () => chat.loose();
+  let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts, loose });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
   const xfer = createXfer({ workspace, ownership, recovery });
   const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive, turnLimit: updateTurnMs });
@@ -137,6 +139,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // Server mode's Dev Focus (threat model row 50): Linux daemons only, the editor's socket beside the daemon's own.
   const editor = transport === 'unix' && state ? daemonEditor({ socket: path.join(state, 'editor.sock'), unit: 'p9-editor-server-' + instance }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
+  // v0.1.6 U5: no read or write reaches inside P9's own folders, whatever root a request names.
+  guardFolders(state, recovery, ownership && (() => { try { return realpathSync(ownership); } catch { return ownership; } })());
   setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
   const json = async (c) => {
     if (c.req.header('content-type') !== 'application/json') throw new Error('json-required');
@@ -150,6 +154,8 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // A Mission file a settings key names is not there (mission.mjs): which key, and its workspace-relative path from
     // settings.json, never the system's error text.
     if (error.message === 'file-not-found') return new Response(JSON.stringify({ error: 'file-not-found', setting: error.setting, file: error.file }), { status: 404, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    // v0.1.6 U5: a path inside P9's state, recovery or ownership folder (packages/files guardFolders).
+    if (error.message === 'private-folder') return new Response(JSON.stringify({ error: 'private-folder' }), { status: 403, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     const invalid = error instanceof SyntaxError || ['unsafe-path', 'locked-path', 'unsafe-file', 'path-changed',
       'binary-or-oversize', 'invalid-save', 'json-required'].includes(error.message) || ['ELOOP', 'ENOTDIR'].includes(error.code);
     const code = Object.hasOwn(statuses, error.code) ? error.code : invalid ? 'REQUEST_REFUSED' : 'INTERNAL_FAILURE';
@@ -202,7 +208,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     let root;
     try { root = await realpath(folder); } catch { return { status: 404, error: 'root-not-found' }; }
     const also = [state, ownership && await realpath(ownership).catch(() => ownership)].filter(Boolean);
-    if (!(await stat(root)).isDirectory() || await rootRefused(root, { workspace, recovery, also })) return { status: 403, error: 'root-refused' };
+    if (!(await stat(root)).isDirectory() || await rootRefused(root, { workspace, recovery, also, loose: loose() })) return { status: 403, error: 'root-refused' };
     // A folder inside the workspace is opened as the workspace, with its own guards (File protection's read-only files).
     if (inside(await realpath(workspace), root)) return { status: 409, error: 'inside-workspace' };
     return { root };
@@ -357,7 +363,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (Object.keys(rest).length || typeof folder !== 'string' || folder.length > 4096 || !path.isAbsolute(folder)) return c.json({ error: 'request-refused' }, 400);
     const real = await realpath(folder).catch(() => null);
     if (!real || !(await stat(real)).isDirectory()) return c.json({ error: 'folder-not-found' }, 404);
-    if (await rootRefused(real, { workspace, recovery, also: [state, ownership && await realpath(ownership).catch(() => ownership)].filter(Boolean) })) return c.json({ error: 'root-refused' }, 403);
+    if (await rootRefused(real, { workspace, recovery, also: [state, ownership && await realpath(ownership).catch(() => ownership)].filter(Boolean), loose: loose() })) return c.json({ error: 'root-refused' }, 403);
     const done = await changeSettings((disk) => (Object.hasOwn(disk.notes_roots ?? {}, 'vault') ? { error: 'name-taken', folder: disk.notes_roots.vault }
       : Object.keys(disk.notes_roots ?? {}).length >= 16 ? { error: 'request-refused', reason: 'settings.notes_roots already has 16 folders' }
         : { ...disk, notes_roots: { ...disk.notes_roots, vault: real }, page_schemes: [...new Set([...(disk.page_schemes ?? []), 'obsidian'])] }));
@@ -767,7 +773,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     if (!settings) {
       settings = disk.parsed ?? paths;
       settingsInvalid = false;
-      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts });
+      server.mission = mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts, loose });
     }
     return c.json({ created, settings: true }, 201);
   });

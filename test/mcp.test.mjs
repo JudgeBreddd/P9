@@ -630,3 +630,34 @@ test('W-E patch and move: any section field (unknown kept and named), items whol
   assert.deepEqual([state.records.sections.map((section) => section.id), state.records.apps[0].desc], [['ops-main', 'two'], 'Edits']);
   console.log('PASS W-E/W-N/W-O: patch set 6 fields (mood named), removed 2, renamed the id; 7 refusals kept the file; 2 moves each kind; 300-char titles, 5000-char text, 70 links; form patch/move 200, picture/mixed/stale refused');
 });
+
+// v0.1.6 U3 (threat model row 33): in Unrestricted mode (agent lock off and File protection off) run_script, answer_needs_you
+// and allow_folder act without asking (a prompt would hang the call); the other checks stay. Off, they ask as before.
+test('U3: in Unrestricted mode run_script, answer_needs_you and allow_folder act without asking', async (t) => {
+  const instance = await start(t);
+  const { conversation, tool, cursor } = await agent(t, instance);
+  const settingsFile = path.join(instance.directory, 'settings.json');
+  assert.equal((await tool('allow_folder', { name: 'home', folder: instance.directory })).error, 'root-refused', 'mode off: home refused as before');
+  const pending = tool('run_script', { id: 'mark' });
+  const asked = await until(instance, (event) => event.conversation === conversation && event.type === 'approval', cursor);
+  await call(instance, `/chat/${conversation}/answer`, 'POST', { request: asked.hit.data.request, answer: { optionId: 'reject' } });
+  assert.equal((await pending).error, 'not-allowed', 'mode off: it asked');
+  await assert.rejects(access(path.join(instance.workspace, 'marker')));
+
+  assert.equal((await call(instance, '/file-protection', 'POST', { on: false })).body.on, false);
+  const ran = await tool('run_script', { id: 'mark' });
+  assert.deepEqual([ran.done, ran.code], [true, 0], JSON.stringify(ran));
+  assert.equal(await file(instance, 'marker'), 'ran');
+  assert.match((await tool('run_script', { id: 'gate', args: ['_archive/plan.md'] })).reason, /listed choices/, 'argument rules stay');
+  const { items: [item] } = await tool('list_needs_you');
+  assert.ok((await tool('answer_needs_you', { name: item.name, hash: hash('stale'), answer: '2' })).error, 'the changed-since check stays');
+  assert.equal((await tool('answer_needs_you', { name: item.name, hash: item.hash, answer: '2' })).action, 'answered');
+  assert.match(await file(instance, '_waiting/pick.md'), /^A\. 2$/m);
+  const added = await tool('allow_folder', { name: 'home', folder: instance.directory });
+  assert.equal(added.name, 'home', JSON.stringify(added));
+  assert.ok(JSON.parse(await readFile(settingsFile, 'utf8')).notes_roots.home, 'home added to notes_roots');
+  assert.equal((await tool('allow_folder', { name: 'state', folder: instance.state })).error, 'root-refused', 'P9\'s own folders stay refused');
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await tool('run_script', { id: 'mark' })).error, 'agent-lock-on');
+  console.log('PASS U3: off, home refused and run_script asked; on, run_script, answer_needs_you and allow_folder(home) acted unasked, a stale hash and state still refused');
+});

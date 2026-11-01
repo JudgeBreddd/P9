@@ -70,7 +70,8 @@ const relative = (value) => typeof value === 'string' && value.length > 0 && val
 export function createMove({ db, workspace, ownership, row, emit, stopConversation, recovered }) {
   const moves = ownership && path.join(ownership, 'moves');
   const staged = (name) => path.join(moves, name);
-  const cwdOf = (conversation) => conversation.folder ? path.join(workspace, conversation.folder) : workspace;
+  // An Unrestricted-mode chat's folder is absolute (v0.1.6 U4); resolve keeps it as is.
+  const cwdOf = (conversation) => path.resolve(workspace, conversation.folder ?? '');
   const unfreeze = (id) => db.prepare("UPDATE conversations SET state = 'stopped' WHERE id = ? AND state = 'moving'").run(id).changes > 0;
   const appending = new Set();
 

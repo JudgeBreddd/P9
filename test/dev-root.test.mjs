@@ -151,3 +151,37 @@ test('dev root: a workspace change sends Dev Focus back to the new workspace', a
   assert.match(main, /const reopenDev = \(\) => \{\s*if \(!devView\) return;[^]*?dev = null;\s*openDev\(\)/);
   console.log('PASS dev root: both workspace-change successes reset Dev Focus to the workspace');
 });
+
+// v0.1.6 U1/U5: Unrestricted mode (agent lock off and File protection off) lets home be the root; saves and new files work
+// in it, never inside P9's state, recovery or ownership folder. Either switch back on refuses home again.
+test('U1: in Unrestricted mode home is a root and saves work in it; U5: never inside P9\'s own folders', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t), dir = instance.directory;
+  const ownership = win ? path.join(dir, 'local-app-data', 'P9') : path.join(dir, '.local', 'state', 'p9-foundation');
+  const set = (folder) => call(instance, '/dev/root', 'POST', { path: folder });
+  assert.deepEqual(await set(dir), { status: 403, body: { error: 'root-refused' } }, 'mode off: home refused as before');
+  assert.equal((await call(instance, '/file-protection', 'POST', { on: false })).body.on, false);
+  assert.equal((await call(instance, '/agent-lock')).body.on, false);
+  const real = await realpath(dir);
+  assert.deepEqual(await set(dir), { status: 200, body: { root: real } }, 'mode on: home is a root');
+  const dev = (method, body) => call(instance, '/files', method, { ...body, root: real });
+  assert.equal((await dev('POST', { path: 'made.txt', content: 'one\n' })).status, 201);
+  assert.equal((await dev('PUT', { path: 'made.txt', hash: hash('one\n'), content: 'two\n' })).body.kind, 'saved', 'a save in a root that holds recovery');
+  assert.equal(await readFile(path.join(dir, 'made.txt'), 'utf8'), 'two\n');
+  assert.equal((await dev('PUT', { path: 'workspace/note.txt', hash: hash('original'), content: 'edited' })).body.kind, 'saved', 'the workspace through home');
+  await writeFile(path.join(instance.state, 'keep.txt'), 'keep');
+  await writeFile(path.join(instance.recovery, 'keep.txt'), 'keep');
+  await mkdir(ownership, { recursive: true }); await writeFile(path.join(ownership, 'keep.txt'), 'keep');
+  for (const folder of [instance.state, instance.recovery, ownership]) {
+    const inner = path.relative(real, await realpath(folder));
+    assert.deepEqual(await dev('POST', { path: inner + '/new.txt', content: 'x' }), { status: 403, body: { error: 'private-folder' } }, inner + ' create');
+    assert.equal((await dev('PUT', { path: inner + '/keep.txt', hash: hash('keep'), content: 'x' })).status, 403, inner + ' save');
+    assert.equal(await readFile(path.join(folder, 'keep.txt'), 'utf8'), 'keep', inner + ' unchanged');
+  }
+  assert.deepEqual(await set(instance.state), { status: 403, body: { error: 'root-refused' } }, 'a root inside state is still refused');
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.deepEqual(await set(dir), { status: 403, body: { error: 'root-refused' } }, 'agent lock on: home refused again');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  await call(instance, '/file-protection', 'POST', { on: true });
+  assert.deepEqual(await set(dir), { status: 403, body: { error: 'root-refused' } }, 'File protection on: home refused again');
+  console.log('PASS U1/U5: home refused with the mode off and with either switch on; with it on, home is a root, create and save work, 6 writes into state/recovery/ownership refused');
+});

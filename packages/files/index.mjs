@@ -18,12 +18,23 @@ export async function quietFfi(load) {
 
 export const hash = (content) => createHash('sha256').update(content).digest('hex');
 
-function partsFor(relative) {
+function partsFor(relative, root) {
   if (typeof relative !== 'string' || !relative || !relative.isWellFormed() || relative.length > 4096
       || path.isAbsolute(relative) || /[\\\x00-\x1f:]/.test(relative)) throw new Error('unsafe-path');
   const parts = relative.split('/');
   if (parts.some((part) => !part || Buffer.byteLength(part) > 255 || part === '.' || part === '..' || locked(part))) throw new Error('locked-path');
+  if (root !== undefined) notPrivate(root, parts);
   return parts;
+}
+// v0.1.6 U5 (threat model rows 34 and 41): P9's own state, recovery and ownership folders. Unrestricted mode lets a root hold
+// them (home, a drive root), so no read, listing, save, new file or rename reaches inside one, whatever the root. The daemon
+// adds its own at start; the walks refuse links, so the joined path is where the file really is.
+const guarded = new Set();
+export const guardFolders = (...folders) => { for (const folder of folders) if (folder) guarded.add(path.resolve(folder)); };
+const within = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
+function notPrivate(root, parts) {
+  const full = path.join(path.resolve(root), ...parts);
+  for (const folder of guarded) if (within(folder, full)) throw new Error('private-folder');
 }
 // File protection (threat model row 4): on unless the desktop turned it off (server.mjs keeps the choice in the ledger).
 let protect = true;
@@ -38,7 +49,7 @@ export const HEAVY = Object.freeze(['node_modules', '.venv', 'venv', '__pycache_
 
 // Walk with O_NOFOLLOW directory handles; subsequent access stays on these inodes.
 async function resolveSafe(root, relative, maxBytes = MAX_BYTES) {
-  const parts = partsFor(relative);
+  const parts = partsFor(relative, root);
   if (win) return win.resolveSafe(root, parts, maxBytes);
   const handles = [];
   try {
@@ -124,7 +135,8 @@ export async function readFile(root, relative) {
 // Regular files and subdirectories directly inside one workspace directory ('' is the root), walked like resolveSafe
 // (no symlinks; locked names refused in the path and left out of the listing).
 export async function listDirectory(root, relative) {
-  const parts = relative === '' ? [] : partsFor(relative);
+  const parts = relative === '' ? [] : partsFor(relative, root);
+  notPrivate(root, parts);
   if (win) return win.listDirectory(root, parts, locked);
   const handles = [];
   try {
@@ -172,11 +184,11 @@ async function preserveDraft(root, recovery, record) {
   try {
     const stat = await directory.stat();
     const actual = win ? win.canonical(directory) : await realpath(`/proc/self/fd/${directory.fd}`);
-    const relativeRecovery = path.relative(root, actual);
+    // v0.1.6 U1/U5: a root may hold the recovery folder (Unrestricted mode's home or drive root); the save may not land in it.
     // ponytail: no uid or mode bits on Windows; main.mjs leaves the private directories' ACLs to the installer there.
     // The daemon passes the recovery folder's realpath from startup; a parent swapped for a link since then lands elsewhere.
-    if ((!win && (stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700)) || actual !== path.resolve(recovery) || !relativeRecovery
-        || (!relativeRecovery.startsWith('..' + path.sep) && relativeRecovery !== '..' && !path.isAbsolute(relativeRecovery))) {
+    if ((!win && (stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o700)) || actual !== path.resolve(recovery)
+        || within(actual, path.join(path.resolve(root), record.path))) {
       throw new Error('unsafe-recovery-directory');
     }
     await update({});
@@ -192,7 +204,7 @@ async function preserveDraft(root, recovery, record) {
 export async function createFile(root, relative, content) {
   if (typeof content !== 'string' || !content.isWellFormed()) throw new Error('invalid-save');
   textFrom(Buffer.from(content));
-  const parts = partsFor(relative), canonicalRoot = path.resolve(root);
+  const parts = partsFor(relative, root), canonicalRoot = path.resolve(root);
   if (win) {
     // Windows deletes through the handle it created, so the cleanup can only remove its own file.
     const created = await win.createNamed(canonicalRoot, parts);
@@ -238,7 +250,7 @@ export async function createFile(root, relative, content) {
 // A new folder only (the setup wizard's starter files, threat model row 17): the same no-symlink walk as createFile,
 // then mkdir (Linux) or FILE_CREATE (Windows), so an existing name fails with EEXIST and is never replaced or followed.
 export async function createDirectory(root, relative) {
-  const parts = partsFor(relative), canonicalRoot = path.resolve(root);
+  const parts = partsFor(relative, root), canonicalRoot = path.resolve(root);
   if (win) return win.createDirectory(canonicalRoot, parts);
   const handles = [];
   try {
@@ -257,8 +269,9 @@ export async function createDirectory(root, relative) {
 // A new name for a file in the same folder (Mission notes, threat model row 34), never over a name that exists: Linux
 // link()s the new name (EEXIST if taken) then unlinks the old one; Windows renames without REPLACE_IF_EXISTS.
 export async function renameFile(root, relative, name) {
-  const parts = partsFor(relative);
+  const parts = partsFor(relative, root);
   if (partsFor(name).length !== 1) throw new Error('unsafe-path');
+  notPrivate(root, [...parts.slice(0, -1), name]);
   if (win) return win.renameNamed(root, parts, name);
   const safe = await resolveSafe(root, relative);
   try {
@@ -287,7 +300,7 @@ export async function guardedSave(root, relative, expectedHash, content, recover
   if (typeof content !== 'string' || typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('invalid-save');
   if (!content.isWellFormed()) throw new Error('invalid-save');
   textFrom(Buffer.from(content));
-  partsFor(relative);
+  partsFor(relative, root);
   // The daemon supplies its canonical startup root; do not follow a later root swap.
   const canonicalRoot = path.resolve(root);
   const key = path.join(canonicalRoot, relative);
@@ -379,7 +392,7 @@ async function save(root, relative, expectedHash, content, recovery) {
 // `expect` (null: must not exist). The old copy goes to <recovery>/replaced/<tag>/<path> (0600, fsynced) first.
 // Windows (win32.mjs anchored): the same walk on NT handles, the file held without write sharing until the rename or delete.
 async function anchored(root, relative, create) {
-  const parts = partsFor(relative), canonicalRoot = path.resolve(root), handles = [];
+  const parts = partsFor(relative, root), canonicalRoot = path.resolve(root), handles = [];
   if (win) return win.anchored(canonicalRoot, parts, create);
   try {
     let parent = await open(canonicalRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);

@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { childEnv } from './child-env.mjs';
-import { imageType } from '../../packages/files/index.mjs';
+import { imageType, protection } from '../../packages/files/index.mjs';
 import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
@@ -258,6 +258,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   let locked = db.prepare("SELECT value FROM prefs WHERE key = 'agent-lock'").get()?.value === 'on';
+  const loose = () => !locked && !protection();
+  // A chat's folder (threat model row 24): workspace-relative, walked like GET /files/list; in Unrestricted mode (v0.1.6 U4)
+  // also an absolute path to any real directory (no links: listDirectory wants its realpath; not inside P9's own folders).
+  const folderCheck = (folder) => (path.isAbsolute(folder) ? (loose() ? listDirectory(folder, '') : Promise.reject(new Error('unsafe-path'))) : listDirectory(workspace, folder));
+  const folderThere = (folder) => folderCheck(folder).then(() => true, () => false);
+  const folderPath = (folder) => path.resolve(workspace, folder ?? '');
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
   const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
     .then((result) => { session.mode = value; emit(session.id, 'mode', { mode: value, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === value) ?? value, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
@@ -460,8 +466,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     try {
       const init = await bounded(session.agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }));
       // The chat's folder, checked again at every start like a file path (threat model row 24): a folder since swapped for a link fails.
-      await bounded(listDirectory(workspace, conversation.folder ?? ''));
-      const cwd = conversation.folder ? path.join(workspace, conversation.folder) : workspace;
+      await bounded(folderCheck(conversation.folder ?? ''));
+      const cwd = folderPath(conversation.folder);
       session.capabilities = init.agentCapabilities ?? {};
       session.steering = init._meta?.steering?.supported === true;
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
@@ -633,6 +639,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const api = {
     login: loginRoutes,
     lock: () => ({ status: 200, on: locked }),
+    // Unrestricted mode (v0.1.6 U1-U5): the agent lock off and File protection off, the two switches the mode turns off and the
+    // daemon holds. Folder roots may hold home and the workspace, P9's MCP tools stop asking, a chat may start in any folder.
+    loose,
     // CP3: a photo sent in this chat, by hash. Only one this chat's own messages name; base64 in JSON, as it was sent.
     image(id, hash) {
       if (!ID.test(id) || typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash) || !imageDir) return refused(404, 'not-found');
@@ -696,7 +705,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     async create(body) {
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
-          || (body.folder !== undefined && (typeof body.folder !== 'string' || !await listDirectory(workspace, body.folder).then(() => true, () => false))))
+          || (body.folder !== undefined && (typeof body.folder !== 'string' || !await folderThere(body.folder))))
         return refused(400, 'request-refused');
       const id = randomUUID(), title = body.title?.trim() || (body.provider === 'claude' ? 'Claude' : 'Codex');
       db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder) VALUES (?, ?, ?, 'idle', ?, ?)").run(id, body.provider, title, Date.now(), body.folder ?? '');
@@ -838,11 +847,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const conversation = ID.test(id) && row(id);
       if (!conversation) return refused(404, 'unknown-conversation');
       if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '') || ['moving', 'moved'].includes(conversation.state)) return refused(409, 'handoff-unavailable');
-      if (!await listDirectory(workspace, conversation.folder ?? '').then(() => true, () => false)) return refused(409, 'folder-unavailable');
+      if (!await folderThere(conversation.folder ?? '')) return refused(409, 'folder-unavailable');
       const result = await stopConversation(id);
       if (result !== 'stopped') return { status: 500, result };
       emit(id, 'handed-off', { session: conversation.session });
-      return { status: 200, session: conversation.session, cwd: conversation.folder ? path.join(workspace, conversation.folder) : workspace,
+      return { status: 200, session: conversation.session, cwd: folderPath(conversation.folder),
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,

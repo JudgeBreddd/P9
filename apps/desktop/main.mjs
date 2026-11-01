@@ -1155,6 +1155,15 @@ export async function createDesktop({ state, open } = {}) {
     setTimeout(reopenDev);
     return { ok: true };
   });
+  // Unrestricted mode (v0.1.6 U2/U4): the daemon's own predicate, agent lock off and File protection off. Any failure reads as off.
+  const looseNow = async () => {
+    const [lock, files] = await Promise.all([daemonRequest(state, 'GET', '/agent-lock'), daemonRequest(state, 'GET', '/file-protection')]).catch(() => []);
+    return lock?.body?.on === false && files?.body?.on === false;
+  };
+  // "Don't ask again" on Trust this folder? (U2): one global flag, honoured only while Unrestricted mode is on.
+  // ponytail: no Settings switch to clear it; deleting p9-trust.json (or turning the mode off) brings the ask back.
+  const trustFile = path.join(app.getPath('userData'), 'p9-trust.json');
+  const trustAll = () => readFile(trustFile, 'utf8').then(text => JSON.parse(text).trustOutside === true, () => false);
   // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
   // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it. Server mode (rows 41/50
   // adds): the picker would list this computer's folders, so the page asks for the server path (one string, only then) and
@@ -1184,10 +1193,18 @@ export async function createDesktop({ state, open } = {}) {
     const outside = key(real) !== key(workspace) && !key(real).startsWith(key(workspace) + sep);
     let set; // the daemon's answer: the root as it stores it, which saves must name exactly
     if (outside) {
-      const { response } = await dialog.showMessageBox(window, { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + (serverHost ? ' on ' + serverHost : '') + ' in Dev Focus?',
-        detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
-        buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
-      if (response !== 1) return { ok: false };
+      const loose = await looseNow();
+      if (!(loose && await trustAll())) {
+        const { response, checkboxChecked } = await dialog.showMessageBox(window, loose
+          ? { type: 'question', title: 'Trust this folder?', message: 'Trust ' + real + (serverHost ? ' on ' + serverHost : '') + ' and open it in Dev Focus?',
+            detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save; P9\'s own folders stay closed.',
+            buttons: ['Cancel', 'Trust and open'], defaultId: 1, cancelId: 0, noLink: true, checkboxLabel: 'Don\'t ask again', checkboxChecked: false }
+          : { type: 'warning', title: 'Open a folder outside the workspace?', message: 'Open ' + real + (serverHost ? ' on ' + serverHost : '') + ' in Dev Focus?',
+            detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
+            buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
+        if (response !== 1) return { ok: false };
+        if (loose && checkboxChecked) await writeFile(trustFile, JSON.stringify({ trustOutside: true }) + '\n', { mode: 0o600 }).catch(() => {});
+      }
       set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(failedReply);
       if (set.status !== 200) return fail(set.body?.error ?? 'daemon-unavailable');
     } else if (devFolder?.outside) await daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null);
@@ -1382,7 +1399,9 @@ export async function createDesktop({ state, open } = {}) {
     if (pick.canceled || !pick.filePaths[0]) return undefined;
     const real = await realpath(pick.filePaths[0]).catch(() => null);
     if (real === root) return '';
-    return real?.startsWith(root + path.sep) ? real.slice(root.length + 1).split(path.sep).join('/') : null;
+    if (real?.startsWith(root + path.sep)) return real.slice(root.length + 1).split(path.sep).join('/');
+    // v0.1.6 U4: a new chat (no argument) may start in any folder while Unrestricted mode is on; the daemon checks it again.
+    return real && !args.length && await looseNow() ? real : null;
   });
   // The Obsidian vault folder (threat model row 73): no argument, so the page never sends a path. The native folder dialog, then a
   // native confirm naming what it allows; only then main sends the folder to the daemon over its local socket. Server mode: this
