@@ -868,7 +868,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     setProtection(body.on);
     return c.json({ on: protection() });
   });
-  // The Mission edit form (mission-editor.mjs), desktop only: names and icons of apps, links and sections, through the
+  // The Mission edit form (mission-editor.mjs), desktop only: names and icons of buttons, apps, links and sections, through the
   // MCP tools' own update() with its guards. File protection asks first: the form sends confirm once the user agreed.
   const editing = async (c, next) => { await reloadSettings(true); return settings ? next() : c.json({ error: settingsInvalid ? 'settings-invalid' : 'settings-missing' }, 503); };
   app.get('/mission/edit', editing, async (c) => c.json(await mcp.editState()));
@@ -878,16 +878,20 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.get('/mission/icons', editing, async (c) => c.json(await icons.collect(await mission.iconSources())));
   app.post('/mission/edit', editing, async (c) => {
     const { kind, confirm, ...rest } = (await json(c)) ?? {};
-    if (!['apps', 'pages', 'sections'].includes(kind) || (confirm !== undefined && typeof confirm !== 'boolean')
-      || !Object.keys(rest).every((name) => ['key', 'title', 'icon', 'picture', 'hash', 'set', 'index'].includes(name))) return c.json({ error: 'request-refused' }, 400);
+    // A button (kind scripts) is a registry script, or with section a space button in that section.
+    if (!['scripts', 'apps', 'pages', 'sections'].includes(kind) || (confirm !== undefined && typeof confirm !== 'boolean') || (rest.section !== undefined && kind !== 'scripts')
+      || !Object.keys(rest).every((name) => ['key', 'section', 'title', 'icon', 'picture', 'hash', 'set', 'base', 'index'].includes(name))) return c.json({ error: 'request-refused' }, 400);
     // The field editor (W-N): set is the MCP patch, index moves a section, each with every guard the tools have. A picture comes only from the upload below.
     const answer = ({ error, ...result }) => c.json(error ? { error, ...result } : result, !error ? 200 : error === 'hash-conflict' ? 409 : error === 'registry-read-only' ? 403 : 400);
     if (rest.set !== undefined || rest.index !== undefined) {
-      const { key, set, index, hash, ...other } = rest;
-      if (Object.keys(other).length || (set !== undefined) === (index !== undefined) || (index !== undefined && kind !== 'sections')
-        || (set !== undefined && (!set || typeof set !== 'object' || 'picture' in set))) return c.json({ error: 'request-refused' }, 400);
-      return answer(await (set !== undefined ? mcp.patch(kind, { key, set, hash }, { user: true, confirm }) : mcp.move({ section: key, index, hash }, { user: true, confirm })));
+      // base: the fields as the form read them, so a save racing another edit of other fields goes ahead (mcp.patch). index moves a section, or a space button in its section.
+      const { key, section, set, base, index, hash, ...other } = rest;
+      if (Object.keys(other).length || (set !== undefined) === (index !== undefined) || (index !== undefined && !(kind === 'sections' || (kind === 'scripts' && section !== undefined)))
+        || (base !== undefined && set === undefined) || (set !== undefined && (!set || typeof set !== 'object' || 'picture' in set))) return c.json({ error: 'request-refused' }, 400);
+      return answer(await (set !== undefined ? mcp.patch(kind, { key, section, set, base, hash }, { user: true, confirm })
+        : mcp.move(kind === 'sections' ? { section: key, index, hash } : { section, id: key, index, hash }, { user: true, confirm })));
     }
+    if (rest.base !== undefined) return c.json({ error: 'request-refused' }, 400);
     // A picture is '' (back to the automatic icon) or {data: base64}. The file is stored only after File protection's confirm and a
     // matching hash, so a refused save leaves nothing behind; the record then names it by the name P9 gave it.
     const { picture } = rest;
@@ -895,7 +899,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
       if (!picture || typeof picture !== 'object' || Object.keys(picture).join() !== 'data' || typeof picture.data !== 'string' || picture.data.length > 400_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(picture.data)) return c.json({ error: 'request-refused' }, 400);
       const now = await mcp.editState();
       if (now.protection && confirm !== true) return c.json({ error: 'registry-read-only' }, 403);
-      const disk = kind === 'sections' ? now.space : now.registry;
+      const disk = kind === 'sections' || rest.section !== undefined ? now.space : now.registry;
       if (rest.hash !== undefined && rest.hash !== disk) return c.json({ error: 'hash-conflict', diskHash: disk }, 409);
       const stored = await icons.savePicture(Buffer.from(picture.data, 'base64'));
       if (stored.error) return c.json(stored, 400);

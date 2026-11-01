@@ -72,7 +72,7 @@ test('MCP: each chat gets its own token; the server answers the SDK client, and 
   assert.deepEqual(entry.env.map(({ name }) => name), ['P9_MCP_SOCKET', 'P9_MCP_TOKEN']);
   assert.match(entry.env[1].value, /^[0-9a-f]{64}$/);
   assert.equal(client.getServerVersion().name, 'p9');
-  assert.equal((await client.listTools()).tools.length, 28);
+  assert.equal((await client.listTools()).tools.length, 29);
   const schema = JSON.parse((await client.readResource({ uri: 'p9://schema/registry' })).contents[0].text);
   assert.ok(schema.properties.scripts.items.properties.cmd.description);
   const registry = JSON.parse((await client.readResource({ uri: 'p9://registry' })).contents[0].text);
@@ -337,7 +337,8 @@ test('The edit form route: File protection asks first, a stale hash is refused, 
   await call(instance, '/agent-lock', 'POST', { on: true });
   const again = await edit({ kind: 'pages', key: 'dash', icon: 'D', confirm: true, hash: saved.body.hash });
   assert.equal(again.status, 200);
-  assert.equal((await edit({ kind: 'scripts', key: 'hello', icon: 'x' })).status, 400);
+  assert.equal((await edit({ kind: 'nope', key: 'hello', icon: 'x' })).status, 400);
+  assert.equal((await edit({ kind: 'scripts', key: 'hello', icon: 'x' })).status, 403, 'buttons are the form\'s too (W-N), under File protection like the rest');
   assert.equal((await edit({ kind: 'apps', key: 'editor', icon: 'x', cmd: ['rm'] })).status, 400);
   assert.equal((await edit({ kind: 'apps', key: 'editor', icon: 'http://x.example/i.png', confirm: true, hash: again.body.hash })).body.error, 'invalid-record');
   assert.equal((await edit({ kind: 'sections', key: 'Ops', icon: '🛠', confirm: true, hash: state.space })).status, 200);
@@ -660,4 +661,87 @@ test('U3: in Unrestricted mode run_script, answer_needs_you and allow_folder act
   await call(instance, '/agent-lock', 'POST', { on: true });
   assert.equal((await tool('run_script', { id: 'mark' })).error, 'agent-lock-on');
   console.log('PASS U3: off, home refused and run_script asked; on, run_script, answer_needs_you and allow_folder(home) acted unasked, a stale hash and state still refused');
+});
+
+// Wave 3 (MCP side): #11 log views (heading, from, lines), W-G columns and span, a Fields save racing another edit merged when the
+// fields it sets did not change (base), the desktop form for buttons (registry and space), #5 preview_card, and every new field documented.
+test('Wave 3: log heading/from/lines, col6 and span, base merges a racing save, the form edits buttons, preview_card', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  const { tool, client } = await agent(t, instance);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const sections = async () => JSON.parse(await file(instance, SETTINGS.space)).sections;
+  // #11: one Markdown heading's part, the top of a file, any number of lines; the default stays the last 200.
+  await writeFile(path.join(instance.workspace, 'hub/status.md'), '# Status\nintro\n## Now\none\ntwo\nthree\n### Detail\nfour\n## Later\nfive\n' + Array.from({ length: 300 }, (_, i) => 'line ' + i).join('\n'));
+  const logs = [{ id: 'now', title: 'Now', path: 'hub/status.md', heading: 'Now', from: 'start', lines: 3 }, { id: 'tail', title: 'Tail', path: 'hub/status.md', lines: 2 },
+    { id: 'whole', title: 'Whole', path: 'hub/status.md' }, { id: 'none', title: 'None', path: 'hub/status.md', heading: 'Missing' }];
+  const set = await tool('patch_section', { section: 'Ops', set: { logs } });
+  assert.equal(set.isError, false, JSON.stringify(set));
+  const log = async (name) => (await call(instance, '/mission/space-log?' + new URLSearchParams({ name }))).body.text;
+  assert.equal(await log('now'), '## Now\none\ntwo');
+  assert.equal(await log('tail'), 'line 298\nline 299');
+  assert.deepEqual([(await log('whole')).split('\n').length, (await log('whole')).split('\n')[0]], [200, 'line 100']);
+  assert.equal(await log('none'), 'No heading "Missing" in this file.');
+  for (const [bad, field] of [[{ lines: 0 }, 'lines'], [{ lines: 2001 }, 'lines'], [{ from: 'middle' }, 'from'], [{ heading: 'a\nb' }, 'heading']]) {
+    const refused = await tool('patch_section', { section: 'Ops', set: { logs: [{ ...logs[0], ...bad }] } });
+    assert.match(refused.detail ?? '', new RegExp('^' + field + ':'), JSON.stringify(refused));
+  }
+  // W-G: up to six columns, and span 1 to 6.
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { place: 'col6', span: 2 } })).isError, false);
+  assert.match((await tool('patch_section', { section: 'Ops', set: { span: 7 } })).detail, /^span:/);
+  assert.match((await tool('patch_section', { section: 'Ops', set: { place: 'col7' } })).detail, /^place:/);
+  assert.equal((await tool('validate_space', { text: JSON.stringify({ sections: [{ id: 'a', title: 'A', place: 'col4', span: 3 }] }) })).ok, true);
+
+  // A save racing another edit: with base it goes ahead when its own fields are as they were, and names them when they are not.
+  const read = (await tool('patch_section', { section: 'Ops', set: { text: 'Mine' } })).hash;
+  const other = await tool('patch_section', { section: 'Ops', set: { icon: '🧪' } });
+  assert.notEqual(other.hash, read);
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { text: 'Late' }, hash: read })).error, 'hash-conflict', 'no base: refused as before');
+  const merged = await tool('patch_section', { section: 'Ops', set: { text: 'Late' }, base: { text: 'Mine' }, hash: read });
+  assert.equal(merged.isError, false, JSON.stringify(merged));
+  let [ops] = await sections();
+  assert.deepEqual([ops.text, ops.icon], ['Late', '🧪'], 'both edits kept');
+  const clash = await tool('patch_section', { section: 'Ops', set: { icon: '🔧' }, base: { icon: null }, hash: read });
+  assert.deepEqual([clash.error, clash.fields], ['hash-conflict', ['icon']]);
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { text: 'x' }, base: { text: 'Late' } })).error, 'request-refused', 'base needs hash');
+  assert.equal((await tool('patch_item', { kind: 'apps', id: 'editor', set: { desc: 'Raced' }, base: {}, hash: hash('stale') })).isError, false, 'a registry record merges too');
+
+  // The desktop form: registry scripts and space buttons (W-N), their Fields with base, and a space button's order.
+  const state = (await call(instance, '/mission/edit')).body;
+  assert.deepEqual(state.records.scripts.map((script) => script.id), ['hello', 'mark', 'gate']);
+  const form = (body) => call(instance, '/mission/edit', 'POST', body);
+  assert.equal((await form({ kind: 'scripts', key: 'hello', title: 'Hello there', hash: state.registry })).status, 200);
+  assert.equal(JSON.parse(await file(instance, SETTINGS.registry)).scripts[0].title, 'Hello there');
+  assert.equal((await tool('add_button', { record: { id: 'ops-down', title: 'Down', cmd: ['true'] }, section: 'ops' })).isError, false);
+  assert.equal((await form({ kind: 'scripts', key: 'ops-up', section: 'ops', set: { desc: 'Brings it up' }, base: { desc: null }, hash: state.space })).status, 200, 'stale hash, base matches: merged');
+  assert.equal((await form({ kind: 'scripts', key: 'ops-up', section: 'ops', set: { desc: 'Again' }, base: { desc: null }, hash: state.space })).status, 409, 'base no longer matches');
+  assert.equal((await form({ kind: 'scripts', key: 'ops-down', section: 'ops', index: 0 })).status, 200);
+  [ops] = await sections();
+  assert.deepEqual(ops.buttons.map((button) => [button.id, button.desc]), [['ops-down', undefined], ['ops-up', 'Brings it up']]);
+  assert.equal((await form({ kind: 'scripts', key: 'ops-up', section: 'ops', icon: '⬆' })).status, 200, 'a space button\'s icon');
+  assert.equal((await sections())[0].buttons[1].icon, '⬆');
+  for (const body of [{ kind: 'apps', key: 'editor', section: 'ops', title: 'x' }, { kind: 'scripts', key: 'hello', index: 0 }, { kind: 'scripts', key: 'hello', title: 'x', base: {} }])
+    assert.equal((await form(body)).status, 400, JSON.stringify(body));
+
+  // #5: the card's own page with sample data, said as one document an artifact can show; nothing runs.
+  await writeFile(path.join(instance.workspace, 'hub/card.html'), '<p id="n"></p><script>addEventListener("p9data", (e) => { n.textContent = e.detail.n; });</script>');
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { cards: [{ id: 'ops-card', title: 'Ops card', html: 'hub/card.html', script: 'mark', frame: false }] } })).isError, false);
+  const preview = await tool('preview_card', { id: 'ops-card', data: { n: 3, s: '</script>' } });
+  assert.equal(preview.isError, false, JSON.stringify(preview));
+  assert.equal(preview.document, '<script>window.p9data = {"n":3,"s":"\\u003c/script>"}; addEventListener(\'load\', () => { if (window.p9data !== undefined) dispatchEvent(new CustomEvent(\'p9data\', { detail: window.p9data })); });</script>'
+    + '<p id="n"></p><script>addEventListener("p9data", (e) => { n.textContent = e.detail.n; });</script>');
+  assert.deepEqual([preview.section, preview.frame, /720 px/.test(preview.size)], ['ops', false, true]);
+  assert.match((await tool('preview_card', { id: 'ops-card' })).document, /^<script>window\.p9data = undefined;/);
+  assert.equal((await tool('preview_card', { id: 'nope' })).error, 'unknown-id');
+  await assert.rejects(access(path.join(instance.workspace, 'marker')), 'its script did not run');
+
+  // Each new field in the schema an agent reads, and in describe_mission.
+  const described = await tool('describe_mission');
+  const props = described.schema.properties.sections.items.properties;
+  assert.ok(props.span.description && /col6/.test(props.place.description));
+  assert.deepEqual(['heading', 'from', 'lines'].map((key) => Boolean(props.logs.items.properties[key]?.description)), [true, true, true]);
+  assert.match(described.about, /preview_card/);
+  const tools = (await client.listTools()).tools;
+  assert.ok(tools.find((entry) => entry.name === 'patch_section').inputSchema.properties.base && tools.find((entry) => entry.name === 'preview_card'));
+  console.log('PASS wave 3 MCP: 4 log views (heading, tail 2, default 200, missing heading), 4 refused; col6/span 2 kept, span 7 and col7 refused; '
+    + 'base merged 2 racing saves, refused a clash naming icon; form edited a registry script, a space button (merge, clash, move, icon), 3 bad bodies refused; preview_card document exact, script not run');
 });

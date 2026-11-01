@@ -82,9 +82,15 @@ export const PAGE = {
 export const LOG = {
   id,
   title: { type: 'string', required: true, check: text, doc: 'The log view label.' },
-  path: { ...relative('The file whose last 200 lines it shows, inside root or the workspace.'), required: true },
+  path: { ...relative('The file it shows (the last 200 lines unless lines and from say otherwise), inside root or the workspace.'), required: true },
   root: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'A key of settings.notes_roots (allow_folder asks the user to add one, e.g. a logs folder in the home folder): path is inside that folder. Without it, the workspace.' },
+  heading: { type: 'string', check: (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 200 && !/[\r\n\0]/.test(value),
+    doc: 'Only the part of the file under this Markdown heading: from the first line that is a heading (#, ##, ...) with exactly this text (spaces at either end and '
+      + 'a closing run of # ignored) to the next heading of the same or a higher level. A file without that heading shows a line saying so. lines and from then apply to that part.' },
+  from: { type: 'string', check: (value) => value === 'start' || value === 'end',
+    doc: 'Which end the lines are taken from: end (the default, the newest lines of a log) or start (the top, e.g. a status file).' },
+  lines: { type: 'integer', check: (value) => Number.isSafeInteger(value) && value >= 1 && value <= 2000, doc: 'How many lines it shows, 1 to 2000. Default 200.' },
 };
 // A folder list (threat model row M2-a): file names and times only, read through packages/files, never written.
 export const FOLDER = {
@@ -197,8 +203,8 @@ export function dataShape(value) {
 // new item type is a field here with doc and example, nothing else (M2 adds its own the same way).
 // The last three are P9's built-in tiles (W-D): + New idea, Sprint status, Edit names and icons.
 export const WIDGETS = ['waiting', 'usage', 'apps', 'notifications', 'primary', 'idea', 'sprint', 'edit'];
-// Where a section draws on the desktop page: a top-row tile that opens its window, or open in one of the three columns.
-export const PLACES = ['tile', 'col1', 'col2', 'col3'];
+// Where a section draws on the desktop page: a top-row tile that opens its window, or open in one of up to six columns (W-G).
+export const PLACES = ['tile', 'col1', 'col2', 'col3', 'col4', 'col5', 'col6'];
 export const SECTION = {
   id: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'The section\'s id: lowercase letters, digits and dashes, unique among sections, and the key the tools and the page use (titles may repeat). Optional: P9 makes one from the title and saves it on the first write.' },
@@ -208,8 +214,8 @@ export const SECTION = {
   text: { type: 'string', check: text, doc: 'A paragraph shown under the heading.' },
   buttons: { type: 'array', check: Array.isArray, fields: RECORD, doc: 'Buttons, each a script record. They share the registry scripts\' IDs: an ID used in both drops both.',
     example: [{ id: 'disk-free', title: 'Disk free', icon: '💾', cmd: ['df', '-h'] }, { id: 'greet', title: 'Greet', cmd: ['echo', 'hello'], args: ['Name'] }] },
-  logs: { type: 'array', check: Array.isArray, fields: LOG, doc: 'Log views, each the last 200 lines of one workspace file.',
-    example: [{ id: 'backup-log', title: 'Backup log', path: 'logs/backup.log' }] },
+  logs: { type: 'array', check: Array.isArray, fields: LOG, doc: 'Log views, each a read-only view of one text file: by default its last 200 lines; heading, from and lines pick another part.',
+    example: [{ id: 'backup-log', title: 'Backup log', path: 'logs/backup.log' }, { id: 'status-now', title: 'Status now', path: 'notes/status.md', heading: 'Now', from: 'start', lines: 40 }] },
   notes: { type: 'string', check: (value) => typeof value === 'string' && ID.test(value),
     doc: 'A key of settings.notes_roots: the section shows that folder\'s .md notes (threat model row 34). Never a path.', example: 'vault' },
   // Threat model row 76: a create-only form for one folder; no example, so the build guide's item list leaves it out.
@@ -233,18 +239,23 @@ export const SECTION = {
   widget: { type: 'string', check: (value) => WIDGETS.includes(value),
     doc: 'One of P9\'s built-in panels, drawn as this section: ' + 'waiting (Waiting on you), usage (Usage), apps (Apps and pages) or notifications (Notifications)'
       + ' or primary (the Main project card). Without a space the first four show; on a space only the ones a section names. Or one of P9\'s built-in tiles, '
-      + 'drawn where the section is under its title: idea (+ New idea), sprint (Sprint status; its window runs this section\'s buttons and script refs, '
-      + 'or sprint-start, sprint-close and sprint-heavy when it has none) or edit (Edit names and icons). While no section names a built-in tile, all three '
-      + 'show at the end of the top row; once one does, only the named ones show.', example: 'waiting' },
+      + 'drawn where the section is under its title: idea (+ New idea), sprint (Sprint status; its window has this section\'s buttons and script refs in its footer, '
+      + 'beside Open tmux) or edit (Edit names and icons). While no section names a built-in tile, all three '
+      + 'show at the end of the top row (that unnamed Sprint status window offers the registry scripts sprint-start, sprint-close and sprint-heavy); once one does, only the named ones show.', example: 'waiting' },
   widgets: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= WIDGETS.length && value.every((item) => WIDGETS.includes(item)),
     doc: 'Built-in panels drawn inside this section, after its other parts unless order says otherwise; unlike widget, the section keeps its title, icon, text and buttons. Any of ' + WIDGETS.join(', ')
-      + ' (idea, sprint and edit draw their tile\'s button). A panel named here shows as if a section named it in widget. The phone leaves them out.', example: ['notifications'] },
+      + ' (idea, sprint and edit draw their tile\'s button). A panel named here shows as if a section named it in widget. On the phone each is a row that opens the phone\'s own window for it '
+      + '(waiting, primary, idea, sprint, apps), or a line saying where it is (usage, notifications, edit).', example: ['notifications'] },
   order: { type: 'array', items: 'string', check: (value) => Array.isArray(value) && value.length <= 32 && value.every((item) => typeof item === 'string'),
     doc: 'The order the section\'s parts draw in, by field name, any of: ' + PARTS.join(', ') + ' (buttons are its button rows, widgets its panels). Parts left out follow '
       + 'the named ones in their usual order, the order of that list; an unknown name is ignored. At most 32. The phone keeps it too.', example: ['cards', 'checklists', 'folders', 'buttons'] },
   place: { type: 'string', check: (value) => PLACES.includes(value),
-    doc: 'Where the section draws on the desktop Mission page: tile (the default) is a tile in the top row that opens the section\'s window; col1, col2 or col3 draws it open in that column, '
-      + 'its items shown in place (a widget section draws its panel there), in file order. Once any section has a column, the three columns hold only the sections placed in them. The phone ignores it.', example: 'col2' },
+    doc: 'Where the section draws on the desktop Mission page: tile (the default) is a tile in the top row that opens the section\'s window; col1 to col6 draws it open in that column, '
+      + 'its items shown in place (a widget section draws its panel there), in file order. Once any section has a column, the columns hold only the sections placed in them; '
+      + 'a column nothing is placed in is left out and the others share its width. The phone ignores it.', example: 'col2' },
+  span: { type: 'integer', check: (value) => Number.isSafeInteger(value) && value >= 1 && value <= 6,
+    doc: 'How wide the section\'s column is, 1 to 6, against the other columns (2 is twice as wide as 1). A column takes the largest span of the sections placed in it, 1 when none has one. '
+      + 'Only for a placed section (col1 to col6). While no section has span and only col1 to col3 are used, the columns keep P9\'s own widths. The phone ignores it.', example: 2 },
 };
 // The file P9 makes for the space when settings names none, next to settings.json (threat model row 69).
 export const SPACE_FILE = 'mission-space.json';
@@ -338,15 +349,18 @@ export const SCHEMAS = {
 
 // describe_mission's answer (threat model row 68): constants only, never the user's files, so it is safe for any chat.
 export function describeMission() {
-  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place' && key !== 'order' && key !== 'widgets').map(([key, field]) => ({
+  const items = Object.entries(SECTION).filter(([key, field]) => field.example !== undefined && key !== 'widget' && key !== 'place' && key !== 'order' && key !== 'widgets' && key !== 'span').map(([key, field]) => ({
     item: key, about: field.doc, ...(field.fields ? { fields: jsonSchema(field.fields).properties } : {}),
     example: { id: 'example-' + key, title: 'Example ' + key, [key]: field.example } }));
   return {
     about: 'Mission Control shows the space: one JSON file of sections in order. Each section has a title, optional text and icon, and items of the types below. '
       + 'A section\'s order field sets the order its parts draw in, and its widgets field draws P9\'s own panels inside it. Build it with add_section, add_button (with section) and the update and remove tools, or write a whole file and check it first with validate_space. '
       + 'patch_section, patch_item, move_section and move_button set any field and reorder. A section is named by its id (or by its title while only one section has it); '
-      + 'a second section with the same id is refused, titles may repeat. An unknown field is named by validate_space but kept, never dropped. A button runs only when the user clicks it; a data tile only after the user answers Allow on it.',
-    file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', place: SECTION.place.example, buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example }] },
+      + 'a second section with the same id is refused, titles may repeat. An unknown field is named by validate_space but kept, never dropped. A button runs only when the user clicks it; a data tile only after the user answers Allow on it. '
+      + 'Layout (schema.space has each field): place puts a section open in a column, col1 to col6, span sets its column\'s width; a card or data tile with frame false draws without its own box. '
+      + 'preview_card returns a card\'s page with sample data as one HTML document: show it to the user as an html artifact to see how it looks before placing it. '
+      + 'add_button and patch_item refuse a field a button does not have (a misspelt confirm would run it without asking); a section and its other items keep one.',
+    file: { sections: [{ id: 'ops', title: 'Ops', text: 'Server chores.', place: SECTION.place.example, buttons: SECTION.buttons.example.slice(0, 1), logs: SECTION.logs.example.slice(0, 1) }] },
     items, templates: TEMPLATES, schema: SCHEMAS.space,
   };
 }

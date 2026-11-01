@@ -108,6 +108,19 @@ export function oneLineChange(before, after, kind) {
 // Strict (M1): an unknown field is listed by name (kept, so an older or newer file still draws), and a section repeating an
 // earlier one's id is dropped; titles may repeat (W-C), the id is the key. A section with no id gets one from its title here,
 // in memory only (withIds). A button keeps its own group (W-J); section names the section it sits in.
+// A log view's part of a file (#11): heading (a Markdown heading's text; to the next heading of the same or a higher level), then
+// lines (default 200) from the end (default) or the start.
+export function logPart(text, { heading, from = 'end', lines = 200 } = {}) {
+  let rows = text.split('\n');
+  if (heading !== undefined) {
+    const level = (line) => { const hit = /^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/.exec(line); return hit ? { depth: hit[1].length, text: hit[2].trim() } : null; };
+    const start = rows.findIndex((line) => level(line)?.text === heading.trim());
+    if (start < 0) return 'No heading "' + heading.trim() + '" in this file.';
+    const depth = level(rows[start]).depth, end = rows.findIndex((line, i) => i > start && level(line) && level(line).depth <= depth);
+    rows = rows.slice(start, end < 0 ? rows.length : end);
+  }
+  return (from === 'start' ? rows.slice(0, lines) : rows.slice(-lines)).join('\n');
+}
 export function parseSpace(text) {
   const space = JSON.parse(stripBom(text));
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
@@ -145,7 +158,7 @@ export function parseSpace(text) {
       for (const extra of unknownFields(record, CHECKLIST, 'a checklist')) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'unknown-field', detail: extra });
       const detail = problem(record, CHECKLIST) ?? (record.file || /\.md$/i.test(record.path ?? '') ? undefined : 'path must be a .md file, or file must name the .md file in each subfolder');
       if (detail) result.invalid.push({ kind: 'space', index, checklists: checklist, reason: 'malformed-record', detail }); else checklists.push({ ...record }); });
-    result.sections.push({ ...extras(section, SECTION), id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.place ? { place: section.place } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}),
+    result.sections.push({ ...extras(section, SECTION), id: section.id, title, text: section.text ?? '', buttons, logs, folders, refs: section.refs ?? [], ...(checklists.length ? { checklists } : {}), ...(section.widget ? { widget: section.widget } : {}), ...(section.place ? { place: section.place } : {}), ...(section.span ? { span: section.span } : {}), ...(section.quick_note ? { quick_note: { ...section.quick_note } } : {}), ...(section.icon ? { icon: section.icon } : {}), ...(section.picture ? { picture: section.picture } : {}), ...(items.data.length ? { data: items.data } : {}), ...(items.cards.length ? { cards: items.cards } : {}), ...(items.links.length ? { links: items.links } : {}), ...(section.notes ? { notes: section.notes } : {}),
       ...(section.order ? { order: section.order } : {}), ...(section.widgets?.length ? { widgets: section.widgets } : {}) });
   });
   return result;
@@ -371,15 +384,17 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     }
     return { id, missing: true };
   }
-  // ponytail: a log view reads the whole file (packages/files refuses one over MAX_BYTES) and shows the last 200 lines.
+  // ponytail: a log view reads the whole file (packages/files refuses one over MAX_BYTES), then cuts the part it shows (#11):
+  // the lines under heading, if it names one, then lines of them (200 by default) from the end, or from the start.
   async function spaceLog(id) {
     if (typeof id !== 'string' || !ID.test(id)) return { status: 400, error: 'request-refused' };
     const log = (await registry()).space.flatMap((section) => section.logs).find((record) => record.id === id);
     if (!log) return { status: 404, error: 'unknown-id' };
     const base = log.root ? await namedRoot(log.root) : { root: workspace }; // wall 10: a log in an allowed folder outside the workspace
     if (base.error) return base;
-    try { return { status: 200, text: (await readFile(base.root, log.path)).content.split('\n').slice(-200).join('\n') }; }
-    catch { return { status: 404, error: 'not-found' }; }
+    let text;
+    try { text = (await readFile(base.root, log.path)).content; } catch { return { status: 404, error: 'not-found' }; }
+    return { status: 200, text: logPart(text, log) };
   }
 
   // Notes (threat model row 34): a folder named in settings.notes_roots and shown by a space section. Every path is
