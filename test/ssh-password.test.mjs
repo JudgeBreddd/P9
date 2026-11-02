@@ -259,6 +259,24 @@ test('Key checkbox, Esc: the same as unticked, nothing is made or added and the 
   assert.equal(await page.locator('dialog#keepDlg[open]').count(), 0, 'not offered again');
 });
 
+// U6 gap c: this computer cannot make the key (ssh-keygen fails). The status bar says so in plain words, nothing is added.
+test('Key checkbox ticked but the key cannot be made: the status bar says so, nothing reaches the remote', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  await writeFile(path.join(s.directory, 'ssh-keygen'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host' }));
+  const page = await launch(t, s, local);
+  await typePassword(page);
+  await keyWindow(page);
+  await page.click('#keepDone');
+  await page.locator('dialog#keepDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  const said = 'This computer could not make the key, so P9 asks for your password on password-host next time';
+  await page.locator('#keepNote:not([hidden]) #keepText', { hasText: said }).waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#keepBtn').isVisible(), false, 'nothing to press');
+  await both(page, 'u6-key-not-made', page.locator('.statusbar'));
+  await assert.rejects(stat(path.join(s.profile, 'ssh', 'p9_ed25519.pub')), 'no key');
+  await assert.rejects(stat(s.keys), 'nothing added to the remote');
+});
+
 test('A dropped connection to a password-only remote says it dropped and asks for the password again', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
   await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host', noKey: ['password-host'] }));
