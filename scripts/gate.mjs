@@ -137,9 +137,11 @@ export async function mutationInventory(directory) {
     const extension = path.extname(file);
     if (!sourceExtensions.has(extension)) {
       if (dataExtensions.has(extension) || specialFiles.has(relative)) continue;
-      // Release images (README, icons) are binary and live only in docs/brand/, plus the phone's icon in apps/web/public/
-      // and the bundled default pet's sheet.
-      if ((relative.startsWith('docs/brand/') || relative === 'apps/web/public/p9-icon.png' || relative === 'apps/desktop/pets/skipper/spritesheet.png') && ['.png', '.jpg', '.ico'].includes(extension)) continue;
+      // Release images (README, icons) are binary and live only in docs/brand/, plus the phone's icon and the top bar's mark
+      // in apps/web/public/ and the bundled default pet's sheet.
+      if ((relative.startsWith('docs/brand/') || relative === 'apps/web/public/p9-icon.png' || relative === 'apps/web/public/p9-mark.png' || relative === 'apps/desktop/pets/skipper/spritesheet.png') && ['.png', '.jpg', '.ico'].includes(extension)) continue;
+      // The landing v5 poster and its rendered loop (163ac1e), imported by the controller as asset URLs.
+      if (['apps/web/src/components/landing-v5/black-hole.webp', 'apps/web/src/components/landing-v5/rendered/horizon-loop.mp4'].includes(relative)) continue;
       throw new Error('unsupported-source-extension: ' + relative);
     }
     if (relative.startsWith('test/')) continue;
