@@ -150,9 +150,9 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.equal(await page.locator('#xferBtn').isVisible(), false, 'no Send files to remote in Remote mode');
   // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
-    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')), await window.p9.remoteInstall(),
+    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')),
     await window.p9.pickVault()]),
-  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true, { error: 'remote-install-refused' },
+  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true,
     { status: 409, body: { error: 'server-mode-local-only' } }]);
   // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this
   // computer's daemon and the forward closes.

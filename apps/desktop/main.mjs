@@ -839,11 +839,6 @@ export async function createDesktop({ state, open } = {}) {
       });
     } else if (!answers && remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
   };
-  ipcMain.handle('p9:remote-install', async (event, ...args) => {
-    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!serverHost || serverError !== 'server-no-p9' || remoteInstall?.phase === 'running') return { error: 'remote-install-refused' };
-    return runInstall();
-  });
   // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's
   // (what it showed: P9_ADMIN need and command) or Keep it running's linger. One string, one line; never stored or logged.
   ipcMain.handle('p9:remote-admin', async (event, ...args) => {
@@ -907,14 +902,6 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost) return { error: 'admin-remote' };
     const command = await adminCommand(args[0]);
     return command ? adminLocal(command, args[1]) : { error: 'nothing-to-install' };
-  });
-  // Start P9 there: this window's remote answered without a running P9 (row I1: never a terminal command). ok connects now.
-  ipcMain.handle('p9:remote-start', async (event, ...args) => {
-    if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
-    if (!serverHost || server || remoteInstall?.phase === 'running') return { error: 'remote-start-refused' };
-    const host = serverHost, result = await startServer(host, sshCommand);
-    if (result === 'ok' && serverHost === host) await useServer(host);
-    return { result };
   });
   // The machine menu's live state (threat model row 50, c23 adds): only a remote saved here or used last, one probe per host
   // per 30 s, shared by calls in flight. ponytail: the cache is never pruned; at most 51 hosts can be in it.

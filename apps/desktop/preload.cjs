@@ -45,8 +45,6 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   xferRun: (id, choice, deleteToo) => ipcRenderer.invoke('p9:xfer', 'run', id, choice, deleteToo),
   onXfer: (callback) => { ipcRenderer.on('p9:xfer', (_event, progress) => callback(progress)); },
   serverUpdate: () => ipcRenderer.invoke('p9:server-update'),
-  remoteInstall: () => ipcRenderer.invoke('p9:remote-install'), // D15a: install P9 on this remote, asked first
-  remoteStart: () => ipcRenderer.invoke('p9:remote-start'), // row I1: start P9 on this remote, no terminal
   remoteAdmin: password => ipcRenderer.invoke('p9:remote-admin', password), // row I2: the admin password for this remote's admin step
   remoteDepsCheck: () => ipcRenderer.invoke('p9:remote-deps-check'), // row 61 on a remote: the command that remote computed for tmux or ssh
   sshAnswer: answer => ipcRenderer.invoke('p9:ssh-answer', answer), // row 78: the ssh password (or 'yes' to a host key) for the waiting login; null cancels
