@@ -105,15 +105,12 @@ export function oneLineChange(before, after, kind) {
 // The free-form space (settings.space, one JSON file): sections, each with optional text, buttons, log views and notes.
 // A button is a registry script record and runs the same way, by ID; a log view shows the end of one workspace file;
 // notes names a folder from settings.notes_roots by its key, never by path.
-// Strict (M1): an unknown field is listed by name (kept, so an older or newer file still draws), and a section repeating an
-// earlier one's id is dropped; titles may repeat (W-C), the id is the key. A section with no id gets one from its title here,
-// in memory only (withIds). A button keeps its own group (W-J); section names the section it sits in.
 // A log view's part of a file (#11): heading (a Markdown heading's text; to the next heading of the same or a higher level), then
 // lines (default 200) from the end (default) or the start.
 export function logPart(text, { heading, from = 'end', lines = 200 } = {}) {
   let rows = text.split('\n');
   if (heading !== undefined) {
-    const level = (line) => { const hit = /^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/.exec(line); return hit ? { depth: hit[1].length, text: hit[2].trim() } : null; };
+    const level = (line) => { const hit = line.match(/^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/); return hit ? { depth: hit[1].length, text: hit[2].trim() } : null; };
     const start = rows.findIndex((line) => level(line)?.text === heading.trim());
     if (start < 0) return 'No heading "' + heading.trim() + '" in this file.';
     const depth = level(rows[start]).depth, end = rows.findIndex((line, i) => i > start && level(line) && level(line).depth <= depth);
@@ -121,6 +118,9 @@ export function logPart(text, { heading, from = 'end', lines = 200 } = {}) {
   }
   return (from === 'start' ? rows.slice(0, lines) : rows.slice(-lines)).join('\n');
 }
+// Strict (M1): an unknown field is listed by name (kept, so an older or newer file still draws), and a section repeating an
+// earlier one's id is dropped; titles may repeat (W-C), the id is the key. A section with no id gets one from its title here,
+// in memory only (withIds). A button keeps its own group (W-J); section names the section it sits in.
 export function parseSpace(text) {
   const space = JSON.parse(stripBom(text));
   if (!space || typeof space !== 'object' || !Array.isArray(space.sections)) throw new Error('invalid-space');
