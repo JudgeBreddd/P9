@@ -173,11 +173,11 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-sh-')), bin = path.join(home, 'bin'), log = path.join(home, 'log');
   t.after(() => rm(home, { recursive: true, force: true }));
   await mkdir(bin);
-  for (const tool of ['realpath', 'dirname', 'mkdir', 'mktemp', 'mv', 'rm', 'rmdir', 'chmod']) {
+  for (const tool of ['realpath', 'dirname', 'mkdir', 'mktemp', 'mv', 'rm', 'rmdir', 'chmod', 'wc', 'sed', 'cat', 'id']) {
     await symlink(['/usr/bin/', '/bin/'].map((dir) => dir + tool).find(existsSync), path.join(bin, tool));
   }
   const stub = (name, body) => writeFile(path.join(bin, name), '#!/bin/sh\n' + body + '\n', { mode: 0o755 });
-  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run']) await stub(tool, 'exit 0');
+  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run', 'gzip', 'flock', 'setsid']) await stub(tool, 'exit 0');
   await stub('node', '[ "$1" = --version ] && { echo "${FAKE_NODE:-v26.10.0}"; exit 0; }\necho "node $*" >> ' + log);
   await stub('pnpm', 'echo "pnpm $*" >> ' + log);
   // The Node download: curl writes a file, sha256sum passes only with FAKE_SUM_OK, tar unpacks a node that logs as p9node.
@@ -217,7 +217,10 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(badSum.status, 1);
   assert.match(badSum.stdout, /does not match its pinned checksum/);
   assert.doesNotMatch(badSum.log, /^(tar|pnpm|p9node|node) ?/m, 'nothing unpacked or installed after a bad checksum');
-  assert.deepEqual(readdirSync(share), [], 'no Node and no temp folder left');
+  // Besides Node: run/, the start script every install since c1a42dd writes (row I1), here from the runs above.
+  const left = () => readdirSync(share).filter((name) => name !== 'run');
+  assert.ok(existsSync(path.join(share, 'run', 'start')), 'the start script is written');
+  assert.deepEqual(left(), [], 'no Node and no temp folder left');
 
   // Wrong Node, good download: P9's own Node is pinned, unpacked, and runs the service install.
   const oldNode = run({ FAKE_NODE: 'v24.19.0', FAKE_SUM_OK: '1' });
@@ -225,7 +228,7 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.match(oldNode.log, new RegExp('^curl -fsSL -o \\S+/node\\.tar\\.gz https://nodejs\\.org/dist/v26\\.10\\.0/node-v26\\.10\\.0-linux-x64\\.tar\\.gz\n'
     + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\np9node scripts/deps\\.mjs --place\npnpm install --frozen-lockfile\npnpm build\n'
     + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\np9node scripts/install-editor\\.mjs\n$'));
-  assert.deepEqual(readdirSync(share), ['node-v26.10.0-linux-x64'], 'temp folder removed');
+  assert.deepEqual(left(), ['node-v26.10.0-linux-x64'], 'temp folder removed');
   assert.ok(oldNode.stdout.includes('export PATH="' + path.join(ownNode, 'bin') + ':$PATH"'), 'PATH line printed');
   const cached = run({ FAKE_NODE: 'v24.19.0' });
   assert.equal(cached.status, 0, cached.stdout + cached.stderr);
@@ -235,7 +238,7 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   await rm(path.join(bin, 'systemctl'));
   const noTool = run();
   assert.equal(noTool.status, 1);
-  assert.match(noTool.stdout, /MISSING: systemctl\b/);
+  assert.match(noTool.stdout, /^- systemctl: /m);
   assert.equal(noTool.log, '', 'nothing installed with a tool missing');
   await stub('systemctl', 'exit 0');
 
