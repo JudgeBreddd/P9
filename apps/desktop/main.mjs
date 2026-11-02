@@ -330,7 +330,10 @@ export async function createDesktop({ state, open } = {}) {
         return;
       }
       if (serverError === 'ssh-login-needed') { serverError = 'ssh-failed'; return; }
-      if (serverError === 'server-no-p9') setUp(serverHost);
+      // A start that said ok but whose P9 still does not answer 30 s later (setUp's until) stops with Try again, never
+      // "Starting P9" forever; the timer below keeps trying, so a late answer still connects. Try again starts it again.
+      if (remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now() && serverError !== 'server-no-p9') remoteInstall = { phase: 'failed', error: 'not-answering', started: remoteInstall.started };
+      else if (serverError === 'server-no-p9' || serverError === 'server-not-answering') setUp(serverHost, serverError === 'server-not-answering');
       setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
     }
   };
@@ -821,17 +824,18 @@ export async function createDesktop({ state, open } = {}) {
   // (startServer); if that finds nothing to start, or P9 still does not answer 30 s after it said started, it is installed
   // or updated (runInstall, row 67's script). Once per Connect or Try again: a failed or stopped one stays in remoteInstall,
   // shown with Try again, until useServer clears it.
-  setUp = host => {
+  // answers: P9 there has its runtime files but did not answer (server-not-answering): it is started again, never installed over.
+  setUp = (host, answers = false) => {
     if (!remoteInstall) {
       const started = Date.now();
       remoteInstall = { phase: 'starting', started };
       startServer(host, sshCommand).then(r => {
         if (serverHost !== host || remoteInstall?.started !== started) return;
-        if (r !== 'ok') return void runInstall();
+        if (r !== 'ok') return void (answers ? (remoteInstall = { phase: 'failed', error: 'not-answering', started }) : runInstall());
         remoteInstall = { phase: 'starting', started, until: Date.now() + 30000 };
         useServer(host);
       });
-    } else if (remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
+    } else if (!answers && remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
   };
   ipcMain.handle('p9:remote-install', async (event, ...args) => {
     if (!fromApp(event) || args.length) throw new Error('ipc-sender-refused');
