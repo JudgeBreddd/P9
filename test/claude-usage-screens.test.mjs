@@ -3,7 +3,7 @@
 // with no chat turn reporting limits.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -21,9 +21,17 @@ const until = async (check, what, ms) => {
   assert.fail('timed out: ' + what);
 };
 const fresh = (text) => text.includes('37%') && text.includes('63%');
+// Mission draws its Usage panel only where a space section names it (faed908), and a profile with no space shows only the
+// onboarding card (Mission M4a, 4d468c3): this space is one section holding the Usage widget.
+const usageSpace = async (paths) => {
+  await mkdir(path.join(paths.workspace, 'hub'), { recursive: true });
+  await writeFile(path.join(paths.workspace, 'hub/space.json'), JSON.stringify({ sections: [{ id: 'use', title: 'Use', widgets: ['usage'] }] }));
+  await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ space: 'hub/space.json' }));
+  return { args: [...args, '--settings', path.join(paths.directory, 'settings.json')] };
+};
 
 test('live Claude usage: every desktop Claude chat and Mission Control show the polled figures', { timeout: 180000 }, async (t) => {
-  const instance = await daemon(t, undefined, false, async () => ({ args }));
+  const instance = await daemon(t, undefined, false, usageSpace);
   const chats = [];
   for (const text of ['one', 'two']) {
     const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
