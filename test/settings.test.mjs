@@ -995,6 +995,10 @@ test('Setup wizard UI: every screen in order, sign-in through the fake CLI, star
   await at(total, 'Mission Control');
   await page.click('[data-act="mission-off"]');
   await page.waitForFunction(() => document.querySelector('[data-focus-btn="mission"]').hidden && !document.querySelector('#welDlg').open);
+  // Ctrl K offers no Mission command while Mission is off.
+  await page.keyboard.press('Control+k'); await page.fill('#palIn', 'mission');
+  const missionCmds = await page.locator('#palList li[data-i]').allTextContents(); await page.keyboard.press('Escape');
+  assert.deepEqual(missionCmds, [], 'Ctrl K offers no Mission command while Mission is off');
   console.log('PASS setup wizard UI: card count, resume at the first step not done, sign-in code and open, ended shows Retry, starter files, name and petdex, tour, skip to the Notification Center across a restart, gone when done, Mission off');
 });
 
