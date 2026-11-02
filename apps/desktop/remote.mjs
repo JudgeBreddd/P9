@@ -180,11 +180,20 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
     await reading;
     return health(state);
   });
-  const child = spawn(ssh, [...sshOptions(), '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes', '-o', 'StreamLocalBindMask=0177',
-    '-L', socketPath + ':' + remoteSocket, ...(editor ? ['-L', editorSocket + ':' + remoteEditor] : []), host], { stdio: 'ignore', signal });
+  // Not -N: over a password login's control master (row 78) an ssh -N hands its forwards to the master and exits at once, so
+  // the tunnel looked dead and P9 never connected. A session waiting on stdin keeps this ssh alive for as long as the
+  // connection (its exit is still the drop), and the remote cat ends when it closes.
+  const forwards = ['-L', socketPath + ':' + remoteSocket, ...(editor ? ['-L', editorSocket + ':' + remoteEditor] : [])];
+  // The master keeps a forward it was handed until cancelled, and takes the same one again as already there: one a
+  // tunnel before this left (a crash, an older P9) would hold the path with its socket file gone. Cancelled first, then.
+  const cancel = () => WINDOWS ? null : new Promise(resolve => execFile(ssh, [...sshOptions(), '-O', 'cancel', ...forwards, host], { timeout: 10000 }, () => resolve()));
+  await cancel();
+  const child = spawn(ssh, [...sshOptions(), '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes', '-o', 'StreamLocalBindMask=0177',
+    ...forwards, host, 'exec cat >/dev/null'], { stdio: ['pipe', 'ignore', 'ignore'], signal });
   child.on('error', () => {}); // the abort's AbortError; exit follows
+  child.stdin.on('error', () => {});
   let closed = false, exited = false, ready = false;
-  const close = async () => { closed = true; if (!exited) child.kill(); await rm(state, { recursive: true, force: true }); };
+  const close = async () => { closed = true; if (!exited) child.kill(); await cancel(); await rm(state, { recursive: true, force: true }); };
   child.on('exit', () => { exited = true; if (!closed) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); if (ready) onDrop(); } });
   // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon.
   for (let i = 0; i < 60; i++) {

@@ -56,7 +56,7 @@ test('D20: after connecting, slow and failed requests show no layer and no note;
   remote.child.kill('SIGCONT');
   // Failed: the tunnel ends and the remote is gone; main rebuilds it.
   await rename(link, link + '.away');
-  const tunnel = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((c) => c.argv.includes('-N')).pop();
+  const tunnel = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((c) => c.argv.includes('-L')).pop();
   process.kill(tunnel.pid, 'SIGTERM');
   await quiet('lost tunnel');
   await box.click(); await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.press('ControlOrMeta+c');

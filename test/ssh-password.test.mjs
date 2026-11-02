@@ -81,7 +81,7 @@ test('No ssh key: P9 asks for the password once in its own window, then connects
   assert.deepEqual(asks[0].leaked, [], 'the password is in no environment variable ssh saw');
   // After the login, the read and the tunnel rode it: key-only ssh, no second ask.
   const login = calls.findIndex((c) => c.argv.includes('BatchMode=no'));
-  assert.ok(login >= 0 && calls.slice(login + 1).some((c) => c.argv.includes('-N') && c.argv.includes('BatchMode=yes')), JSON.stringify(calls.map((c) => c.argv)));
+  assert.ok(login >= 0 && calls.slice(login + 1).some((c) => c.argv.includes('-L') && c.argv.includes('BatchMode=yes')), JSON.stringify(calls.map((c) => c.argv)));
   assert.ok(calls.every((c) => !c.argv.some((a) => a.includes(PASSWORD))), 'never on a command line');
   assert.deepEqual(await filesHolding(s.directory, PASSWORD), [], 'in no file, the ssh log included');
 });
@@ -284,7 +284,7 @@ test('A dropped connection to a password-only remote says it dropped and asks fo
   await typePassword(page);
   await connected(page);
   await page.waitForTimeout(6000); // the window has shown the remote (a status poll after connecting)
-  const tunnel = (await s.calls()).filter((c) => c.argv.includes('-N')).pop();
+  const tunnel = (await s.calls()).filter((c) => c.argv.includes('-L')).pop();
   await rm(s.master, { force: true });
   process.kill(tunnel.pid);
   await page.locator('dialog#sshDlg[open]').waitFor({ timeout: 30000 });

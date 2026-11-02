@@ -59,7 +59,7 @@ test('Server mode: the forward, its files and the ssh it runs', { skip }, async 
   // forwards exactly the server daemon's socket.
   const calls = await s.calls();
   assert.ok(calls.length >= 2 && calls.every(c => c.argv.includes('BatchMode=yes') && c.argv.includes('StrictHostKeyChecking=accept-new') && c.argv.includes('test-host')), JSON.stringify(calls));
-  const tunnel = calls.find(c => c.argv.includes('-N'));
+  const tunnel = calls.find(c => c.argv.includes('-L'));
   assert.equal(tunnel.argv[tunnel.argv.indexOf('-L') + 1], saved.socketPath + ':' + path.join(s.server, 'p9-foundation', 'daemon.sock'));
   assert.ok(tunnel.argv.includes('StreamLocalBindMask=0177') && tunnel.argv.includes('ExitOnForwardFailure=yes'));
   // close() removes the folder and is not a drop.
@@ -69,7 +69,7 @@ test('Server mode: the forward, its files and the ssh it runs', { skip }, async 
   // editor: false (the move's tunnel) forwards the daemon's socket only.
   const move = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: path.join(s.local, 'move'), editor: false });
   t.after(() => move.close());
-  const moved = (await s.calls()).filter(c => c.argv.includes('-N')).at(-1);
+  const moved = (await s.calls()).filter(c => c.argv.includes('-L')).at(-1);
   assert.deepEqual(moved.argv.filter(arg => arg === '-L').length, 1, JSON.stringify(moved.argv));
 });
 
@@ -108,7 +108,7 @@ test('Server mode: a lost tunnel is a drop, and a restarted server daemon is fou
   assert.equal((await server.check()).status, 'ok');
   assert.equal(JSON.parse(await readFile(path.join(server.state, 'desktop.json'), 'utf8')).cookie, second.credentials.cookie);
   // The ssh process ends (lid closed, network gone): onDrop runs and the folder goes.
-  process.kill((await s.calls()).find(c => c.argv.includes('-N')).pid, 'SIGTERM');
+  process.kill((await s.calls()).find(c => c.argv.includes('-L')).pid, 'SIGTERM');
   await Promise.race([dropped, new Promise((_, reject) => setTimeout(() => reject(new Error('no onDrop')), 5000))]);
   assert.ok(await gone(server.state));
 });
@@ -433,7 +433,7 @@ test('U6: a remote P9 that starts but never answers stops with a plain line and 
   for (const end = Date.now() + 20000; Date.now() < end && count('P9_START') < 2; await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
   assert.equal(count('P9_START'), 2, 'Try again starts it again');
   // Quitting while that start's forward still waits for /health ends the forward too: no ssh is left running on its own.
-  const tunnel = () => ran.slice(ran.findLastIndex((c) => c.argv.some((a) => a.includes('P9_START')))).find((c) => c.argv.includes('-N'));
+  const tunnel = () => ran.slice(ran.findLastIndex((c) => c.argv.some((a) => a.includes('P9_START')))).find((c) => c.argv.includes('-L'));
   for (const end = Date.now() + 20000; Date.now() < end && !tunnel(); await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
   const { pid } = tunnel();
   await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
@@ -865,7 +865,7 @@ test('Server mode Dev Focus: the server\'s daemon runs one editor on editor.sock
   const server = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local });
   t.after(() => server.close());
   // One ssh, two forwards: the daemon's socket and the editor's, both into the owner-only folder.
-  const tunnel = (await s.calls()).find(c => c.argv.includes('-N'));
+  const tunnel = (await s.calls()).find(c => c.argv.includes('-L'));
   assert.deepEqual(tunnel.argv.flatMap((arg, i) => (arg === '-L' ? [tunnel.argv[i + 1]] : [])), [
     path.join(server.state, 'daemon.sock') + ':' + path.join(s.server, 'p9-foundation', 'daemon.sock'),
     path.join(server.state, 'editor.sock') + ':' + path.join(s.server, 'p9-foundation', 'editor.sock')]);

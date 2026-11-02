@@ -1,6 +1,6 @@
 // A stand-in for ssh in test/remote.test.mjs, run through a small sh wrapper the test writes (P9_SSH or connectServer's ssh).
 // FAKE_RUNTIME plays the server's $XDG_RUNTIME_DIR: a remote command runs in sh with it set, so remote.mjs's real READ
-// command is what runs. -N -L <local>:<remote> (any number of them) forwards a Unix socket, as OpenSSH does with StreamLocalBindMask=0177.
+// command is what runs. -L <local>:<remote> (any number of them) forwards a Unix socket, as OpenSSH does with StreamLocalBindMask=0177.
 // Every call is appended to FAKE_SSH_LOG (argv and pid), so a test sees what ran and can kill the tunnel.
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -8,14 +8,14 @@ import { spawnSync } from 'node:child_process';
 import net from 'node:net';
 
 const argv = process.argv.slice(2);
+if (argv.includes('-O')) process.exit(0); // close()'s -O cancel: no control master here, and not logged as a tunnel
 appendFileSync(process.env.FAKE_SSH_LOG, JSON.stringify({ pid: process.pid, argv }) + '\n');
 const forwards = [];
 const opts = {};
 let tunnel = false, i = 0;
 for (; i < argv.length && argv[i].startsWith('-'); i++) {
   if (argv[i] === '-o') { const [key, ...value] = argv[++i].split('='); if (key.toLowerCase() === 'identityfile') (opts.identityfile ??= []).push(value.join('=')); else opts[key.toLowerCase()] = value.join('='); }
-  else if (argv[i] === '-L') forwards.push(argv[++i]);
-  else if (argv[i] === '-N') tunnel = true;
+  else if (argv[i] === '-L') { forwards.push(argv[++i]); tunnel = true; }
 }
 const [host, ...command] = argv.slice(i);
 if (!host || host.startsWith('unreachable')) process.exit(255); // a host named unreachable* is one ssh cannot reach
