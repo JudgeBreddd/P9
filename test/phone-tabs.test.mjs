@@ -160,7 +160,9 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
   // c7's leftovers (spec §6), finished by c1. Each is noted and the test goes on, so one A/B run shows all five.
   const misses = [], soft = async (name, check) => { try { await check(); } catch (error) { misses.push(name + ': ' + String(error.message).split('\n')[0]); } };
   await soft('Terminal title not cut', async () => {
-    const title = await page.evaluate(() => { const span = document.querySelector('#termTitle'); return { text: span.textContent, cut: span.scrollWidth > span.clientWidth }; });
+    const title = await page.evaluate(() => { const span = document.querySelector('#termTitle'), range = document.createRange(); range.selectNodeContents(span);
+      // Fractional widths: scrollWidth and clientWidth round separately, so a fitting title read as cut at some clock digits.
+      return { text: span.textContent, cut: range.getBoundingClientRect().width > span.getBoundingClientRect().width + 0.5 }; });
     assert.match(title.text, /^Terminal · \d{1,2}:\d{2}/); assert.equal(title.cut, false, title.text + ' is cut');
   });
   await shot(page, 'tab-terminal');

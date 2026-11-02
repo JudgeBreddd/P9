@@ -71,6 +71,7 @@ section[data-view=chat]:not([hidden]){display:flex;flex-direction:column;overflo
 .bar .back:focus-visible{outline:1px solid color-mix(in srgb,var(--cyan) 45%,transparent);outline-offset:-1px}
 .bar button{min-height:44px;min-width:44px;border:0;border-radius:12px;background:transparent;color:var(--cyan);font-weight:600}
 .bar button svg{width:24px;height:24px}
+.bar>button:has(>svg:only-child){padding:0} /* icon-only: 44 px, not 50, so the Terminal title and its clock fit at 390 wide */
 .bar .sync{flex:none;width:8px;height:8px;border-radius:50%;background:var(--cyan);margin:0 8px}
 .bar .sync[data-state=stale]{background:var(--amber)}
 nav{flex:none;display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom);background:color-mix(in oklch,var(--bg) 96%,transparent);border-top:1px solid rgba(255,255,255,.08);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
