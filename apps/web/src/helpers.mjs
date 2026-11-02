@@ -82,6 +82,8 @@ export const info = (tip, section) => `<button class="info" type="button" data-d
 // was a while (a send waits up to 90 s, twice), and for a send that the message is back in the box (liveChat.prompt).
 const CHAT_VERB = { prompt: 'send', answer: 'send your answer', cancel: 'stop the turn', create: 'start the chat', stop: 'stop the chat' };
 export function chatFailed(action, body, ms) {
+  // The daemon refuses a new chat's folder only (chat.mjs create): say what a folder needs (Builder, 2026-11-02).
+  if (action === 'create' && body?.error === 'request-refused') return 'Could not start the chat in that folder. It must exist on the server; a full path works only in Unrestricted mode.';
   if (body?.error !== 'daemon-unavailable') return null;
   const who = body.host ? 'P9 on ' + body.host : 'P9 on this computer', minutes = Math.round(ms / 60000);
   const why = minutes >= 1 ? who + ' did not answer for ' + minutes + (minutes === 1 ? ' minute.' : ' minutes.') : who + ' is not answering.';

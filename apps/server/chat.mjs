@@ -263,7 +263,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const loose = () => !locked && !protection();
   // A chat's folder (threat model row 24): workspace-relative, walked like GET /files/list; in Unrestricted mode (v0.1.6 U4)
   // also an absolute path to any real directory (no links: listDirectory wants its realpath; not inside P9's own folders).
-  const folderCheck = (folder) => (path.isAbsolute(folder) ? (loose() ? listDirectory(folder, '') : Promise.reject(new Error('unsafe-path'))) : listDirectory(workspace, folder));
+  // A typed full path is resolved first: "/x/y/" with its trailing slash failed the walk's realpath match (Builder, 2026-11-02).
+  const folderCheck = (folder) => (path.isAbsolute(folder) ? (loose() ? listDirectory(path.resolve(folder), '') :Promise.reject(new Error('unsafe-path'))) : listDirectory(workspace, folder));
   const folderThere = (folder) => folderCheck(folder).then(() => true, () => false);
   const folderPath = (folder) => path.resolve(workspace, folder ?? '');
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');

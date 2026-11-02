@@ -768,6 +768,8 @@ test('U4: a chat starts in a folder outside the workspace only in Unrestricted m
   assert.equal(JSON.parse((await call(instance, '/file-protection', 'POST', { on: false })).text).on, false);
   for (const folder of [path.join(instance.directory, 'missing'), path.join(instance.directory, 'workspace', 'note.txt'), instance.state])
     assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder })).status, 400, folder);
+  // Typed with a trailing slash (Builder, 2026-11-02: "Chat create: request-refused"): the same folder.
+  assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside + '/' })).status, 201, 'trailing slash');
   const made = await json(call(instance, '/chat', 'POST', { provider: 'claude', folder: outside }));
   assert.equal(made.status, 201, made.text);
   const id = made.body.conversation;

@@ -637,7 +637,7 @@ const pickRemoteFolder = () => new Promise(done => {
   list.onclick = e => { const b = e.target.closest('[data-fdir]'); if (!b) return; at = b.dataset.fdir === '..' ? at.split('/').slice(0, -1).join('/') : (at ? at + '/' : '') + b.dataset.fdir; show(); };
   $('#folderPath').value = ''; d.returnValue = '';
   $('#folderPath').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); d.close('yes'); } };
-  d.onclose = () => done(d.returnValue === 'yes' ? $('#folderPath').value.trim() || at : undefined);
+  d.onclose = () => done(d.returnValue === 'yes' ? $('#folderPath').value.trim().replace(/(.)\/+$/, '$1') || at : undefined);
   d.showModal(); show();
 });
 const recentFolders = () => { try { const r = JSON.parse(localStorage.getItem('eh-chat-folders')); return Array.isArray(r) ? r.filter(f => typeof f === 'string').slice(0, 5) : []; } catch { return []; } };

@@ -12,4 +12,5 @@ test('chatFailed: a send nobody answered, in words', () => {
   assert.equal(chatFailed('cancel', gone, 500), 'Could not stop the turn. P9 on build-box is not answering. Try again in a moment.');
   assert.equal(chatFailed('prompt', { error: 'request-refused' }, 10), null);
   assert.equal(chatFailed('prompt', undefined, 10), null);
+  assert.match(chatFailed('create', { error: 'request-refused' }, 10), /^Could not start the chat in that folder\. .*Unrestricted mode/);
 });
