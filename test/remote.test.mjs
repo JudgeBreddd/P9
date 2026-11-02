@@ -1051,8 +1051,12 @@ test('Machine menu probes: saved remotes read P9 running, P9 not running or Unre
   await page.locator('#rChat').waitFor({ timeout: 20000 });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
   const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot({ animations: 'disabled' })).toString('base64')); };
-  const want = { 'no-p9-box': 'P9 not running', 'test-host': 'P9 running', 'unreachable-box': 'Unreachable', 'from-config': 'Not connected' };
-  const settled = async () => { for (const [h, say] of Object.entries(want)) await page.locator('#serverPop [data-server-go="' + h + '"] .muted', { hasText: say }).waitFor({ timeout: 15000 }); };
+  const want = { 'no-p9-box': 'P9 not running', 'test-host': 'P9 running', 'unreachable-box': 'Unreachable' };
+  // A config-only host is never checked, so it says nothing (not "Not connected", which read as P9 down there).
+  const settled = async () => {
+    for (const [h, say] of Object.entries(want)) await page.locator('#serverPop [data-server-go="' + h + '"] .muted', { hasText: say }).waitFor({ timeout: 15000 });
+    assert.equal(await page.locator('#serverPop [data-server-go="from-config"] .muted').textContent(), '');
+  };
   const probes = async () => (await s.calls()).filter((c) => c.argv.includes('ConnectTimeout=4')).map((c) => c.argv.at(-2)).sort();
   for (const theme of ['event-horizon-prime', 'daylight']) {
     await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
