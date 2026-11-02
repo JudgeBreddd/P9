@@ -625,6 +625,10 @@ dialog.land::backdrop{background:#000;backdrop-filter:none;transition:opacity .4
 .shead .spacer{flex:1}
 .sbody{min-height:0;min-width:0;overflow:hidden;display:grid}
 .sbody>.chats{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+/* The chat picker keeps its one line; without rows a short chat (a new one's welcome) left it half the spare height. */
+#sideBody:has(>#sidePick:not([hidden])){grid-template-rows:auto minmax(0,1fr)}
+/* New chat is in Dev Focus too: its chat opens beside the editor. */
+.shell[data-focus="dev"] #newBtn{display:inline-flex}
 .dtab{grid-column:1/-1;display:flex;align-items:center;height:30px;border-bottom:1px solid var(--border)}
 #fDev .dtab{display:none}
 .stage[data-side] #fDev .dtab{display:flex}

@@ -609,6 +609,8 @@ function closeTab(id) {
 }
 const untab = id => { S.open = S.open.map(o => o === id ? (S.sessions.find(x => !x.hidden && !S.open.includes(x.id)) || {}).id : o).filter(Boolean); renderTabs(); renderChats(); };
 function newSession(agent, model) {
+  // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
+  if (S.focus === 'dev') { S.sideId = null; setSideChat(true); }
   if (liveChat.on) return liveChat.create(agent, newFolder);
   const s = { id: 's-' + Date.now(), agent, title: `${names[agent]} ${S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [] };
   S.sessions.push(s); show(s.id); renderTabs(); renderChats();
