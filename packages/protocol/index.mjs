@@ -19,7 +19,7 @@ export function parseSave(input) {
 // Threat model row 4: what turning File protection off risks, in the desktop's native warning (main.mjs) and the phone's
 // confirm (phone.ts, c18).
 export const FILE_PROTECTION_RISK = 'File protection stops P9\'s editor, here and on your paired phone, from opening or changing your secrets '
-  + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons.\n\n'
+  + '(.env files and the secrets and _private folders), your git history (.git), P9\'s own recovery files (.p9-*) and the script list behind Mission buttons. Mission still shows the folders your Mission space names, _private ones included.\n\n'
   + 'With it off, one wrong save can break those files, and anyone holding your unlocked, paired phone can read or change them, keys included.\n\n'
   + 'Agents, terminals and editor extensions are not affected: they can already change any file you can. You can turn protection back on any time in Settings.';
 

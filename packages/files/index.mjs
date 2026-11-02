@@ -19,11 +19,11 @@ export async function quietFfi(load) {
 
 export const hash = (content) => createHash('sha256').update(content).digest('hex');
 
-function partsFor(relative, root) {
+function partsFor(relative, root, isLocked = locked) {
   if (typeof relative !== 'string' || !relative || !relative.isWellFormed() || relative.length > 4096
       || path.isAbsolute(relative) || /[\\\x00-\x1f:]/.test(relative)) throw new Error('unsafe-path');
   const parts = relative.split('/');
-  if (parts.some((part) => !part || Buffer.byteLength(part) > 255 || part === '.' || part === '..' || locked(part))) throw new Error('locked-path');
+  if (parts.some((part) => !part || Buffer.byteLength(part) > 255 || part === '.' || part === '..' || isLocked(part))) throw new Error('locked-path');
   if (root !== undefined) notPrivate(root, parts);
   return parts;
 }
@@ -50,6 +50,9 @@ export const setProtection = (on) => { protect = on !== false; }; // anything bu
 export const protection = () => protect;
 const locked = (name) => protect && (/^(?:_private|\.git|secrets)$/i.test(name) || /^\.env/i.test(name) || /^\.p9-/i.test(name));
 export const lockedName = (name) => locked(name);
+// P11 (owner, 2026-11-02: "don't restrict access to people's machine or files"): Mission's own reads of the folders the
+// person's space names ({ space: true }) see _private too. Keys (.env, secrets, .git) stay hidden, and writes keep the lock.
+const spaceLocked = (name) => locked(name) && !/^_private$/i.test(name);
 
 // Folders P9 never crawls (Builder, 2026-10-27: no VS Code-style out-of-memory from walking them): the file tree, Dev
 // Focus's tree, search and watcher, and a tunnel send of a folder that is not a git repo.
@@ -59,8 +62,8 @@ export const HEAVY = Object.freeze(['node_modules', '.venv', 'venv', '__pycache_
 export const WALK_SKIP = Object.freeze([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
 
 // Walk with O_NOFOLLOW directory handles; subsequent access stays on these inodes.
-async function resolveSafe(root, relative, maxBytes = MAX_BYTES) {
-  const parts = partsFor(relative, root);
+async function resolveSafe(root, relative, maxBytes = MAX_BYTES, isLocked = locked) {
+  const parts = partsFor(relative, root, isLocked);
   if (win) return win.resolveSafe(root, parts, maxBytes);
   const handles = [];
   try {
@@ -135,8 +138,8 @@ export async function readImage(root, relative) {
   } finally { await safe.close(); }
 }
 
-export async function readFile(root, relative) {
-  const safe = await resolveSafe(root, relative);
+export async function readFile(root, relative, { space = false } = {}) {
+  const safe = await resolveSafe(root, relative, MAX_BYTES, space ? spaceLocked : locked);
   try {
     const buffer = await contents(safe.file);
     return { content: textFrom(buffer), hash: hash(buffer) };
@@ -145,10 +148,11 @@ export async function readFile(root, relative) {
 
 // Regular files and subdirectories directly inside one workspace directory ('' is the root), walked like resolveSafe
 // (no symlinks; locked names refused in the path and left out of the listing).
-export async function listDirectory(root, relative) {
-  const parts = relative === '' ? [] : partsFor(relative, root);
+export async function listDirectory(root, relative, { space = false } = {}) {
+  const isLocked = space ? spaceLocked : locked;
+  const parts = relative === '' ? [] : partsFor(relative, root, isLocked);
   notPrivate(root, parts);
-  if (win) return win.listDirectory(root, parts, locked);
+  if (win) return win.listDirectory(root, parts, isLocked);
   const handles = [];
   try {
     let parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -161,7 +165,7 @@ export async function listDirectory(root, relative) {
     const entries = [];
     for (const name of await readdir(`/proc/self/fd/${parent.fd}`)) {
       const stat = await lstat(`/proc/self/fd/${parent.fd}/${name}`).catch(() => null);
-      if (locked(name)) continue;
+      if (isLocked(name)) continue;
       if (stat?.isFile()) entries.push({ name, mtimeMs: stat.mtimeMs });
       else if (stat?.isDirectory()) entries.push({ name, mtimeMs: stat.mtimeMs, dir: true });
     }

@@ -19,7 +19,8 @@ const SPACE = { sections: [
     { id: 'all-plans', title: 'All plans', root: 'vault', path: 'plans', pattern: '*.md' },
     { id: 'run-logs', title: 'Run logs', path: 'logs', pattern: 'run-??.log' },
     { id: 'wide', title: 'Wide', root: 'wide' }] },
-  { title: 'Bad', folders: [{ id: 'slash', title: 'Slash', pattern: 'a/b' }, { id: 'extra', title: 'Extra', where: 'x' }] }] };
+  { title: 'Bad', folders: [{ id: 'slash', title: 'Slash', pattern: 'a/b' }, { id: 'extra', title: 'Extra', where: 'x' }] },
+  { title: 'Private', folders: [{ id: 'solo', title: 'Solo runs', path: '_private/solo-runs', pattern: '*.md' }] }] };
 
 async function seed({ directory, workspace }) {
   for (const folder of ['projects', 'hub', '_waiting', 'logs']) await mkdir(path.join(workspace, folder));
@@ -28,6 +29,8 @@ async function seed({ directory, workspace }) {
     apps: [{ id: 'editor', title: 'Editor', cmd: ['true'] }], pages: [{ id: 'dash', title: 'Dashboard', url: 'https://example.com' }] }));
   await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify(SPACE, null, 2) + '\n');
   for (const name of ['run-01.log', 'run-02.log', 'run-100.log', 'notes.txt']) await writeFile(path.join(workspace, 'logs', name), 'x\n');
+  await mkdir(path.join(workspace, '_private', 'solo-runs'), { recursive: true });
+  for (const name of ['run.md', '.env.md']) await writeFile(path.join(workspace, '_private', 'solo-runs', name), '# Solo run\n');
   const vault = path.join(directory, 'vault'), plans = path.join(vault, 'plans');
   await mkdir(path.join(plans, 'sub'), { recursive: true });
   // 3 hold the line (one indented, in a subfolder), 1 does not, 1 is a link to a file outside the root that holds it too.
@@ -98,6 +101,20 @@ test('log view root: a log in an allowed folder shows; a root not allowed does n
   assert.equal(shown.status, 200);
   assert.match(shown.body.text, /Status: open/);
   assert.deepEqual([(await log('no-root-log')).status, (await log('no-root-log')).body.error], [404, 'unknown-root']);
+});
+
+// P11 (owner, 2026-11-02: "don't restrict access to people's machine or files"): a space folder in _private lists and
+// opens with File protection on; .env names stay hidden, and the editor's own routes still refuse _private.
+test('P11: a space folder inside _private lists and opens with File protection on; keys stay hidden', { timeout: 60000 }, async (t) => {
+  const instance = await start(t);
+  assert.equal((await call(instance, '/file-protection')).body.on, true);
+  const solo = await list(instance, 'solo');
+  assert.deepEqual([solo.status, solo.body.files.map((file) => file.name)], [200, ['run.md']]);
+  const opened = await open(instance, 'solo', '_private/solo-runs/run.md');
+  assert.deepEqual([opened.status, opened.body.text], [200, '# Solo run\n']);
+  assert.equal((await open(instance, 'solo', '_private/solo-runs/.env.md')).status, 404);
+  assert.equal((await call(instance, '/files?' + new URLSearchParams({ path: '_private/solo-runs/run.md' }))).status >= 400, true, 'the editor still refuses it');
+  console.log('PASS P11: _private/solo-runs lists run.md and opens it with File protection on; .env.md hidden; /files refuses');
 });
 
 test('refs: found ones name their script, app or page; a missing ID says so', { timeout: 60000 }, async (t) => {

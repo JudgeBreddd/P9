@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
 import { readFile, listDirectory, guardedSave, createFile, renameFile, WALK_SKIP } from '../../packages/files/index.mjs';
+const SPACE = { space: true }; // P11: Mission's reads of the folders a space names see _private (packages/files spaceLocked)
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 import { ID, web, problem, unknownFields, extras, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
 
@@ -393,7 +394,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const base = log.root ? await namedRoot(log.root) : { root: workspace }; // wall 10: a log in an allowed folder outside the workspace
     if (base.error) return base;
     let text;
-    try { text = (await readFile(base.root, log.path)).content; } catch { return { status: 404, error: 'not-found' }; }
+    try { text = (await readFile(base.root, log.path, SPACE)).content; } catch { return { status: 404, error: 'not-found' }; }
     return { status: 200, text: logPart(text, log) };
   }
 
@@ -426,7 +427,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     for (let walked = 0; folders.length && walked < NOTES_FOLDERS; walked++) {
       const folder = folders.shift();
       let entries;
-      try { entries = await listDirectory(target.root, folder); } catch (error) { if (!folder) throw error; continue; }
+      try { entries = await listDirectory(target.root, folder, SPACE); } catch (error) { if (!folder) throw error; continue; }
       for (const entry of entries) {
         if (entry.name.startsWith('.')) continue;
         const relative = folder ? `${folder}/${entry.name}` : entry.name;
@@ -452,7 +453,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     for (let walked = 0; folders.length && walked < NOTES_FOLDERS; walked++) {
       const folder = folders.shift();
       let entries;
-      try { entries = await listDirectory(target.root, folder); } catch { if (folder === base) return { status: 404, error: 'not-found' }; continue; }
+      try { entries = await listDirectory(target.root, folder, SPACE); } catch { if (folder === base) return { status: 404, error: 'not-found' }; continue; }
       for (const entry of entries) {
         if (entry.name.startsWith('.')) continue;
         const relative = folder ? `${folder}/${entry.name}` : entry.name;
@@ -467,7 +468,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       partial ||= files.length > FOLDER_MATCHED;
       found = [];
       for (const file of files.slice(0, FOLDER_MATCHED)) {
-        try { if ((await readFile(target.root, file.path)).content.split('\n').some((text) => text.trim() === line)) found.push(file); } catch {}
+        try { if ((await readFile(target.root, file.path, SPACE)).content.split('\n').some((text) => text.trim() === line)) found.push(file); } catch {}
       }
     }
     return { status: 200, root: target.root, files: found.slice(0, NOTES_SHOWN), total: found.length, shown: NOTES_SHOWN, partial, ...(item.fix ? { fix: item.fix } : {}) };
@@ -481,7 +482,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const list = await folderFiles(id);
     if (list.error) return list;
     if (!list.files.some((file) => file.path === relative)) return { status: 404, error: 'not-found' };
-    try { return { status: 200, text: (await readFile(list.root, relative)).content, ...(list.fix ? { fix: list.fix } : {}) }; } catch { return { status: 404, error: 'not-found' }; }
+    try { return { status: 200, text: (await readFile(list.root, relative, SPACE)).content, ...(list.fix ? { fix: list.fix } : {}) }; } catch { return { status: 404, error: 'not-found' }; }
   }
   // Checklists (threat model row M4-a): the files an item names, read through packages/files: in the workspace, or in a
   // notes root the user said yes to (allow_folder, whose question names these writes). A write is one mark or one review
@@ -494,7 +495,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     let paths = [[base, path.posix.basename(base)]];
     if (item.file) {
       let entries;
-      try { entries = await listDirectory(target.root, base); } catch { return { status: 404, error: 'not-found' }; }
+      try { entries = await listDirectory(target.root, base, SPACE); } catch { return { status: 404, error: 'not-found' }; }
       let names = entries.filter((entry) => entry.dir && !entry.name.startsWith('.')).map((entry) => entry.name).sort();
       // Newest is the last date-named folder (YYYY-MM-DD...): a run folder like backfill-undated sorts after every date.
       if (item.newest) names = names.filter((name) => /^\d{4}-\d{2}-\d{2}/.test(name)).slice(-1);
@@ -503,7 +504,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const files = [];
     for (const [relative, name] of paths) {
       let file;
-      try { file = await readFile(target.root, relative); } catch { if (!item.file) return { status: 404, error: 'not-found' }; continue; }
+      try { file = await readFile(target.root, relative, SPACE); } catch { if (!item.file) return { status: 404, error: 'not-found' }; continue; }
       files.push({ path: relative, name, ...file, ...checklistParse(file.content, item) });
     }
     return { status: 200, root: target.root, files };
@@ -559,7 +560,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     if (!note(relative)) return refused;
     const target = await notesRoot(name);
     if (target.error) return target;
-    const file = await readFile(target.root, relative);
+    const file = await readFile(target.root, relative, SPACE);
     return { status: 200, path: relative, content: file.content, hash: file.hash };
   }
   // The same guarded save and conflict reply as answer(): a note changed on disk since it was read is never overwritten.
@@ -854,7 +855,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const item = (await registry()).space.flatMap((section) => section.cards ?? []).find((record) => record.id === id);
     if (!item) return { status: 404, error: 'unknown-id' };
     let file;
-    try { file = await readFile(workspace, item.html); } catch { return { status: 404, error: 'not-found', detail: 'The card file ' + item.html + ' was not found in the workspace.' }; }
+    try { file = await readFile(workspace, item.html, SPACE); } catch { return { status: 404, error: 'not-found', detail: 'The card file ' + item.html + ' was not found in the workspace.' }; }
     if (Buffer.byteLength(file.content) > CARD_BYTES) return { status: 413, error: 'too-big', detail: 'The card file ' + item.html + ' is over 256 KiB.' };
     return { status: 200, html: file.content };
   }
