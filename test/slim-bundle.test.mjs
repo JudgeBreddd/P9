@@ -40,7 +40,7 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
     assert.ok(!names.includes(bad), bad + ' was sent');
   for (const good of ['apps/server/main.mjs', 'apps/server/mcp-relay.mjs', 'apps/desktop/tools.sh', 'apps/desktop/editor-host.mjs', 'scripts/install.sh', 'scripts/background.sh', 'scripts/agents.mjs', 'scripts/install-editor.mjs', 'scripts/deps.mjs', 'agents.json', 'NOTICES.md', 'LICENSE'])
     assert.ok(names.includes(good), good + ' is missing');
-  // The pins: linux-x64 and linux-arm64 (cortanabot), each codex and claude, at this checkout's versions and lockfile hashes.
+  // The pins: linux-x64 and linux-arm64 (an arm64 server), each codex and claude, at this checkout's versions and lockfile hashes.
   const lock = await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8'), pins = JSON.parse(await readFile(path.join(there, 'agents.json'), 'utf8'));
   assert.deepEqual(Object.keys(pins).sort(), ['linux-arm64', 'linux-x64']);
   const codexVersion = JSON.parse(await readFile(path.join(there, 'node_modules', '@openai', 'codex', 'package.json'), 'utf8')).version;

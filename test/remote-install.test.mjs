@@ -41,7 +41,7 @@ test('D15a: a checkout\'s source lands in ~/p9 there and install.sh runs headles
   const shown = JSON.stringify(events);
   assert.ok(shown.includes('build.log') && !shown.includes(s.dir), shown);
   // A failed install can be tried again: its own ~/p9 gets this app's source over it, so an older app's install.sh
-  // (cortanabot, 2026-10-31: the old "XDG_RUNTIME_DIR: not set" at line 20 on every retry) is replaced before it runs.
+  // (an arm64 test server, 2026-10-31: the old "XDG_RUNTIME_DIR: not set" at line 20 on every retry) is replaced before it runs.
   await writeFile(path.join(s.home, 'p9', 'scripts', 'install.sh'), 'echo "XDG_RUNTIME_DIR: not set"; exit 1\n');
   await writeFile(path.join(s.home, 'p9', 'node_modules-kept'), 'built\n');
   assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' })).phase, 'done');

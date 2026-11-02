@@ -114,8 +114,8 @@ test('Server mode: a lost tunnel is a drop, and a restarted server daemon is fou
 
 test('Server mode: ~/.ssh/config hosts for the Settings list', { skip }, async () => {
   const s = await stage(), file = path.join(s.directory, 'config');
-  await writeFile(file, 'Host pfister laptop\n  HostName 192.0.2.1\nHost *.example !bad -evil\nInclude other\n  host Lower\nMatch all\nHost pfister\n');
-  assert.deepEqual(await sshHosts(file), ['pfister', 'laptop', 'Lower']);
+  await writeFile(file, 'Host homebox laptop\n  HostName 192.0.2.1\nHost *.example !bad -evil\nInclude other\n  host Lower\nMatch all\nHost homebox\n');
+  assert.deepEqual(await sshHosts(file), ['homebox', 'laptop', 'Lower']);
   assert.deepEqual(await sshHosts(path.join(s.directory, 'none')), []);
 });
 
