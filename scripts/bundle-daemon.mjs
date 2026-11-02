@@ -2,7 +2,7 @@
 // (0.1.3 unpacked 26,028 files under daemon/node_modules, every web dependency included). Each bundle sits at its old
 // path, so every lookup relative to import.meta.url still resolves: windows-host.ps1 and adapterEntry from
 // apps/server, and claude-agent-acp's import.meta.resolve('@anthropic-ai/claude-agent-sdk') that finds claude.exe.
-import { access, cp, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { access, cp, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { rolldown } from 'rolldown';
 
@@ -35,8 +35,37 @@ export async function appLocalRuntime(vendor) {
   }
 }
 
-// platform is the agents' binary package suffix, win32-x64 or win32-arm64 for an installer. Returns the notices of
-// every package inlined into a bundle, which lose their own licence files.
+// U8: the agents' binary packages for each Linux arch the slim Temporary P9 runs on, by exact version with the sha512
+// integrity pnpm-lock.yaml pins (the same check pnpm install --frozen-lockfile makes), for scripts/agents.mjs on the remote.
+// codex and sdk: the installed packages' folders; a version the lockfile does not pin stops the build.
+// ponytail: glibc only (Node's own Linux builds are glibc too), so no musl entries.
+export async function agentPins(root, codex, sdk) {
+  const lock = await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8');
+  const version = async (dir) => JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8')).version;
+  const codexVersion = await version(codex), sdkVersion = await version(sdk);
+  const pins = {};
+  for (const arch of ['x64', 'arm64']) {
+    const wanted = [['@openai/codex-linux-' + arch, '@openai/codex@' + codexVersion + '-linux-' + arch],
+      ['@anthropic-ai/claude-agent-sdk-linux-' + arch, '@anthropic-ai/claude-agent-sdk-linux-' + arch + '@' + sdkVersion]];
+    pins['linux-' + arch] = wanted.map(([folder, key]) => {
+      const at = lock.indexOf("\n  '" + key + "':\n    resolution: {integrity: ");
+      const integrity = at < 0 ? null : /^sha512-[A-Za-z0-9+/]+=*/.exec(lock.slice(lock.indexOf('integrity: ', at) + 11))?.[0];
+      if (!integrity) throw new Error('agent-pin-not-in-lockfile:' + key);
+      const name = key.slice(0, key.lastIndexOf('@')), exact = key.slice(key.lastIndexOf('@') + 1);
+      return { folder, url: 'https://registry.npmjs.org/' + name + '/-/' + name.split('/')[1] + '-' + exact + '.tgz', integrity };
+    });
+  }
+  return pins;
+}
+
+// U8: what the slim Temporary P9 needs beside the bundles (remote-install.mjs SLIM): its install and start scripts, tmux's
+// and the editor server's installers, and the agents' fetcher. Each imports only Node's standard library and these.
+const SLIM_FILES = ['scripts/install.sh', 'scripts/background.sh', 'scripts/deps.mjs', 'scripts/install-editor.mjs', 'scripts/agents.mjs',
+  'apps/desktop/tools.sh', 'apps/desktop/editor-host.mjs', 'apps/server/process-tree.mjs', 'package.json', 'LICENSE'];
+
+// platform is the agents' binary package suffix, win32-x64 or win32-arm64 for an installer; null for none (U8: the slim
+// Temporary P9, whose remote fetches its own). Returns the notices of every package inlined into a bundle, which lose their
+// own licence files; out/NOTICES.md gets them too.
 export async function bundleDaemon(root, out, platform) {
   for (const folder of ['apps', 'node_modules']) await rm(path.join(out, folder), { recursive: true }).catch((error) => { if (error.code !== 'ENOENT') throw error; });
   const modules = await bundle(path.join(root, 'apps', 'server', 'main.mjs'), path.join(out, 'apps', 'server', 'main.mjs'));
@@ -57,14 +86,16 @@ export async function bundleDaemon(root, out, platform) {
     [sdk, '@anthropic-ai/claude-agent-sdk', ['package.json', 'LICENSE.md']],
     [codexAcp, '@agentclientprotocol/codex-acp'],
     [codex, '@openai/codex'],
-    [await packageDir(codex, `@openai/codex-${platform}`), `@openai/codex-${platform}`],
-    [await packageDir(sdk, `@anthropic-ai/claude-agent-sdk-${platform}`), `@anthropic-ai/claude-agent-sdk-${platform}`],
+    ...platform ? [[await packageDir(codex, `@openai/codex-${platform}`), `@openai/codex-${platform}`],
+      [await packageDir(sdk, `@anthropic-ai/claude-agent-sdk-${platform}`), `@anthropic-ai/claude-agent-sdk-${platform}`]] : [],
   ];
   for (const [from, name, files] of copies) {
     if (!files) await cp(from, path.join(modulesDir, name), { recursive: true });
     else for (const file of files) await cp(path.join(from, file), path.join(modulesDir, name, file));
   }
-  if (platform.startsWith('win32')) await appLocalRuntime(path.join(modulesDir, '@openai', `codex-${platform}`, 'vendor'));
+  await writeFile(path.join(out, 'agents.json'), JSON.stringify(await agentPins(root, codex, sdk), null, 2) + '\n');
+  for (const file of SLIM_FILES) await cp(path.join(root, file), path.join(out, file));
+  if (platform?.startsWith('win32')) await appLocalRuntime(path.join(modulesDir, '@openai', `codex-${platform}`, 'vendor'));
   const packages = new Set(modules.flatMap((id) => /^(.*[\\/]node_modules[\\/](?:@[^\\/]+[\\/])?[^\\/]+)[\\/]/.exec(id)?.[1] ?? []));
   let notices = '# Packages bundled into the P9 daemon\n\nEach package below is inlined into resources/daemon; its notices follow.\n';
   for (const dir of [...packages].sort()) {
@@ -74,6 +105,16 @@ export async function bundleDaemon(root, out, platform) {
       notices += `\n### ${file}\n\n${(await readFile(path.join(dir, file), 'utf8')).trim()}\n`;
     }
   }
+  await writeFile(path.join(out, 'NOTICES.md'), notices);
   return notices;
+}
+
+// U8: a slim Temporary P9 built from this checkout (an unpackaged app; a packaged one has its resources/daemon), in a new
+// folder under parent. -> the folder, for remote-install.mjs slimArchive; the caller removes it.
+export async function slimBundle(root, parent) {
+  const out = await mkdtemp(path.join(parent, 'p9-slim-'));
+  await bundleDaemon(root, out, null);
+  await cp(path.join(root, 'packages'), path.join(out, 'packages'), { recursive: true });
+  return out;
 }
 

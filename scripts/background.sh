@@ -8,6 +8,8 @@
 #   sh start deps [admin]  what deps.mjs says this machine lacks (tmux, ssh): its command, or with admin (the password as
 #                     stdin's first line, as keep admin) that command run as admin (row 61 on a remote)
 #   sh start release  P9's service off, and linger if P9 turned it on, then the background daemon (Keep P9 running: No)
+#   sh start stop     stop the background daemon (an install that replaces it: U8)
+# A line slim=1 before this body marks the small Temporary P9 (U8, ~/.local/share/p9/remote): keep answers P9_KEEP full.
 # The file background marks background mode: remote.mjs READ runs "up" at each connect only while it is there.
 # POSIX sh, as the desktop runs it with sh. It runs as this user only and never asks for a password; the functions of
 # apps/desktop/tools.sh come before it in the start file.
@@ -38,10 +40,21 @@ up() {
   return 1
 }
 
+# Only the daemon this script started: its pid file can be stale, so that process must still name this state folder.
+# Then up to 15 s for its lock to go; fails while a daemon still holds it.
+stop() {
+  pid=$(cat "$r/daemon.pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -qxF -- "$state"; then kill -TERM "$pid"; fi
+  for _ in $(seq 30); do running || break; sleep 0.5; done
+  ! running
+}
+
 unit="$HOME/.config/systemd/user/p9-foundation.service"
 keep() {
   p9_pw=
   if [ "${1:-}" = admin ]; then IFS= read -r p9_pw || true; fi
+  # U8: the slim Temporary P9 has no service files; Keep there is the full install (main.mjs runs it, remote-install.mjs).
+  if [ "${slim:-}" = 1 ]; then echo "P9_KEEP full"; return 0; fi
   if [ ! -e "$r/background" ] && [ -e "$unit" ]; then echo "P9_KEEP ok"; return 0; fi
   # Linger for this user's own account: systemd's default (set-self-linger) needs no password; where a rule asks for
   # one, --no-ask-password fails at once and the app offers the admin password for this one command instead.
@@ -55,11 +68,7 @@ keep() {
   u="/run/user/$(id -u)"
   for _ in $(seq 20); do [ -d "$u" ] && break; sleep 0.5; done
   [ -d "$u" ] && [ -O "$u" ] || { echo "P9_KEEP no-runtime"; return 1; }
-  # Only the daemon this script started: its pid file can be stale, so that process must still name this state folder.
-  pid=$(cat "$r/daemon.pid" 2>/dev/null || true)
-  if [ -n "$pid" ] && tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -qxF -- "$state"; then kill -TERM "$pid"; fi
-  for _ in $(seq 30); do running || break; sleep 0.5; done
-  if running; then echo "P9_KEEP busy"; return 1; fi
+  if ! stop; then echo "P9_KEEP busy"; return 1; fi
   cd "$checkout"
   if XDG_RUNTIME_DIR="$u" "$node" scripts/install-service.mjs "$workspace" >>"$r/daemon.log" 2>&1; then
     rm -f -- "$r/background" "$r/daemon.pid"
@@ -103,5 +112,6 @@ case "${1:-up}" in
   deps) deps "${2:-}" ;;
   keep) keep "${2:-}" ;;
   release) release ;;
+  stop) stop ;;
   *) exit 2 ;;
 esac

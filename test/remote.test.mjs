@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
@@ -362,7 +362,7 @@ test('U6: a fresh remote goes Connect, install, the Temporary or Always on quest
   await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'test-host', remotes: ['test-host'] }));
   // The stand-in install leaves what the real one does in background mode: the marker, a start script, P9's runtime folder.
   const fakeInstall = path.join(s.directory, 'install.sh');
-  await writeFile(fakeInstall, 'cat > /dev/null\necho "P9_INSTALL unpacked"; echo "Building P9"; sleep 4\nmkdir -p ' + JSON.stringify(run) + '; touch ' + JSON.stringify(path.join(run, 'background'))
+  await writeFile(fakeInstall, 'cat > ' + JSON.stringify(path.join(s.directory, 'sent.tgz')) + '\necho "P9_INSTALL unpacked"; echo "Building P9"; sleep 4\nmkdir -p ' + JSON.stringify(run) + '; touch ' + JSON.stringify(path.join(run, 'background'))
     + '; printf "exit 0\\n" > ' + JSON.stringify(path.join(run, 'start')) + '; ln -s ' + JSON.stringify(remote.state) + ' ' + JSON.stringify(path.join(run, 'p9-foundation')) + '\necho "P9_INSTALL done"\n');
   const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_INSTALL: fakeInstall, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
   const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
@@ -387,12 +387,75 @@ test('U6: a fresh remote goes Connect, install, the Temporary or Always on quest
   await evidence(page, 'u6-keep');
   const ran = await s.calls();
   assert.equal(ran.filter((c) => c.argv.some((a) => a.includes('P9_INSTALL'))).length, 1, 'installed once');
+  // U8: a remote not Always on gets the slim P9 into the hidden folder, never ~/p9: the built daemon, not the source.
+  const install = ran.find((c) => c.argv.some((a) => a.includes('P9_INSTALL'))).argv.at(-1);
+  assert.ok(install.includes('--slim "$d"') && install.includes('d="$s/remote"'), 'the slim install');
+  const sent = await new Promise((resolve) => execFile('tar', ['-tzf', path.join(s.directory, 'sent.tgz')], { maxBuffer: 1 << 26 }, (error, out) => resolve(error ? '' : out)));
+  const files = sent.split('\n');
+  assert.ok(files.includes('agents.json') && files.includes('apps/server/main.mjs'), sent.slice(0, 400));
+  assert.ok(!files.some((f) => /^(p9\/|README\.md|AGENTS\.md|apps\/web\/)/.test(f)), 'no source tree');
   assert.ok(ran.every((c) => !c.argv.length || c.argv.includes('StrictHostKeyChecking=accept-new')), 'trust on first use on every ssh');
   // Temporary: the status line says so, with Make it always on.
   await page.locator('#keepDlg button[value="no"]').click();
   await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'P9 on test-host is temporary: it stops when you disconnect' }).waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#keepBtn').textContent(), 'Make it always on');
   console.log('PASS U6 fresh remote: Connect, install, the keep question, no other click');
+});
+
+// U9: Disconnect beside the remote label goes back to this computer (p9:server(null)), and U8: on the slim Temporary P9 the
+// window has no Mission Control button and the status line says it comes with Always on.
+test('U9 Disconnect on the remote label goes back to this computer; U8 the slim Temporary P9 hides Mission Control', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  const profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host', remotes: ['test-host'] }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor({ timeout: 20000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor({ timeout: 30000 });
+  const disconnect = page.locator('#disconnectBtn:not([hidden])');
+  await disconnect.waitFor({ timeout: 15000 });
+  assert.equal(await disconnect.textContent(), 'Disconnect');
+  assert.match(await disconnect.getAttribute('title'), /^Back to this computer\. P9 keeps running on test-host\.$/);
+  // The full P9 there: Mission Control is offered.
+  assert.equal(await page.locator('#rMission').isVisible(), true);
+  await evidence(page, 'u9-disconnect-remote');
+  // The machine menu says it too.
+  await page.locator('#serverBadge').click();
+  await page.locator('#serverPop #serverDisconnect', { hasText: 'Disconnect from test-host' }).waitFor({ timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await disconnect.click();
+  await page.locator('#serverBadge', { hasText: 'Local' }).waitFor({ timeout: 30000 });
+  await page.locator('#disconnectBtn').waitFor({ state: 'hidden', timeout: 15000 });
+  assert.equal(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')).host, null, 'remembered: this computer');
+  await evidence(page, 'u9-disconnected-local');
+  // U8: main's answers for a slim Temporary P9 there, replayed (remote-keep.test.mjs runs what makes them).
+  await app.evaluate(({ ipcMain }) => {
+    const k = globalThis.slimTest = { calls: [] };
+    ipcMain.removeHandler('p9:get-status'); ipcMain.handle('p9:get-status', () => ({ status: 'ok', mode: 'server', host: 'test-host', background: true, slim: true, ask: false }));
+    ipcMain.removeHandler('p9:server'); ipcMain.handle('p9:server', (_, ...a) => { k.calls.push(a); return a.length ? { ok: true } : { host: 'test-host', last: 'test-host', connected: true, slim: true, error: null, hosts: [], remotes: ['test-host'], keep: {}, noKey: [] }; });
+  });
+  // Ctrl K offers Mission before slim (the control for the check after it).
+  const missionCmds = async () => { await page.keyboard.press('Control+k'); await page.fill('#palIn', 'mission'); const names = await page.locator('#palList li[data-i]').allTextContents(); await page.keyboard.press('Escape'); return names; };
+  assert.ok((await missionCmds()).some((n) => n.includes('Mission Control')), 'Ctrl K offers Mission Control on a full P9');
+  await page.reload();
+  await page.locator('#rChat').waitFor({ timeout: 20000 });
+  await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'P9 on test-host is temporary (no Mission Control): it stops when you disconnect' }).waitFor({ timeout: 15000 });
+  await page.locator('#rMission').waitFor({ state: 'hidden', timeout: 10000 });
+  assert.equal(await page.locator('#rChat').isVisible(), true);
+  assert.match(await disconnect.getAttribute('title'), /temporary, so it stops there 5 minutes later/);
+  // The footer and Ctrl K do not claim Mission Control there.
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 10000 });
+  assert.doesNotMatch(await page.locator('#dataNote').textContent(), /Mission/);
+  assert.deepEqual(await missionCmds(), [], 'Ctrl K offers no Mission command on the slim P9');
+  await evidence(page, 'u8-slim-no-mission');
+  await disconnect.click();
+  for (const end = Date.now() + 5000; Date.now() < end && !(await app.evaluate(() => globalThis.slimTest.calls.some((c) => c.length)));) await page.waitForTimeout(100);
+  assert.deepEqual((await app.evaluate(() => globalThis.slimTest.calls)).filter((c) => c.length), [[null]], 'Disconnect is p9:server(null)');
 });
 
 // D3: Settings > Remote lists only what this person has: the remotes added here and their own ~/.ssh/config Hosts, none built

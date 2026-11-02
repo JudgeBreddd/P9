@@ -35,6 +35,22 @@ const LIMIT_MS = 30 * 60_000, KEEP = 64 * 1024;
 const quote = (text) => "'" + text.replace(/'/g, "'\\''") + "'";
 // The tools needed before Node, their reasons and the admin step (apps/desktop/tools.sh, shared with install.sh).
 const TOOLS = readFileSync(new URL('./tools.sh', import.meta.url), 'utf8');
+// p9_newer A B: A is a later version than B (U8: an older app never replaces a newer P9 there). sort -V for the numbers; with
+// the same numbers a release is later than its pre-release, as semver says and sort -V does not.
+const NEWER = 'p9_newer() { [ "$1" != "$2" ] || return 1; if [ "${1%%-*}" = "${2%%-*}" ]; then case $1 in *-*) case $2 in *-*) ;; *) return 1 ;; esac ;; *) return 0 ;; esac; fi; '
+  + '[ "$(printf \'%s\\n%s\\n\' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }';
+// The admin flow before anything is unpacked, shared by both scripts: the tools first (P9_ADMIN need and command, exit 5,
+// or with the password, the command run as admin).
+const toolsStep = (admin, slim) => [
+  'p9_tools' + (slim ? ' slim' : '') + '; if [ -n "$P9_TOOLS_NEED" ]; then c=$(p9_install_command "$P9_TOOLS_PACKAGES")',
+  admin ? '  if [ -n "$c" ]; then p9_admin "$c" || true; fi'
+    : '  printf "%s" "$P9_TOOLS_NEED" | while IFS= read -r l; do echo "P9_ADMIN need $l"; done; if [ -n "$c" ]; then echo "P9_ADMIN command $c"; exit 5; fi',
+  '  p9_tools' + (slim ? ' slim' : '') + '; [ -z "$P9_TOOLS_NEED" ] || { echo "P9_INSTALL missing-tools"; exit 4; }; fi',
+];
+// A slim P9 there (U8) runs as start's background daemon; stopped before a full install takes over its state folder.
+// Its background marker goes too, so a connect meanwhile does not start it again (READ); a failed install puts it back.
+const STOP_SLIM = 'z=; if [ -f "$s/run/start" ] && grep -qx slim=1 "$s/run/start"; then sh "$s/run/start" stop || { echo "P9_INSTALL busy"; exit 1; }; rm -f -- "$s/run/background"; z=1; fi';
+const SLIM_BACK = ' || { if [ -n "$z" ]; then : > "$s/run/background"; fi; exit 1; }';
 
 // The remote's script. version: null when this app's source comes over ssh's stdin, else the release to download there.
 // A ~/p9 this install made (its marker file) gets the source unpacked over it and install.sh again; any other ~/p9 is left alone.
@@ -43,26 +59,72 @@ const TOOLS = readFileSync(new URL('./tools.sh', import.meta.url), 'utf8');
 // admin: stdin's first line is the admin password (row I2), read before anything else; install.sh gets it the same way.
 // Tools a fresh install needs first (tar and gzip unpack the source) are checked here, before the unpack, with the same
 // reasons install.sh gives: no command line or file ever holds the password.
-export function script(version, keep = false, admin = false) {
+// stdin: the source comes over stdin (this app's own); version then is only what it is, for the marker and the downgrade
+// check (U8: ~/p9's marker holds the version it has; an older one stops with P9_INSTALL newer-there, exit 8, unless force).
+// Files an earlier install unpacked that this source no longer has are removed (the marker's list, .p9-files), so nothing a
+// newer version left stays; what install.sh built (node_modules, dist) was never in a list and stays.
+export function script(version, keep = false, admin = false, { stdin = version === null, force = false } = {}) {
   if (version !== null && !VERSION.test(version)) throw new Error('remote-install-version');
-  const source = version === null ? 'cat > "$t/p9.tar.gz"'
+  const source = stdin ? 'cat > "$t/p9.tar.gz"'
     : 'u=' + quote(ARCHIVE + 'v' + version + '.tar.gz') + '; if command -v curl >/dev/null; then curl -fsSL --proto =https -o "$t/p9.tar.gz" "$u"; '
       + 'elif command -v wget >/dev/null; then wget -q -O "$t/p9.tar.gz" "$u"; else echo "P9_INSTALL missing curl"; exit 4; fi';
   const flags = '--headless' + (keep ? '' : ' --background');
   return [
-    'set -eu', 'd="$HOME/p9" p9_pw=', TOOLS,
+    'set -eu', 'd="$HOME/p9" s="$HOME/.local/share/p9" v=' + quote(version ?? '') + ' f=' + (force ? 1 : 0) + ' p9_pw=', TOOLS, NEWER,
     admin ? 'IFS= read -r p9_pw || true' : '',
     'if [ -e "$d" ] || [ -L "$d" ]; then [ -f "$d/.p9-remote-install" ] || { echo "P9_INSTALL already-there"; exit 3; }',
-    'else p9_tools; if [ -n "$P9_TOOLS_NEED" ]; then c=$(p9_install_command "$P9_TOOLS_PACKAGES")',
-    admin ? '  if [ -n "$c" ]; then p9_admin "$c" || true; fi'
-      : '  printf "%s" "$P9_TOOLS_NEED" | while IFS= read -r l; do echo "P9_ADMIN need $l"; done; if [ -n "$c" ]; then echo "P9_ADMIN command $c"; exit 5; fi',
-    '  p9_tools; [ -z "$P9_TOOLS_NEED" ] || { echo "P9_INSTALL missing-tools"; exit 4; }; fi; fi',
+    '  o=$(head -n 1 "$d/.p9-remote-install"); if [ -n "$o" ] && [ -n "$v" ] && [ "$f" != 1 ] && p9_newer "$o" "$v"; then echo "P9_INSTALL newer-there $o"; exit 8; fi',
+    'else', ...toolsStep(admin, false).map((l) => '  ' + l), 'fi',
     // Our own ~/p9 gets this app's source over it every time, so a retry after an update runs the new install.sh, not the
-    // one an older app left there. ponytail: files the new source dropped stay behind; nothing runs them by name.
-    't=$(mktemp -d); trap \'rm -rf "$t"\' EXIT; ' + source + '; [ -d "$d" ] || { mkdir "$d"; : > "$d/.p9-remote-install"; }; tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; echo "P9_INSTALL unpacked"',
-    admin ? 'printf "%s\\n" "$p9_pw" | bash "$d/scripts/install.sh" ' + flags + ' --admin-stdin' : 'bash "$d/scripts/install.sh" ' + flags + ' </dev/null',
+    // one an older app left there.
+    't=$(mktemp -d); trap \'rm -rf "$t"\' EXIT; ' + source + '; [ -d "$d" ] || { mkdir "$d"; : > "$d/.p9-remote-install"; }',
+    // Only sh, cat, tar and grep: a remote missing tools gets here before an admin installs them (row I2), so no sed, sort, comm or cp.
+    'tar -tzf "$t/p9.tar.gz" | while IFS= read -r x; do x=${x#*/}; case $x in "" | */) ;; *) printf "%s\\n" "$x" ;; esac; done > "$t/files"',
+    'if [ -f "$d/.p9-files" ]; then grep -vxF -f "$t/files" -- "$d/.p9-files" | while IFS= read -r x; do case "/$x/" in */../* | //*) ;; *) rm -f -- "$d/$x" ;; esac; done; fi',
+    'tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; cat "$t/files" > "$d/.p9-files"; echo "P9_INSTALL unpacked"',
+    STOP_SLIM,
+    (admin ? 'printf "%s\\n" "$p9_pw" | bash "$d/scripts/install.sh" ' + flags + ' --admin-stdin' : 'bash "$d/scripts/install.sh" ' + flags + ' </dev/null') + SLIM_BACK,
+    // The version once its install worked; the slim P9 (U8) it replaced goes.
+    'if [ -n "$v" ]; then printf "%s\\n" "$v" > "$d/.p9-remote-install"; fi; rm -rf -- "$s/remote"',
     'echo "P9_INSTALL done"',
   ].join('\n');
+}
+
+// U8 (threat model row 50 U8 and U9): the small Temporary P9. stdin is slimArchive's tar.gz (after the admin password line
+// with admin). It goes into ~/.local/share/p9/remote, a hidden folder: no ~/p9, no source. Unpacked into a new folder beside
+// the old one, install.sh --slim there (Node, the agents for this machine, tmux, the editor server, start), and only then
+// swapped in whole, so nothing an earlier version had stays; then the old daemon stops and the next connect starts the new one.
+// A remote with the full P9 (our ~/p9, or a start that is not slim) says P9_INSTALL full-there (exit 9): main runs the full
+// install. An installed version newer than this one: P9_INSTALL newer-there (exit 8), unless force.
+export function slimScript(version, admin = false, force = false) {
+  if (!VERSION.test(version ?? '')) throw new Error('remote-install-version');
+  const run = 'bash "$t/new/scripts/install.sh" --headless --background --slim "$d"';
+  return [
+    'set -eu', 's="$HOME/.local/share/p9"; d="$s/remote" v=' + quote(version) + ' f=' + (force ? 1 : 0) + ' p9_pw=', TOOLS, NEWER,
+    admin ? 'IFS= read -r p9_pw || true' : '',
+    'if [ -f "$HOME/p9/.p9-remote-install" ] || { [ -f "$s/run/start" ] && ! grep -qx slim=1 "$s/run/start"; }; then echo "P9_INSTALL full-there"; exit 9; fi',
+    'o=$(cat "$d/.p9-version" 2>/dev/null || true); if [ -n "$o" ] && [ "$f" != 1 ] && p9_newer "$o" "$v"; then echo "P9_INSTALL newer-there $o"; exit 8; fi',
+    ...toolsStep(admin, true),
+    'mkdir -p -- "$s"; t=$(mktemp -d "$s/.remote-XXXXXX"); trap \'rm -rf "$t"\' EXIT; mkdir "$t/new"',
+    'cat > "$t/p9.tar.gz"; tar -xzf "$t/p9.tar.gz" -C "$t/new"; rm -f -- "$t/p9.tar.gz"; printf "%s\\n" "$v" > "$t/new/.p9-version"; echo "P9_INSTALL unpacked"',
+    admin ? 'printf "%s\\n" "$p9_pw" | ' + run + ' --admin-stdin' : run + ' </dev/null',
+    'if [ -d "$d" ]; then mv -- "$d" "$t/old"; fi; mv -- "$t/new" "$d"',
+    // The daemon the old folder ran (its files are in $t/old until this script ends); the next connect starts the new one.
+    'sh "$s/run/start" stop || echo "The P9 running there stops on its own 5 minutes after its last client; the new one starts then."',
+    'echo "P9_INSTALL done"',
+  ].join('\n');
+}
+
+// U8: the files of a daemon folder (bundle-daemon.mjs bundleDaemon's out, or a packaged app's resources/daemon) that make the
+// slim Temporary P9, as tar.gz with no top folder. Named one by one: never the folder's own node binary, the agents' native
+// packages of this computer's platform (the remote fetches its own, agents.mjs), or anything else in it.
+export const SLIM = ['apps/server', 'apps/desktop/tools.sh', 'apps/desktop/editor-host.mjs', 'scripts/install.sh', 'scripts/background.sh',
+  'scripts/deps.mjs', 'scripts/install-editor.mjs', 'scripts/agents.mjs', 'node_modules/@agentclientprotocol', 'node_modules/@openai/codex',
+  'node_modules/@anthropic-ai/claude-agent-sdk', 'packages', 'package.json', 'agents.json', 'LICENSE', 'NOTICES.md'];
+export function slimArchive(folder) {
+  const present = SLIM.filter((name) => existsSync(path.join(folder, name)));
+  if (!present.includes('agents.json') || !present.includes('apps/server')) throw new Error('slim-bundle-incomplete');
+  return run('tar', ['-czf', '-', '-C', folder, ...present]);
 }
 
 // This app's source as tar.gz for the script's stdin, one top folder (the script strips it). A git checkout sends its
@@ -89,10 +151,15 @@ function run(command, args) {
 // remote download version. admin: the admin password (PASSWORD), written to ssh's stdin first; no event ever carries it.
 // 'admin': an admin must install need (["name: reason"]) with command (no sudo in it, run as admin as shown); error
 // 'wrong-password' after a password that sudo refused.
-export function installRemote({ host, ssh = 'ssh', version = null, archive = null, keep = false, admin = null, tell = () => {}, limit = LIMIT_MS }) {
+// slim (U8): archive is slimArchive's, version this app's; force: install over a newer version there.
+// 'full-there' (U8): the remote has the full P9, so the slim one is not put beside it; main installs the full one instead.
+// error 'newer-there' with server: the version there is newer than this one (U8).
+export function installRemote({ host, ssh = 'ssh', version = null, archive = null, keep = false, admin = null, tell = () => {}, limit = LIMIT_MS, slim = false, force = false }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
   if (admin !== null && !PASSWORD(admin)) throw new Error('remote-install-password');
-  const command = 'sh -c ' + quote(script(archive ? null : version, keep === true, admin !== null));
+  if (slim && !archive) throw new Error('slim-needs-archive');
+  const command = 'sh -c ' + quote(slim ? slimScript(version, admin !== null, force === true)
+    : script(version, keep === true, admin !== null, { stdin: !!archive, force: force === true }));
   return new Promise((resolve) => {
     const child = spawn(ssh, [...sshOptions(), host, command], { stdio: ['pipe', 'pipe', 'pipe'] });
     let tail = '', done = false;
@@ -114,6 +181,8 @@ export function installRemote({ host, ssh = 'ssh', version = null, archive = nul
       const need = [...tail.matchAll(/^P9_ADMIN need (.+)$/gm)].map((m) => m[1]).slice(-20), said = /^P9_ADMIN command (.+)$/m.exec(tail)?.[1];
       if (code === 0 && tail.includes('P9_INSTALL done')) finish({ phase: 'done', tail: shown });
       else if (code === 3 && tail.includes('P9_INSTALL already-there')) finish({ phase: 'already-there' });
+      else if (code === 8 && /^P9_INSTALL newer-there \S+$/m.test(tail)) finish({ phase: 'failed', error: 'newer-there', server: /^P9_INSTALL newer-there (\S+)$/m.exec(tail)[1].slice(0, 60) });
+      else if (code === 9 && tail.includes('P9_INSTALL full-there')) finish({ phase: 'full-there' });
       else if (code === 5 && said) finish({ phase: 'admin', need, command: said });
       else if (code === 6 && tail.includes('P9_ADMIN wrong-password')) finish({ phase: 'admin', error: 'wrong-password' });
       else if (code === 7 && tail.includes('P9_ADMIN not-allowed')) finish({ phase: 'failed', error: 'not-allowed', tail: shown });

@@ -189,3 +189,40 @@ test('Start P9 there: the user service where one is installed, the background st
   assert.equal(await startServer('test-host', path.join(none.bin, 'ssh')), 'none');
   assert.equal(await startServer('-oProxyCommand=x', path.join(none.bin, 'ssh')), 'failed', 'HOST check');
 });
+
+// U8 (threat model row 50 U8 and U9): the slim Temporary P9. install.sh --slim writes a start that marks it and points at the
+// slim folder, fetches the agents for this machine, never runs pnpm and starts nothing (the next connect does).
+test('U8: install.sh --slim: the slim start (slim=1, its folder), the agents fetched, no pnpm, no daemon; --slim needs --background', { skip, timeout: 40000 }, async () => {
+  const s = await stage(true, 'refused', { installed: false });
+  await writeFile(path.join(s.bin, 'pnpm'), '#!/bin/sh\necho "$*" >> "' + s.dir + '/pnpm.log"\n');
+  const slim = path.join(s.home, '.local', 'share', 'p9', 'remote');
+  assert.notEqual((await bash(s, ['--headless', '--slim', slim])).code, 0, 'slim is only the background mode');
+  const { code, out } = await bash(s, ['--headless', '--background', '--slim', slim]);
+  assert.equal(code, 0, out);
+  const start = await read(path.join(s.runDir, 'start'));
+  assert.match(start, /^slim=1$/m);
+  assert.ok(start.includes("checkout='" + slim.replaceAll("'", "'\\''") + "'"), start.slice(0, 400));
+  assert.ok(existsSync(path.join(s.runDir, 'background')));
+  assert.match(await nodeLog(s), /scripts\/agents\.mjs/);
+  assert.equal(await read(path.join(s.dir, 'pnpm.log')), '', 'no pnpm install or build');
+  assert.equal(await starts(s), 0, 'started at the next connect, not here');
+});
+
+test('U8: on the slim P9, Keep says full (main installs the full P9), READ says slim, and stop stops only its daemon', { skip, timeout: 60000 }, async (t) => {
+  const s = await background(t, 'allowed');
+  const start = await read(s.start);
+  await writeFile(s.start, start.replace(/\n/, '\nslim=1\n'));
+  const r = await remoteMode('test-host', 'keep', path.join(s.bin, 'ssh'));
+  assert.equal(r.phase, 'full');
+  assert.equal(await read(s.lingerLog), '', 'no linger, no service: the full install does that');
+  assert.ok(existsSync(path.join(s.runDir, 'background')));
+  const said = await sh(s, ['-c', READ], { ...s.env, XDG_RUNTIME_DIR: s.run });
+  assert.deepEqual(said.out.split('\n').slice(0, 3), [s.runDir, 'slim', '{}']);
+  const stopped = await sh(s, [s.start, 'stop']);
+  assert.equal(stopped.code, 0, stopped.out);
+  assert.ok(!existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json')), 'its daemon stopped');
+  // The full P9's READ (no slim=1) says nothing more.
+  await writeFile(s.start, start);
+  const full = await sh(s, ['-c', READ], { ...s.env, XDG_RUNTIME_DIR: s.run });
+  assert.notEqual(full.out.split('\n')[1], 'slim');
+});

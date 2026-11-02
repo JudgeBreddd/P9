@@ -2,10 +2,12 @@
 # install.sh sources it, the desktop's remote install script runs it before it unpacks anything (tar and gzip come first),
 # and ~/.local/share/p9/run/start carries it for Keep it running. It sits in apps/desktop because a packaged app ships that.
 
-# p9_tools: sets P9_TOOLS_NEED (one "name: reason" line per missing tool) and P9_TOOLS_PACKAGES (" pkg pkg").
+# p9_tools [slim]: sets P9_TOOLS_NEED (one "name: reason" line per missing tool) and P9_TOOLS_PACKAGES (" pkg pkg").
+# slim: the small Temporary P9 (U8), which has no source and so no git.
 p9_tools() {
-  P9_TOOLS_NEED= P9_TOOLS_PACKAGES=
-  for p9_t in git systemctl systemd-run sha256sum tar gzip flock setsid curl; do
+  P9_TOOLS_NEED= P9_TOOLS_PACKAGES= p9_g=git
+  if [ "${1:-}" = slim ]; then p9_g=; fi
+  for p9_t in $p9_g systemctl systemd-run sha256sum tar gzip flock setsid curl; do
     case $p9_t in
       curl) { command -v curl || command -v wget; } >/dev/null 2>&1 && continue ;; # Ubuntu Desktop has wget and not curl
       *) command -v "$p9_t" >/dev/null 2>&1 && continue ;;
@@ -14,7 +16,7 @@ p9_tools() {
       git) p9_p=git p9_w="P9's source and its updates come with git." ;;
       systemctl | systemd-run) p9_p=systemd p9_w="P9 runs as this user's service, and runs each agent command inside its own limits." ;;
       sha256sum) p9_p=coreutils p9_w="P9 checks each download against its pinned checksum." ;;
-      tar | gzip) p9_p=$p9_t p9_w="P9's source and Node arrive as a compressed archive." ;;
+      tar | gzip) p9_p=$p9_t p9_w="P9 and Node arrive as a compressed archive." ;;
       flock | setsid) p9_p=util-linux p9_w="P9 starts its background process with it, and checks whether one runs." ;;
       curl) p9_p=curl p9_w="P9 downloads Node with it." ;;
     esac

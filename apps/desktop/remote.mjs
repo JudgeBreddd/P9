@@ -53,7 +53,7 @@ export const sshFailure = (err, windows = WINDOWS || process.env.P9_SSH_KEYS_ONL
 // one runs) and reads the folder that one uses. So every connect, a reconnect too, starts a P9 that stopped when idle.
 const RUN = '"$HOME/.local/share/p9/run"';
 export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; b=' + RUN + '; if [ ! -e "$r/p9-foundation/desktop.json" ] && [ -f "$b/background" ]; then r="$b"; sh "$b/start" up >&2 || true; fi; '
-  + 'printf "%s\\n" "$r"; cat "$r/p9-foundation/desktop.json" 2>/dev/null; exit 0';
+  + 'printf "%s\\n" "$r"; if [ "$r" = "$b" ] && grep -qx slim=1 "$b/start" 2>/dev/null; then echo slim; fi; cat "$r/p9-foundation/desktop.json" 2>/dev/null; exit 0';
 
 // The machine menu's state for a saved remote that is not in use: is a P9 running there? It checks desktop.json exists, never
 // reads it (the cookie stays there). Fixed argv, no shell here, BatchMode, 4 s to connect, 8 s in all; only three words come back.
@@ -77,11 +77,14 @@ function readServer(host, ssh) {
   // 60 s: a background start waits up to 30 s for its daemon.
   return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536 }, (error, out, err) => {
     if (error) return reject(sshFailure(err));
-    const [runtime, ...rest] = out.split('\n');
+    // U8: a slim line before the JSON marks the Temporary remote's small P9 (remote-install.mjs slimScript).
+    let [runtime, ...rest] = out.split('\n');
+    const slim = rest[0] === 'slim';
+    if (slim) rest = rest.slice(1);
     let credentials;
     try { credentials = JSON.parse(rest.join('\n')); } catch { return reject(new Error('server-no-p9')); }
     if (!/^\/[\w./-]+$/.test(runtime) || runtime.includes('..') || typeof credentials?.cookie !== 'string' || typeof credentials.csrf !== 'string') return reject(new Error('server-no-p9'));
-    resolve({ remoteSocket: runtime + '/p9-foundation/daemon.sock', remoteEditor: runtime + '/p9-foundation/editor.sock', credentials: { cookie: credentials.cookie, csrf: credentials.csrf }, background: runtime.endsWith('/.local/share/p9/run') });
+    resolve({ remoteSocket: runtime + '/p9-foundation/daemon.sock', remoteEditor: runtime + '/p9-foundation/editor.sock', credentials: { cookie: credentials.cookie, csrf: credentials.csrf }, background: runtime.endsWith('/.local/share/p9/run'), slim });
   }));
 }
 
@@ -89,14 +92,15 @@ function readServer(host, ssh) {
 // ('release': the service off, then the background daemon); start's own steps (scripts/background.sh). Fixed argv, BatchMode.
 // password: keep only, the admin password the person typed (row I2), for loginctl enable-linger <user> where linger needs an
 // admin: stdin's first line, never the command. -> { phase, command? }: phase 'ok' | 'refused' (linger needs an admin there;
-// command: the one the password would run) | 'wrong-password' | 'not-allowed' | 'no-start' (a P9 installed before this) | 'failed'.
+// command: the one the password would run) | 'wrong-password' | 'not-allowed' | 'no-start' (a P9 installed before this) | 'full' (U8: a slim
+// Temporary P9 there, which Keep replaces with the full one: main.mjs runs the full install) | 'failed'.
 export function remoteMode(host, action, ssh = 'ssh', password = null) {
   if (!HOST.test(host) || !['keep', 'release'].includes(action) || (password !== null && (action !== 'keep' || !PASSWORD(password)))) return Promise.resolve({ phase: 'failed' });
   const command = 'b=' + RUN + '; [ -f "$b/start" ] || { echo P9_MODE no-start; exit 0; }; sh "$b/start" ' + action + (password !== null ? ' admin' : '');
   return new Promise(resolve => {
     const child = execFile(ssh, [...sshOptions(), host, command], { timeout: 180000 }, (error, out) => {
       const admin = /^P9_ADMIN (wrong-password|not-allowed)$/m.exec(out ?? '')?.[1];
-      const phase = admin ?? /^P9_(?:KEEP|RELEASE|MODE) (ok|refused|no-start)$/m.exec(out ?? '')?.[1] ?? 'failed';
+      const phase = admin ?? /^P9_(?:KEEP|RELEASE|MODE) (ok|refused|no-start|full)$/m.exec(out ?? '')?.[1] ?? 'failed';
       const shown = /^P9_ADMIN command (loginctl enable-linger [\w.-]+)$/m.exec(out ?? '')?.[1];
       resolve({ phase, ...(phase === 'refused' && shown && { command: shown }) });
     });
@@ -140,13 +144,13 @@ export function restartServer(host, ssh = 'ssh') {
   return new Promise(resolve => execFile(ssh, [...sshOptions(), host, 'systemctl --user restart p9-foundation.service'], { timeout: 60000 }, error => resolve(!error)));
 }
 
-// connectServer({ host }) -> { state, host, close(), check(), background }. background: P9 there runs in background mode (row I1). check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock and editor.sock (the forwards) and desktop.json.
+// connectServer({ host }) -> { state, host, close(), check(), background, slim }. slim: the small Temporary P9 there (U8). background: P9 there runs in background mode (row I1). check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock and editor.sock (the forwards) and desktop.json.
 // editor.sock answers only once Dev Focus has asked the server's daemon to start its editor (POST /dev/editor); ssh connects each forwarded socket when it is used.
 // editor: false leaves the editor forward off (the move's tunnel has no use for it).
 // onDrop runs when the tunnel ends without close() (lid closed, network gone, server restarted); the caller reconnects.
 export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {} }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
-  const { remoteSocket, remoteEditor, credentials, background } = await readServer(host, ssh);
+  const { remoteSocket, remoteEditor, credentials, background, slim } = await readServer(host, ssh);
   const state = serverFolder(host, runtime), parent = path.dirname(state);
   await mkdir(state, { recursive: true, mode: 0o700 });
   await chmod(parent, 0o700); await chmod(state, 0o700);
@@ -171,7 +175,7 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon.
   for (let i = 0; i < 60; i++) {
     if (exited) break;
-    if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check, background }; }
+    if (await check().then(h => h.status === 'ok', () => false)) { ready = true; return { state, host, close, check, background, slim }; }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   await close();
