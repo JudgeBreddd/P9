@@ -623,21 +623,42 @@ $('#newPop').innerHTML = `<div class="hd eyebrow">Start in</div><select data-slo
 let newFolder = '';
 // U4 on a remote (Builder, 2026-11-02: "no window at all"): the server's folders, walked from its workspace with the file
 // list route, or a full path typed in (Unrestricted mode only; the daemon refuses it otherwise when the chat starts).
+// In Unrestricted mode the walk goes past the workspace, anywhere on the server (Builder, 2026-11-02: "need a picker so i can
+// click in and out of folders"): /files/folders answers only then, so its 403 falls back to the workspace walk.
 const pickRemoteFolder = () => new Promise(done => {
-  const d = $('#folderDlg'), list = $('#folderList'); let at = '', shown = 0;
+  const d = $('#folderDlg'), list = $('#folderList'); let at = '', abs = null, ws = null, prev = null, shown = 0;
+  const row = (key, label) => `<button type="button" data-fdir="${esc(key)}">${esc(label)}</button>`;
   const show = async () => {
-    const mine = ++shown; $('#folderAt').textContent = 'Workspace' + (at ? ' / ' + at.split('/').join(' / ') : '');
+    const mine = ++shown;
     list.innerHTML = '<p class="sm muted">Loading…</p>';
+    if (abs !== false) {
+      const all = await window.p9.mission('folders', { path: abs ?? '' }).catch(() => null);
+      if (mine !== shown) return;
+      if (all?.status === 200) {
+        ({ path: abs, workspace: ws } = all.body); $('#folderAt').textContent = abs === ws ? 'Workspace · ' + abs : abs;
+        list.innerHTML = (all.body.parent ? row(all.body.parent, '..') : '') + (all.body.dirs.map(e => row(e.path, e.name)).join('') || '<p class="sm muted">No folders here.</p>');
+        return;
+      }
+      // A folder the server would not list: say why, with the way back. Before the first answer: the mode is off.
+      if (abs) { $('#folderAt').textContent = abs; list.innerHTML = `<p class="sm muted">Not readable: ${esc(all?.body?.error || 'no answer')}</p>` + row(prev, '..'); return; }
+      abs = false;
+    }
+    $('#folderAt').textContent = 'Workspace' + (at ? ' / ' + at.split('/').join(' / ') : '');
     const r = await window.p9.mission('list', { path: at }).catch(() => null);
     if (mine !== shown) return;
     const dirs = r?.status === 200 ? r.body.entries.filter(e => e.dir).map(e => e.name).sort() : null;
-    list.innerHTML = (at ? '<button type="button" data-fdir="..">..</button>' : '')
-      + (!dirs ? `<p class="sm muted">Not readable: ${esc(r?.body?.error || 'no answer')}</p>` : dirs.map(n => `<button type="button" data-fdir="${esc(n)}">${esc(n)}</button>`).join('') || '<p class="sm muted">No folders here.</p>');
+    list.innerHTML = (at ? row('..', '..') : '')
+      + (!dirs ? `<p class="sm muted">Not readable: ${esc(r?.body?.error || 'no answer')}</p>` : dirs.map(n => row(n, n)).join('') || '<p class="sm muted">No folders here.</p>');
   };
-  list.onclick = e => { const b = e.target.closest('[data-fdir]'); if (!b) return; at = b.dataset.fdir === '..' ? at.split('/').slice(0, -1).join('/') : (at ? at + '/' : '') + b.dataset.fdir; show(); };
+  list.onclick = e => {
+    const b = e.target.closest('[data-fdir]'); if (!b) return;
+    if (abs) { prev = abs; abs = b.dataset.fdir; } else at = b.dataset.fdir === '..' ? at.split('/').slice(0, -1).join('/') : (at ? at + '/' : '') + b.dataset.fdir;
+    show();
+  };
   $('#folderPath').value = ''; d.returnValue = '';
   $('#folderPath').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); d.close('yes'); } };
-  d.onclose = () => done(d.returnValue === 'yes' ? $('#folderPath').value.trim().replace(/(.)\/+$/, '$1') || at : undefined);
+  // The workspace itself stays '' (a chat's usual folder); any other folder walked in the mode goes as its full path.
+  d.onclose = () => done(d.returnValue === 'yes' ? $('#folderPath').value.trim().replace(/(.)\/+$/, '$1') || (abs ? (abs === ws ? '' : abs) : at) : undefined);
   d.showModal(); show();
 });
 const recentFolders = () => { try { const r = JSON.parse(localStorage.getItem('eh-chat-folders')); return Array.isArray(r) ? r.filter(f => typeof f === 'string').slice(0, 5) : []; } catch { return []; } };
@@ -3225,10 +3246,18 @@ addEventListener('click', e => {
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();
-// A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser.
-addEventListener('click', e => {
+// A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser,
+// after a question showing the whole address (Builder, 2026-11-02: the chat link confirm, "yes on 1.6"); "don't ask again"
+// is kept on this computer.
+const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true) : new Promise(done => {
+  const d = $('#linkDlg'); $('#linkU').textContent = href; d.returnValue = '';
+  d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-link-ok', '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
+  d.showModal();
+});
+addEventListener('click', async e => {
   const a = e.target.closest?.('a.link[href]'); if (!a || !window.p9?.openLink) return; // a browser preview follows the link
-  e.preventDefault(); window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
+  e.preventDefault();
+  if (await linkOk(a.href)) window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
 });
 // Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
 // and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff with no old text, else a Write.

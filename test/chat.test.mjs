@@ -773,7 +773,18 @@ test('U4: a chat starts in a folder outside the workspace only in Unrestricted m
   const outside = path.join(instance.directory, 'elsewhere');
   await mkdir(outside);
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside })).status, 400, 'mode off: refused as before');
+  assert.equal((await call(instance, '/files/folders?path=')).status, 403, 'mode off: no walk past the workspace');
   assert.equal(JSON.parse((await call(instance, '/file-protection', 'POST', { on: false })).text).on, false);
+  // The picker's walk (Builder, 2026-11-02: "click in and out of folders"): '' is the workspace, '..' is its parent, folders only.
+  await writeFile(path.join(instance.directory, 'loose.txt'), 'x');
+  const home = await json(call(instance, '/files/folders?path='));
+  assert.equal(home.body.path, home.body.workspace);
+  const up = await json(call(instance, '/files/folders?' + new URLSearchParams({ path: home.body.parent })));
+  assert.equal(up.status, 200, up.text);
+  assert.ok(up.body.dirs.some((e) => e.name === 'elsewhere' && e.path === path.join(up.body.path, 'elsewhere')), up.text);
+  assert.ok(!up.body.dirs.some((e) => e.name === 'loose.txt'), 'folders only');
+  for (const [bad, status] of [['relative/x', 400], [path.join(instance.directory, 'missing'), 404]])
+    assert.equal((await call(instance, '/files/folders?' + new URLSearchParams({ path: bad }))).status, status, bad);
   for (const folder of [path.join(instance.directory, 'missing'), path.join(instance.directory, 'workspace', 'note.txt'), instance.state])
     assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder })).status, 400, folder);
   // Typed with a trailing slash (Builder, 2026-11-02: "Chat create: request-refused"): the same folder.

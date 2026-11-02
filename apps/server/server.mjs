@@ -245,6 +245,20 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const target = await readTarget(c); if (target.error) return reply(c, target);
     return c.json({ entries: (await listDirectory(target.root, c.req.query('path') ?? '')).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) });
   });
+  // U4 on a remote (Builder, 2026-11-02: "need a picker so i can click in and out of folders"): in Unrestricted mode the
+  // desktop's New chat picker walks the whole computer, folders only, from an absolute path ('': the workspace). Links are
+  // not listed; the chat's own start check (chat.mjs folderCheck) still decides. Off, or from a phone: refused.
+  api.get('/files/folders', async (c) => {
+    if (c.get('device') || !loose()) return c.json({ error: 'unrestricted-only' }, 403);
+    const asked = c.req.query('path') || workspace;
+    if (!path.isAbsolute(asked) || asked.length > 4096 || asked.includes('\0')) return c.json({ error: 'request-refused' }, 400);
+    let at; try { at = await realpath(asked); } catch { return c.json({ error: 'not-found' }, 404); }
+    const entries = await readdir(at, { withFileTypes: true }).catch(() => null);
+    if (!entries) return c.json({ error: 'not-readable' }, 403);
+    const parent = path.dirname(at);
+    return c.json({ path: at, workspace: await realpath(workspace), parent: parent === at ? null : parent,
+      dirs: entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().map((name) => ({ name, path: path.join(at, name) })) });
+  });
   api.get('/files/root', (c) => (c.get('device') ? c.json({ root: phoneRoot }) : c.json({ error: 'not-found' }, 404)));
   api.post('/files/root', async (c) => {
     if (!c.get('device')) return c.json({ error: 'not-found' }, 404); // the desktop's is POST /dev/root, from main

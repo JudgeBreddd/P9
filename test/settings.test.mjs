@@ -317,9 +317,25 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // anything else the page could send.
   await app.evaluate(({ shell }) => { globalThis.linkSeen = []; shell.openExternal = async (url) => { globalThis.linkSeen.push(url); }; });
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
-  await reply.locator('a[href="https://docs.example.test/p"]').click();
+  // First a question naming the whole address (Builder, 2026-11-02: the chat link confirm); Cancel opens nothing.
+  const linkAsk = async (answer) => {
+    await reply.locator('a[href="https://docs.example.test/p"]').click();
+    await page.locator('#linkDlg[open] #linkU', { hasText: 'https://docs.example.test/p' }).waitFor({ timeout: 5000 });
+    await page.click(`#linkDlg button[value="${answer}"]`);
+  };
+  await linkAsk('no');
+  await new Promise((r) => setTimeout(r, 500));
+  assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), [], 'Cancel: not opened');
+  await linkAsk('yes');
   for (let i = 0; i < 50 && !(await app.evaluate(() => globalThis.linkSeen.length)); i++) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), ['https://docs.example.test/p']);
+  // "Open, don't ask again": opened, and the next click opens with no question.
+  await linkAsk('never');
+  await reply.locator('a[href="https://docs.example.test/p"]').click();
+  for (let i = 0; i < 50 && (await app.evaluate(() => globalThis.linkSeen.length)) < 3; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(await page.evaluate(() => document.querySelector('#linkDlg').open), false, 'no question after don\'t ask again');
+  assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), Array(3).fill('https://docs.example.test/p'));
+  await app.evaluate(() => { globalThis.linkSeen = ['https://docs.example.test/p']; });
   assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), windows);
   assert.deepEqual(await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents, run = (...args) => ipcMain._invokeHandlers.get('p9:open-link')({ sender, senderFrame: sender.mainFrame }, ...args).then(() => 'accepted', (e) => e.message);

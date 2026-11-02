@@ -164,6 +164,20 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   if (process.env.CI !== 'true') console.log('P9_SHOT remote-folder ' + (await page.screenshot()).toString('base64'));
   await page.locator('#folderDlg button[value="yes"]').click();
   await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
+  // In Unrestricted mode the walk starts at the workspace's full path and goes up past it (Builder, 2026-11-02: "need a
+  // picker so i can click in and out of folders"); a folder outside it goes as its full path.
+  await http({ socketPath: path.join(remote.state, 'daemon.sock'), route: '/file-protection', method: 'POST',
+    headers: { ...authenticated(remote.credentials), 'content-type': 'application/json' }, body: JSON.stringify({ on: false }) });
+  await mkdir(path.join(path.dirname(remote.workspace), 'outside-ws'), { recursive: true });
+  if (!await page.locator('#newFolder').isVisible()) await page.click('#newBtn');
+  await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
+  await page.locator('#folderAt', { hasText: 'Workspace · ' }).waitFor({ timeout: 10000 });
+  await page.locator('#folderDlg #folderList button', { hasText: /^\.\.$/ }).click({ timeout: 10000 });
+  await page.locator('#folderDlg #folderList button', { hasText: /^outside-ws$/ }).click({ timeout: 10000 });
+  await page.locator('#folderAt', { hasText: /outside-ws$/ }).waitFor({ timeout: 10000 });
+  if (process.env.CI !== 'true') console.log('P9_SHOT remote-folder-loose ' + (await page.screenshot()).toString('base64'));
+  await page.locator('#folderDlg button[value="yes"]').click();
+  await page.waitForFunction(() => /^\/.*outside-ws$/.test(document.querySelector('#newFolder').value), null, { timeout: 5000 });
   await page.keyboard.press('Escape');
   // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this
   // computer's daemon and the forward closes.
