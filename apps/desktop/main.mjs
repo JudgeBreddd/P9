@@ -266,6 +266,8 @@ export async function createDesktop({ state, open } = {}) {
   const sshCommand = (!app.isPackaged && process.env.P9_SSH) || 'ssh'; // P9_SSH: the tests' stand-in, source checkouts only
   // last: the host used before, so Local can show a one-click way back.
   const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
+  // Aborted on quit: ends a forward connectServer is still waiting on (a quit mid-connect left its ssh running).
+  const leaving = new AbortController();
   let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
@@ -297,7 +299,7 @@ export async function createDesktop({ state, open } = {}) {
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
-      const s = await connectServer({ host: serverHost, ssh: sshCommand, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; dropped = true; connect(attempt); } } });
+      const s = await connectServer({ host: serverHost, ssh: sshCommand, signal: leaving.signal, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; dropped = true; connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
       server = s; serverError = null; dropped = false;
       if (/^(starting|done)$/.test(remoteInstall?.phase)) remoteInstall = null; // U6: a later no-P9 sets up again
@@ -351,7 +353,7 @@ export async function createDesktop({ state, open } = {}) {
   if (serverHost) { state = serverFolder(serverHost); connect(++serverTry); }
   // Here, not beside wake(): wake() reads serverHost, which does not exist before this point.
   if (process.platform === 'win32' && localState) health(localState).catch(wake);
-  app.on('will-quit', () => { serverTry++; server?.close().catch(() => {}); });
+  app.on('will-quit', () => { serverTry++; leaving.abort(); server?.close().catch(() => {}); });
   const petsFolder = path.join(app.getPath('userData'), 'pets');
   // A profile with no pets folder yet gets the bundled Skipper through Add's checks; one the user removes stays removed.
   if (!(await lstat(petsFolder).catch(() => null))) await addPet(petsFolder, fileURLToPath(new URL('pets/skipper', import.meta.url))).catch(() => null);

@@ -148,7 +148,8 @@ export function restartServer(host, ssh = 'ssh') {
 // editor.sock answers only once Dev Focus has asked the server's daemon to start its editor (POST /dev/editor); ssh connects each forwarded socket when it is used.
 // editor: false leaves the editor forward off (the move's tunnel has no use for it).
 // onDrop runs when the tunnel ends without close() (lid closed, network gone, server restarted); the caller reconnects.
-export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {} }) {
+// signal: aborted when P9 quits, so a forward still waiting for /health is ended too, never left running on its own.
+export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {}, signal }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
   const { remoteSocket, remoteEditor, credentials, background, slim } = await readServer(host, ssh);
   const state = serverFolder(host, runtime), parent = path.dirname(state);
@@ -168,7 +169,8 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
     return health(state);
   });
   const child = spawn(ssh, [...sshOptions(), '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes', '-o', 'StreamLocalBindMask=0177',
-    '-L', socketPath + ':' + remoteSocket, ...(editor ? ['-L', editorSocket + ':' + remoteEditor] : []), host], { stdio: 'ignore' });
+    '-L', socketPath + ':' + remoteSocket, ...(editor ? ['-L', editorSocket + ':' + remoteEditor] : []), host], { stdio: 'ignore', signal });
+  child.on('error', () => {}); // the abort's AbortError; exit follows
   let closed = false, exited = false, ready = false;
   const close = async () => { closed = true; if (!exited) child.kill(); await rm(state, { recursive: true, force: true }); };
   child.on('exit', () => { exited = true; if (!closed) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); if (ready) onDrop(); } });

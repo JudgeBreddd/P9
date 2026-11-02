@@ -431,6 +431,16 @@ test('U6: a remote P9 that starts but never answers stops with a plain line and 
   await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
   for (const end = Date.now() + 20000; Date.now() < end && count('P9_START') < 2; await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
   assert.equal(count('P9_START'), 2, 'Try again starts it again');
+  // Quitting while that start's forward still waits for /health ends the forward too: no ssh is left running on its own.
+  const tunnel = () => ran.slice(ran.findLastIndex((c) => c.argv.some((a) => a.includes('P9_START')))).find((c) => c.argv.includes('-N'));
+  for (const end = Date.now() + 20000; Date.now() < end && !tunnel(); await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
+  const { pid } = tunnel();
+  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (const end = Date.now() + 5000; Date.now() < end && alive(); await new Promise((resolve) => setTimeout(resolve, 100)));
+  const left = alive();
+  if (left) process.kill(pid, 'SIGKILL'); // without the fix, so the file ends instead of hanging on it
+  assert.equal(left, false, 'the forward is ended when P9 quits mid-connect');
   console.log('PASS U6 start that never answers: a plain line and Try again');
 });
 
