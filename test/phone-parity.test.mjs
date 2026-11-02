@@ -304,6 +304,7 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   assert.equal(await page.isHidden('#composerNote'), true);
   // The sent photo shows in its message, fetched from the daemon by hash.
   await page.waitForSelector('#events .user-imgs img[src^="data:image/png;base64,"]', { timeout: 10000 });
+  await page.locator('#events .user-imgs img').last().scrollIntoViewIfNeeded(); await shot(page, 'phone-sent-photo');
   // Four a message: the fifth is refused with the reason.
   await paste(5);
   await chips(4);

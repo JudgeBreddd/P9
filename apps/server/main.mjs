@@ -15,7 +15,7 @@ import { parseSettings } from './mission.mjs';
 import { drainSaves } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
 import { AGENTS, placeAgents } from './deps.mjs';
-import { internalEndpoint, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
+import { internalEndpoint, trimLog, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
 import { keepOldPhotos } from './chat.mjs';
 import { createClaudeUsage, openQuery } from './claude-usage.mjs';
 import { watchIdle } from './idle.mjs';
@@ -192,6 +192,8 @@ try {
   console.error('P9_START_FAILED');
   process.exit(1);
 }
+// The Windows task's daemon.log, beside the state folder (install-windows.ps1), is checked every 10 min, not only when the host starts.
+if (windows) setInterval(() => trimLog(path.join(values.state, '..', 'daemon.log')).catch(() => {}), 600000).unref();
 // Item 15: an update moved the CLIs P9 ships; the launchers the owner installed are rewritten to point at this version's.
 placeAgents(AGENTS, { refresh: true }).catch((error) => console.error('P9_AGENT_LAUNCHERS_NOT_UPDATED ' + (error.code ?? error.message)));
 let stopping = false;

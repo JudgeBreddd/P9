@@ -441,6 +441,16 @@ test('v0.1.5 cD2 tile icons: picture, then emoji, then the site or program icon,
   await new Promise((resolve) => site.listen(0, '127.0.0.1', resolve));
   t.after(() => site.close());
   const url = 'http://127.0.0.1:' + site.address().port + '/';
+  // 0.1.6 item 3: a site that offers only an SVG icon (another origin: the icon cache is one per origin).
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#f0a020"/></svg>';
+  const svgSite = createServer((req, res) => {
+    if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head><link rel="icon" type="image/svg+xml" href="/i.svg"></head></html>'); }
+    else if (req.url === '/i.svg') { res.writeHead(200, { 'content-type': 'image/svg+xml' }); res.end(SVG); }
+    else { res.writeHead(404); res.end(); }
+  });
+  await new Promise((resolve) => svgSite.listen(0, '127.0.0.1', resolve));
+  t.after(() => svgSite.close());
+  const svgUrl = 'http://127.0.0.1:' + svgSite.address().port + '/';
   const xdg = path.join(home, 'xdg');
   await mkdir(path.join(xdg, 'applications'), { recursive: true });
   await mkdir(path.join(xdg, 'icons/hicolor/64x64/apps'), { recursive: true });
@@ -454,7 +464,7 @@ test('v0.1.5 cD2 tile icons: picture, then emoji, then the site or program icon,
     registry = path.join(ws, 'hub/registry.json');
     for (const dir of ['_waiting', 'hub', 'projects']) await mkdir(path.join(ws, dir), { recursive: true });
     await writeFile(registry, JSON.stringify({ scripts: [], apps: [{ id: 'prog', title: 'Zedit', cmd: ['/opt/zedit/zedit'] }, { id: 'pic', title: 'Notes', icon: '🧪', cmd: ['true'] }, { id: 'plain', title: 'Plain', cmd: ['nothing-here'] }],
-      pages: [{ id: 'school', title: 'School', url }, { id: 'emoji', title: 'Emoji link', icon: '🎓', url }] }, null, 2) + '\n');
+      pages: [{ id: 'school', title: 'School', url }, { id: 'emoji', title: 'Emoji link', icon: '🎓', url }, { id: 'vector', title: 'Vector', url: svgUrl }] }, null, 2) + '\n');
     await writeFile(path.join(ws, 'projects/AGENTS.md'), '# Projects\n');
     await writeFile(path.join(ws, 'space.json'), JSON.stringify({ sections: [] }));
     await writeFile(settings, JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'projects/AGENTS.md', space: 'space.json' }));
@@ -476,6 +486,7 @@ test('v0.1.5 cD2 tile icons: picture, then emoji, then the site or program icon,
   const png = (r, g, b) => 'data:image/png;base64,' + solid(r, g, b).toString('base64');
   assert.equal(await src('School'), png(200, 30, 60), 'a link tile shows the site\'s own icon');
   assert.equal(await src('Zedit'), png(20, 140, 90), 'an app tile shows the program\'s own icon');
+  assert.equal(await src('Vector'), 'data:image/svg+xml;base64,' + Buffer.from(SVG).toString('base64'), 'an SVG-only site shows its SVG, not the letters');
   assert.equal(await tile('Emoji link').locator('img').count(), 0, 'a text icon beats the automatic one');
   assert.match(await tile('Emoji link').innerText(), /🎓/);
   assert.equal(await tile('Plain').locator('img').count(), 0);

@@ -92,18 +92,19 @@ async function follow(url, origin, limit) {
 }
 
 const attributes = (tag) => Object.fromEntries([...tag.matchAll(/([a-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)].map((m) => [m[1].toLowerCase(), m[2] ?? m[3] ?? m[4]]));
-// The icon links in a page head, the largest first: an apple-touch-icon, then the biggest declared size. SVG is skipped.
+// The icon links in a page head, the largest first: an apple-touch-icon, then the biggest declared size. SVG links come
+// back marked svg, for discover to try last: a site that offers only an SVG got the letter tile before (0.1.6 item 3).
 export function iconLinks(html, base) {
   const found = [];
   for (const [tag] of html.slice(0, html.search(/<\/head>/i) < 0 ? undefined : html.search(/<\/head>/i)).matchAll(/<link\b[^>]*>/gi)) {
     const attr = attributes(tag), rel = (attr.rel ?? '').toLowerCase().split(/\s+/);
     if (!attr.href || !(rel.includes('icon') || rel.includes('apple-touch-icon') || rel.includes('apple-touch-icon-precomposed'))) continue;
-    if (/svg/i.test(attr.type ?? '') || /\.svg(\?|#|$)/i.test(attr.href)) continue;
+    const svg = /svg/i.test(attr.type ?? '') || /\.svg(\?|#|$)/i.test(attr.href);
     let href;
     try { href = new URL(attr.href, base); } catch { continue; }
     if (!/^https?:$/.test(href.protocol)) continue;
     const size = Math.max(0, ...(attr.sizes ?? '').split(/\s+/).map((part) => Number.parseInt(part, 10) || 0)) || (rel.some((r) => r.startsWith('apple')) ? 180 : 0);
-    found.push({ href: href.href, size });
+    found.push({ href: href.href, size, ...(svg && { svg }) });
   }
   return found.sort((a, b) => b.size - a.size);
 }
@@ -113,12 +114,14 @@ export async function discover(link) {
   const origin = new URL(link).origin;
   const page = await follow(link, origin, 131_072).catch(() => null);
   const html = page && page.status === 200 && /html/i.test(page.headers['content-type'] ?? '') ? page.body.toString('utf8') : '';
-  const urls = [...iconLinks(html, page?.url ?? link).map((entry) => entry.href), origin + '/favicon.ico'].filter((url, i, all) => all.indexOf(url) === i).slice(0, 4);
+  // A raster icon wins: the page's raster links, then /favicon.ico, and only then its SVG (shown only through <img>, so no script runs).
+  const links = iconLinks(html, page?.url ?? link), urls = [...links.filter((entry) => !entry.svg).map((entry) => entry.href), origin + '/favicon.ico',
+    ...links.filter((entry) => entry.svg).map((entry) => entry.href)].filter((url, i, all) => all.indexOf(url) === i).slice(0, 4);
   for (const url of urls) {
     const response = await follow(url, origin, SITE_MAX).catch(() => null);
     if (!response || response.status !== 200 || response.big) continue;
     const ext = sniff(response.body);
-    if (ext && ext !== 'svg') return { ext, bytes: response.body };
+    if (ext) return { ext, bytes: response.body };
   }
   return null;
 }

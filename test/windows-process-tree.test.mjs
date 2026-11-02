@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
-import { internalEndpoint, missingWindowsBinaries, windowsLockEndpoint } from '../apps/server/windows.mjs';
+import { internalEndpoint, missingWindowsBinaries, trimLog, windowsLockEndpoint } from '../apps/server/windows.mjs';
 import { resolveWindowsExecutable, windowsArgv, windowsJobCommand } from '../apps/server/process-tree.mjs';
 import { allowed, childEnv } from '../apps/server/child-env.mjs';
 
@@ -214,4 +214,22 @@ test('Windows Stop ends detached chat and script children through Job Objects wi
     assert.equal(result.body.code, 127, result.text);
   }
   console.log(`PASS Windows Job Objects: pipe ACL only ${sid}; dash argv preserved; chat child ${chatPid} and script child ${scriptPid} gone within 5 s`);
+});
+
+// 016 item 6: daemon.log is trimmed while the daemon runs, not only at the host's start. The writer here holds it open for
+// append, as the Windows host gives it to node (FILE_APPEND_DATA); after the trim its next line lands at the new end, no gap.
+test('daemon.log: over the limit it is copied to .1 and emptied in place while a writer holds it open; main.mjs checks it every 10 min on Windows', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-log-')), log = path.join(directory, 'daemon.log');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { open } = await import('node:fs/promises'), writer = await open(log, 'a');
+  t.after(() => writer.close());
+  await writer.write('old line\n'.repeat(200));
+  assert.equal(await trimLog(log, 10000), false, 'under the limit nothing moves');
+  assert.equal(await trimLog(log, 1000), true);
+  await writer.write('new line\n');
+  assert.equal(await readFile(log, 'utf8'), 'new line\n', 'the open writer goes on at the start, with no hole of NULs');
+  assert.equal(await readFile(log + '.1', 'utf8'), 'old line\n'.repeat(200));
+  assert.equal(await trimLog(path.join(directory, 'missing.log')), false);
+  const main = await readFile(path.join(root, 'apps/server/main.mjs'), 'utf8');
+  assert.match(main, /if \(windows\) setInterval\(\(\) => trimLog\(path\.join\(values\.state, '\.\.', 'daemon\.log'\)\)\.catch\(\(\) => \{\}\), 600000\)\.unref\(\);/);
 });

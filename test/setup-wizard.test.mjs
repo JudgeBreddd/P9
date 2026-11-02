@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
-import { health } from '../scripts/teh.mjs';
+import { daemonRequest, health } from '../scripts/teh.mjs';
 import { WALK_SKIP } from '../packages/files/index.mjs';
 
 const call = async (instance, route, method = 'GET', body, type = 'application/json') => {
@@ -509,6 +509,10 @@ test('Setup wizard workspace change: only through the picker, never home or P9 s
     }, [folder, button]);
     return page.evaluate(() => window.p9.workspaceChange());
   };
+  // 016 item 5: the window's chat list keeps up across the daemon restart a move makes, with no reload.
+  await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  const made = (await daemonRequest(state, 'POST', '/chat', { provider: 'claude', title: 'Before move' })).body.conversation;
+  await page.locator('#tabs .tab[data-id="' + made + '"]').waitFor({ timeout: 10000 });
   const before = await readFile(unitFile, 'utf8');
   for (const folder of [home, path.join(home, '.local'), path.join(home, '.local/state/p9-foundation'), path.join(home, '.local/state/p9-foundation/conflicts'),
     state, run, '/', path.join(home, 'a-file')]) assert.deepEqual(await change(folder), { error: 'workspace-refused', workspace: first }, folder);
@@ -518,6 +522,8 @@ test('Setup wizard workspace change: only through the picker, never home or P9 s
   const moved = await readFile(unitFile, 'utf8');
   assert.equal(moved, before.replace('"' + first + '"', '"' + second + '"'), 'only --workspace changed');
   assert.equal((await health(state)).workspace, second);
+  const after = (await daemonRequest(state, 'POST', '/chat', { provider: 'claude', title: 'After move' })).body.conversation;
+  for (const id of [made, after]) await page.locator('#tabs .tab[data-id="' + id + '"]').waitFor({ timeout: 20000 });
   const back = await change(refused);
   assert.equal(back.error, 'workspace-not-started');
   assert.equal(back.workspace, second, 'rolled back to the folder it was on');

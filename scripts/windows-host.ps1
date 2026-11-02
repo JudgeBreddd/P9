@@ -339,7 +339,7 @@ $command = @($decoded.argv | ForEach-Object { [string]$_ })
 $environment = @{}
 $decoded.env.psobject.Properties | ForEach-Object { $environment[$_.Name] = [string]$_.Value }
 if ($Log) {
-  # ponytail: one old copy at 5 MB, checked when the host starts; a daemon that runs for weeks can grow it past that.
+  # One old copy at 5 MB, here at the host's start and every 10 min by the running daemon (windows.mjs trimLog).
   if ((Test-Path -LiteralPath $Log) -and (Get-Item -LiteralPath $Log).Length -gt 5MB) { Move-Item -LiteralPath $Log -Destination ($Log + '.1') -Force }
   Add-Content -LiteralPath $Log -Value ((Get-Date -Format o) + ' host started')
 }

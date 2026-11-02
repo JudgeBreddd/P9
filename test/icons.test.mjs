@@ -55,14 +55,19 @@ test('A link tile gets the site\'s own icon: the largest <link rel="icon">, else
   const b = await site(t, { '/': html(''), '/favicon.ico': [200, { 'content-type': 'image/x-icon' }, ICO] }, log);
   const big = await site(t, { '/': html('<link rel="icon" href="/big.png">'), '/big.png': [200, {}, Buffer.concat([PNG, Buffer.alloc(SITE_MAX + 10)])] }, log);
   const hop = await site(t, { '/': html('<link rel="icon" href="/go.png">'), '/go.png': [302, { location: `${other}/stolen.png` }, ''], '/favicon.ico': [302, { location: 'file:///etc/passwd' }, ''] }, log);
-  const svg = await site(t, { '/': html('<link rel="icon" type="image/svg+xml" href="/i.svg">'), '/i.svg': [200, { 'content-type': 'image/svg+xml' }, '<svg xmlns="http://www.w3.org/2000/svg"/>'] }, log);
+  // 0.1.6 item 3: a site offering only an SVG gets it (data: in <img>, no script); one offering both keeps the raster.
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+  const svg = await site(t, { '/': html('<link rel="icon" type="image/svg+xml" href="/i.svg">'), '/i.svg': [200, { 'content-type': 'image/svg+xml' }, SVG] }, log);
+  const both = await site(t, { '/': html('<link rel="icon" href="/i.svg" sizes="any"><link rel="icon" href="/s.png" sizes="16x16">'), '/i.svg': [200, {}, SVG], '/s.png': [200, {}, small] }, log);
   const instance = await start(t, [
     { id: 'a', title: 'A', url: a + '/' }, { id: 'b', title: 'B', url: b + '/' }, { id: 'big', title: 'Big', url: big + '/' },
-    { id: 'hop', title: 'Hop', url: hop + '/' }, { id: 'svg', title: 'Svg', url: svg + '/' }, { id: 'texty', title: 'T', icon: 'T', url: a + '/' }]);
+    { id: 'hop', title: 'Hop', url: hop + '/' }, { id: 'svg', title: 'Svg', url: svg + '/' }, { id: 'both', title: 'Both', url: both + '/' }, { id: 'texty', title: 'T', icon: 'T', url: a + '/' }]);
   const art = (await call(instance, '/mission/icons')).body;
   assert.equal(art.pages.a.auto, uri('image/png', large), 'the largest same-site icon link wins');
   assert.equal(art.pages.b.auto, uri('image/x-icon', ICO), '/favicon.ico when the page names no icon');
-  for (const id of ['big', 'hop', 'svg']) assert.equal(art.pages[id]?.auto, undefined, id + ' is refused');
+  for (const id of ['big', 'hop']) assert.equal(art.pages[id]?.auto, undefined, id + ' is refused');
+  assert.equal(art.pages.svg.auto, uri('image/svg+xml', Buffer.from(SVG)), 'an SVG-only site gets its SVG, not the letters');
+  assert.equal(art.pages.both.auto, uri('image/png', small), 'a raster icon wins over an SVG');
   assert.equal(art.pages.texty, undefined, 'a tile with a text icon is not fetched for');
   assert.ok(!log.some((entry) => entry.port === Number(new URL(other).port)), 'a cross-origin icon href or redirect (here a private address) is never requested');
   assert.ok(log.every((entry) => entry.cookie === undefined && entry.authorization === undefined), 'no cookies or credentials');
@@ -70,7 +75,7 @@ test('A link tile gets the site\'s own icon: the largest <link rel="icon">, else
   const before = log.length;
   assert.deepEqual((await call(instance, '/mission/icons')).body.pages.a, art.pages.a);
   assert.equal(log.length, before, 'the second look is served from the cache on disk');
-  console.log('PASS site icons: link rel (largest), /favicon.ico, oversized, redirect, svg and cross-origin refused, cached, no credentials');
+  console.log('PASS site icons: link rel (largest), /favicon.ico, SVG only as a last resort, oversized, redirect and cross-origin refused, cached, no credentials');
 });
 
 test('Only http(s) links the user saved are fetched', async (t) => {
