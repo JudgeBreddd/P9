@@ -238,6 +238,27 @@ test('Key checkbox unticked: nothing is made or added, the next password login o
   await page.locator('#setDlg [data-key-again]').waitFor({ state: 'detached', timeout: 5000 });
 });
 
+// U6 gap b: Esc on the window is a no, the same as unticking: nothing made or added, remembered, not offered again.
+test('Key checkbox, Esc: the same as unticked, nothing is made or added and the next password login offers nothing', { skip, timeout: 120000 }, async (t) => {
+  const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
+  await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host', remotes: ['password-host'] }));
+  const page = await launch(t, s, local);
+  await typePassword(page);
+  await keyWindow(page);
+  await page.keyboard.press('Escape');
+  await page.locator('dialog#keepDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  for (const end = Date.now() + 10000; Date.now() < end && !(await page.evaluate(() => window.p9.server())).noKey?.length;) await page.waitForTimeout(250);
+  assert.deepEqual((await page.evaluate(() => window.p9.server())).noKey, ['password-host'], 'the no is remembered');
+  await assert.rejects(stat(path.join(s.profile, 'ssh', 'p9_ed25519')), 'no key made');
+  await assert.rejects(stat(s.keys), 'nothing added to the remote');
+  await rm(s.master, { force: true });
+  await reconnect(page);
+  await typePassword(page);
+  await connected(page);
+  await page.waitForTimeout(6000); // more than one status poll
+  assert.equal(await page.locator('dialog#keepDlg[open]').count(), 0, 'not offered again');
+});
+
 test('A dropped connection to a password-only remote says it dropped and asks for the password again', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await daemon(t), s = await stage(remote);
   await writeFile(path.join(s.profile, 'p9-server.json'), JSON.stringify({ host: 'password-host', noKey: ['password-host'] }));

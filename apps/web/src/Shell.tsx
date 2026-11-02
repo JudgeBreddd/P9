@@ -240,8 +240,8 @@ export default function Shell() {
               const v = dialog.returnValue;
               if (askKeep && (v === 'yes' || v === 'no')) void window.p9?.remoteKeep?.(v === 'yes', remember.checked).finally(ask);
               if (!offer) return;
-              // Esc adds nothing and asks again after the next password login; unticked adds nothing and is remembered.
-              if (!v || !box.checked) return void window.p9?.sshKey?.(false, !!v).catch(() => {});
+              // Unticked, or Esc: adds nothing, and the no is remembered (Settings > Remote Connect offers it again).
+              if (!v || !box.checked) return void window.p9?.sshKey?.(false, true).catch(() => {});
               void (window.p9?.sshKey?.(true, false) ?? Promise.reject(new Error('no-bridge'))).catch(() => ({ error: 'key-failed' })).then((r?: { ok?: boolean; error?: string }) => {
                 if (r?.ok) return;
                 keySaid = (KEY_SAID[r?.error ?? ''] ?? 'P9\'s key could not be added to HOST, so P9 asks for your password there next time').replaceAll('HOST', host);
