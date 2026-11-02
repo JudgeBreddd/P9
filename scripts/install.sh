@@ -203,7 +203,9 @@ if [ -n "$slim" ]; then
   write_start
   exit 0
 fi
-if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] || { [ -n "$background" ] && [ -e "$run_dir/background" ]; }; then
+# Only with node_modules here: a ~/p9 removed and installed again (the state folder kept) is a new install, not an update,
+# or the daemon cannot load its packages and every start fails.
+if [ -d node_modules ] && { [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] || { [ -n "$background" ] && [ -e "$run_dir/background" ]; }; }; then
   # An update checks the system again: a new version can need something the old one did not. Node is in place by now
   # (above), so the check never skips. An install from before the editor server was part of it gets it now (issue #14);
   # one on the pinned release is left alone.

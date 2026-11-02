@@ -339,7 +339,7 @@ export async function createDesktop({ state, open } = {}) {
       if (serverError === 'ssh-login-needed') { serverError = 'ssh-failed'; return; }
       // A start that said ok but whose P9 still does not answer 30 s later (setUp's until) stops with Try again, never
       // "Starting P9" forever; the timer below keeps trying, so a late answer still connects. Try again starts it again.
-      if (remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now() && serverError !== 'server-no-p9') remoteInstall = { phase: 'failed', error: 'not-answering', started: remoteInstall.started };
+      if ((remoteInstall?.phase === 'starting' && serverError !== 'server-no-p9' || remoteInstall?.phase === 'done') && remoteInstall.until < Date.now()) remoteInstall = { phase: 'failed', error: 'not-answering', started: remoteInstall.started };
       else if (serverError === 'server-no-p9' || serverError === 'server-not-answering') setUp(serverHost, serverError === 'server-not-answering');
       setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
     }
@@ -824,7 +824,8 @@ export async function createDesktop({ state, open } = {}) {
           : await installRemote({ host, ssh: sshCommand, version: ownVersion, keep, admin, tell,
             archive: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null });
         if (e.phase === 'full-there' && serverHost === host) return void runInstall(admin, { full: true, keep });
-        if (e.phase === 'done' && serverHost === host) useServer(host);
+        // 30 s for the new P9 to answer, as a start gets; then Try again, never "Connecting…" forever.
+        if (e.phase === 'done' && serverHost === host) { remoteInstall = { ...remoteInstall, until: Date.now() + 30000 }; useServer(host); }
       } finally {
         if (slim?.built) await rm(slim.folder, { recursive: true, force: true }).catch(() => {});
       }
