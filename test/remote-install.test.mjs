@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile, access } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { installRemote, script, slimArchive, sourceArchive } from '../apps/desktop/remote-install.mjs';
 
 const skip = process.platform === 'win32' ? 'sh' : false;
@@ -186,4 +187,8 @@ test('U8: the full ~/p9 records its version, refuses an older one unless forced,
   // An install from before U8 (an empty marker) is replaced as before; force installs an older version.
   assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6', force: true })).phase, 'done');
   assert.equal(await readFile(path.join(d, '.p9-remote-install'), 'utf8'), '0.1.6\n');
+  // Review 2 L1: an archive tar cannot list fails before the sweep, so the files the last install unpacked stay.
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: Readable.from([Buffer.from('not a tarball')]), version: '0.1.9' })).phase, 'failed');
+  assert.equal(await exists(path.join(d, 'README.md')), true, 'a bad archive removes nothing');
+  assert.equal(await exists(path.join(d, 'scripts', 'install.sh')), true);
 });

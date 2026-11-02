@@ -7,7 +7,7 @@
 // Windows: its OpenSSH has no control master, so there ssh stays key-only, as before.
 import { spawn, execFile } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { health } from '../../scripts/teh.mjs';
@@ -19,10 +19,21 @@ export const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
 // The owner-only folder for that login's control socket (and its askpass helper while it asks); %C: ssh's hash of the host.
 export const CONTROL_DIR = path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'p9-ssh-' + (process.getuid?.() ?? 0));
 const WINDOWS = process.platform === 'win32';
-const CONTROL = WINDOWS ? [] : ['-o', 'ControlPath=' + CONTROL_DIR + '/%C'];
+// Review 2 M2: only our own real folder, as sshLogin checks; one another user made first (os.tmpdir() when XDG_RUNTIME_DIR
+// is unset) could hold a socket that answers as the server, so then no sharing at all.
+const ownControl = () => {
+  try {
+    mkdirSync(CONTROL_DIR, { recursive: true, mode: 0o700 });
+    const folder = lstatSync(CONTROL_DIR);
+    if (!folder.isDirectory() || folder.uid !== process.getuid()) return false;
+    chmodSync(CONTROL_DIR, 0o700);
+    return true;
+  } catch { return false; }
+};
+const control = () => WINDOWS ? [] : ['-o', 'ControlPath=' + (ownControl() ? CONTROL_DIR + '/%C' : 'none')];
 // U6 (threat model row 50 U6): trust on first use. An unknown host key is accepted and recorded; a changed one still refuses (CHANGED).
 export const TOFU = ['-o', 'StrictHostKeyChecking=accept-new'];
-const SSH_OPTIONS = ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', ...CONTROL];
+const SSH_OPTIONS = ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3'];
 // Row 79: P9's own key (main sets the path; ssh-login.mjs makes it only after a yes). Any IdentityFile on the command line
 // stops ssh trying its default key files, so the ones that exist are listed first, in ssh's order: the person's keys still go first.
 let KEY = null;
@@ -30,7 +41,7 @@ export const useKey = (file) => { KEY = file; };
 const DEFAULT_KEYS = ['id_rsa', 'id_ecdsa', 'id_ecdsa_sk', 'id_ed25519', 'id_ed25519_sk', 'id_xmss', 'id_dsa'];
 const identity = () => KEY && existsSync(KEY)
   ? [...DEFAULT_KEYS.map(k => path.join(os.homedir(), '.ssh', k)).filter(existsSync), KEY].flatMap(f => ['-o', 'IdentityFile=' + f]) : [];
-export const sshOptions = () => [...SSH_OPTIONS, ...identity()];
+export const sshOptions = () => [...SSH_OPTIONS, ...control(), ...identity()];
 // What ssh writes when key-only login is refused or the host key is not known yet: then the password window can log in.
 export const LOGIN = /Permission denied|Host key verification failed|No more authentication methods/;
 // Row 78: the host key differs from the one known_hosts has. Checked before LOGIN (it ends in the same failed line): never a
@@ -59,7 +70,7 @@ export const READ = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; b=' + RUN + '; 
 // reads it (the cookie stays there). Fixed argv, no shell here, BatchMode, 4 s to connect, 8 s in all; only three words come back.
 // A background-mode P9 (row I1) counts as there: it may be stopped, and connecting starts it.
 export const PROBE = 'r="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; { test -e "$r/p9-foundation/desktop.json" || test -f ' + RUN + '/background; } && echo p9; exit 0';
-export const probeServer = (host, ssh = 'ssh') => new Promise(resolve => execFile(ssh, ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=4', ...CONTROL, ...identity(), host, PROBE], { timeout: 8000 },
+export const probeServer = (host, ssh = 'ssh') => new Promise(resolve => execFile(ssh, ['-o', 'BatchMode=yes', ...TOFU, '-o', 'ConnectTimeout=4', ...control(), ...identity(), host, PROBE], { timeout: 8000 },
   (error, out) => resolve(error ? 'unreachable' : out.trim() === 'p9' ? 'p9' : 'no-p9')));
 
 // Host aliases from ~/.ssh/config (no wildcards, no negations), for the Settings list. Include files are not followed.

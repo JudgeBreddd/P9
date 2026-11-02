@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { chromium } from '@playwright/test';
 import { daemon, http, authenticated, remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
+import { desktopFolders } from '../packages/files/index.mjs';
 
 // Dev Focus's second root (threat model row 41): a folder outside the workspace that only the desktop sets, after the native
 // picker and confirm. Saves name it by its path and go through the guarded save; the phone's listener refuses any root.
@@ -171,7 +172,10 @@ test('U1: in Unrestricted mode home is a root and saves work in it; U5: never in
   await writeFile(path.join(instance.state, 'keep.txt'), 'keep');
   await writeFile(path.join(instance.recovery, 'keep.txt'), 'keep');
   await mkdir(ownership, { recursive: true }); await writeFile(path.join(ownership, 'keep.txt'), 'keep');
-  for (const folder of [instance.state, instance.recovery, ownership]) {
+  // Review 2 M1: the desktop's data folder (P9's ssh key) as well; the daemon has no APPDATA or XDG_CONFIG_HOME here.
+  const desktop = desktopFolders({ home: dir, env: {} });
+  for (const folder of desktop) { await mkdir(folder, { recursive: true }); await writeFile(path.join(folder, 'keep.txt'), 'keep'); }
+  for (const folder of [instance.state, instance.recovery, ownership, ...desktop]) {
     const inner = path.relative(real, await realpath(folder));
     assert.deepEqual(await dev('POST', { path: inner + '/new.txt', content: 'x' }), { status: 403, body: { error: 'private-folder' } }, inner + ' create');
     assert.equal((await dev('PUT', { path: inner + '/keep.txt', hash: hash('keep'), content: 'x' })).status, 403, inner + ' save');
@@ -183,5 +187,5 @@ test('U1: in Unrestricted mode home is a root and saves work in it; U5: never in
   await call(instance, '/agent-lock', 'POST', { on: false });
   await call(instance, '/file-protection', 'POST', { on: true });
   assert.deepEqual(await set(dir), { status: 403, body: { error: 'root-refused' } }, 'File protection on: home refused again');
-  console.log('PASS U1/U5: home refused with the mode off and with either switch on; with it on, home is a root, create and save work, 6 writes into state/recovery/ownership refused');
+  console.log('PASS U1/U5: home refused with the mode off and with either switch on; with it on, home is a root, create and save work, 12 writes into state, recovery, ownership and the desktop folders refused');
 });

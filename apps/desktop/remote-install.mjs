@@ -79,7 +79,9 @@ export function script(version, keep = false, admin = false, { stdin = version =
     // one an older app left there.
     't=$(mktemp -d); trap \'rm -rf "$t"\' EXIT; ' + source + '; [ -d "$d" ] || { mkdir "$d"; : > "$d/.p9-remote-install"; }',
     // Only sh, cat, tar and grep: a remote missing tools gets here before an admin installs them (row I2), so no sed, sort, comm or cp.
-    'tar -tzf "$t/p9.tar.gz" | while IFS= read -r x; do x=${x#*/}; case $x in "" | */) ;; *) printf "%s\\n" "$x" ;; esac; done > "$t/files"',
+    // Review 2 L1: the listing first, on its own: a bad or cut-short archive stops here, before the sweep removes anything.
+    'tar -tzf "$t/p9.tar.gz" > "$t/list" || exit 1',
+    'while IFS= read -r x; do x=${x#*/}; case $x in "" | */) ;; *) printf "%s\\n" "$x" ;; esac; done < "$t/list" > "$t/files"',
     'if [ -f "$d/.p9-files" ]; then grep -vxF -f "$t/files" -- "$d/.p9-files" | while IFS= read -r x; do case "/$x/" in */../* | //*) ;; *) rm -f -- "$d/$x" ;; esac; done; fi',
     'tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; cat "$t/files" > "$d/.p9-files"; echo "P9_INSTALL unpacked"',
     STOP_SLIM,

@@ -1065,3 +1065,21 @@ test('Machine menu probes: saved remotes read P9 running, P9 not running or Unre
   assert.deepEqual(await page.evaluate(() => Promise.all(['from-config', 'somewhere-else', '-oProxyCommand=x'].map((h) => window.p9.remoteState(h).then(() => 'taken', (e) => e.message.includes('ipc-sender-refused'))))), [true, true, true]);
   console.log('PASS machine menu probes');
 });
+
+// Review 2 M2: ssh shares a login only through our own real folder; anything else at that path (here a file, as another
+// user's folder would be) means ControlPath=none, so no socket there can answer as the server.
+test('M2: the control folder is used only when it is our own folder', { skip: process.platform === 'win32' }, async (t) => {
+  const run = await mkdtemp(path.join(os.tmpdir(), 'p9-control-')), uid = process.getuid();
+  t.after(() => rm(run, { recursive: true, force: true }));
+  const options = () => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
+    'import { sshOptions } from "./apps/desktop/remote.mjs"; console.log(JSON.stringify(sshOptions()))'], { cwd: root, env: { ...process.env, XDG_RUNTIME_DIR: run } }));
+  const dir = path.join(run, 'p9-ssh-' + uid);
+  assert.ok(options().includes('ControlPath=' + dir + '/%C'), 'made and used');
+  assert.equal((await stat(dir)).mode & 0o777, 0o700);
+  await chmod(dir, 0o755);
+  assert.ok(options().includes('ControlPath=' + dir + '/%C'), 'ours, mode put back');
+  assert.equal((await stat(dir)).mode & 0o777, 0o700);
+  await rm(dir, { recursive: true }); await writeFile(dir, '');
+  assert.ok(options().includes('ControlPath=none'), 'not a folder: no sharing');
+  console.log('PASS M2: own folder used (0700), a file at that path gives ControlPath=none');
+});

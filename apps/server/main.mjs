@@ -12,7 +12,7 @@ import { openLedger } from './ledger.mjs';
 import { createAnymouse } from './anymouse.mjs';
 import { createHash } from 'node:crypto';
 import { parseSettings } from './mission.mjs';
-import { drainSaves } from '../../packages/files/index.mjs';
+import { drainSaves, guardFolders, desktopFolders } from '../../packages/files/index.mjs';
 import { childEnv } from './child-env.mjs';
 import { AGENTS, placeAgents } from './deps.mjs';
 import { internalEndpoint, trimLog, windowsLockEndpoint, windowsStateRoot } from './windows.mjs';
@@ -65,6 +65,7 @@ for (const directory of [values.state, values.recovery]) {
 }
 const state = await realpath(values.state), recovery = await realpath(values.recovery);
 if (inside(state, recovery) || inside(recovery, state)) throw new Error('state-and-recovery-must-be-separate');
+guardFolders(...desktopFolders()); // review 2 M1: no file route reads the desktop's ssh key
 const socketPath = internalEndpoint(state);
 // Linux keeps a Unix socket's path in 108 bytes, ending NUL: a longer one fails at listen with no reason given.
 if (!windows && Buffer.byteLength(socketPath) > 107) throw new Error('socket-path-too-long: ' + socketPath);

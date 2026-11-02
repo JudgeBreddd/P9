@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { open, realpath, unlink, rename, link, readdir, lstat, mkdir, copyFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import os from 'node:os';
 import { MAX_BYTES } from '../protocol/index.mjs';
 
 // Windows has no /proc/self/fd or O_NOFOLLOW; win32.mjs gives the same walk on NT handles. Linux never loads it.
@@ -31,6 +32,13 @@ function partsFor(relative, root) {
 // adds its own at start; the walks refuse links, so the joined path is where the file really is.
 const guarded = new Set();
 export const guardFolders = (...folders) => { for (const folder of folders) if (folder) guarded.add(path.resolve(folder)); };
+// Review 2 M1: the desktop app's data folder (P9's own ssh key, row 79, and its settings), packaged and from a source checkout,
+// where Electron names it after the app. Only the ssh folder of the checkout's generic Electron folder, which other apps share.
+export const desktopFolders = ({ platform = process.platform, home = os.homedir(), env = process.env } = {}) => {
+  const base = platform === 'win32' ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
+    : platform === 'darwin' ? path.join(home, 'Library', 'Application Support') : env.XDG_CONFIG_HOME || path.join(home, '.config');
+  return [path.join(base, 'P9 Event Horizon'), path.join(base, 'Electron', 'ssh')];
+};
 const within = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
 function notPrivate(root, parts) {
   const full = path.join(path.resolve(root), ...parts);
