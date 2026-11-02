@@ -20,6 +20,22 @@ test('right-click: selected page text gets Copy; the bare page gets no menu', ()
   assert.deepEqual(contextMenu({ isEditable: false, selectionText: '' }), []);
 });
 
+// 016 cC: an image gets Copy Image and a link Copy Link Address (an image inside a link gets both); main.mjs wires them to Electron.
+test('right-click: an image gets Copy Image, a link Copy Link Address, and main.mjs wires both', async () => {
+  const said = [], act = { copyImage: () => said.push('image'), copyLink: (url) => said.push(url) };
+  const image = contextMenu({ isEditable: false, selectionText: '', mediaType: 'image', hasImageContents: true }, null, null, act);
+  assert.deepEqual(shape(image), ['Copy Image']);
+  const link = contextMenu({ isEditable: false, selectionText: 'docs', linkURL: 'https://example.com/a' }, null, null, act);
+  assert.deepEqual(shape(link), ['copy', 'Copy Link Address']);
+  assert.deepEqual(shape(contextMenu({ isEditable: false, mediaType: 'image', linkURL: 'https://example.com/b' }, null, null, act)), ['Copy Image', 'Copy Link Address']);
+  image[0].click(); link[1].click();
+  assert.deepEqual(said, ['image', 'https://example.com/a']);
+  assert.deepEqual(contextMenu({ isEditable: false, mediaType: 'image', hasImageContents: false }, null, null, act), [], 'a broken image has nothing to copy');
+  const main = (await import('node:fs')).readFileSync(new URL('../apps/desktop/main.mjs', import.meta.url), 'utf8');
+  assert.match(main, /copyImage: \(\) => window\.webContents\.copyImageAt\(params\.x, params\.y\)/);
+  assert.match(main, /copyLink: url => clipboard\.writeText\(url\)/);
+});
+
 test('Windows full name: read from net user; a blank or missing one gives the login-name fallback', () => {
   const out = (full) => `User name                    sam\r\nFull Name                    ${full}\r\nComment                      Built-in\r\n`;
   assert.equal(windowsFullName(out('Sam Rivera')), 'Sam Rivera');

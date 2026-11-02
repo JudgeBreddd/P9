@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { appendFileSync, constants, openSync, watch } from 'node:fs';
@@ -477,7 +477,8 @@ export async function createDesktop({ state, open } = {}) {
   window.webContents.on('dom-ready', () => window.webContents.setZoomFactor(settings.zoom));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('context-menu', (_event, params) => {
-    const menu = contextMenu(params, word => window.webContents.replaceMisspelling(word), word => window.webContents.session.addWordToSpellCheckerDictionary(word));
+    const menu = contextMenu(params, word => window.webContents.replaceMisspelling(word), word => window.webContents.session.addWordToSpellCheckerDictionary(word),
+      { copyImage: () => window.webContents.copyImageAt(params.x, params.y), copyLink: url => clipboard.writeText(url) });
     if (menu.length) Menu.buildFromTemplate(menu).popup({ window });
   });
   window.webContents.on('will-navigate', (event, url) => { if (url !== APP_URL) event.preventDefault(); });
