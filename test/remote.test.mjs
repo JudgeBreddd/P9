@@ -150,9 +150,9 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.equal(await page.locator('#xferBtn').isVisible(), false, 'no Send files to remote in Remote mode');
   // This computer's service is not touched from Server mode, and the IPC takes only a host name ssh cannot read as an option.
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
-    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')), await window.p9.remoteInstall(),
+    await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')),
     await window.p9.pickVault()]),
-  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true, { error: 'remote-install-refused' },
+  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true,
     { status: 409, body: { error: 'server-mode-local-only' } }]);
   // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this
   // computer's daemon and the forward closes.
@@ -400,6 +400,48 @@ test('U6: a fresh remote goes Connect, install, the Temporary or Always on quest
   await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'P9 on test-host is temporary: it stops when you disconnect' }).waitFor({ timeout: 15000 });
   assert.equal(await page.locator('#keepBtn').textContent(), 'Make it always on');
   console.log('PASS U6 fresh remote: Connect, install, the keep question, no other click');
+});
+
+// U6 gap a: P9 there starts (its start script says ok and leaves desktop.json) but its daemon never answers. The connecting
+// screen does not sit on "Starting P9" forever: about 30 s after the start, a plain line and Try again; nothing is installed
+// over it; Try again starts it again.
+test('U6: a remote P9 that starts but never answers stops with a plain line and Try again, not Starting P9 forever', { skip, timeout: 150000 }, async (t) => {
+  const local = await daemon(t), s = await stage(null), home = path.join(s.directory, 'home');
+  const profile = path.join(s.directory, 'profile'), run = path.join(home, '.local/share/p9/run'), dead = path.join(s.server, 'p9-foundation');
+  await mkdir(profile); await mkdir(run, { recursive: true });
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: 'test-host' }));
+  // The start leaves the credentials file of a daemon that is not there: no daemon.sock behind the forward.
+  await writeFile(path.join(run, 'start'), 'mkdir -p ' + JSON.stringify(dead) + '; printf %s ' + JSON.stringify(JSON.stringify({ cookie: 'c', csrf: 'x' })) + ' > ' + JSON.stringify(path.join(dead, 'desktop.json')) + '\nexit 0\n');
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, FAKE_HOME: home }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', local.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const retry = page.locator('#connRetry');
+  await page.locator('dialog#connecting[open]').waitFor({ timeout: 20000 });
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  const why = 'Setting up P9 on test-host stopped: P9 started there but did not answer. Press Try again.';
+  await page.locator('#connWhy', { hasText: why }).waitFor({ timeout: 100000 });
+  assert.equal(await retry.isVisible(), true); assert.equal(await retry.isDisabled(), false);
+  assert.equal(await page.locator('#connProgress:not([hidden])').count(), 0, 'no progress line once it stopped');
+  await evidence(page, 'u6-start-not-answering');
+  const ran = await s.calls(), count = (word) => ran.filter((c) => c.argv.some((a) => a.includes(word))).length;
+  assert.deepEqual([count('P9_START'), count('P9_INSTALL')], [1, 0], 'started once, never installed over');
+  await retry.click();
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  for (const end = Date.now() + 20000; Date.now() < end && count('P9_START') < 2; await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
+  assert.equal(count('P9_START'), 2, 'Try again starts it again');
+  // Quitting while that start's forward still waits for /health ends the forward too: no ssh is left running on its own.
+  const tunnel = () => ran.slice(ran.findLastIndex((c) => c.argv.some((a) => a.includes('P9_START')))).find((c) => c.argv.includes('-N'));
+  for (const end = Date.now() + 20000; Date.now() < end && !tunnel(); await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
+  const { pid } = tunnel();
+  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]);
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (const end = Date.now() + 5000; Date.now() < end && alive(); await new Promise((resolve) => setTimeout(resolve, 100)));
+  const left = alive();
+  if (left) process.kill(pid, 'SIGKILL'); // without the fix, so the file ends instead of hanging on it
+  assert.equal(left, false, 'the forward is ended when P9 quits mid-connect');
+  console.log('PASS U6 start that never answers: a plain line and Try again');
 });
 
 // U9: Disconnect beside the remote label goes back to this computer (p9:server(null)), and U8: on the slim Temporary P9 the

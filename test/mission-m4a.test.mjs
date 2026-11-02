@@ -91,9 +91,9 @@ test('M4a templates: four shipped files, sections with text and https links only
   const live = (await settingsOf(instance)).space;
   assert.equal(live, path.join(instance.directory, '.config/p9/mission-space.json'));
   const overview = (await call(instance, '/mission')).body;
-  assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Waiting on you', 'Usage', 'Apps and pages', 'Notifications', 'Projects', 'Handoffs', 'Workspace rules'], []]);
+  assert.deepEqual([overview.empty, overview.space.map((s) => s.title), overview.invalid], [false, ['Waiting on you', 'Usage', 'Apps and pages', 'Notifications', 'Projects', 'Handoffs', 'Solo runs', 'Workspace rules'], []]);
   // Fresh-install finding 3a: the ICM template's four sections name P9's built-in panels.
-  assert.deepEqual(overview.space.map((s) => s.widget ?? null), ['waiting', 'usage', 'apps', 'notifications', null, null, null]);
+  assert.deepEqual(overview.space.map((s) => s.widget ?? null), ['waiting', 'usage', 'apps', 'notifications', null, null, null, null]);
 
   // Never over a space with sections: 409 and the same bytes.
   const before = await readFile(live, 'utf8');

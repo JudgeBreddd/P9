@@ -52,6 +52,20 @@
         ]
       },
       {
+        "id": "solo-runs",
+        "title": "Solo runs",
+        "icon": "🏃",
+        "text": "Solo run reports in your workspace, newest first: the top one is the last run.",
+        "folders": [
+          {
+            "id": "solo-run-reports",
+            "title": "Solo run reports",
+            "pattern": "*solo-run*.md",
+            "recursive": true
+          }
+        ]
+      },
+      {
         "id": "rules",
         "title": "Workspace rules",
         "icon": "📏",

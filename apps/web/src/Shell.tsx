@@ -7,7 +7,7 @@ const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping }>; remoteInstall?(): Promise<{ ok?: boolean; error?: string }>; remoteStart?(): Promise<{ result?: string; error?: string }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
@@ -26,7 +26,7 @@ const REMOTE_WHY: Record<string, string> = {
   'server-dropped': 'Lost the remote: connecting again.',
 };
 
-// Row 78 (desktop/ssh-login.mjs): what the waiting ssh login asks. A prompt with (yes/no is a host key seen for the first time.
+// Row 78 (desktop/ssh-login.mjs): the password the waiting ssh login asks for. A new host key is never asked (accept-new).
 // Row 78: a changed host key, said plainly, with the known_hosts line ssh pointed at. P9 never edits known_hosts itself.
 const keyChanged = (host: string, kh?: { file: string; line: number }) => 'The ssh host key of ' + host + ' is not the one your known_hosts file has for it, '
   + 'so P9 will not connect and will not ask for your password. A reinstalled remote gets a new key; so does another machine answering in its place. '
@@ -43,28 +43,22 @@ type SshAsk = { id: number; prompt: string; again?: boolean; dropped?: boolean }
 const askSsh = (host: string, ask: SshAsk) => {
   const dialog = document.getElementById('sshDlg') as HTMLDialogElement | null, pw = document.getElementById('sshPw') as HTMLInputElement | null;
   if (!dialog || !pw || dialog.open || !window.p9?.sshAnswer) return;
-  const key = /\(yes\/no/i.test(ask.prompt);
-  document.getElementById('sshT')!.textContent = key ? 'Trust ' + host + '?' : 'Password for ' + host;
-  document.getElementById('sshP')!.textContent = key
-    ? 'This computer has not connected to ' + host + ' before. ssh shows its key below. Trust it if this is the machine you meant.'
-    : (ask.dropped ? 'The connection to ' + host + ' dropped. ' : '') + 'No ssh key works for ' + host + ', so ssh needs your password to ' + (ask.dropped ? 'connect again.' : 'log in.');
-  const said = document.getElementById('sshKey')!;
-  said.textContent = key ? ask.prompt.trim() : ''; said.hidden = !key;
+  document.getElementById('sshT')!.textContent = 'Password for ' + host;
+  document.getElementById('sshP')!.textContent = (ask.dropped ? 'The connection to ' + host + ' dropped. ' : '') + 'No ssh key works for ' + host + ', so ssh needs your password to ' + (ask.dropped ? 'connect again.' : 'log in.');
   document.getElementById('sshL')!.textContent = ask.prompt.trim().replace(/:$/, '');
-  for (const id of ['sshL', 'sshPw', 'sshNote']) document.getElementById(id)!.hidden = key;
-  pw.required = !key;
+  pw.required = true;
   document.getElementById('sshErr')!.hidden = !ask.again;
-  document.getElementById('sshOk')!.textContent = key ? 'Trust and connect' : 'Connect';
+  document.getElementById('sshOk')!.textContent = 'Connect';
   pw.value = '';
   dialog.returnValue = '';
   // The answer goes to main once; the field is emptied whenever the window closes. Cancel (or Esc) stops the login.
   dialog.onclose = () => {
     const password = pw.value;
     pw.value = '';
-    void window.p9?.sshAnswer?.(dialog.returnValue === 'ok' ? (key ? 'yes' : password || null) : null).catch(() => {});
+    void window.p9?.sshAnswer?.(dialog.returnValue === 'ok' ? password || null : null).catch(() => {});
   };
   dialog.showModal();
-  (key ? document.getElementById('sshOk')! : pw).focus();
+  pw.focus();
 };
 
 // Row 79, since U6 (threat model row 50 U6): the key offer is a checkbox on the keep window (below). When adding the key
@@ -86,7 +80,7 @@ const installWhy = (host: string, i: RemoteInstall) => ({
   done: 'P9 is ready on ' + host + '. Connecting…',
   admin: host + ' needs ' + (needNames(i.need) || 'a few tools') + ' before P9 can run there, and only an admin can add ' + ((i.need?.length ?? 0) > 1 ? 'them' : 'it') + '. Press Continue.',
   'already-there': host + ' has a ~/p9 folder this app did not make, so P9 leaves it alone. Rename or remove that folder there, then press Try again.',
-  failed: 'Setting up P9 on ' + host + ' stopped' + ({ 'timed-out': ' after 30 minutes', 'server-unreachable': ': the connection was lost', 'ssh-failed': ': ssh did not start', 'install-failed': '', 'missing-tools': ': ' + host + ' is missing ' + (needNames(i.need) || 'tools P9 needs') + ' and has no package manager P9 knows', 'not-allowed': ': your account there cannot install software', 'newer-there': ': ' + host + ' has P9 ' + (i.server ?? '') + ', newer than this app, and P9 never replaces it with an older one. Update this app first' }[i.error ?? ''] ?? ' (' + i.error + ')')
+  failed: 'Setting up P9 on ' + host + ' stopped' + ({ 'timed-out': ' after 30 minutes', 'not-answering': ': P9 started there but did not answer', 'server-unreachable': ': the connection was lost', 'ssh-failed': ': ssh did not start', 'install-failed': '', 'missing-tools': ': ' + host + ' is missing ' + (needNames(i.need) || 'tools P9 needs') + ' and has no package manager P9 knows', 'not-allowed': ': your account there cannot install software', 'newer-there': ': ' + host + ' has P9 ' + (i.server ?? '') + ', newer than this app, and P9 never replaces it with an older one. Update this app first' }[i.error ?? ''] ?? ' (' + i.error + ')')
     + '. ' + (i.error === 'not-allowed' || i.error === 'missing-tools' ? 'Someone who administers ' + host + ' must install ' + (needNames(i.need) || 'them') + ', then press Try again.' : (i.tail ? 'Its last lines are below. ' : '') + 'Press Try again.'),
 }[i.phase]);
 // Row I1: P9 on a remote in background mode stops when nobody uses it. One line in the status bar says so, with Make it
@@ -240,8 +234,8 @@ export default function Shell() {
               const v = dialog.returnValue;
               if (askKeep && (v === 'yes' || v === 'no')) void window.p9?.remoteKeep?.(v === 'yes', remember.checked).finally(ask);
               if (!offer) return;
-              // Esc adds nothing and asks again after the next password login; unticked adds nothing and is remembered.
-              if (!v || !box.checked) return void window.p9?.sshKey?.(false, !!v).catch(() => {});
+              // Unticked, or Esc: adds nothing, and the no is remembered (Settings > Remote Connect offers it again).
+              if (!v || !box.checked) return void window.p9?.sshKey?.(false, true).catch(() => {});
               void (window.p9?.sshKey?.(true, false) ?? Promise.reject(new Error('no-bridge'))).catch(() => ({ error: 'key-failed' })).then((r?: { ok?: boolean; error?: string }) => {
                 if (r?.ok) return;
                 keySaid = (KEY_SAID[r?.error ?? ''] ?? 'P9\'s key could not be added to HOST, so P9 asks for your password there next time').replaceAll('HOST', host);

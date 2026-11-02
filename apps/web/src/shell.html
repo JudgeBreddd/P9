@@ -174,11 +174,10 @@
   </div>
   <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="cancel" formnovalidate>Cancel</button><button data-slot="button" data-variant="default" value="ok" id="adminOk"></button></div>
 </form></dialog>
-<!-- Row 78: ssh's password (or a new host key to trust) for a remote with no key set up. Shell.tsx askSsh fills it. -->
+<!-- Row 78: ssh's password for a remote with no key set up. Shell.tsx askSsh fills it. -->
 <dialog id="sshDlg" class="admin-dlg" aria-labelledby="sshT" aria-describedby="sshP"><form method="dialog">
   <div class="dlg-head"><div><h2 id="sshT"></h2><p id="sshP"></p></div></div>
   <div class="dlg-body">
-    <pre id="sshKey" class="admin-cmd" tabindex="0" aria-label="What ssh says about this remote" hidden></pre>
     <label class="admin-pw" for="sshPw" id="sshL"></label>
     <input data-slot="input" type="password" id="sshPw" autocomplete="off" spellcheck="false" maxlength="1024" aria-describedby="sshErr sshNote">
     <p id="sshErr" class="admin-err sm" role="alert" hidden>That password did not work. Check it and try again.</p>

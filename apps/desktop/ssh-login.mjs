@@ -18,7 +18,8 @@ const q = (s) => "'" + String(s).replaceAll("'", "'\\''") + "'";
 const HELPER = "const c=require('net').connect(process.argv[2]);let o='';c.on('connect',()=>c.end(process.argv[1]||''));"
   + "c.setEncoding('utf8').on('data',d=>{o+=d});c.on('end',()=>{if(!o)process.exit(1);process.stdout.write(o+'\\n')});c.on('error',()=>process.exit(1))";
 
-// ask({ prompt, again }) -> the password, 'yes' for a host key the person trusts, or null. again: the last password was wrong.
+// ask({ prompt, again }) -> the password, or null. again: the last password was wrong. No host key question reaches it:
+// TOFU (accept-new) takes a new key without asking, and a changed one fails.
 export async function sshLogin({ host, ssh = 'ssh', ask, dir = CONTROL_DIR }) {
   if (typeof host !== 'string' || !HOST.test(host)) return 'failed';
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -30,8 +31,7 @@ export async function sshLogin({ host, ssh = 'ssh', ask, dir = CONTROL_DIR }) {
   const server = net.createServer({ allowHalfOpen: true }, (c) => {
     let prompt = '';
     c.setEncoding('utf8').on('error', () => {}).on('data', (d) => { prompt += d; if (prompt.length > 4096) c.destroy(); }).on('end', async () => {
-      const key = /\(yes\/no/i.test(prompt);
-      const answer = cancelled ? null : await Promise.resolve(ask({ prompt: prompt.slice(0, 2000), again: !key && passwords++ > 0 })).catch(() => null);
+      const answer = cancelled ? null : await Promise.resolve(ask({ prompt: prompt.slice(0, 2000), again: passwords++ > 0 })).catch(() => null);
       if (typeof answer !== 'string' || !answer) cancelled = true;
       c.end(cancelled ? '' : answer);
     });
