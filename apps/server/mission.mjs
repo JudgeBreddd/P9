@@ -108,7 +108,7 @@ export function oneLineChange(before, after, kind) {
 // A log view's part of a file (#11): heading (a Markdown heading's text; to the next heading of the same or a higher level), then
 // lines (default 200) from the end (default) or the start.
 export function logPart(text, { heading, from = 'end', lines = 200 } = {}) {
-  let rows = text.split('\n');
+  let rows = text.split(/\r?\n/);
   if (heading !== undefined) {
     const level = (line) => { const hit = line.match(/^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$/); return hit ? { depth: hit[1].length, text: hit[2].trim() } : null; };
     const start = rows.findIndex((line) => level(line)?.text === heading.trim());
