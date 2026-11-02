@@ -847,7 +847,7 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost && server && /^(refused|wrong-password)$/.test(keeper.status(serverHost, !!server.background).keeping?.phase ?? '') && keeper.admin(serverHost, !!server.background, args[0])) return { ok: true };
     return { error: 'remote-admin-refused' };
   });
-  // Row 78: the password window's answer for the ssh login waiting on it: a password, 'yes' for a host key, or null (Cancel).
+  // Row 78: the password window's answer for the ssh login waiting on it: a password, or null (Cancel).
   // Handed to the login once and kept nowhere.
   ipcMain.handle('p9:ssh-answer', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || (args[0] !== null && !PASSWORD(args[0]))) throw new Error('ipc-sender-refused');

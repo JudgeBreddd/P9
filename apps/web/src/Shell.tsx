@@ -26,7 +26,7 @@ const REMOTE_WHY: Record<string, string> = {
   'server-dropped': 'Lost the remote: connecting again.',
 };
 
-// Row 78 (desktop/ssh-login.mjs): what the waiting ssh login asks. A prompt with (yes/no is a host key seen for the first time.
+// Row 78 (desktop/ssh-login.mjs): the password the waiting ssh login asks for. A new host key is never asked (accept-new).
 // Row 78: a changed host key, said plainly, with the known_hosts line ssh pointed at. P9 never edits known_hosts itself.
 const keyChanged = (host: string, kh?: { file: string; line: number }) => 'The ssh host key of ' + host + ' is not the one your known_hosts file has for it, '
   + 'so P9 will not connect and will not ask for your password. A reinstalled remote gets a new key; so does another machine answering in its place. '
@@ -43,28 +43,22 @@ type SshAsk = { id: number; prompt: string; again?: boolean; dropped?: boolean }
 const askSsh = (host: string, ask: SshAsk) => {
   const dialog = document.getElementById('sshDlg') as HTMLDialogElement | null, pw = document.getElementById('sshPw') as HTMLInputElement | null;
   if (!dialog || !pw || dialog.open || !window.p9?.sshAnswer) return;
-  const key = /\(yes\/no/i.test(ask.prompt);
-  document.getElementById('sshT')!.textContent = key ? 'Trust ' + host + '?' : 'Password for ' + host;
-  document.getElementById('sshP')!.textContent = key
-    ? 'This computer has not connected to ' + host + ' before. ssh shows its key below. Trust it if this is the machine you meant.'
-    : (ask.dropped ? 'The connection to ' + host + ' dropped. ' : '') + 'No ssh key works for ' + host + ', so ssh needs your password to ' + (ask.dropped ? 'connect again.' : 'log in.');
-  const said = document.getElementById('sshKey')!;
-  said.textContent = key ? ask.prompt.trim() : ''; said.hidden = !key;
+  document.getElementById('sshT')!.textContent = 'Password for ' + host;
+  document.getElementById('sshP')!.textContent = (ask.dropped ? 'The connection to ' + host + ' dropped. ' : '') + 'No ssh key works for ' + host + ', so ssh needs your password to ' + (ask.dropped ? 'connect again.' : 'log in.');
   document.getElementById('sshL')!.textContent = ask.prompt.trim().replace(/:$/, '');
-  for (const id of ['sshL', 'sshPw', 'sshNote']) document.getElementById(id)!.hidden = key;
-  pw.required = !key;
+  pw.required = true;
   document.getElementById('sshErr')!.hidden = !ask.again;
-  document.getElementById('sshOk')!.textContent = key ? 'Trust and connect' : 'Connect';
+  document.getElementById('sshOk')!.textContent = 'Connect';
   pw.value = '';
   dialog.returnValue = '';
   // The answer goes to main once; the field is emptied whenever the window closes. Cancel (or Esc) stops the login.
   dialog.onclose = () => {
     const password = pw.value;
     pw.value = '';
-    void window.p9?.sshAnswer?.(dialog.returnValue === 'ok' ? (key ? 'yes' : password || null) : null).catch(() => {});
+    void window.p9?.sshAnswer?.(dialog.returnValue === 'ok' ? password || null : null).catch(() => {});
   };
   dialog.showModal();
-  (key ? document.getElementById('sshOk')! : pw).focus();
+  pw.focus();
 };
 
 // Row 79, since U6 (threat model row 50 U6): the key offer is a checkbox on the keep window (below). When adding the key
