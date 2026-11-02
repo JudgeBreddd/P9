@@ -1327,6 +1327,15 @@ export async function createDesktop({ state, open } = {}) {
       return { ok: true };
     }
     clearTimeout(cardsHide); cardsHide = null;
+  // Builder, 2026-11-02 ("the editor being on top of everything"): the view draws above the page, so a top-bar menu opened over it
+  // would be under it. The shell asks for a still of the editor, shows it in the view's place, then hides the view while the menu
+  // is open. Only the shell may ask; the still goes only to it.
+  ipcMain.handle('p9:dev-still', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!devView?.getVisible()) return null;
+    const image = await devView.webContents.capturePage().catch(() => null);
+    return image && !image.isEmpty() ? 'data:image/jpeg;base64,' + image.toJPEG(90).toString('base64') : null;
+  });
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z), view = openCards();
     cardsItems = c.items.map(i => ({ key: i.key, title: i.title, sub: i.sub, ...(i.n === undefined ? {} : { n: i.n }) }));
     view.webContents.send('p9cards:list', cardsItems);

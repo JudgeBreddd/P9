@@ -2158,10 +2158,6 @@ function setFocus(f, stay = false) {
   document.querySelectorAll('[data-focus-btn]').forEach(b => b.setAttribute('aria-pressed', b.dataset.focusBtn === f));
   renderIndicator(); // each focus has its own pets
   $('#focusTitle').textContent = focusNames[f];
-  // In the desktop the Dev Focus editor is drawn above this page, so the theme picker would open behind it.
-  const behind = f === 'dev' && Boolean(window.p9);
-  $('#themeBtn').disabled = behind;
-  $('#themeBtn').title = behind ? 'Look: pick it in Chat or Mission Control, where it applies to Dev Focus too (the editor here would cover the picker)' : 'Look: the theme of every focus mode';
   showTerm();
   side.focus();
   placeDev();
@@ -2172,7 +2168,7 @@ function setFocus(f, stay = false) {
 function placeDev() {
   if (!window.p9?.devView) return;
   const r = $('#fDev').getBoundingClientRect(), now = side.current();
-  const visible = S.focus === 'dev' && r.width > 0 && r.height > 0 && !document.querySelector('dialog[open]') && now?.mode !== 'full';
+  const visible = S.focus === 'dev' && r.width > 0 && r.height > 0 && !document.querySelector('dialog[open]') && now?.mode !== 'full' && !devFrozen;
   let x = r.x, y = r.y, right = r.right;
   // The side panel and its drag bar stay clear of the view (8 px), on whichever side the swap put it. The cards are not reserved for: they float over it (their own overlay view).
   if (now) { const s = $('#side').getBoundingClientRect(); if (s.left > r.x) right = Math.min(right, s.left - 8); else x = Math.max(x, s.right + 8); }
@@ -2190,8 +2186,36 @@ function placeDev() {
     const room = ([a, b, c, d]) => Math.max(0, c - a) * Math.max(0, d - b);
     [x, y, right, bottom] = [[t.right + 8, y, right, bottom], [x, y, t.left - 8, bottom], [x, t.bottom + 8, right, bottom], [x, y, right, t.top - 8]].reduce((m, o) => room(o) > room(m) ? o : m);
   }
-  window.p9.devView(visible ? { visible, x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) } : { visible });
+  if (visible) devRect = { x: Math.round(x), y: Math.round(y), width: Math.round(Math.max(0, right - x)), height: Math.round(Math.max(0, bottom - y)) };
+  return window.p9.devView(visible ? { visible, ...devRect } : { visible });
 }
+// Builder, 2026-11-02 ("the editor being on top of everything"): a top-bar menu (machines, theme, history) opened over the view
+// would be under it. While one is open over it, a still of the editor (p9:dev-still) takes its place and the view steps aside;
+// closing the menu brings the live editor back. The still costs one capture per menu opened, only when the menu is over the editor.
+let devRect = null, devFrozen = false, devFreezing = 0;
+const devStill = Object.assign(document.createElement('img'), { hidden: true, alt: '' });
+devStill.style.cssText = 'position:fixed;pointer-events:none';
+$('#fDev').append(devStill);
+const menuOverDev = () => S.focus === 'dev' && devRect && [...document.querySelectorAll('.pop:not([hidden])')].some(p => {
+  const a = p.getBoundingClientRect();
+  return a.right > devRect.x && a.left < devRect.x + devRect.width && a.bottom > devRect.y && a.top < devRect.y + devRect.height;
+});
+async function devFreeze() {
+  const want = Boolean(window.p9?.devStill) && menuOverDev(), mine = ++devFreezing;
+  if (want === devFrozen) return;
+  if (want) {
+    const src = await window.p9.devStill().catch(() => null);
+    if (mine !== devFreezing) return;
+    if (src) { devStill.src = src; Object.assign(devStill.style, { left: devRect.x + 'px', top: devRect.y + 'px', width: devRect.width + 'px', height: devRect.height + 'px' }); devStill.hidden = false; }
+    devFrozen = true; placeDev();
+    return;
+  }
+  devFrozen = false;
+  await placeDev()?.catch(() => {});
+  // ponytail: one frame's grace for the view to paint before the still goes; a slow GPU could still show one frame of the pane.
+  requestAnimationFrame(() => { if (mine === devFreezing) devStill.hidden = true; });
+}
+document.querySelectorAll('.pop').forEach(p => new MutationObserver(devFreeze).observe(p, { attributeFilter: ['hidden'] }));
 new ResizeObserver(placeDev).observe($('#fDev'));
 new ResizeObserver(cardsOverlay).observe($('.stage'));
 new MutationObserver(() => { placeDev(); cardsOverlay(); }).observe(document.body, { subtree: true, attributeFilter: ['open'] });
