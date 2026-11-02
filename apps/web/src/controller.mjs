@@ -2201,8 +2201,9 @@ const menuOverDev = () => S.focus === 'dev' && devRect && [...document.querySele
   return a.right > devRect.x && a.left < devRect.x + devRect.width && a.bottom > devRect.y && a.top < devRect.y + devRect.height;
 });
 async function devFreeze() {
-  const want = Boolean(window.p9?.devStill) && menuOverDev(), mine = ++devFreezing;
+  const want = Boolean(window.p9?.devStill) && menuOverDev();
   if (want === devFrozen) return;
+  const mine = ++devFreezing;
   if (want) {
     const src = await window.p9.devStill().catch(() => null);
     if (mine !== devFreezing) return;
@@ -2215,7 +2216,9 @@ async function devFreeze() {
   // ponytail: one frame's grace for the view to paint before the still goes; a slow GPU could still show one frame of the pane.
   requestAnimationFrame(() => { if (mine === devFreezing) devStill.hidden = true; });
 }
-document.querySelectorAll('.pop').forEach(p => new MutationObserver(devFreeze).observe(p, { attributeFilter: ['hidden'] }));
+// A menu whose rows arrive after it opens (the machine list) only reaches down over the editor once it grows, so its size counts too.
+const popSize = new ResizeObserver(devFreeze);
+document.querySelectorAll('.pop').forEach(p => { new MutationObserver(devFreeze).observe(p, { attributeFilter: ['hidden'] }); popSize.observe(p); });
 new ResizeObserver(placeDev).observe($('#fDev'));
 new ResizeObserver(cardsOverlay).observe($('.stage'));
 new MutationObserver(() => { placeDev(); cardsOverlay(); }).observe(document.body, { subtree: true, attributeFilter: ['open'] });
