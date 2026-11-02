@@ -140,7 +140,7 @@ test('install.sh update with no Node: it fetches Node for the system check inste
   t.after(() => rm(home, { recursive: true, force: true }));
   await mkdir(bin); await mkdir(path.join(home, '.config/systemd/user'), { recursive: true });
   await writeFile(path.join(home, '.config/systemd/user/p9-foundation.service'), '[Service]\n');
-  for (const tool of ['git', 'systemctl', 'systemd-run', 'sha256sum', 'tar', 'realpath', 'dirname', 'uname', 'mktemp', 'mkdir', 'rm', 'rmdir', 'cat', 'ls', 'head']) {
+  for (const tool of ['git', 'systemctl', 'systemd-run', 'sha256sum', 'tar', 'gzip', 'flock', 'setsid', 'wc', 'realpath', 'dirname', 'uname', 'mktemp', 'mkdir', 'rm', 'rmdir', 'cat', 'ls', 'head']) {
     const found = spawnSync('sh', ['-c', 'command -v ' + tool], { encoding: 'utf8' }).stdout.trim();
     if (found) await symlink(found, path.join(bin, tool));
   }

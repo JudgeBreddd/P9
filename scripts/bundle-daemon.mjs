@@ -40,7 +40,8 @@ export async function appLocalRuntime(vendor) {
 // codex and sdk: the installed packages' folders; a version the lockfile does not pin stops the build.
 // ponytail: glibc only (Node's own Linux builds are glibc too), so no musl entries.
 export async function agentPins(root, codex, sdk) {
-  const lock = await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8');
+  // A Windows checkout (core.autocrlf, as GitHub's Windows runners set it) has CRLF line ends; the keys are found by \n.
+  const lock = (await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8')).replace(/\r\n/g, '\n');
   const version = async (dir) => JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8')).version;
   const codexVersion = await version(codex), sdkVersion = await version(sdk);
   const pins = {};

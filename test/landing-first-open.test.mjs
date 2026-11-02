@@ -38,3 +38,35 @@ test('Landing, first load: the main stage straight away, no P9 mark, the video p
   assert.ok(last.time > seen.at(-5).time, 'the video is moving');
   console.log('PASS landing first load: ' + JSON.stringify(last));
 });
+
+// The cause of the first-load failure, every time (a busy machine, 2026-11-01): the IntersectionObserver reported the video
+// once, not intersecting, while #land was still closed, and never again once it opened, so it sat paused on 'loading'.
+// Here every observer does exactly that; the landing must play anyway.
+test('Landing, first load: the video plays even when the observer never reports the landing opening', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t);
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-land-io-')), profile = path.join(home, 'profile');
+  await mkdir(profile, { recursive: true });
+  await writeFile(path.join(profile, 'p9-settings.json'), JSON.stringify({ focus: { chat: true, dev: true, mission: true } }));
+  await versionSeen(profile);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE; delete env.P9_LANDING;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.waitForFunction(() => document.querySelector('#land')?.open, null, { timeout: 20000 });
+  // A reload with the same window's landed mark cleared opens the landing again, as on a first load.
+  await app.context().addInitScript(() => {
+    sessionStorage.removeItem('p9-landed');
+    window.IntersectionObserver = class { constructor(callback) { this.callback = callback; }
+      observe(target) { setTimeout(() => this.callback([{ target, isIntersecting: false, intersectionRatio: 0 }], this), 0); }
+      unobserve() {} disconnect() {} takeRecords() { return []; } };
+  });
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#land').open, null, { timeout: 20000 });
+  const state = () => page.evaluate(() => { const c = document.querySelector('.p9-cosmos'); return { state: c.dataset.videoState, paused: c.querySelector('video').paused, time: c.querySelector('video').currentTime }; });
+  await page.waitForFunction(() => document.querySelector('.p9-cosmos').dataset.videoState === 'playing', null, { timeout: 15000 })
+    .catch(async () => assert.fail('the landing video did not play: ' + JSON.stringify(await state())));
+  const t0 = (await state()).time;
+  await page.waitForFunction((at) => document.querySelector('.p9-cosmos video').currentTime > at + 0.3, t0, { timeout: 5000 });
+  console.log('PASS landing plays with an observer that never saw it open: ' + JSON.stringify(await state()));
+});

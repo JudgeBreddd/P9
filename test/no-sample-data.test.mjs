@@ -42,15 +42,17 @@ const noSamples = async page => {
   assert.equal(await page.locator('#tabs .tab').count(), 0, 'no sample chat tabs');
   const text = await page.locator('body').innerText();
   for (const m of MARKERS) assert.ok(!text.includes(m), 'page shows sample text: ' + m);
-  assert.equal(await page.locator('#fMission .needs [data-n]').innerText(), '0');
+  // Waiting on you is a section widget (faed908): with no space it is not drawn at all; the sample view always drew it.
+  assert.equal(await page.locator('#fMission .needs').count(), 0, 'no Waiting on you panel, so no sample items in it');
 };
 
-test('a daemon with no settings file shows empty lists and says Mission Control is not set up', { timeout: 60000 }, async t => {
+test('a daemon with no settings file shows empty lists and Mission Control\'s onboarding card', { timeout: 60000 }, async t => {
   const instance = await daemon(t); // the test home has no settings.json: the fresh Windows install of issue #4
   const page = await open(t, instance.state);
-  await page.locator('[data-mission-note]', { hasText: /not set up yet \(settings-missing\)/ }).waitFor({ timeout: 15000 });
+  // Mission M4a (4d468c3): a fresh profile draws only the onboarding card, which says Mission Control is empty for now.
+  await page.locator('#fMission [data-onboard]', { hasText: /It is empty for now/ }).waitFor({ timeout: 15000 });
   await noSamples(page);
-  console.log('PASS settings-missing: no sample tabs, text or waiting items; the note says not set up');
+  console.log('PASS settings-missing: no sample tabs, text or waiting items; Mission shows its onboarding card');
 });
 
 test('no daemon at all shows empty lists and says the background service is not answering', { timeout: 60000 }, async t => {
