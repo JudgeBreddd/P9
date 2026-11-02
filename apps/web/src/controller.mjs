@@ -3568,7 +3568,8 @@ async function renderServerMenu() {
     + (h && remotes.includes(h) && !current ? '<button class="srv-x" data-server-rm="' + esc(h) + '" aria-label="Remove ' + esc(h) + '" title="Remove ' + esc(h) + '">×</button>' : '') + '</div>';
   pop.innerHTML = '<div class="hd eyebrow">Work on</div>' + row(null, host ? ['off', ''] : ['ok', 'In use'], !host)
     + all.map(h => row(h, h === host ? SERVER_STATE[s.status === 'ok' ? 'ok' : s.error] ?? ['bad', 'Unreachable'] : probed(h) ? ['wait', 'Checking…'] : ['off', ''], h === host)).join('')
-    + '<hr data-slot="separator" style="margin:6px 0">' + (host ? '<button class="item" role="menuitem" id="serverDisconnect">Disconnect from ' + esc(host) + '</button>' : '')
+    + '<hr data-slot="separator" style="margin:6px 0">' + (host && s.slim && window.p9.remoteAgents ? '<button class="item" role="menuitem" id="serverAgents">AI agents on ' + esc(host) + '…</button>' : '')
+    + (host ? '<button class="item" role="menuitem" id="serverDisconnect">Disconnect from ' + esc(host) + '</button>' : '')
     + '<button class="item" role="menuitem" id="serverAdd">Add a machine…</button>';
   pop.querySelectorAll('[data-server-go]').forEach(b => { b.onclick = () => { serverPop.close(); if (b.getAttribute('aria-current') !== 'true') window.p9.server(b.dataset.serverGo || null); }; });
   pop.querySelectorAll('[data-server-rm]').forEach(b => { b.onclick = async () => { const r = await window.p9.remotes('remove', b.dataset.serverRm).catch(() => null); if (r) { serverInfo.remotes = r.remotes; renderServerMenu(); } }; });
@@ -3578,6 +3579,8 @@ async function renderServerMenu() {
   }, () => {}));
   // U9: the same switch as This computer above, said plainly.
   if (host) $('#serverDisconnect').onclick = () => { serverPop.close(); window.p9.server(null); };
+  // Builder, 2026-11-02: the after-connect window again with only the agents question (Shell.tsx), now rather than at the next poll.
+  if ($('#serverAgents')) $('#serverAgents').onclick = async () => { serverPop.close(); await window.p9.remoteAgents(null).catch(() => {}); dispatchEvent(new Event('p9:status-now')); };
   $('#serverAdd').onclick = async () => { serverPop.close(); await $('#setBtn').onclick(); settingsAt($('#setRemote')); $('#setRemoteName')?.focus(); };
 }
 if (chatOn()) side.open('dan-chat', danChat);

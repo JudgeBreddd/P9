@@ -851,6 +851,20 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     try { return reply(c, { status: 200, installed: await placeAgents(AGENTS.filter((agent) => body[agent])) }); }
     catch (error) { return reply(c, { status: 500, error: 'agents-not-installed', detail: error.code ?? error.message }); }
   });
+  // Builder, 2026-11-02: the slim Temporary P9 installs without the agents' binary packages (about 600 MB); the desktop asks for
+  // the ones the owner picked once it is connected, and this fetches them (scripts/agents.mjs: pinned versions, checked against
+  // their sha512, an agent already there skipped). Only a folder with agents.json (a daemon bundle) fetches; a checkout says so.
+  app.post('/setup/agents-fetch', async (c) => {
+    const body = await json(c);
+    if (!body || typeof body !== 'object' || Object.keys(body).sort().join() !== 'claude,codex' || typeof body.claude !== 'boolean' || typeof body.codex !== 'boolean'
+        || !(body.claude || body.codex)) return reply(c, { status: 400, error: 'request-refused' });
+    const script = fileURLToPath(new URL('../../scripts/agents.mjs', import.meta.url));
+    if (!existsSync(fileURLToPath(new URL('../../agents.json', import.meta.url)))) return reply(c, { status: 409, error: 'not-a-bundle' });
+    const names = AGENTS.filter((agent) => body[agent]);
+    const done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: 900000, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => resolve(error ? (String(stderr).trim().split('\n').pop() || error.message) : null)));
+    return reply(c, done ? { status: 500, error: 'agents-not-fetched', detail: done.slice(0, 300) } : { status: 200, fetched: names });
+  });
   // Item 15 (threat model row 61): a system package P9 cannot carry, installed with the admin password. The command comes
   // from deps.mjs's table for a dependency that is missing now, typed into a new P9 terminal and never run: the owner reads
   // the reason first (the wizard's screen), then the command, and presses Enter; sudo asks for the password there.

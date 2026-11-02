@@ -163,7 +163,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await page.locator('#serverBadge', { hasText: 'Local' }).waitFor();
   await status({ status: 'ok' });
   assert.ok(await gone(forward));
-  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {}, noKey: [] });
+  assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-server.json'), 'utf8')), { host: null, last: 'test-host', remotes: [], keep: {}, noKey: [], agents: {} });
 });
 
 // Rows I1 and I2 in the window: the Temporary or Always on question (U6), the status line with Make it always on, the admin password window
@@ -496,6 +496,41 @@ test('U9 Disconnect on the remote label goes back to this computer; U8 the slim 
   assert.doesNotMatch(await page.locator('#dataNote').textContent(), /Mission/);
   assert.deepEqual(await missionCmds(), [], 'Ctrl K offers no Mission command on the slim P9');
   await evidence(page, 'u8-slim-no-mission');
+  // Builder, 2026-11-02: the agents question, in the same window after connecting, when main says it is due (agentsAsk);
+  // the boxes go to p9:remote-agents, and the download's phase shows on the status line, Try again when it failed.
+  await app.evaluate(({ ipcMain }) => {
+    const k = globalThis.slimTest, base = { status: 'ok', mode: 'server', host: 'test-host', background: true, slim: true, ask: false };
+    k.status = { ...base, agentsAsk: [] }; k.agents = [];
+    ipcMain.removeHandler('p9:get-status'); ipcMain.handle('p9:get-status', () => k.status);
+    ipcMain.removeHandler('p9:remote-agents'); ipcMain.handle('p9:remote-agents', (_, names) => { k.agents.push(names); k.status = names ? { ...base, agents: { phase: 'running', names } } : { ...base, agentsAsk: ['claude'] }; return { ok: true }; });
+  });
+  await page.evaluate(() => dispatchEvent(new Event('p9:status-now')));
+  await page.locator('#keepDlg[open]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#keepT').textContent(), 'Connected to test-host');
+  assert.equal(await page.locator('#keepAgentsRow').isVisible(), true);
+  assert.deepEqual([await page.locator('#keepClaude').isChecked(), await page.locator('#keepCodex').isChecked()], [false, false]);
+  assert.deepEqual(await page.locator('#keepDlg .dlg-foot button:visible').allTextContents(), ['Done']);
+  await page.locator('#keepClaude').check();
+  await evidence(page, 'agents-ask');
+  await page.click('#keepDone');
+  await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'Downloading Claude on test-host… the editor and terminal work meanwhile' }).waitFor({ timeout: 10000 });
+  assert.deepEqual(await app.evaluate(() => globalThis.slimTest.agents), [['claude']]);
+  await app.evaluate(() => { const k = globalThis.slimTest; k.status = { ...k.status, agents: { phase: 'failed', names: ['claude'], error: 'agents-not-fetched' } }; });
+  await page.evaluate(() => dispatchEvent(new Event('p9:status-now')));
+  await page.locator('#keepNote:not([hidden]) #keepText', { hasText: 'Claude could not be downloaded on test-host (agents-not-fetched)' }).waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#keepBtn').textContent(), 'Try again');
+  await page.click('#keepBtn');
+  for (const end = Date.now() + 5000; Date.now() < end && (await app.evaluate(() => globalThis.slimTest.agents.length)) < 2;) await page.waitForTimeout(100);
+  assert.deepEqual(await app.evaluate(() => globalThis.slimTest.agents), [['claude'], ['claude']]);
+  assert.equal(await page.locator('#keepDlg[open]').count(), 0, 'answered: not asked again');
+  // The machine menu asks again, at once, with the stored choice ticked; Esc stores nothing.
+  await page.locator('#serverBadge').click();
+  await page.locator('#serverPop #serverAgents', { hasText: 'AI agents on test-host…' }).click();
+  await page.locator('#keepDlg[open]').waitFor({ timeout: 5000 });
+  assert.deepEqual([await page.locator('#keepClaude').isChecked(), await page.locator('#keepCodex').isChecked()], [true, false]);
+  await page.keyboard.press('Escape');
+  await page.locator('#keepDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  assert.deepEqual(await app.evaluate(() => globalThis.slimTest.agents), [['claude'], ['claude'], null]);
   await disconnect.click();
   for (const end = Date.now() + 5000; Date.now() < end && !(await app.evaluate(() => globalThis.slimTest.calls.some((c) => c.length)));) await page.waitForTimeout(100);
   assert.deepEqual((await app.evaluate(() => globalThis.slimTest.calls)).filter((c) => c.length), [[null]], 'Disconnect is p9:server(null)');

@@ -191,8 +191,8 @@ test('Start P9 there: the user service where one is installed, the background st
 });
 
 // U8 (threat model row 50 U8 and U9): the slim Temporary P9. install.sh --slim writes a start that marks it and points at the
-// slim folder, fetches the agents for this machine, never runs pnpm and starts nothing (the next connect does).
-test('U8: install.sh --slim: the slim start (slim=1, its folder), the agents fetched, no pnpm, no daemon; --slim needs --background', { skip, timeout: 40000 }, async () => {
+// slim folder, keeps the agents the old one had (the desktop fetches the picked ones later), never runs pnpm and starts nothing.
+test('U8: install.sh --slim: the slim start (slim=1, its folder), the old agents kept, no pnpm, no daemon; --slim needs --background', { skip, timeout: 40000 }, async () => {
   const s = await stage(true, 'refused', { installed: false });
   await writeFile(path.join(s.bin, 'pnpm'), '#!/bin/sh\necho "$*" >> "' + s.dir + '/pnpm.log"\n');
   const slim = path.join(s.home, '.local', 'share', 'p9', 'remote');
@@ -203,7 +203,7 @@ test('U8: install.sh --slim: the slim start (slim=1, its folder), the agents fet
   assert.match(start, /^slim=1$/m);
   assert.ok(start.includes("checkout='" + slim.replaceAll("'", "'\\''") + "'"), start.slice(0, 400));
   assert.ok(existsSync(path.join(s.runDir, 'background')));
-  assert.match(await nodeLog(s), /scripts\/agents\.mjs/);
+  assert.ok((await nodeLog(s)).includes('scripts/agents.mjs --keep ' + slim), await nodeLog(s));
   assert.equal(await read(path.join(s.dir, 'pnpm.log')), '', 'no pnpm install or build');
   assert.equal(await starts(s), 0, 'started at the next connect, not here');
 });

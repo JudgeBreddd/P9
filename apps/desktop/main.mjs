@@ -275,12 +275,28 @@ export async function createDesktop({ state, open } = {}) {
   const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
+  // Builder, 2026-11-02: the agents each remote's slim Temporary P9 gets (claude, codex, both or none), asked once in the window
+  // after connecting; the install there sends none, and fetchAgents below asks that daemon for these once connected.
+  // agentsAgain: the machine menu's AI agents item asks again on this remote (this launch only).
+  const pickable = list => Array.isArray(list) && list.length <= 2 && new Set(list).size === list.length && list.every(a => a === 'claude' || a === 'codex');
+  const agentsFor = Object.fromEntries(Object.entries(saved?.agents && typeof saved.agents === 'object' ? saved.agents : {}).filter(([h, list]) => named(h) && pickable(list)));
+  const agentsAgain = new Set(), agentsTried = new WeakSet();
+  let agentsJob = null; // { host, names, phase: running | done | failed, error, at }
   const slimTried = new Map(); // review 2 L2: host -> the old slim version this launch reinstalled over
   // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
   // U8: Keep on the slim Temporary P9 there (P9_KEEP full) is the full install, with keep and this password if any.
   const keeper = createKeeper({ saved: saved?.keep, named, save: () => keepServer(), run: (h, action, password) => remoteMode(h, action, sshCommand, password)
     .then(r => { if (r.phase === 'full' && h === serverHost) runInstall(password, { full: true, keep: true }); return r; }) });
-  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey }), { mode: 0o600 });
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor }), { mode: 0o600 });
+  // The download runs on the remote (POST /setup/agents-fetch); the page shows its phase from p9:get-status.
+  const fetchAgents = (host, names) => {
+    if (!names.length || !server?.slim || (agentsJob?.host === host && agentsJob.phase === 'running')) return;
+    const job = agentsJob = { host, names, phase: 'running' };
+    daemonRequest(state, 'POST', '/setup/agents-fetch', { claude: names.includes('claude'), codex: names.includes('codex') }, undefined, 900000)
+      .then(r => r.status === 200 ? { phase: 'done' } : { phase: 'failed', error: r.status === 404 || r.body?.error === 'request-refused' ? 'daemon-outdated' : r.body?.detail ?? r.body?.error ?? 'daemon-unavailable' },
+        () => ({ phase: 'failed', error: 'daemon-unavailable' }))
+      .then(end => { if (agentsJob === job) agentsJob = { ...job, ...end, at: Date.now() }; });
+  };
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
   let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
@@ -533,6 +549,14 @@ export async function createDesktop({ state, open } = {}) {
       const h = await server?.check().catch(() => null);
       // background: P9 there stops when nobody uses it (row I1); ask: the Keep P9 running question is due.
       const there = { ...keeper.status(serverHost, !!server?.background), ...(server?.slim && { slim: true }), ...(keyOffer?.host === serverHost && { keyOffer: { id: keyOffer.id } }) };
+      // The agents: asked when this remote has no choice yet (or the machine menu asked again); a stored choice is fetched once per
+      // connection (an update there may have brought new versions; ones already there are skipped); a finished job shows 30 s.
+      if (h?.status === 'ok' && server?.slim) {
+        if (!Object.hasOwn(agentsFor, serverHost) || agentsAgain.has(serverHost)) there.agentsAsk = agentsFor[serverHost] ?? [];
+        else if (!agentsTried.has(server)) { agentsTried.add(server); fetchAgents(serverHost, agentsFor[serverHost]); }
+      }
+      const job = agentsJob?.host === serverHost && (agentsJob.phase !== 'done' || Date.now() - agentsJob.at < 30000) ? agentsJob : null;
+      if (job) there.agents = { phase: job.phase, names: job.names, ...(job.error && { error: job.error }) };
       return h?.status === 'ok' ? { status: 'ok', mode: 'server', host: serverHost, ...there } : { status: 'unavailable', mode: 'server', host: serverHost, error: serverError ?? 'server-connecting', ...(serverError === 'ssh-host-key-changed' && knownHosts && { knownHosts }), ...(remoteInstall && { install: remoteInstall }), ...(sshAsk && { sshAsk: { id: sshAsk.id, prompt: sshAsk.prompt, again: sshAsk.again, dropped: sshAsk.dropped } }) };
     }
     try {
@@ -925,6 +949,18 @@ export async function createDesktop({ state, open } = {}) {
     probes.set(host, { at: Date.now(), state });
     return state;
   });
+  // Builder, 2026-11-02: the agents for this window's remote (a list of claude and codex, maybe empty), stored and fetched now;
+  // null asks again (the machine menu's AI agents). Picking fewer removes nothing already there.
+  ipcMain.handle('p9:remote-agents', async (event, ...args) => {
+    const [names] = args;
+    if (!fromApp(event) || args.length !== 1 || !(names === null || pickable(names))) throw new Error('ipc-sender-refused');
+    if (!serverHost || !server) return { error: 'not-connected' };
+    if (names === null) { agentsAgain.add(serverHost); return { ok: true }; }
+    agentsAgain.delete(serverHost); agentsFor[serverHost] = names;
+    await keepServer().catch(() => {});
+    fetchAgents(serverHost, names);
+    return { ok: true };
+  });
   // Row I1: the answer to Keep P9 running on this window's remote (yes: boolean), stored when remember is true, applied now.
   ipcMain.handle('p9:remote-keep', async (event, ...args) => {
     const [yes, remember] = args;
@@ -1291,6 +1327,15 @@ export async function createDesktop({ state, open } = {}) {
     if (!shown) devView.webContents.focus();
     return { ok: true };
   });
+  // Builder, 2026-11-02 ("the editor being on top of everything"): the view draws above the page, so a top-bar menu opened over it
+  // would be under it. The shell asks for a still of the editor, shows it in the view's place, then hides the view while the menu
+  // is open. Only the shell may ask; the still goes only to it.
+  ipcMain.handle('p9:dev-still', async (event, ...args) => {
+    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
+    if (!devView?.getVisible()) return null;
+    const image = await devView.webContents.capturePage().catch(() => null);
+    return image && !image.isEmpty() ? 'data:image/jpeg;base64,' + image.toJPEG(90).toString('base64') : null;
+  });
   // The Dev Focus cards overlay (threat model row 3, p9:cards): the shell hands over a bounded list of card texts and where to
   // put them; the overlay view above the editor draws them and says which one was clicked. Created when first needed, closed a
   // minute after it was last hidden, so it costs nothing in the other focuses.
@@ -1327,15 +1372,6 @@ export async function createDesktop({ state, open } = {}) {
       return { ok: true };
     }
     clearTimeout(cardsHide); cardsHide = null;
-  // Builder, 2026-11-02 ("the editor being on top of everything"): the view draws above the page, so a top-bar menu opened over it
-  // would be under it. The shell asks for a still of the editor, shows it in the view's place, then hides the view while the menu
-  // is open. Only the shell may ask; the still goes only to it.
-  ipcMain.handle('p9:dev-still', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length) throw new Error('ipc-sender-refused');
-    if (!devView?.getVisible()) return null;
-    const image = await devView.webContents.capturePage().catch(() => null);
-    return image && !image.isEmpty() ? 'data:image/jpeg;base64,' + image.toJPEG(90).toString('base64') : null;
-  });
     const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z), view = openCards();
     cardsItems = c.items.map(i => ({ key: i.key, title: i.title, sub: i.sub, ...(i.n === undefined ? {} : { n: i.n }) }));
     view.webContents.send('p9cards:list', cardsItems);

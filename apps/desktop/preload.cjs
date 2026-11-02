@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   server: (...host) => ipcRenderer.invoke('p9:server', ...host), // none: mode, remotes and ssh hosts; null: Local; a host: that remote
   remotes: (action, host) => ipcRenderer.invoke('p9:remotes', action, host), // 'add' or 'remove', one host name
   remoteKeep: (yes, remember) => ipcRenderer.invoke('p9:remote-keep', yes, remember), // row I1: Keep P9 running on this remote?
+  remoteAgents: (names) => ipcRenderer.invoke('p9:remote-agents', names),
   remoteKeepSetting: (host, choice) => ipcRenderer.invoke('p9:remote-keep-setting', host, choice), // true, false or null (ask)
   remoteState: host => ipcRenderer.invoke('p9:remote-state', host), // 'p9', 'no-p9' or 'unreachable'; saved or last-used remotes only
   // With a Send files plan for the chat's folder: its id and the prompt's answer (item 23).

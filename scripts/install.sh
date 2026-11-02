@@ -6,7 +6,7 @@
 # --background: the desktop's "No" to Keep P9 running there (threat model row I1): no linger and no service; P9 runs as a
 # background process while a desktop is connected, the way VS Code's server runs. Without it, a server keeps P9 running.
 # --slim FOLDER (U8): this is the small Temporary P9 the desktop sent (remote-install.mjs slimScript), unpacked beside
-# FOLDER, which it replaces afterwards: no pnpm, no build, no service; the agents' binary packages come from agents.mjs, and
+# FOLDER, which it replaces afterwards: no pnpm, no build, no service; the agents' binary packages are kept from FOLDER (agents.mjs --keep; the desktop fetches the rest), and
 # start names FOLDER. Goes with --headless --background.
 # --admin-stdin (row I2): the admin password the person typed into the desktop's install window is stdin's first line.
 # Without it, --headless stops where an admin is needed: P9_ADMIN need and P9_ADMIN command lines, exit 5.
@@ -194,9 +194,10 @@ if ! node_error=$(node --version 2>&1 >/dev/null); then
   esac
 fi
 node=$(command -v node)
-# U8: the slim Temporary P9 is built already; it needs the agents for this machine, tmux and the editor server, then start.
+# U8: the slim Temporary P9 is built already; it needs tmux and the editor server, then start. The agents for this machine:
+# only the ones the old install there had (kept, no download); the desktop fetches the ones the owner picks once connected.
 if [ -n "$slim" ]; then
-  "$node" scripts/agents.mjs || { echo "P9_INSTALL agents-failed"; exit 1; }
+  "$node" scripts/agents.mjs --keep "$slim" || echo "P9 could not keep the agents from before; P9 downloads them again when you connect." 
   system_deps --headless || exit 1
   "$node" scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
   mkdir -p -- "$workspace"

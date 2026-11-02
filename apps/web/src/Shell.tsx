@@ -7,7 +7,7 @@ const markup = shell.replace('<!--black-hole-->', hole);
 import { mountShell } from './controller.mjs';
 
 declare global {
-  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
+  interface Window { p9?: { getStatus(): Promise<{ status: 'ok' | 'unavailable'; reason?: 'task-missing' | 'task-stale' | 'not-answering'; savedWorkspace?: string; workspace?: string; mode?: 'server'; host?: string; error?: string; knownHosts?: { file: string; line: number }; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }>; remoteKeep?(yes: boolean, remember: boolean): Promise<unknown>; remoteAgents?(names: Agent[] | null): Promise<unknown>; sshAnswer?(answer: string | null): Promise<unknown>; sshKey?(yes: boolean, never: boolean): Promise<{ ok?: boolean; error?: string }>; sshKeySetting?(host: string): Promise<unknown>; remoteAdmin?(password: string): Promise<{ ok?: boolean; error?: string }>; remoteDepsCheck?(): Promise<{ command?: string; error?: string }>; remoteDeps?(password: string): Promise<{ ok?: boolean; error?: string }>; usage(): Promise<unknown>; server?(...host: (string | null)[]): Promise<{ host?: string | null; last?: string | null }> } }
 }
 
 // Remote mode (desktop/remote.mjs): why the window is not on the remote yet.
@@ -99,6 +99,14 @@ const keepLine = (host: string, background?: boolean, k?: Keeping, slim?: boolea
   if (k?.phase === 'failed') return ['Could not change how P9 runs on ' + host, 'Try again'];
   return background ? ['P9 on ' + host + ' is temporary' + (slim ? ' (no Mission Control)' : '') + ': it stops when you disconnect', 'Make it always on'] : null;
 };
+// Builder, 2026-11-02: the agents downloading on the slim Temporary P9 there after connecting (desktop main.mjs fetchAgents).
+type Agent = 'claude' | 'codex';
+type Agents = { phase: 'running' | 'done' | 'failed'; names: Agent[]; error?: string };
+const agentNames = (names: Agent[]) => names.map(n => n === 'claude' ? 'Claude' : 'Codex').join(' and ');
+const agentsLine = (host: string, a: Agents): [string, string] => a.phase === 'running'
+  ? ['Downloading ' + agentNames(a.names) + ' on ' + host + '… the editor and terminal work meanwhile', '']
+  : a.phase === 'done' ? [agentNames(a.names) + (a.names.length > 1 ? ' are' : ' is') + ' ready on ' + host, '']
+  : [agentNames(a.names) + ' could not be downloaded on ' + host + (a.error === 'daemon-outdated' ? ': P9 there is older than this app' : ' (' + a.error + ')'), 'Try again'];
 // Row I2: the password window for one admin step on host. need: "name: reason" lines; command: exactly what runs as admin.
 // The password goes to main once (p9:remote-admin) and the field is emptied whenever the window closes.
 // send: where the password goes (Keep it running and the install: p9:remote-admin; row 61 on a remote: p9:remote-deps).
@@ -140,7 +148,7 @@ const elapsed = (started?: number) => {
 export default function Shell() {
   useEffect(() => {
     const dispose = mountShell({ askAdmin });
-    let keepAsked = false, adminAsked = '', sshAsked = 0, keyAsked = 0, keySaid = '';
+    let keepAsked = false, adminAsked = '', sshAsked = 0, keyAsked = 0, keySaid = '', agentsAsked = false;
     let active = true, waited = false, connected = false, timer: ReturnType<typeof setTimeout> | undefined;
     // D20: the remote this window has shown.
     let shown = '';
@@ -148,7 +156,7 @@ export default function Shell() {
     // Asks again every 5 s until the daemon answers: asked once, the label said unavailable forever (issue #6 B3).
     const ask = () => void (window.p9?.getStatus() ?? Promise.resolve({ status: 'unavailable' as const }))
       .catch(() => ({ status: 'unavailable' as const }))
-      .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping }) => {
+      .then((result: { status: string; reason?: string; savedWorkspace?: string; workspace?: string; mode?: string; host?: string; error?: string; install?: RemoteInstall; sshAsk?: SshAsk; keyOffer?: { id: number }; background?: boolean; slim?: boolean; ask?: boolean; keeping?: Keeping; agentsAsk?: Agent[]; agents?: Agents }) => {
         const label = document.getElementById('daemonStatus'), disconnect = document.getElementById('disconnectBtn');
         if (!active) return;
         // Remote mode asks every 5 s even when connected: a lost tunnel shows here, and main connects again on its own.
@@ -204,14 +212,17 @@ export default function Shell() {
             disconnect.title = 'Back to this computer.' + (result.background ? ' P9 on ' + result.host + ' is temporary, so it stops there 5 minutes later.' : ' P9 keeps running on ' + result.host + '.');
             disconnect.onclick = () => { (disconnect as HTMLButtonElement).disabled = true; void window.p9?.server?.(null); };
           }
-          const note = document.getElementById('keepNote'), line: [string, string] | null = ok ? (keySaid ? [keySaid, ''] : keepLine(result.host ?? '', result.background, result.keeping, result.slim)) : null;
+          const agentLine = ok && !keySaid && result.agents ? agentsLine(result.host ?? '', result.agents) : null;
+          const note = document.getElementById('keepNote'), line: [string, string] | null = ok ? (keySaid ? [keySaid, ''] : agentLine ?? keepLine(result.host ?? '', result.background, result.keeping, result.slim)) : null;
           if (note && window.p9?.remoteKeep) {
             note.hidden = !line;
             const keepText = document.getElementById('keepText')!; keepText.textContent = keepText.title = line?.[0] ?? '';
             const button = document.getElementById('keepBtn') as HTMLButtonElement;
             button.hidden = !line?.[1]; button.textContent = line?.[1] ?? '';
             const k = result.keeping, host = result.host ?? '';
-            button.onclick = (k?.phase === 'refused' || k?.phase === 'wrong-password') && k.command
+            const names = result.agents?.names ?? [];
+            button.onclick = agentLine ? () => { button.hidden = true; void window.p9?.remoteAgents?.(names).finally(ask); }
+              : (k?.phase === 'refused' || k?.phase === 'wrong-password') && k.command
               ? () => askAdmin(host, 'Make P9 always on for ' + host, 'For P9 to keep running after you sign out, your account there needs one admin setting.',
                 [], k.command!, 'Make it always on', k.phase === 'wrong-password' ? 'That password did not work. Check it and try again.' : '', ask)
               : () => { button.hidden = true; void window.p9?.remoteKeep?.(true, false).finally(ask); };
@@ -221,10 +232,18 @@ export default function Shell() {
           const dialog = document.getElementById('keepDlg') as HTMLDialogElement | null;
           const askKeep = ok && !!result.ask && !keepAsked && !!window.p9?.remoteKeep;
           const offer = ok && !!result.keyOffer && result.keyOffer.id !== keyAsked && !!window.p9?.sshKey;
-          if (dialog && !dialog.open && (askKeep || offer)) {
+          // Builder, 2026-11-02: which agents to download there, on the first connect to a slim Temporary P9 (or the machine menu's
+          // AI agents asked again). Answered, main stops asking, so the next ask is due again only after another ask from the menu.
+          if (!result.agentsAsk) agentsAsked = false;
+          const askAgents = ok && !!result.agentsAsk && !agentsAsked && !!window.p9?.remoteAgents;
+          if (dialog && !dialog.open && (askKeep || offer || askAgents)) {
             const host = result.host ?? '', box = document.getElementById('keepKey') as HTMLInputElement, remember = document.getElementById('keepRemember') as HTMLInputElement;
             if (askKeep) keepAsked = true;
             if (offer) keyAsked = result.keyOffer!.id;
+            if (askAgents) agentsAsked = true;
+            const claude = document.getElementById('keepClaude') as HTMLInputElement, codex = document.getElementById('keepCodex') as HTMLInputElement;
+            claude.checked = !!result.agentsAsk?.includes('claude'); codex.checked = !!result.agentsAsk?.includes('codex');
+            document.getElementById('keepAgentsRow')!.style.display = askAgents ? '' : 'none';
             document.getElementById('keepT')!.textContent = askKeep ? 'How should P9 run on ' + host + '?' : 'Connected to ' + host;
             // style, not hidden: .keep-ways and .keep-again set their own display.
             for (const id of ['keepP', 'keepWays', 'keepRememberRow', 'keepNo', 'keepYes']) document.getElementById(id)!.style.display = askKeep ? '' : 'none';
@@ -233,6 +252,8 @@ export default function Shell() {
             box.checked = true; remember.checked = false;
             dialog.onclose = () => {
               const v = dialog.returnValue;
+              // Esc stores nothing: the next connect asks again. Any button stores the boxes, none ticked included.
+              if (askAgents && v) void window.p9?.remoteAgents?.([...(claude.checked ? ['claude' as const] : []), ...(codex.checked ? ['codex' as const] : [])]).finally(ask);
               if (askKeep && (v === 'yes' || v === 'no')) void window.p9?.remoteKeep?.(v === 'yes', remember.checked).finally(ask);
               if (!offer) return;
               // Unticked, or Esc: adds nothing, and the no is remembered (Settings > Remote Connect offers it again).
@@ -265,8 +286,11 @@ export default function Shell() {
         }
         if (result.status !== 'ok') timer = setTimeout(ask, 5000);
       });
+    // The machine menu's AI agents (controller.mjs): ask now, not at the next 5 s poll.
+    const now = () => { clearTimeout(timer); ask(); };
+    addEventListener('p9:status-now', now);
     ask();
-    return () => { active = false; clearTimeout(timer); dispose(); };
+    return () => { active = false; clearTimeout(timer); removeEventListener('p9:status-now', now); dispose(); };
   }, []);
   // Approved static markup, bundled with this module; external data never reaches this sink.
   return <div data-p9-island dangerouslySetInnerHTML={{ __html: markup }} />;

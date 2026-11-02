@@ -64,20 +64,29 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
   const health = await http({ socketPath: started.credentials.socketPath, headers: authenticated(started.credentials) });
   assert.equal(health.status, 200, JSON.stringify(health));
   assert.equal(JSON.parse(health.text).version, JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
+  // Builder, 2026-11-02: the desktop's agents fetch after connecting (no network here): a body that picks none or is not
+  // booleans is refused; a checkout's daemon, with no agents.json, says it is not a bundle.
+  const fetchAgents = (d, body) => http({ socketPath: d.credentials.socketPath, method: 'POST', route: '/setup/agents-fetch',
+    headers: { ...authenticated(d.credentials), 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await fetchAgents(started, { claude: false, codex: false })).status, 400);
+  assert.equal((await fetchAgents(started, { claude: 'yes', codex: true })).status, 400);
+  const checkout = await fetchAgents(await daemon(t), { claude: true, codex: false });
+  assert.deepEqual([checkout.status, JSON.parse(checkout.text).error], [409, 'not-a-bundle']);
 });
 
 // A stand-in for registry.npmjs.org: P9_AGENTS_FROM, a folder of .tgz files, with the same check.
-async function agentsStage(tamper) {
+async function agentsStage(tamper, args = []) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-agents-')), p9 = path.join(dir, 'p9'), from = path.join(dir, 'from');
   await mkdir(path.join(p9, 'scripts'), { recursive: true }); await mkdir(path.join(dir, 'pkg', 'package'), { recursive: true }); await mkdir(from);
   await cp(path.join(root, 'scripts', 'agents.mjs'), path.join(p9, 'scripts', 'agents.mjs'));
   await writeFile(path.join(dir, 'pkg', 'package', 'codex'), 'the binary\n');
+  await writeFile(path.join(dir, 'pkg', 'package', 'package.json'), '{"version":"1.0.0-linux"}');
   assert.equal((await run('tar', ['-czf', path.join(from, 'codex-1.0.0-linux.tgz'), '-C', path.join(dir, 'pkg'), 'package'])).code, 0);
   const bytes = await readFile(path.join(from, 'codex-1.0.0-linux.tgz'));
   const integrity = 'sha512-' + createHash('sha512').update(tamper ? Buffer.concat([bytes, Buffer.from('x')]) : bytes).digest('base64');
   await writeFile(path.join(p9, 'agents.json'), JSON.stringify({ [process.platform + '-' + process.arch]: [{ folder: '@openai/codex-linux', url: 'https://registry.npmjs.org/@openai/codex/-/codex-1.0.0-linux.tgz', integrity }] }));
-  const result = await run(process.execPath, [path.join(p9, 'scripts', 'agents.mjs')], { env: { ...process.env, P9_AGENTS_FROM: from } });
-  return { ...result, p9, modules: path.join(p9, 'node_modules') };
+  const result = await run(process.execPath, [path.join(p9, 'scripts', 'agents.mjs'), ...args], { env: { ...process.env, P9_AGENTS_FROM: from } });
+  return { ...result, dir, p9, from, modules: path.join(p9, 'node_modules') };
 }
 
 test('U8 agents.mjs: a package matching its pinned sha512 is installed for this machine', { skip, timeout: 30000 }, async () => {
@@ -93,4 +102,34 @@ test('U8 agents.mjs: a package that does not match its pin installs nothing and 
   assert.match(s.out, /does not match its pinned checksum; nothing was installed/);
   assert.equal(existsSync(path.join(s.modules, '@openai')), false);
   assert.deepEqual((await readdir(s.modules)).filter((n) => n.startsWith('.agents-')), []);
+});
+
+// Builder, 2026-11-02: the slim install keeps the agents the old one had (install.sh --slim runs --keep), and the desktop
+// fetches only the ones the owner picked once connected (POST /setup/agents-fetch runs agents.mjs claude and/or codex).
+test('agents.mjs: fetches only the agents named, skips one already there, and --keep links the old install\'s instead of downloading', { skip, timeout: 30000 }, async () => {
+  const s = await agentsStage(false, ['claude']), script = path.join(s.p9, 'scripts', 'agents.mjs');
+  assert.equal(s.code, 0, s.out);
+  assert.equal(existsSync(path.join(s.modules, '@openai')), false, 'codex was not picked');
+  const again = (args, env = {}, cwd = s.p9) => run(process.execPath, [path.join(cwd, 'scripts', 'agents.mjs'), ...args], { env: { ...process.env, P9_AGENTS_FROM: s.from, ...env } });
+  assert.equal((await again(['codex'])).code, 0);
+  const binary = path.join(s.modules, '@openai', 'codex-linux', 'codex');
+  assert.equal(await readFile(binary, 'utf8'), 'the binary\n');
+  // Already there at its pinned version: nothing is read (an empty P9_AGENTS_FROM would fail a download).
+  const empty = path.join(s.dir, 'empty'); await mkdir(empty);
+  const skipped = await again([], { P9_AGENTS_FROM: empty });
+  assert.equal(skipped.code, 0, skipped.out);
+  // A new install beside it keeps the old one's, linked, with no download and none named.
+  const next = path.join(s.dir, 'next');
+  await mkdir(path.join(next, 'scripts'), { recursive: true });
+  await cp(script, path.join(next, 'scripts', 'agents.mjs')); await cp(path.join(s.p9, 'agents.json'), path.join(next, 'agents.json'));
+  const kept = await again(['--keep', s.p9], { P9_AGENTS_FROM: empty }, next);
+  assert.equal(kept.code, 0, kept.out);
+  assert.match(kept.out, /\(kept\)/);
+  assert.equal((await stat(path.join(next, 'node_modules', '@openai', 'codex-linux', 'codex'))).ino, (await stat(binary)).ino);
+  // --keep with nothing to keep fetches nothing.
+  const none = path.join(s.dir, 'none');
+  await mkdir(path.join(none, 'scripts'), { recursive: true });
+  await cp(script, path.join(none, 'scripts', 'agents.mjs')); await cp(path.join(s.p9, 'agents.json'), path.join(none, 'agents.json'));
+  assert.equal((await again(['--keep', empty], { P9_AGENTS_FROM: empty }, none)).code, 0);
+  assert.equal(existsSync(path.join(none, 'node_modules', '@openai')), false);
 });
