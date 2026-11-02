@@ -358,6 +358,14 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   assert.equal(existsSync(leftover), false, 'the old images folder is gone from the state folder');
   third.child.kill('SIGTERM');
   await once(third.child, 'exit');
+  // v0.1.5 also cached site icons in <state>/icons; that cache is dropped at start so it cannot refuse the start either.
+  const cache = path.join(instance.directory, 'state-5', 'icons');
+  await mkdir(cache, { recursive: true, mode: 0o700 }); await chmod(path.dirname(cache), 0o700);
+  await writeFile(path.join(cache, 'a'.repeat(32) + '.json'), '{}');
+  const fifth = await restart(t, instance, 'state-5');
+  assert.equal(existsSync(cache), false, 'the old icons cache is gone from the state folder');
+  fifth.child.kill('SIGTERM');
+  await once(fifth.child, 'exit');
   if (process.platform !== 'win32') { // a symlink there needs a privilege
     const stray = path.join(instance.directory, 'state-4', 'images');
     await mkdir(stray, { recursive: true, mode: 0o700 }); await chmod(path.dirname(stray), 0o700);

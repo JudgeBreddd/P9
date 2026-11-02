@@ -898,7 +898,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.get('/mission/edit', editing, async (c) => c.json(await mcp.editState()));
   // Tile art (apps/server/icons.mjs): site icons fetched from the sites themselves, program icons, and the user's pictures,
   // all as data: URIs for <img>. Desktop only; the phone lists links and shows no tiles.
-  const icons = createIcons({ dir: state, workspace, registry: () => settings.registry });
+  const icons = createIcons({ dir: ownership ?? state, workspace, registry: () => settings.registry });
   app.get('/mission/icons', editing, async (c) => c.json(await icons.collect(await mission.iconSources())));
   app.post('/mission/edit', editing, async (c) => {
     const { kind, confirm, ...rest } = (await json(c)) ?? {};

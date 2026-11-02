@@ -177,6 +177,8 @@ test('Setup wizard: a registry, AGENTS.md or waiting folder inside dist, build, 
 
 // K14: the wizard's scan and Mission's plans list skip the same folders (packages/files WALK_SKIP), agent_skills included.
 test('K14 Setup wizard: nothing inside a WALK_SKIP folder is found', { timeout: 60000 }, async (t) => {
+  // Named here, not read from the list, so a name dropped from WALK_SKIP fails.
+  for (const name of ['node_modules', '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']) assert.ok(WALK_SKIP.includes(name), name);
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {
     for (const name of WALK_SKIP) {
       await mkdir(path.join(workspace, name, 'workspace-hub'), { recursive: true });

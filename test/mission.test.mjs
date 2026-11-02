@@ -465,7 +465,7 @@ test('M5: the daemon refuses with the reason and starts nothing; choices come ba
 // workspace-hub's "Gate check a plan" button: choices "plans" is every plan.md under the scripts root, still strict.
 test('choices "plans": every plan.md outside skipped folders, and nothing else is accepted', { timeout: 30000 }, async (t) => {
   const instance = await start(t, TEAMMATE, [{ id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }]);
-  for (const dir of ['a', 'b/c', 'node_modules/x', 'dist/x', 'build', 'venv', '.venv', '__pycache__', '.cache', '.astro', '_archive', '.git', 'agent_skills/s', '_private']) {
+  for (const dir of ['a', 'b/c', 'node_modules/x', 'dist/x', 'build', 'venv', '.venv', '__pycache__', '.cache', '.astro', '_archive', '.git', 'agent_skills/s', '_private', '_intake', '_templates', 'templates/t', 'x/recommended-delete']) {
     await mkdir(path.join(instance.workspace, dir), { recursive: true });
     await writeFile(path.join(instance.workspace, dir, 'plan.md'), '# plan');
   }

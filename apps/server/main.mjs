@@ -1,4 +1,4 @@
-import { mkdir, open, lstat, chmod, unlink, readdir, realpath, readFile } from 'node:fs/promises';
+import { mkdir, open, lstat, chmod, unlink, readdir, realpath, readFile, rm } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -112,6 +112,8 @@ if (windows) {
   }
 }
 await keepOldPhotos(state, ownershipDirectory);
+// v0.1.5 cached site icons in <state>/icons, which made every later Windows start refuse. It is only a cache: drop it.
+if ((await lstat(path.join(state, 'icons')).catch(() => null))?.isDirectory()) await rm(path.join(state, 'icons'), { recursive: true });
 const stateEntries = await readdir(state);
 if (windows) {
   if (stateEntries.some((name) => name !== 'desktop.json')) throw new Error('state-directory-not-empty');

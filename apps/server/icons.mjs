@@ -156,7 +156,7 @@ export async function programIcon(program, env = process.env) {
   return null;
 }
 
-// dir: the state folder's icons cache; without one (a listener built without a state folder) no site is fetched.
+// dir: where the icons cache lives (the ownership folder, never the state folder: Windows refuses to start with anything in it); without one no site is fetched.
 // registry(): the registry's path under the workspace; pictures live in icons/ beside it.
 export function createIcons({ dir, workspace, registry, discoverIcon = discover, now = Date.now }) {
   const cache = dir && path.join(dir, 'icons');
