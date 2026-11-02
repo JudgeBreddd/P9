@@ -462,9 +462,9 @@ test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list th
   for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'solo-runs/2026-Nov-01-solo-run-report.md', 'ICM/_private/solo-runs/2026-Oct-31-solo-run-report.md', 'CLAUDE.md']) {
     await mkdir(path.dirname(path.join(instance.workspace, file)), { recursive: true }); await writeFile(path.join(instance.workspace, file), '# ' + file);
   }
-  // P11: a solo-run report anywhere in the workspace is listed, except under a locked name (_private, File protection).
+  // P11: a solo-run report anywhere in the workspace is listed, _private included (924105d: Mission's reads see it), newest first.
   const lists = { homelab: [['Services', ['stack/docker-compose.yml']], ['Logs', ['stack/logs/app.log', 'stack/nightly-backup.log']], ['Backups', ['stack/nightly-backup.log']]],
-    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Solo runs', ['solo-runs/2026-Nov-01-solo-run-report.md']], ['Workspace rules', ['CLAUDE.md']]] };
+    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Solo runs', ['ICM/_private/solo-runs/2026-Oct-31-solo-run-report.md', 'solo-runs/2026-Nov-01-solo-run-report.md']], ['Workspace rules', ['CLAUDE.md']]] };
   for (const [name, sections] of Object.entries(lists)) {
     const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
     assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));

@@ -33,6 +33,8 @@ export async function stage(folder, linger = 'refused', { installed = true, home
   const real = await readFile(new URL('../scripts/install.sh', import.meta.url), 'utf8');
   const checkout = path.join(dir, "src it's", 'p9');
   await mkdir(path.join(checkout, 'scripts'), { recursive: true });
+  // 971988f: the update path needs node_modules there too (without it install.sh builds).
+  if (installed) await mkdir(path.join(checkout, 'node_modules'));
   await writeFile(path.join(checkout, 'scripts', 'install.sh'), real.replaceAll('/run/user/', path.join(dir, 'run', 'user') + '/'));
   await writeFile(path.join(checkout, 'scripts', 'background.sh'), (await readFile(new URL('../scripts/background.sh', import.meta.url), 'utf8')).replaceAll('/run/user/', path.join(dir, 'run', 'user') + '/'));
   // install.sh sources apps/desktop/tools.sh (row I2), as a checkout has it.
