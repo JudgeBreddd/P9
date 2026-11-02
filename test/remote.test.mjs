@@ -82,7 +82,8 @@ test('Server mode: host names ssh would read as options are refused before ssh r
   assert.deepEqual(await s.calls(), []);
   // A server that answers but runs no P9, and one ssh cannot reach, say so apart.
   await assert.rejects(connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local }), /server-no-p9/);
-  await assert.rejects(connectServer({ host: 'test-host', ssh: path.join(s.directory, 'no-ssh'), runtime: s.local }), /server-unreachable/);
+  // No ssh program at all names itself (owner, 2026-11-02), apart from a remote ssh cannot reach.
+  await assert.rejects(connectServer({ host: 'test-host', ssh: path.join(s.directory, 'no-ssh'), runtime: s.local }), /ssh-missing/);
 });
 
 // A non-tty ssh session can come without $XDG_RUNTIME_DIR (a home server, 2026-10-26); the read falls back to systemd's /run/user/<uid>.
@@ -1082,4 +1083,21 @@ test('M2: the control folder is used only when it is our own folder', { skip: pr
   await rm(dir, { recursive: true }); await writeFile(dir, '');
   assert.ok(options().includes('ControlPath=none'), 'not a folder: no sharing');
   console.log('PASS M2: own folder used (0700), a file at that path gives ControlPath=none');
+});
+
+// Owner, 2026-11-02: no ssh program on this computer is said as ssh-missing (with how to install it), not as an unreachable
+// remote, and is not retried on a timer. A connection that drops on its own is a notification; a disconnect or a quit is not.
+test('ssh-missing, and a dropped connection is a notification', { timeout: 10000 }, async () => {
+  const runtime = await mkdtemp(path.join(os.tmpdir(), 'p9-nossh-'));
+  await assert.rejects(connectServer({ host: 'remote-a', ssh: path.join(runtime, 'no-such-ssh'), runtime }), { message: 'ssh-missing' });
+  const main = await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8');
+  assert.match(main, /onDrop: \(\) => \{ if \(attempt === serverTry && !leaving\.signal\.aborted\) \{[^}]*dropNote\(attempt\)/, 'a drop is noted; a quit is not');
+  assert.match(main, /const dropNote = attempt => \{[^\n]*if \(attempt === serverTry && !server && !leaving\.signal\.aborted\) tellUpdate\(\{ phase: 'dropped', host \}\); \}, 30000\)/, 'only when still down 30 s later (D20 keeps blips quiet)');
+  assert.match(main, /serverError === 'ssh-key-needed' \|\| serverError === 'ssh-missing'\) return;/, 'no timed retry');
+  const page = await readFile(path.join(root, 'apps/web/src/controller.mjs'), 'utf8');
+  assert.match(page, /dropped: \['Lost the connection to ' \+ u\.host \+ ' for 30 seconds\. P9 keeps trying to connect again\.', 'bad', true\]/, 'kept as an alert');
+  const shell = await readFile(path.join(root, 'apps/web/src/Shell.tsx'), 'utf8');
+  assert.match(shell, /'ssh-missing': 'This computer has no ssh program[^']*Try again\.'/);
+  await rm(runtime, { recursive: true, force: true });
+  console.log('PASS ssh-missing: a missing ssh program names itself; drops notify');
 });

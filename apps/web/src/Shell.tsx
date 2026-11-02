@@ -24,6 +24,7 @@ const REMOTE_WHY: Record<string, string> = {
   'server-not-answering': 'The tunnel opened, but P9 on the remote did not answer.',
   'server-host-refused': 'ssh refused that host name.',
   'server-dropped': 'Lost the remote: connecting again.',
+  'ssh-missing': 'This computer has no ssh program, which P9 needs to reach a remote. Install the OpenSSH client (Windows: Settings > System > Optional features; Linux: the openssh-client package; macOS has it), then press Try again.',
 };
 
 // Row 78 (desktop/ssh-login.mjs): the password the waiting ssh login asks for. A new host key is never asked (accept-new).

@@ -87,7 +87,8 @@ export const serverFolder = (host, runtime = process.env.XDG_RUNTIME_DIR || os.t
 function readServer(host, ssh) {
   // 60 s: a background start waits up to 30 s for its daemon.
   return new Promise((resolve, reject) => execFile(ssh, [...sshOptions(), host, READ], { timeout: 60000, maxBuffer: 65536 }, (error, out, err) => {
-    if (error) return reject(sshFailure(err));
+    // No ssh program on this computer (owner, 2026-11-02): said as such, not as an unreachable remote.
+    if (error) return reject(error.code === 'ENOENT' ? new Error('ssh-missing') : sshFailure(err));
     // U8: a slim line before the JSON marks the Temporary remote's small P9 (remote-install.mjs slimScript).
     let [runtime, ...rest] = out.split('\n');
     const slim = rest[0] === 'slim';

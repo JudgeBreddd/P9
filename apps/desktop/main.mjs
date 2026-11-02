@@ -300,7 +300,7 @@ export async function createDesktop({ state, open } = {}) {
   const connect = async (attempt, wait = 1000, loggedIn = false) => {
     if (attempt !== serverTry || !serverHost) return;
     try {
-      const s = await connectServer({ host: serverHost, ssh: sshCommand, signal: leaving.signal, onDrop: () => { if (attempt === serverTry) { server = null; serverError = 'server-dropped'; dropped = true; connect(attempt); } } });
+      const s = await connectServer({ host: serverHost, ssh: sshCommand, signal: leaving.signal, onDrop: () => { if (attempt === serverTry && !leaving.signal.aborted) { server = null; serverError = 'server-dropped'; dropped = true; dropNote(attempt); connect(attempt); } } });
       if (attempt !== serverTry) return void s.close();
       server = s; serverError = null; dropped = false;
       if (/^(starting|done)$/.test(remoteInstall?.phase)) remoteInstall = null; // U6: a later no-P9 sets up again
@@ -322,7 +322,7 @@ export async function createDesktop({ state, open } = {}) {
       if (attempt !== serverTry) return;
       // Row 78: a changed host key, or a remote that needs a key from this Windows computer, stops here until the person's
       // Try again: no password window, no timed retry.
-      if (serverError === 'ssh-host-key-changed' || serverError === 'ssh-key-needed') return;
+      if (serverError === 'ssh-host-key-changed' || serverError === 'ssh-key-needed' || serverError === 'ssh-missing') return;
       // Row 78: key-only ssh refused. One login with the password window, then connect over it. Never retried on a timer:
       // a refused or cancelled login waits for the person's Try again.
       if (serverError === 'ssh-login-needed' && !loggedIn) {
@@ -344,6 +344,9 @@ export async function createDesktop({ state, open } = {}) {
       setTimeout(() => connect(attempt, Math.min(wait * 2, 30000)), wait);
     }
   };
+  // A connection that dropped on its own and is still down 30 s later is a notification (owner, 2026-11-02); a shorter blip
+  // stays quiet (D20). A disconnect, a switch or a quit is on purpose and says nothing.
+  const dropNote = attempt => { const host = serverHost; setTimeout(() => { if (attempt === serverTry && !server && !leaving.signal.aborted) tellUpdate({ phase: 'dropped', host }); }, 30000); };
   const useServer = async host => {
     const attempt = ++serverTry, old = server;
     // A finished install stays for its own remote while it reconnects, so the window says installed, not Install again.

@@ -3458,12 +3458,15 @@ function onServerUpdate(u) {
     'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
     'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],
     'app-older': ['The remote runs P9 ' + u.server + '; this app is ' + u.app + '. Update this app (Settings > Updates).', 'bad', true],
+    // A connection that dropped on its own (owner, 2026-11-02): a notification. Disconnecting, or quitting with a Temporary
+    // remote, closes it on purpose and says nothing; the remote stays in the machine menu either way.
+    dropped: ['Lost the connection to ' + u.host + ' for 30 seconds. P9 keeps trying to connect again.', 'bad', true],
     unsupported: [on + ' cannot update itself (it is not a source checkout run by systemd). It stays on ' + u.server + '.', 'bad', true],
   }[u.phase];
   if (!say) return;
   // A remote before 0.1.6 (K1): the steps in a dialog at once, then connect again and it updates itself from then on.
   const steps = u.phase === 'too-old' ? ['git pull', 'pnpm install --frozen-lockfile', 'pnpm build', 'bash scripts/install.sh', 'systemctl --user restart p9-foundation'] : null;
-  const a = { kind: 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1], ...(steps ? { steps, after: 'Then connect again: from 0.1.6 on, it updates itself when you connect.' } : {}) };
+  const a = { kind: u.phase === 'dropped' ? 'remote' : 'remote update', txt: say[0] + (missing ? ' Missing on the remote: ' + missing + ' (P9 never runs sudo).' : ''), level: say[1], ...(steps ? { steps, after: 'Then connect again: from 0.1.6 on, it updates itself when you connect.' } : {}) };
   toast(a, !say[2]);
   if (steps) openModal({ kind: 'alert', a });
 }
