@@ -329,7 +329,9 @@ test('Item 15: wizard asks Claude, Codex or both with its why line, installs the
 // refuse first (no remote connected here); then main's status, server and deps handlers are stand-ins for a remote.
 test('Row 61 on a remote: tmux or ssh missing there opens the admin password window, never a terminal', { skip: !linux, timeout: 90000 }, async (t) => {
   const deadline = Date.now() + 85000, left = () => Math.max(1000, deadline - Date.now());
-  const { instance, PATH } = await start(t, ['claude'], { without: ['ssh'] });
+  // tmux is missing too: signed in, with a writable workspace, the terminal row is the one check the Set up card counts
+  // that fails. Since fa58abe a fresh install's Mission files count as done, so with tmux there no card showed at all.
+  const { instance, PATH } = await start(t, ['claude'], { without: ['ssh', 'tmux'] });
   await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
   await writeFile(path.join(instance.directory, '.claude', '.credentials.json'), '{}');
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-c36-'));
