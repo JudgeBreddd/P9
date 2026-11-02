@@ -2331,7 +2331,7 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 /* ---------- settings (phase 18) ---------- */
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
-let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
+let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, termGreeting = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
 async function saveSettings(next) {
   try { settings = window.p9?.setSettings ? await window.p9.setSettings(next) : (localStorage.setItem('p9-settings', JSON.stringify(next)), next); }
   catch { toast({ kind: 'settings', txt: 'Settings not saved', level: 'bad' }, true); }
@@ -2513,6 +2513,8 @@ function renderSettings() {
     + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
     + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
     + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
+    // The daemon keeps this one (it starts the shells, the phone's too); null: it did not answer, so the box is disabled.
+    + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', termGreeting !== false, termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (pets ? petSettings() : '')
@@ -2531,6 +2533,7 @@ function renderSettings() {
     if (!Number.isFinite(n)) { el.value = settings.xfer[k]; return; }
     saveSettings({ ...settings, xfer: { ...settings.xfer, [k]: Math.min(XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
+  if ($('#setGreeting')) $('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
   $('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
     const a = el.dataset.defaultMode, m = el.value;
     if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await looseOk(a, m)) { el.value = defaultMode(a); return; }
@@ -2585,6 +2588,7 @@ $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
   if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
   if (window.p9?.fileProtection) { const r = await window.p9.fileProtection().catch(() => null); fileProtect = r?.status === 200 ? r.body.on : null; }
+  if (window.p9?.terminal) { const r = await window.p9.terminal('greeting', {}).catch(() => null); termGreeting = r?.status === 200 ? r.body.show : null; }
   serverInfo = window.p9?.server ? await window.p9.server().catch(() => null) : null;
   if (window.p9?.chat) { const r = await window.p9.chat('missionFiles', {}).catch(() => null); missionFiles = r?.status === 200 ? r.body : null; }
   updates = window.p9?.updates ? await window.p9.updates().catch(() => null) : null;

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { health } from '../scripts/teh.mjs';
+import { WALK_SKIP } from '../packages/files/index.mjs';
 
 const call = async (instance, route, method = 'GET', body, type = 'application/json') => {
   const result = await http({ socketPath: instance.credentials.socketPath, route, method,
@@ -172,6 +173,21 @@ test('Setup wizard: a registry, AGENTS.md or waiting folder inside dist, build, 
     return {};
   });
   assert.deepEqual((await call(instance, '/setup')).body.found, {});
+});
+
+// K14: the wizard's scan and Mission's plans list skip the same folders (packages/files WALK_SKIP), agent_skills included.
+test('K14 Setup wizard: nothing inside a WALK_SKIP folder is found', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const name of WALK_SKIP) {
+      await mkdir(path.join(workspace, name, 'workspace-hub'), { recursive: true });
+      await writeFile(path.join(workspace, name, 'workspace-hub', 'registry.json'), '{"scripts":[],"apps":[],"pages":[]}');
+      await writeFile(path.join(workspace, name, 'AGENTS.md'), 'not mine');
+    }
+    await mkdir(path.join(workspace, 'notes'));
+    return {};
+  });
+  assert.deepEqual((await call(instance, '/setup')).body.found, {});
+  console.log('PASS K14 wizard: ' + WALK_SKIP.length + ' skipped folder names');
 });
 
 test('Setup wizard: an existing workspace-hub is used as it is; only the settings file is written', { timeout: 60000 }, async (t) => {

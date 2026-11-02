@@ -754,7 +754,9 @@ export async function createDesktop({ state, open } = {}) {
   const sample = !app.isPackaged && process.env.P9_SAMPLE_DATA === '1'
     ? JSON.parse(JSON.stringify((await import(new URL('../../test/sample-data.mjs', import.meta.url).href)).M)) : null;
   ipcMain.on('p9:sample', event => { event.returnValue = event.sender === window.webContents ? sample : null; }); // asked while the preload runs, before the frame has its URL
-  const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}] };
+  const terminalRoutes = { list: () => ['GET', '/terminals'], create: () => ['POST', '/terminals', {}], stop: ({ id: shell }) => uuid(shell) && ['POST', '/terminals/' + shell + '/stop', {}],
+    // Settings > General: {} reads the welcome message setting, { show } changes it.
+    greeting: body => !Object.keys(body).length ? ['GET', '/terminal-greeting'] : Object.keys(body).join() === 'show' && typeof body.show === 'boolean' && ['POST', '/terminal-greeting', { show: body.show }] };
   ipcMain.handle('p9:terminal', async (event, ...args) => {
     const [action, payload = {}] = args;
     if (!fromApp(event) || args.length > 2 || !Object.hasOwn(terminalRoutes, action) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('ipc-sender-refused');
@@ -1363,11 +1365,16 @@ export async function createDesktop({ state, open } = {}) {
     const pets = (await Promise.all(names.map(name => loadPet(petsFolder, name)))).filter(Boolean).map(({ name, displayName }) => ({ name, displayName }));
     return { folder: petsFolder, pets, importable: (await importable()).length };
   });
-  // Import: petdex's own folder, names P9 does not have yet; each still goes through addPet's checks on the click.
-  const petdexFolder = () => path.join(app.getPath('home'), '.codex', 'pets');
+  // Import: Codex's pets folders, names P9 does not have yet; each still goes through addPet's checks on the click. Codex keeps
+  // them under CODEX_HOME when it is set, but petdex 1.4.0 always writes ~/.codex/pets (read 2026-11-01), so both are read,
+  // CODEX_HOME's first; a name in both comes from CODEX_HOME.
+  const petdexFolders = () => [...new Set([process.env.CODEX_HOME && path.join(path.resolve(process.env.CODEX_HOME), 'pets'), path.join(app.getPath('home'), '.codex', 'pets')].filter(Boolean))];
   const importable = async () => {
-    const have = new Set(await readdir(petsFolder).catch(() => []));
-    return (await readdir(petdexFolder()).catch(() => [])).filter(name => PET_NAME.test(name) && !have.has(name)).sort().slice(0, 20);
+    const have = new Set(await readdir(petsFolder).catch(() => [])), found = new Map();
+    for (const folder of petdexFolders()) {
+      for (const name of await readdir(folder).catch(() => [])) if (PET_NAME.test(name) && !have.has(name) && !found.has(name)) found.set(name, path.join(folder, name));
+    }
+    return [...found.keys()].sort().slice(0, 20).map(name => found.get(name)); // the folders to import
   };
   const addFolders = async folders => {
     const added = [], refused = [];
@@ -1380,7 +1387,7 @@ export async function createDesktop({ state, open } = {}) {
   ipcMain.handle('p9:pet-import', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length) throw new Error('ipc-sender-refused');
-    return addFolders((await importable()).map(name => path.join(petdexFolder(), name)));
+    return addFolders(await importable());
   });
   // Install (Builder, 2026-10-18: paste "the npm command from petdex.dev"): the page sends the pasted text; main keeps only the pet
   // names after "install", then does what petdex 1.4.0's install does (read 2026-10-18): petdex.dev's manifest, then the pet's
@@ -1422,9 +1429,10 @@ export async function createDesktop({ state, open } = {}) {
   ipcMain.handle('p9:pet-add', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length) throw new Error('ipc-sender-refused');
-    const petdex = petdexFolder();
+    let petdex = app.getPath('home');
+    for (const folder of petdexFolders()) if ((await stat(folder).catch(() => null))?.isDirectory()) { petdex = folder; break; }
     const pick = await dialog.showOpenDialog(window, { title: 'Add pets', buttonLabel: 'Add', properties: ['openDirectory', 'multiSelections'],
-      defaultPath: (await stat(petdex).catch(() => null))?.isDirectory() ? petdex : app.getPath('home') });
+      defaultPath: petdex });
     return addFolders(pick.canceled ? [] : pick.filePaths);
   });
   // New chat's Choose folder... (threat model row 24): the system folder dialog, then only a folder inside the workspace's real path goes

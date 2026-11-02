@@ -1,7 +1,8 @@
-// The plan limits (5 h and 7 d used %) as Claude Code and Codex record them, never estimated. Same sources as the
-// workspace's usage script: Claude from the last saved status-line input (if a status-line script saves one) or
-// ~/.claude.json cachedUsageUtilization (written when /usage or the usage panel runs), whichever is newer; Codex from
-// the newest rate_limits event in its session logs (written every turn).
+// The plan limits (5 h and 7 d used %) as Claude Code and Codex record them, never estimated. Claude: the newest of the
+// daemon's own poll (claude-usage.mjs), a P9 Claude chat's live reading, the last saved status-line input (if a
+// status-line script saves one) and .claude.json cachedUsageUtilization (written when /usage or the usage panel runs).
+// Codex: the newest rate_limits event in the session logs under CODEX_HOME (written every turn). Also each agent's
+// folders (agentDirs) and Claude's auto-compact window (claudeWindow, P5).
 import { open, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 

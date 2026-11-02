@@ -1037,7 +1037,11 @@ one<HTMLElement>('#gap').onclick = () => { one<HTMLElement>('#gap').hidden = tru
 // Mission: the same daemon routes the desktop uses. Native <details> rows open in place; scripts stream output from
 // /runs/:id. Terminal scripts and laptop apps open windows on the laptop, so the phone lists them as laptop-only.
 type Item = { id: string; title: string; desc: string; group: string; section?: string; args: string[]; confirm: boolean; terminal: boolean; url: string };
-type Waiting = { name: string; title: string; project: string; age: string; hash: string; content: string; answerable: boolean };
+type Waiting = { name: string; title: string; project: string; age: string; updated?: number; hash: string; content: string; answerable: boolean };
+// P21: Waiting on you sorts like the desktop's (controller.mjs reviewSort): Newest first by default, or Project (by file
+// name, <project>-<what>.md); the pick is kept on this phone.
+const queueBy = () => { try { return localStorage.getItem('p9-queue-sort') === 'project' ? 'project' : 'updated'; } catch { return 'updated'; } };
+const sortQueue = (items: Waiting[]) => items.sort(queueBy() === 'project' ? (a, b) => a.name.localeCompare(b.name) : (a, b) => (b.updated || 0) - (a.updated || 0));
 let mission: { queue: Waiting[]; scripts: Item[]; empty?: boolean; spaces?: string[]; space?: { id: string; widget?: string; widgets?: string[]; refs?: { id: string; kind?: string }[] }[] } = { queue: [], scripts: [] };
 // P9's built-in tiles a section may name (W-D); naming any decides which show. The phone has no editor, so edit is the desktop's alone.
 const TILE_WIDGETS = ['idea', 'sprint', 'edit'];
@@ -1133,6 +1137,8 @@ async function loadMission(cached = false) {
   try {
     const data = cached ? lastMission : await request('/mission');
     mission = data;
+    sortQueue(data.queue as Waiting[]); // in place: an answer form's index is its place in mission.queue
+    const by = queueBy(), sortPick = data.queue.length > 1 ? `<label class="queue-sort">Sort<select data-queue-sort aria-label="Sort"><option value="updated"${by === 'updated' ? ' selected' : ''}>Newest</option><option value="project"${by === 'project' ? ' selected' : ''}>Project</option></select></label>` : '';
     const queue = (data.queue as Waiting[]).map((item, index) => row(`${escape(item.title)}<small>${escape(item.project)} · ${escape(item.age)}</small>`,
       `<pre>${escape(item.content)}</pre>` + (item.answerable
         ? `<form data-answer="${index}"><label>Your answer<textarea rows="3" required maxlength="4000"></textarea></label><button type="submit">Send answer</button><p class="muted" data-note></p></form>`
@@ -1220,7 +1226,7 @@ async function loadMission(cached = false) {
       if (!guide) void loadGuide();
     } else keepOpen(() => { one('#mission').innerHTML = spacePicker(data.spaces ?? [], data.spaceName ?? null, escape) + (data.update ? `<article class="card warn" data-update><h2>P9 is updating to ${escape(data.update.version)}</h2><p>${data.update.phase === 'waiting-turns' ? `It restarts when ${data.update.turns} chat${data.update.turns === 1 ? ' finishes its' : 's finish their'} turn. New messages wait until it is back.` : data.update.phase === 'restarting' ? 'It is restarting now; this page reconnects by itself.' : 'Building the new version beside the running one. Chats keep working.'}</p></article>` : '') + (data.restart?.needed ?`<article class="card warn"><h2>Restart P9 to apply</h2><p>The workspace folder ${escape(data.restart.folder)} was not there when P9 started, so it is using the default folder. Restart P9 on the computer.</p></article>` : '') + (data.settingsError ? `<article class="card warn"><h2>Settings</h2><p>settings.json has a problem, so the last good settings are in use: ${escape(data.settingsError)}</p></article>` : '') + (data.invalid.length ? `<article class="card warn"><h2>Registry</h2><p>${data.invalid.length} entries are malformed and hidden.</p></article>` : '')
       + '<div class="tiles"><h2 class="grp a">Needs attention</h2><h2 class="grp b">Everything else</h2>'
-      + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue || '<div class="empty">Nothing is waiting on you.</div>')
+      + win('queue', 'Waiting on you', data.queue.length, data.queue[0] ? escape(data.queue[0].title) : 'Nothing is waiting on you.', queue ? sortPick + queue : '<div class="empty">Nothing is waiting on you.</div>')
       + win('primary', 'Main project', escape(data.primary?.name ?? 'None'), status, `<article class="card"><h2>${escape(data.primary?.name ?? 'No primary project')}</h2><small>${status}</small></article>`)
       // + New idea writes to _ideas: an ICM widget, shown only where the desktop shows the ICM widgets (finding 3a).
       + (icm ? win('idea', 'New idea', '+', 'Saved to _ideas/', row('+ New idea', '<form data-idea><p class="muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><input name="name" placeholder="short-name" required><textarea name="text" rows="6"></textarea><label><input type="checkbox" name="needs"> A fix for an existing project (needs-done)</label><button type="submit">Save idea</button><p class="muted" data-note></p></form>')) : '')
@@ -1435,6 +1441,12 @@ one('#mission').addEventListener('click', async (event) => {
     await mutate('/mission/space', { name: space });
     tplPreview = null; chooseArmed = false; void loadMission();
   }
+});
+one('#mission').addEventListener('change', (event) => {
+  const sort = (event.target as Element).closest<HTMLSelectElement>('[data-queue-sort]');
+  if (!sort) return;
+  try { localStorage.setItem('p9-queue-sort', sort.value); } catch {}
+  void loadMission(true);
 });
 one('#mission').addEventListener('change', async (event) => {
   const pick = (event.target as Element).closest<HTMLSelectElement>('[data-space-pick]');

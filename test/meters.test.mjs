@@ -27,8 +27,11 @@ const rollout = (instance, n) => writeFile(path.join(instance.directory, '.codex
     secondary: { used_percent: n, window_minutes: 10080, resets_at: Date.now() / 1000 + 72 * 3600 } } } }) + '\n');
 
 // text: the first prompt, sent before the window opens; done: the event that says it was answered; before: run then.
-async function open(t, provider, { text = 'hello', done = (e) => e.data?.content?.text === 'echo:' + text, before } = {}) {
+// window: the CLAUDE_CODE_AUTO_COMPACT_WINDOW in ~/.claude/settings.json, written before the chat starts.
+async function open(t, provider, { text = 'hello', done = (e) => e.data?.content?.text === 'echo:' + text, before, window } = {}) {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  if (window) { await mkdir(path.join(instance.directory, '.claude'), { recursive: true });
+    await writeFile(path.join(instance.directory, '.claude', 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) } })); }
   await mkdir(path.join(instance.directory, '.codex', 'sessions', '2026', '10', '24'), { recursive: true });
   await rollout(instance, 74);
   // A signed-in Codex: without its auth.json, Usage (P8) names Codex signed out and drops its figures.
@@ -85,6 +88,22 @@ for (const provider of ['claude', 'codex']) {
     console.log('PASS MR1 MR2 ' + provider + ': three filled bars, none amber at 74%, all amber at 76%, no wait for the minute poll');
   });
 }
+
+// P5 (owner, 2026-10-31: the meter read 12% while /context said 116.5k / 200k): claude-agent-acp's usage_update carries
+// the model's whole window as size; Claude Code's /context divides by its auto-compact window. The fake agent reports
+// used 200 of size 1000; with a 500 window the desktop meter must read 40%, not 20%.
+test('P5 claude: the chat meter divides by the auto-compact window from settings.json, as /context does', { timeout: 120000 }, async (t) => {
+  const { instance, id, pane, bars, send, errors } = await open(t, 'claude', { window: 500 });
+  await send('limits 20');
+  await until(async () => (await bars())[0][0] !== '—', 'a context reading');
+  assert.equal((await bars())[0][0], '40%', 'the meter divides by the model window, not the auto-compact window');
+  assert.equal(await pane.locator('.meters .meter').first().getAttribute('title'), '200 of 500 tokens');
+  const usage = await call(instance, '/usage');
+  assert.deepEqual(usage.contexts.filter((c) => c.conversation === id).map((c) => c.size), [500]);
+  await shot(pane.locator('.meters'), 'meters-p5-window');
+  assert.deepEqual(errors, []);
+  console.log('PASS P5: desktop meter 40% = 200 of 500 tokens, /usage size 500');
+});
 
 test('MR2: the cache clock moves on every 15 s without rebuilding the pane', { timeout: 90000 }, async (t) => {
   const { page, pane } = await open(t, 'claude');

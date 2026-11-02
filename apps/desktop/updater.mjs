@@ -45,7 +45,13 @@ export async function startUpdater({ app, version, log, resources = process.reso
   updater.autoInstallOnAppQuit = true;
   updater.allowPrerelease = false;
   updater.allowDowngrade = false;
-  updater.logger = { info: log, warn: log, error: log, debug() {} };
+  // One line per message: with no normal release, GitHub's 404 page (a whole HTML document) follows "Data:" in
+  // electron-updater's error, and it used to fill p9-update.log. The first line names the error and the URL.
+  const line = (message) => {
+    const text = String(message ?? ''), first = text.split('\n')[0].slice(0, 500);
+    return first.length < text.length ? first + ' (' + (text.length - first.length) + ' more characters not logged)' : first;
+  };
+  updater.logger = { info: m => log(line(m)), warn: m => log(line(m)), error: m => log(line(m)), debug() {} };
   const set = (state, fields = {}) => { Object.assign(status, { state, reason: null }, fields); log(`state ${state}${status.available ? ' ' + status.available : ''}`); };
   updater.on('checking-for-update', () => set('checking'));
   updater.on('update-not-available', () => set('idle', { available: null }));

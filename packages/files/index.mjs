@@ -46,6 +46,9 @@ export const lockedName = (name) => locked(name);
 // Folders P9 never crawls (Builder, 2026-10-27: no VS Code-style out-of-memory from walking them): the file tree, Dev
 // Focus's tree, search and watcher, and a tunnel send of a folder that is not a git repo.
 export const HEAVY = Object.freeze(['node_modules', '.venv', 'venv', '__pycache__', '.cache', 'dist', 'build', '.astro']);
+// K14: the one list a workspace walk leaves out (Mission's plans list, the setup wizard's "Use what's here"): HEAVY plus
+// archive, private, intake, template and skill trees. Dot folders are skipped by each walk as well.
+export const WALK_SKIP = Object.freeze([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
 
 // Walk with O_NOFOLLOW directory handles; subsequent access stays on these inodes.
 async function resolveSafe(root, relative, maxBytes = MAX_BYTES) {

@@ -59,11 +59,11 @@ The repository is public: downloading and updating need no GitHub account.
 3. Open P9 from the Start menu. Details: [Install on Windows](#install-on-windows). From then on it updates
    itself: [Update, roll back, uninstall](#update-roll-back-uninstall).
 
-**Linux AppImage** (x64)
+**Linux AppImage** (x64; the file name says x86_64)
 
 Install `tmux` and `libfuse2t64` (an AppImage mounts itself with FUSE, and Ubuntu Desktop 24.04 does not
 ship that library): `sudo apt install tmux libfuse2t64`. Download
-`p9-event-horizon-<version>-linux-x64.AppImage` from the same page, then `chmod +x` it and run it. On its
+`p9-event-horizon-<version>-linux-x86_64.AppImage` from the same page (its checksum is in `SHA256SUMS-linux-x64`), then `chmod +x` it and run it. On its
 first start it copies its daemon to `~/.local/share/p9/daemon`, installs the Dev Focus editor server it
 carries into `~/.local/share/p9/codium-server` (checked against a pinned SHA-256), and installs the
 `p9-foundation` user service with `~/P9` as the workspace; without tmux it installs nothing and says
