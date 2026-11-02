@@ -1166,10 +1166,14 @@ async function loadMission(cached = false) {
     });
     // The free-form space: a section's buttons arrived with the scripts above; its text and log views join the same group.
     const notes = new Map<string, string>(), counts = new Map<string, number>();
-    // The phone's own order of a section's parts (information first, its buttons last); widgets are the desktop's alone.
-    const PHONE_PARTS = ['text', 'quick_note', 'notes', 'logs', 'data', 'cards', 'links', 'folders', 'checklists', 'refs', 'buttons'];
+    // The phone's own order of a section's parts (information first, its buttons last). A widget is a row opening the phone's own window
+    // for it (W-I on the phone); one the phone has none for says where it is.
+    const PHONE_PARTS = ['text', 'quick_note', 'notes', 'logs', 'data', 'cards', 'links', 'folders', 'checklists', 'refs', 'widgets', 'buttons'];
+    const PHONE_WIDGET: Record<string, [string, string]> = { waiting: ['queue', 'Waiting on you'], primary: ['primary', 'Main project'], idea: ['idea', '+ New idea'], sprint: ['sprint', 'Sprint status'], apps: ['pages', 'Apps and pages'] };
+    const widgetRow = (w: string) => PHONE_WIDGET[w] ? `<p class="tile-row" data-widget="${escape(w)}"><button type="button" class="link" data-open="${PHONE_WIDGET[w][0]}">${escape(PHONE_WIDGET[w][1])}</button></p>`
+      : `<p class="muted tile-row" data-widget="${escape(w)}">${w === 'usage' ? 'Usage has its own tab.' : w === 'notifications' ? 'Notifications show on the desktop.' : 'Edit names and icons on the desktop.'}</p>`;
     type Ref = { id: string; kind?: 'scripts' | 'apps' | 'pages'; title?: string; missing?: true };
-    for (const space of (data.space ?? []) as { id: string; title: string; text: string; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
+    for (const space of (data.space ?? []) as { id: string; title: string; text: string; widget?: string; widgets?: string[]; order?: string[]; logs: { id: string; title: string }[]; notes?: string; data?: { id: string; title: string }[]; cards?: { id: string; title: string }[]; links?: { url: string; title: string }[]; folders?: { id: string; title: string }[]; refs?: Ref[]; checklists?: { id: string; title: string }[] }[]) {
       const text = space.text ? [`<p class="muted" data-space-text>${escape(space.text)}</p>`] : [];
       // Notes (threat model row 34): the list loads when the row opens; a note opens in the file editor below.
       const folder = space.notes ? [row(`Notes<small>${escape(space.notes)}</small>`, `<div data-notes="${escape(space.notes)}"><p class="muted">Loading…</p></div>`)] : [];
@@ -1184,7 +1188,9 @@ async function loadMission(cached = false) {
       // Checklists (threat model row M4-a): read when the window opens; each press is one mark or one review line.
       const checks = (space.checklists ?? []).map((list) => row(escape(list.title), `<div data-ck="${escape(list.id)}">${checklistHtml(list.id, null, escape)}</div>`));
       // References: a script is its own row (Run included), a page its link, an app is the laptop's; an ID nothing has says so.
-      const refs = (space.refs ?? []).map((ref) => {
+      // A section naming sprint: its buttons and script refs are the sprint window's (W-M), so they are not rows here too.
+      const sprint = space.widget === 'sprint';
+      const refs = (space.refs ?? []).filter((ref) => !(sprint && ref.kind === 'scripts')).map((ref) => {
         if (ref.missing || !ref.title) return `<div class="row missing" data-ref-missing aria-disabled="true"><span>${escape(ref.id)}</span><small>not found</small></div>`;
         const attrs = ` data-ref="${escape(ref.id)}"`, part = ref.kind === 'scripts' ? scriptParts.get(ref.id) : undefined;
         if (part) return row(part[0], part[1], attrs);
@@ -1198,9 +1204,12 @@ async function loadMission(cached = false) {
       // What the section shows comes first and its buttons after them (Builder, 2026-10-31: actions under the information).
       // The section's order field (the desktop's too) moves these; the text is not a row, so it is not counted.
       const parts: Record<string, string[]> = { text, quick_note: quick, notes: folder, logs: space.logs.map((log) => row(escape(log.title), lazy({ name: log.id }))), data: tiles, cards, links: webLinks,
-        folders: lists, checklists: checks, refs, buttons: groups.get(space.id) ?? [] };
+        folders: lists, checklists: checks, refs, widgets: (space.widgets ?? []).map(widgetRow), buttons: sprint ? [] : groups.get(space.id) ?? [] };
       const ordered = partOrder(space.order, PHONE_PARTS).flatMap((part) => parts[part]);
+      // A widget section is the phone's own window for it: it draws a window of its own only for the other things it holds, the widget's row first.
+      if (space.widget && !ordered.length) { groups.delete(space.id); names.delete(space.id); continue; }
       if (ordered[0] === text[0] && text.length) { notes.set(space.id, text[0]); ordered.shift(); }
+      if (space.widget) ordered.unshift(widgetRow(space.widget));
       groups.set(space.id, ordered);
       counts.set(space.id, ordered.length - (ordered.includes(text[0]) ? 1 : 0));
       names.set(space.id, [...(names.get(space.id) ?? []), ...(space.notes ? ['Notes'] : []), ...space.logs.map((log) => log.title), ...(space.data ?? []).map((tile) => tile.title), ...(space.links ?? []).map((link) => link.title),
@@ -1256,10 +1265,10 @@ async function loadSprint() {
   const rings = data ? data.chunks.map((c) => `<div class="spr" data-state="${escape(['running', 'waiting', 'merged', 'blocked'].includes(c.state) ? c.state : 'unknown')}"><div class="ring" role="img" aria-label="${escape(c.id)} ${escape(c.state)} ${c.percent}%" style="--p:${Number(c.percent)}"><b>${Number(c.percent)}%</b></div>`
     + `<div class="spt"><b>${escape(c.id)} · ${escape(c.title)}</b><small class="st">${escape(c.state)}${c.activity ? ` · <span data-activity="${escape(c.activity)}">${escape(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${escape(c.steps)}</span>` : ''}</small>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<small class="muted">Waiting on: ${escape(c.waitingOn)}</small>` : ''}</div></div>`).join('') || '<div class="empty">No chunks in the status file yet.</div>' : '';
   const overall = data && Number.isFinite(data.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${Number(data.overall)}%" style="--p:${Number(data.overall)}" data-overall><b>${Number(data.overall)}%</b></div><div class="spt"><b>Whole sprint</b><small class="muted">${data.chunks.filter((c) => c.state === 'merged').length} of ${data.chunks.length} merged</small></div></div>` : '';
-  // W-M: the section naming sprint runs its own buttons and script refs; with none, the three above.
+  // W-M: the section naming sprint runs its own buttons and script refs, and only those; the three above are the unnamed window's.
   const sec = mission.space?.find((s) => naming(s, 'sprint')), own = sec ? [...mission.scripts.filter((item) => item.section === sec.id).map((item) => item.id),
     ...(sec.refs ?? []).filter((ref) => ref.kind === 'scripts').map((ref) => ref.id)] : [];
-  const scripts = (own.length ? own.map((id) => [id, mission.scripts.find((item) => item.id === id)?.title ?? id]) : SPRINT_SCRIPTS).map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
+  const scripts = (sec ? own.map((id) => [id, mission.scripts.find((item) => item.id === id)?.title ?? id]) : SPRINT_SCRIPTS).map(([id, label]) => { const index = mission.scripts.findIndex((item) => item.id === id);
     return index < 0 ? `<p class="muted">${escape(label)}: add a ${escape(id)} button to the registry.</p>` : `<form data-run="${index}"><button type="submit">${escape(label)} (asks first)</button></form><pre data-output hidden></pre><button type="button" data-copy hidden>Copy</button>`; }).join('');
   const merged = data ? data.chunks.filter((c) => c.state === 'merged').length : 0;
   keepOpen(() => { target.innerHTML = win('sprint', data ? 'Sprint · ' + escape(data.sprint || 'unnamed') : 'Sprint', data ? `${merged}/${data.chunks.length}` : '!',
@@ -1289,7 +1298,7 @@ one('#mission').addEventListener('click', (event) => {
     details.open = true;
     if (field) field.focus(); else form.requestSubmit();
   }
-  else if (open) { openWindow = open.dataset.open!; const box = document.getElementById('w-' + openWindow) as HTMLDialogElement; box.showModal(); void loadFolders(box); }
+  else if (open) { const box = document.getElementById('w-' + open.dataset.open) as HTMLDialogElement | null; if (!box) return; openWindow = open.dataset.open!; box.showModal(); void loadFolders(box); }
   else if (target.closest('[data-close]')) target.closest('dialog')!.close();
 });
 // Close button or Escape; a dialog removed by a reload is outside #mission by then, so it never clears this.

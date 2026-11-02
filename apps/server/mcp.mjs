@@ -13,7 +13,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { readFile, guardedSave, createFile } from '../../packages/files/index.mjs';
 import { parseSettings, parseRegistry, parseSpace, combine, argvFor, argRefusal, stripBom, rootRefused, withIds, spaceAt, draftAt, draftNames, spaceFile } from './mission.mjs';
-import { problem, unknownFields, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, WIDGETS, PLACES, SPACE_FILE, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
+import { problem, unknownFields, jsonSchema, describeMission, sectionId, SCHEMAS, RECORD, PAGE, SECTION, WIDGETS, PLACES, SPACE_FILE, CARD_BYTES, ID, SPACES_DIR, SPACE_NAME_RULE, TEMPLATES, spaceName } from './mission-fields.mjs';
 import { childEnv } from './child-env.mjs';
 import { card, KINDS, MAX_TEXT, CARD_ID } from './artifacts.mjs';
 import pkg from '../../package.json' with { type: 'json' };
@@ -41,7 +41,7 @@ const INSTRUCTIONS = 'P9 Mission Control, for this chat. Call describe_mission b
 const hashField = { type: 'string', description: 'The file\'s hash from a resource read or the last write. A file changed since is reported as hash-conflict, not overwritten.' };
 const sectionName = 'A space section: its id, or its title while only one section has it (two with the same title are named by id).';
 const sectionField = { type: 'string', description: sectionName + ' Without it the button goes to (or comes from) the registry\'s scripts.' };
-const placeField = { type: 'string', description: 'Where it draws on the desktop page: ' + PLACES.join(', ') + '. tile (the default) is a top-row tile; col1 to col3 draws it open in that column.' };
+const placeField = { type: 'string', description: 'Where it draws on the desktop page: ' + PLACES.join(', ') + '. tile (the default) is a top-row tile; col1 to col6 draws it open in that column (span, set with patch_section, sets the column\'s width).' };
 const orderField = { type: 'array', items: { type: 'string' }, maxItems: 32, description: SECTION.order.doc };
 const widgetsField = { type: 'array', items: { type: 'string', enum: WIDGETS }, maxItems: WIDGETS.length, description: SECTION.widgets.doc };
 const iconField = { type: 'string', description: RECORD.icon.doc + ' An empty string removes it.' };
@@ -53,8 +53,11 @@ const input = (properties, required = []) => ({ type: 'object', properties, requ
 const spaceField = { type: 'string', description: 'Optional. Without it a tool reads and writes the space Mission shows (the main space, or the scratch space '
   + 'picked in Mission\'s space picker); every reply names the file. A name (' + SPACE_NAME_RULE + ') writes that scratch space instead, made on the first write; '
   + '"" writes the main space while a scratch space is shown.' };
-const SPACE_TOOLS = new Set(['validate_space', 'add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items', 'patch_section', 'patch_item', 'move_section', 'move_button']);
+const SPACE_TOOLS = new Set(['validate_space', 'preview_card', 'add_button', 'add_section', 'update_button', 'update_section', 'remove_button', 'remove_section', 'set_section_items', 'patch_section', 'patch_item', 'move_section', 'move_button']);
 const setField = { type: 'object', description: 'The fields to write, by name, each to its new value; null removes one. Checked by the same tables as the file (describe_mission).' };
+// A save racing another edit (the desktop form, or an agent that read the file a while ago): with base, a changed file is no reason to refuse.
+const baseField = { type: 'object', description: 'Optional, with hash: each field of set as it was when you read the record (null or left out: it had none). If the file changed since hash, '
+  + 'the write still goes ahead when every one of these fields is still as it was (another edit changed only other things); otherwise it is refused as hash-conflict, naming the fields that changed.' };
 const ITEM_KINDS = Object.keys(SECTION).filter((key) => SECTION[key].fields && SECTION[key].example !== undefined && key !== 'buttons' && key !== 'widget');
 const TOOLS = [
   ['describe_mission', 'How to build the Mission space: its format, an example of every item type, and the templates. Reads nothing of yours.', input({})],
@@ -97,9 +100,13 @@ const TOOLS = [
     input({ title: { type: 'string', description: sectionName }, kind: { type: 'string', enum: ITEM_KINDS },
       items: { type: 'array', items: { type: 'object' } }, space: spaceField, hash: hashField }, ['title', 'kind', 'items'])],
   ['patch_section', 'Set any fields of a space section in one write (null removes one): every field of describe_mission, quick_note and id included, and its item lists whole. '
-    + 'A field P9 does not know is kept and named in the reply.', input({ section: { type: 'string', description: sectionName }, set: setField, space: spaceField, hash: hashField }, ['section', 'set'])],
+    + 'A field P9 does not know is kept and named in the reply.', input({ section: { type: 'string', description: sectionName }, set: setField, base: baseField, space: spaceField, hash: hashField }, ['section', 'set'])],
   ['patch_item', 'Set any fields of a script button, app or page in one write (null removes one), as add_button, add_app and add_page check them. A button in a space section needs section.',
-    input({ kind: { type: 'string', enum: ['scripts', 'apps', 'pages'] }, id: { type: 'string' }, section: sectionField, set: setField, space: spaceField, hash: hashField }, ['kind', 'id', 'set'])],
+    input({ kind: { type: 'string', enum: ['scripts', 'apps', 'pages'] }, id: { type: 'string' }, section: sectionField, set: setField, base: baseField, space: spaceField, hash: hashField }, ['kind', 'id', 'set'])],
+  ['preview_card', 'How a space card looks (#5): its HTML file with sample data put in as window.p9data and the p9data event, as one HTML document. Show it to the user in a fenced block whose info string is '
+    + '"html artifact panel <title>": the artifact frame is the same sandbox the card runs in. Reads the card\'s file; runs nothing.',
+    input({ id: { type: 'string', description: 'The card\'s id in the space.' }, data: { description: 'Optional sample JSON, as the card\'s script would print it. Without it window.p9data is undefined, as before the first run.' },
+      space: spaceField }, ['id'])],
   ['move_section', 'Move a space section to a place in the file\'s order: index 0 is first. The page draws its tiles and columns in this order.',
     input({ section: { type: 'string', description: sectionName }, index: { type: 'integer', minimum: 0 }, space: spaceField, hash: hashField }, ['section', 'index'])],
   ['move_button', 'Move a space button to index within its section (0 is first), or into another section with to (at index, default last).',
@@ -450,14 +457,16 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   // (an unknown one is kept and named, W-F), and its item lists whole, each item checked as set_section_items checks it. A button, app
   // or page takes only its table's fields, as add_* does; an unknown key the record already has stays. The same rules as the specific
   // tools hold: the field tables, picture from the desktop form only, unique ids, and Mission Control's own merge keeping the result.
-  function patch(kind, { key, section: where, set, hash }, by) {
+  function patch(kind, { key, section: where, set, base, hash }, by) {
     const fields = FIELDS[kind];
-    if (!fields || !words(key) || (where !== undefined && (kind !== 'scripts' || !words(where))) || !object(set) || !Object.keys(set).length || ('picture' in set && !by?.user)) {
-      return { error: 'request-refused', detail: 'kind: scripts, apps, pages or sections; set: an object of fields (picture only from the desktop form); section only for a space button.' };
+    if (!fields || !words(key) || (where !== undefined && (kind !== 'scripts' || !words(where))) || !object(set) || !Object.keys(set).length || ('picture' in set && !by?.user)
+      || (base !== undefined && (!object(base) || hash === undefined))) {
+      return { error: 'request-refused', detail: 'kind: scripts, apps, pages or sections; set: an object of fields (picture only from the desktop form); section only for a space button; base only with hash.' };
     }
     const added = kind !== 'sections' && Object.keys(set).find((name) => !Object.hasOwn(fields, name) && set[name] !== null);
     if (added) return { error: 'invalid-record', detail: unknownFields({ [added]: set[added] }, fields, 'this record')[0] };
-    return edit(kind === 'sections' || where !== undefined ? 'space' : 'registry', hash, (data) => {
+    // With base, the hash is checked field by field below instead of whole (the save itself still refuses a file changed after this read).
+    return edit(kind === 'sections' || where !== undefined ? 'space' : 'registry', base ? undefined : hash, (data) => {
       let entry, others;
       if (kind === 'sections') { const found = section(data, key); if (found.error) return found; entry = found.entry; others = found.sections; }
       else {
@@ -468,6 +477,9 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         if (hits.length !== 1) return { error: hits.length ? 'duplicate-id' : 'unknown-id', id: key };
         entry = hits[0]; others = target;
       }
+      // ponytail: compared as JSON text, so a field whose keys were reordered by hand counts as changed (refused, never lost).
+      const moved = base ? Object.keys(set).filter((name) => JSON.stringify(entry[name] ?? null) !== JSON.stringify(base[name] ?? null)) : [];
+      if (moved.length) return { error: 'hash-conflict', fields: moved, detail: 'The file changed since it was read, and so did ' + moved.join(', ') + ': nothing was saved.' };
       const before = structuredClone(entry);
       for (const [name, value] of Object.entries(set)) if (value === null) delete entry[name]; else entry[name] = value;
       const wrong = kind === 'sections' && entry.id === undefined ? 'id: a section keeps its id; set a new one instead' : problem(entry, fields, false, current()?.page_schemes);
@@ -649,8 +661,9 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
         return { changed: { action: 'removed', kind: 'section', record: found.entry } };
       });
     },
-    patch_section: ({ section: key, set, hash }) => patch('sections', { key, set, hash }),
-    patch_item: ({ kind, id, section: where, set, hash }) => (['scripts', 'apps', 'pages'].includes(kind) ? patch(kind, { key: id, section: where, set, hash }) : { error: 'request-refused', detail: 'kind: scripts, apps or pages' }),
+    patch_section: ({ section: key, set, base, hash }) => patch('sections', { key, set, base, hash }),
+    patch_item: ({ kind, id, section: where, set, base, hash }) => (['scripts', 'apps', 'pages'].includes(kind) ? patch(kind, { key: id, section: where, set, base, hash }) : { error: 'request-refused', detail: 'kind: scripts, apps or pages' }),
+    preview_card: (args) => previewCard(args),
     move_section: ({ section: key, index, hash }) => (index === undefined ? { error: 'request-refused', detail: 'index: 0 is first' } : move({ section: key, index, hash })),
     move_button: ({ id, section: key, to, index, hash }) => (id === undefined ? { error: 'request-refused' } : move({ section: key, id, to, index, hash })),
     run_script: (args, conversation, signal) => runScript(conversation, args, signal),
@@ -755,13 +768,33 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     finally { if (inflight.get(key) === controller) inflight.delete(key); }
   }
 
+  // preview_card (#5): the card's own file, read as the page reads it, with the sample data set before its scripts run and sent as the
+  // p9data event once it has loaded, as the page does after each run. The size it gets on the page is said beside it.
+  async function previewCard({ id, data }) {
+    if (!words(id)) return { error: 'request-refused', detail: 'id: the card\'s id' };
+    const { space, file } = await files();
+    if (!space) return file ? missingSpace(file) : noSpace();
+    let all;
+    try { all = parseSpace(space.content); } catch (error) { return { file, ...unparsable(error) }; }
+    const where = all.sections.find((entry) => (entry.cards ?? []).some((item) => item.id === id)), card = where?.cards.find((item) => item.id === id);
+    if (!card) return { error: 'unknown-id', id, file };
+    let html;
+    try { html = (await readFile(workspace, card.html)).content; } catch { return { error: 'not-found', detail: 'The card file ' + card.html + ' was not found in the workspace.', file }; }
+    if (Buffer.byteLength(html) > CARD_BYTES) return { error: 'too-big', detail: 'The card file ' + card.html + ' is over 256 KiB.', file };
+    const json = data === undefined ? 'undefined' : JSON.stringify(data).replace(/</g, '\\u003c');
+    const head = `<script>window.p9data = ${json}; addEventListener('load', () => { if (window.p9data !== undefined) dispatchEvent(new CustomEvent('p9data', { detail: window.p9data })); });</script>`;
+    return { id, title: card.title, section: where.id, file, html: card.html, frame: card.frame !== false,
+      size: 'On the page the card is as wide as its section (a column or the section\'s window) and as tall as its content, 60 to 720 px; a page sized to 100vh grows to 720.'
+        + (card.frame === false ? ' frame is false, so it draws with no box or title of its own.' : ' It draws in a box under its title.'),
+      document: head + html };
+  }
   // The desktop's edit form (/mission/edit): the file hashes it edits against (the space Mission shows, W-B), and the same update() the tools use.
   async function editState() {
     const { registry, space } = await files(need());
     // The records as the files hold them, for the field editor (W-N): each section, app and page whole, unknown keys included.
     const read = (file) => { try { const data = JSON.parse(stripBom(file?.content ?? '{}')); return object(data) ? data : {}; } catch { return {}; } };
     const reg = read(registry), spc = read(space), lists = (data, key) => (Array.isArray(data[key]) ? data[key].filter(object) : []);
-    return { registry: registry.hash, space: space?.hash ?? null, protection: protection(), records: { apps: lists(reg, 'apps'), pages: lists(reg, 'pages'), sections: lists(spc, 'sections') } };
+    return { registry: registry.hash, space: space?.hash ?? null, protection: protection(), records: { scripts: lists(reg, 'scripts'), apps: lists(reg, 'apps'), pages: lists(reg, 'pages'), sections: lists(spc, 'sections') } };
   }
   return { handle, update, patch, move, editState, install, deleteSpace, saveTemplate, userTemplates };
 }

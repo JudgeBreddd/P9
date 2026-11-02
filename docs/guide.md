@@ -99,7 +99,7 @@ A button's output opens in a window you can copy from. Add `"terminal": true` to
 
 ### Your own sections
 
-The `space` file adds sections to Mission Control. Each section can have text, buttons and log views (the last 200 lines of a file):
+The `space` file adds sections to Mission Control. Each section can have text, buttons and log views (the last 200 lines of a file; a log view's `heading`, `from` and `lines` show one Markdown heading's part, the top of the file, or another number of lines):
 
 ```json
 { "sections": [
@@ -111,9 +111,11 @@ The `space` file adds sections to Mission Control. Each section can have text, b
 
 Edits to this file show up the next time the page loads, with no restart.
 
+A section's `place` (`col1` to `col6`) draws it open in a column of the page instead of as a tile, and `span` (1 to 6) makes its column wider than the others. Your agent's `describe_mission` tool lists every field; its `preview_card` tool shows how a card looks before you place it.
+
 ### Sprint tracker
 
-A **Sprint** button shows while the machine you are connected to has a sprint status file (`~/.local/state/sprint/status.json`, which the sprint skill writes). Its window shows a ring for the whole sprint and one ring per chunk, with each chunk's state (running, waiting, merged, blocked), its latest activity and its steps, and when it last updated. **Open tmux** opens a P9 terminal that runs `tmux attach -t p9`. The window also has a button for each sprint script your registry defines. No file, no button.
+A **Sprint** button shows while the machine you are connected to has a sprint status file (`~/.local/state/sprint/status.json`, which the sprint skill writes). Its window shows a ring for the whole sprint and one ring per chunk, with each chunk's state (running, waiting, merged, blocked), its latest activity and its steps, and when it last updated. **Open tmux** opens a P9 terminal that runs `tmux attach -t p9`. The window also has a button for each sprint script your registry defines (`sprint-start`, `sprint-close`, `sprint-heavy`). A section in your space with `"widget": "sprint"` puts this button where the section is, and its window then has that section's own buttons instead. No file, no button.
 
 ### Other parts
 
