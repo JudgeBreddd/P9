@@ -139,12 +139,52 @@ for (const op of ['rename', 'delete', 'mkdir']) guarded[op] = async function (ur
 };
 
 // Open Folder: main's picker (and its confirm for a folder outside the workspace); main loads this page again on the folder it took.
-// Server mode: the picker would list this computer's folders, so this asks for the server path and main checks it (rows 41/50).
+// Server mode: the picker would list this computer's folders, so this lists the server's and main checks the pick (rows 41/50).
+// VS Code's own remote Open Folder dialog is not in this build (no dialogs override), so this is its shape: a quick pick of
+// the server's folders, read through the editor's remote file provider; type a path, or walk into folders, then Open.
+const pickServerFolder = start => new Promise(resolve => {
+  const pick = v.window.createQuickPick();
+  Object.assign(pick, { title: 'Open Folder on the server', placeholder: 'A folder\'s full path on the server', ignoreFocusOut: true });
+  let dir = null, folders = [], read = 0;
+  const show = () => {
+    const typed = pick.value, part = typed.slice(typed.lastIndexOf('/') + 1).toLowerCase();
+    const matches = folders.filter(name => name.toLowerCase().startsWith(part)).map(name => ({ label: '$(folder) ' + name, name, alwaysShow: true }));
+    pick.items = part ? (matches.length ? matches : [{ label: '$(folder-opened) Open ' + typed, path: typed, alwaysShow: true }])
+      : [{ label: '$(folder-opened) Open this folder', path: dir, description: dir, alwaysShow: true },
+        ...(dir === '/' ? [] : [{ label: '$(arrow-up) ..', name: '..', alwaysShow: true }]), ...matches];
+  };
+  const load = async next => {
+    dir = next; folders = [];
+    const mine = ++read;
+    pick.busy = true;
+    const stat = await service.resolve(URI.from({ scheme: 'vscode-remote', authority, path: next })).catch(() => null);
+    if (mine !== read) return;
+    pick.busy = false;
+    folders = (stat?.children ?? []).filter(child => child.isDirectory).map(child => child.name).sort((a, b) => a.localeCompare(b));
+    pick.validationMessage = stat ? undefined : 'P9 cannot read ' + next + ' on the server.';
+    show();
+  };
+  const go = next => { pick.value = next === '/' ? '/' : next + '/'; load(next); };
+  pick.onDidChangeValue(typed => {
+    const at = typed.lastIndexOf('/');
+    if (at < 0) return show();
+    const folder = at === 0 ? '/' : typed.slice(0, at);
+    if (folder !== dir) load(folder); else show();
+  });
+  pick.onDidAccept(() => {
+    const [item] = pick.activeItems;
+    if (!item) return;
+    if (item.path) { resolve(item.path); pick.hide(); return; }
+    go(item.name === '..' ? (dir.slice(0, dir.lastIndexOf('/')) || '/') : (dir === '/' ? '' : dir) + '/' + item.name);
+  });
+  pick.onDidHide(() => { resolve(undefined); pick.dispose(); });
+  pick.show();
+  go(start.replace(/\/+$/, '') || '/');
+});
 const openFolder = async () => {
   let result = await window.p9dev.openFolder();
   if (result.pathNeeded) {
-    const typed = await v.window.showInputBox({ title: 'Open Folder on the server', value: result.value, ignoreFocusOut: true,
-      prompt: 'The folder\'s full path on the server. Outside the workspace, P9 asks once before it opens it.' });
+    const typed = await pickServerFolder(result.value);
     if (!typed) return false;
     result = await window.p9dev.openFolder(typed);
   }
