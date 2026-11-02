@@ -2665,6 +2665,7 @@ function openLanding(intro) {
   land.dataset.stage = intro ? 'intro' : 'main';
   land.toggleAttribute('data-run', intro);
   if (!land.open) land.showModal();
+  landVideo?.refresh();
   land.focus();
   landGreeting(); landStatus(); landPets();
   land.querySelectorAll('[data-land]').forEach(b => { b.hidden = !focusOn(b.dataset.land); });
@@ -2705,6 +2706,7 @@ function leaveLanding() {
 }
 land.addEventListener('close', () => {
   try { sessionStorage.setItem('p9-landed', '1'); } catch {}
+  landVideo?.refresh();
   land.classList.remove('leaving');
   cancelAnimationFrame(LAND.raf); LAND.raf = 0;
   clearTimeout(LAND.intro); clearTimeout(LAND.status);
