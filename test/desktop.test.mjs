@@ -459,11 +459,12 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
 test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list the matching workspace files', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const { page, shot } = await openFirst(t, instance);
-  for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'CLAUDE.md']) {
+  for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'solo-runs/2026-Nov-01-solo-run-report.md', 'ICM/_private/solo-runs/2026-Oct-31-solo-run-report.md', 'CLAUDE.md']) {
     await mkdir(path.dirname(path.join(instance.workspace, file)), { recursive: true }); await writeFile(path.join(instance.workspace, file), '# ' + file);
   }
+  // P11: a solo-run report anywhere in the workspace is listed, except under a locked name (_private, File protection).
   const lists = { homelab: [['Services', ['stack/docker-compose.yml']], ['Logs', ['stack/logs/app.log', 'stack/nightly-backup.log']], ['Backups', ['stack/nightly-backup.log']]],
-    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Workspace rules', ['CLAUDE.md']]] };
+    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Solo runs', ['solo-runs/2026-Nov-01-solo-run-report.md']], ['Workspace rules', ['CLAUDE.md']]] };
   for (const [name, sections] of Object.entries(lists)) {
     const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
     assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));
@@ -476,6 +477,7 @@ test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list th
       await page.locator('#mdlBody [data-folder="0"]').click();
       await page.locator('#mdlBody [data-i]').first().waitFor({ timeout: 10000 });
       assert.deepEqual((await page.locator('#mdlBody [data-i] .truncate:not(.sub)').allInnerTexts()).map((s) => s.trim()).sort(), files, name + ': ' + title);
+      if (title === 'Solo runs') await shot('template-icm-solo-runs-dark');
       if (title === sections[0][0]) {
         await shot('template-' + name + '-list-dark');
         await page.evaluate(() => { const h = document.documentElement; h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
