@@ -1597,11 +1597,17 @@ function renderMission() {
   }
   pullTopLevels();
   const lay = placed();
-  setHTML($('#fMission'), `<div class="tiles" aria-label="Script categories">${topRow(lay)}</div>`
+  // Three parts written apart, so a top-row change (a tile's count or level) leaves the columns and their card frames in place;
+  // one write of the whole page made every card again, which showed as cards flashing and losing their place.
+  setHTML($('#fMission'), '<div class="mpart"></div><div class="mpart"></div><div class="mpart"></div>');
+  const [mTop, mNotes, mBody] = $('#fMission').children;
+  setHTML(mTop, `<div class="tiles" aria-label="Script categories">${topRow(lay)}</div>`);
+  setHTML(mNotes, ''
     + (live.note ? `<p class="muted sm" data-mission-note>${esc(live.note)}${live.noteRestart ? restartBtn() : ''}</p>` : '')
     + (missionEmpty() ? missionIntro() : '')
     + (live.settingsError ? `<p class="sm" data-settings-error role="status">settings.json was changed but P9 cannot use it (${esc(live.settingsError)}). It keeps using the earlier settings until the file is fixed.</p>` : '')
-    + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : '')
+    + (live.restart?.needed ? `<p class="sm" data-restart role="status"><b>Restart P9 to apply.</b> The workspace folder ${esc(live.restart.folder)} was not there when P9 started, so it is using the default folder.${restartBtn()}</p>` : ''));
+  setHTML(mBody, ''
     // Waiting on you as a list on the page that scrolls on its own, with the big count workspace-hub had (Builder, 2026-10-18 #3). Three columns fill the window; each list scrolls inside itself.
     + (lay ? '<div class="mrow" data-placed>' + placedCols().map(c => `<div class="mcol" data-col="${c.n}"${c.w ? ` data-w="${c.w}"` : ''}>${c.mine.map(placedHtml).join('')}</div>`).join('') + '</div>'
       : '<div class="mrow">' + (widgetOn('waiting') ? NEEDS : '')

@@ -29,6 +29,7 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .shell:not([data-focus="dev"]) [data-in="dev"]{display:none}
 .shell:not([data-focus="mission"]) [data-in="mission"]{display:none}
 /* Mission Control: category tiles on top, then one small card per section; a card opens its section in the modal (Builder, 2026-10-17) */
+#fMission>.mpart{display:contents}
 #fMission{grid-template-columns:minmax(0,1fr);grid-auto-rows:auto;gap:10px;padding:12px;align-content:start;overflow:auto}
 #fMission{grid-template-rows:auto auto minmax(0,1fr)}#fMission:not(:has([data-mission-note])){grid-template-rows:auto minmax(0,1fr)}
 .mrow{display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,1.2fr) minmax(0,1fr);gap:10px;min-height:0}
