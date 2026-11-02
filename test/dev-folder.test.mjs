@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { serverPath, folderError } from '../apps/desktop/dev-folder.mjs';
+import { serverPath, folderError, trusted, setTrust } from '../apps/desktop/dev-folder.mjs';
 
 // Dev Focus Open Folder in Server mode (threat model rows 41/50 adds): main asks for the server path instead of refusing, checks
 // it with the server's rules, and every refusal names its own reason.
@@ -38,7 +38,17 @@ test('U2: Trust this folder? with Don\'t ask again, only in Unrestricted mode', 
   assert.match(handler, /const loose = await looseNow\(\);\s*if \(!\(loose && await trustAll\(\)\)\)/, 'the flag skips the ask only while the mode is on');
   assert.match(handler, /loose\s*\? \{ type: 'question', title: 'Trust this folder\?'[^}]*checkboxLabel: 'Don\\'t ask again'/);
   assert.match(handler, /: \{ type: 'warning', title: 'Open a folder outside the workspace\?'/, 'mode off: the old confirm');
-  assert.match(handler, /if \(loose && checkboxChecked\) await writeFile\(trustFile/);
+  assert.match(handler, /if \(loose && checkboxChecked\) await trust\(true\);/);
+  assert.match(main, /const loose = lock\?\.body\?\.on === false && files\?\.body\?\.on === false;\s*if \(!loose\) await trust\(false\);/, 'L4: the mode off drops the flag');
+  // L4: per place; mode off drops only that place; the old global flag trusts nowhere.
+  let file = setTrust('', 'local', true);
+  assert.deepEqual([trusted(file, 'local'), trusted(file, 'server-a')], [true, false]);
+  file = setTrust(file, 'server-a', true);
+  assert.equal(setTrust(file, 'server-a', true), null, 'no change, no write');
+  file = setTrust(file, 'local', false);
+  assert.deepEqual([trusted(file, 'local'), trusted(file, 'server-a')], [false, true]);
+  assert.equal(trusted(JSON.stringify({ trustOutside: true }), 'local'), false);
+  assert.equal(trusted('not json', 'local'), false);
   const picker = main.slice(main.indexOf("ipcMain.handle('p9:pick-folder'"), main.indexOf("ipcMain.handle('p9:pick-vault'"));
   assert.match(picker, /return real && !args\.length && await looseNow\(\) \? real : null;/, 'U4: an outside chat folder only in the mode, only for a new chat');
   console.log('PASS U2: Trust this folder? with Don\'t ask again in the mode, the old confirm without it; U4 picker gated the same way');

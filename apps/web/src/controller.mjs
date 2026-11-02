@@ -3446,7 +3446,7 @@ window.p9?.onMove?.(onMove);
 function onServerUpdate(u) {
   if (!u) return;
   const on = 'P9 on ' + u.host, missing = (u.missing ?? []).map(m => m.id + ' (' + m.why + '): ' + m.command).join('; ');
-  const why = { 'turn-never-ended': 'a chat\'s turn did not end within 2 hours' }[u.error] ?? u.error;
+  const why = { 'turn-never-ended': 'a chat\'s turn did not end within 2 hours', 'still-older': 'its old P9 kept running after the reinstall; restart that computer or stop P9 there, then connect again' }[u.error] ?? u.error;
   const say = {
     downloading: [on + ' is downloading ' + u.version + ' from GitHub Releases.', 'ok'],
     building: [on + ' is building ' + u.version + ' beside the running copy.', 'ok'],

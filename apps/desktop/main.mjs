@@ -25,7 +25,7 @@ import { readState, writeState, begin, timedOut, healthy, quit, rolledBack, star
   rollbackLog, sanitize, reportLink, shareRoot, START_MS } from './rollback.mjs';
 import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 import { updatedFrom } from './whats-new.mjs';
-import { serverPath } from './dev-folder.mjs';
+import { serverPath, trusted, setTrust } from './dev-folder.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
 
 export const APP_URL = 'p9://app/';
@@ -275,6 +275,7 @@ export async function createDesktop({ state, open } = {}) {
   const sshKeyFile = path.join(app.getPath('userData'), 'ssh', 'p9_ed25519');
   useKey(sshKeyFile);
   let noKey = Array.isArray(saved?.noKey) ? saved.noKey.filter(named) : [];
+  const slimTried = new Map(); // review 2 L2: host -> the old slim version this launch reinstalled over
   // Row I1: Keep P9 running there? per host (keep.mjs), applied at each connect.
   // U8: Keep on the slim Temporary P9 there (P9_KEEP full) is the full install, with keep and this password if any.
   const keeper = createKeeper({ saved: saved?.keep, named, save: () => keepServer(), run: (h, action, password) => remoteMode(h, action, sshCommand, password)
@@ -309,7 +310,11 @@ export async function createDesktop({ state, open } = {}) {
         serverUpdating = true;
         updateServer({ state: s.state, check: s.check, version: ownVersion, host: serverHost, live: () => attempt === serverTry,
           checkout: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? fileURLToPath(new URL('../../', import.meta.url)) : null,
-          reinstall: s.slim ? () => { if (attempt === serverTry && remoteInstall?.phase !== 'running') runInstall(); } : null,
+          reinstall: s.slim ? old => {
+            if (attempt !== serverTry || remoteInstall?.phase === 'running') return;
+            if (slimTried.get(serverHost) === old) return false; // L2: once per host and old version, each launch
+            slimTried.set(serverHost, old); runInstall();
+          } : null,
           tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
@@ -1198,12 +1203,17 @@ export async function createDesktop({ state, open } = {}) {
   // Unrestricted mode (v0.1.6 U2/U4): the daemon's own predicate, agent lock off and File protection off. Any failure reads as off.
   const looseNow = async () => {
     const [lock, files] = await Promise.all([daemonRequest(state, 'GET', '/agent-lock'), daemonRequest(state, 'GET', '/file-protection')]).catch(() => []);
-    return lock?.body?.on === false && files?.body?.on === false;
+    const loose = lock?.body?.on === false && files?.body?.on === false;
+    if (!loose) await trust(false);
+    return loose;
   };
-  // "Don't ask again" on Trust this folder? (U2): one global flag, honoured only while Unrestricted mode is on.
-  // ponytail: no Settings switch to clear it; deleting p9-trust.json (or turning the mode off) brings the ask back.
-  const trustFile = path.join(app.getPath('userData'), 'p9-trust.json');
-  const trustAll = () => readFile(trustFile, 'utf8').then(text => JSON.parse(text).trustOutside === true, () => false);
+  // "Don't ask again" on Trust this folder? (U2, review 2 L4): per place (this computer or the server's host), honoured only
+  // while Unrestricted mode is on, and dropped by the first check that finds the mode off there (dev-folder.mjs).
+  // ponytail: no Settings switch to clear it; turning the mode off and opening a folder, or deleting p9-trust.json, does.
+  const trustFile = path.join(app.getPath('userData'), 'p9-trust.json'), trustPlace = () => serverHost ?? 'local';
+  const trustText = () => readFile(trustFile, 'utf8').catch(() => '');
+  const trustAll = async () => trusted(await trustText(), trustPlace());
+  const trust = async on => { const next = setTrust(await trustText(), trustPlace(), on); if (next) await writeFile(trustFile, next, { mode: 0o600 }).catch(() => {}); };
   // Dev Focus's Open Folder (threat model row 41): the native picker, then a folder inside the workspace opens at once; one outside
   // it asks first, naming the folder, and the daemon checks it (POST /dev/root) before the editor shows it. Server mode (rows 41/50
   // adds): the picker would list this computer's folders, so the page asks for the server path (one string, only then) and
@@ -1243,7 +1253,7 @@ export async function createDesktop({ state, open } = {}) {
             detail: 'It is outside the workspace. Saves there still go through P9\'s guarded save. P9 keeps it open until you restart or open the workspace again.',
             buttons: ['Cancel', 'Open folder'], defaultId: 0, cancelId: 0, noLink: true });
         if (response !== 1) return { ok: false };
-        if (loose && checkboxChecked) await writeFile(trustFile, JSON.stringify({ trustOutside: true }) + '\n', { mode: 0o600 }).catch(() => {});
+        if (loose && checkboxChecked) await trust(true);
       }
       set = await daemonRequest(state, 'POST', '/dev/root', { path: real }).catch(failedReply);
       if (set.status !== 200) return fail(set.body?.error ?? 'daemon-unavailable');

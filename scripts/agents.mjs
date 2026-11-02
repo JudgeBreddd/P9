@@ -26,9 +26,16 @@ try {
     let bytes;
     if (from) bytes = await readFile(path.join(from, path.basename(new URL(url).pathname)));
     else {
-      const response = await fetch(url);
+      // Review 2 L5: a stalled or endless download stops (10 minutes, 1 GB) instead of hanging the install or filling memory.
+      const response = await fetch(url, { signal: AbortSignal.timeout(600000) });
       if (!response.ok) throw new Error(`download ${response.status} for ${url}`);
-      bytes = Buffer.from(await response.arrayBuffer());
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        if ((size += chunk.length) > 1024 ** 3) throw new Error(`download over 1 GB for ${url}; nothing was installed`);
+        chunks.push(chunk);
+      }
+      bytes = Buffer.concat(chunks);
     }
     const [algorithm, digest] = [integrity.slice(0, integrity.indexOf('-')), integrity.slice(integrity.indexOf('-') + 1)];
     if (algorithm !== 'sha512' || createHash('sha512').update(bytes).digest('base64') !== digest) throw new Error(`${folder} does not match its pinned checksum; nothing was installed`);

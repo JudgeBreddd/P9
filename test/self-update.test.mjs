@@ -379,6 +379,21 @@ test('update, laptop: a server with no /update routes (before 0.1.6) is too-old,
   assert.equal(done.phase, 'too-old');
 });
 
+// Review 2 L2: a slim remote still on the old version after this launch reinstalled over it says so once (still-older),
+// instead of installing again on every connect. main.mjs keeps the version it reinstalled over, per host.
+test('update, slim: one reinstall per old version; still older after it is said, not installed again', { timeout: 30000 }, async () => {
+  const seen = new Set(), events = [];
+  const reinstall = (old) => (seen.has(old) ? false : void seen.add(old));
+  const run = () => updateServer({ state: null, check: async () => ({ version: '0.1.5' }), version: NEXT, checkout: null, host: 'test', reinstall, tell: (event) => { events.push(event); } });
+  assert.equal((await run()).phase, 'reinstall');
+  assert.deepEqual(events, []);
+  assert.deepEqual(await run(), { phase: 'failed', host: 'test', version: NEXT, error: 'still-older' });
+  assert.deepEqual(events, [{ phase: 'failed', host: 'test', version: NEXT, error: 'still-older' }]);
+  const main = await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8');
+  assert.match(main, /if \(slimTried\.get\(serverHost\) === old\) return false;[^\n]*\n\s*slimTried\.set\(serverHost, old\); runInstall\(\);/);
+  console.log('PASS L2: first connect reinstalls, the second with the same old version says still-older once');
+});
+
 // K3: a turn that never ends fails the update (turn-never-ended) and gives the starts back; the laptop's follow has its own
 // deadline and says timed-out instead of waiting for ever.
 test('update: a turn that never ends fails as turn-never-ended, and the laptop stops following at its deadline', { skip, timeout: 60000 }, async (t) => {

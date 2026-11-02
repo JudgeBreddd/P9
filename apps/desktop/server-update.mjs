@@ -54,7 +54,15 @@ export async function updateServer({ state, check, version, checkout, host, tell
   const health = await check().catch(() => null);
   if (!health?.version) return { phase: 'unknown' };
   if (newer(health.version, version)) return tell({ phase: 'app-older', host, server: health.version, app: version }) ?? { phase: 'app-older' };
-  if (reinstall) { if (!newer(version, health.version)) return { phase: 'current' }; reinstall(); return { phase: 'reinstall' }; }
+  // Review 2 L2: reinstall(server version) is false when this launch already reinstalled over that same version and the
+  // old daemon still answers: said once, instead of installing again on every connect.
+  if (reinstall) {
+    if (!newer(version, health.version)) return { phase: 'current' };
+    if (reinstall(health.version) !== false) return { phase: 'reinstall' };
+    const event = { phase: 'failed', host, version, error: 'still-older' };
+    tell(event);
+    return event;
+  }
   const target = await offer({ checkout, version });
   if (!target || !newer(target.version, health.version)) return { phase: 'current' };
   const status = await daemonRequest(state, 'GET', '/update/status').catch(() => null);

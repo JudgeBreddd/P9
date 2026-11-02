@@ -24,3 +24,16 @@ export function folderError(error, server) {
     'daemon-outdated': 'The P9' + (server ? ' on the server' : '') + ' is older than this app and cannot open other folders yet. Update it first.',
   }[error] ?? 'P9 could not open that folder' + there + ' (' + error + ').';
 }
+
+// "Don't ask again" on Trust this folder? (U2; review 2 L4): kept per place, 'local' or the server's host, in p9-trust.json's
+// text. A check that finds the mode off drops that place's flag, so turning the mode on again asks again. An older file with
+// one global trustOutside: true trusts nowhere.
+const places = (text) => { try { const all = JSON.parse(text)?.trustOutside; return all && typeof all === 'object' && !Array.isArray(all) ? all : {}; } catch { return {}; } };
+export const trusted = (text, place) => places(text)[place] === true;
+// The file's new text, or null when nothing changes.
+export function setTrust(text, place, on) {
+  const all = { ...places(text) };
+  if ((all[place] === true) === on) return null;
+  if (on) all[place] = true; else delete all[place];
+  return JSON.stringify({ trustOutside: all }) + '\n';
+}
