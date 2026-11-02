@@ -655,9 +655,9 @@ test('One look for every focus mode: a pick in Chat or Mission sets Dev Focus to
   await tour(first, 'picked in Chat');
   await pick('Control+3', second);
   await tour(second, 'picked in Mission');
-  // Dev Focus's editor is drawn above the page, so the picker is off there; it shows the look picked elsewhere.
+  // f964049: the picker works in Dev Focus too (its menu shows over a still of the editor); it shows the look picked elsewhere.
   await page.keyboard.press('Control+2');
-  assert.equal(await page.locator('#themeBtn').isDisabled(), true, 'no theme picker in Dev Focus');
+  assert.equal(await page.locator('#themeBtn').isDisabled(), false, 'the theme picker works in Dev Focus');
   assert.equal(await theme(page), second);
   const shot = await app.evaluate(async ({ BrowserWindow }) => (await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString('base64'));
   if (process.env.CI !== 'true') console.log('P9_SHOT one-look-dev ' + shot);

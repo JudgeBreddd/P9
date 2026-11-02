@@ -731,3 +731,4 @@ div.onboard-tpl{cursor:default}div.onboard-tpl:hover{border-color:var(--border)}
 #mdlBody .file-image-note{margin:16px 20px}
 /* History lists every chat a message was sent in: past the window it scrolls, or the last ones cannot be reached. */
 #histPop{max-height:calc(100vh - 60px);overflow-y:auto;overscroll-behavior:contain}
+#folderDlg{width:min(460px,92vw)}.folder-list{display:grid;gap:2px;max-height:280px;overflow:auto;margin:8px 0;padding:0 10px}.folder-list>p{margin:4px 8px}.folder-list button{text-align:left;padding:4px 8px;border-radius:6px}.folder-list button:hover{background:var(--muted,#ffffff14)}.folder-path{display:grid;gap:4px;margin:0 18px 14px}

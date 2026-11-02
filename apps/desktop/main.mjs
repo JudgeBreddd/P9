@@ -1496,8 +1496,9 @@ export async function createDesktop({ state, open } = {}) {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
         || args.length > 1 || (args.length && !Object.hasOwn(PICKS, args[0]))) throw new Error('ipc-sender-refused');
     if (!state) return null;
-    // ponytail: no picker in Server mode (this machine's dialog cannot browse the server); acts as Cancel. A server folder list is the sprint's.
-    if (serverHost) return undefined;
+    // Server mode: this machine's dialog cannot browse the server. Setup's picks act as Cancel; a new chat's folder is
+    // picked in the page from the server's own folder list (v0.1.6 U4), so main only says so.
+    if (serverHost) return args.length ? undefined : { remote: true };
     const root = await realpath((await health(state)).workspace);
     const [title, buttonLabel, kind] = args.length ? PICKS[args[0]] : ['Start the chat in', 'Start here', 'openDirectory'];
     const pick = await dialog.showOpenDialog(window, { title, buttonLabel, properties: [kind], defaultPath: root });

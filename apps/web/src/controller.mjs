@@ -619,6 +619,25 @@ $('#newPop').innerHTML = `<div class="hd eyebrow">Start in</div><select data-slo
 // ':pick' cannot be a folder, the daemon refuses ':' in paths).
 // The daemon checks it again. The choice stays picked until changed.
 let newFolder = '';
+// U4 on a remote (Builder, 2026-11-02: "no window at all"): the server's folders, walked from its workspace with the file
+// list route, or a full path typed in (Unrestricted mode only; the daemon refuses it otherwise when the chat starts).
+const pickRemoteFolder = () => new Promise(done => {
+  const d = $('#folderDlg'), list = $('#folderList'); let at = '', shown = 0;
+  const show = async () => {
+    const mine = ++shown; $('#folderAt').textContent = 'Workspace' + (at ? ' / ' + at.split('/').join(' / ') : '');
+    list.innerHTML = '<p class="sm muted">Loading…</p>';
+    const r = await window.p9.mission('list', { path: at }).catch(() => null);
+    if (mine !== shown) return;
+    const dirs = r?.status === 200 ? r.body.entries.filter(e => e.dir).map(e => e.name).sort() : null;
+    list.innerHTML = (at ? '<button type="button" data-fdir="..">..</button>' : '')
+      + (!dirs ? `<p class="sm muted">Not readable: ${esc(r?.body?.error || 'no answer')}</p>` : dirs.map(n => `<button type="button" data-fdir="${esc(n)}">${esc(n)}</button>`).join('') || '<p class="sm muted">No folders here.</p>');
+  };
+  list.onclick = e => { const b = e.target.closest('[data-fdir]'); if (!b) return; at = b.dataset.fdir === '..' ? at.split('/').slice(0, -1).join('/') : (at ? at + '/' : '') + b.dataset.fdir; show(); };
+  $('#folderPath').value = ''; d.returnValue = '';
+  $('#folderPath').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); d.close('yes'); } };
+  d.onclose = () => done(d.returnValue === 'yes' ? $('#folderPath').value.trim() || at : undefined);
+  d.showModal(); show();
+});
 const recentFolders = () => { try { const r = JSON.parse(localStorage.getItem('eh-chat-folders')); return Array.isArray(r) ? r.filter(f => typeof f === 'string').slice(0, 5) : []; } catch { return []; } };
 function renderNewFolder() {
   const seen = new Set(), opts = [['', 'Workspace'], ...(live.primary ? [[live.primary.path, 'Main project · ' + live.primary.name]] : []), ...[newFolder, ...recentFolders()].map(f => [f, f])]
@@ -628,7 +647,8 @@ function renderNewFolder() {
 }
 $('#newFolder').onchange = async e => {
   if (e.target.value !== ':pick') { newFolder = e.target.value; return; }
-  const picked = await window.p9.pickFolder();
+  let picked = await window.p9.pickFolder();
+  if (picked?.remote) picked = await pickRemoteFolder();
   if (typeof picked === 'string') newFolder = picked;
   else if (picked === null) toast({ kind: 'chat', txt: 'Pick a folder inside the workspace.', level: 'warn' }, true);
   renderNewFolder();

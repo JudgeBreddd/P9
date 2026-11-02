@@ -153,8 +153,18 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   assert.deepEqual(await page.evaluate(async () => [await window.p9.repairService(), await window.p9.workspaceChange(), await window.p9.pickFolder(),
     await window.p9.server('-oProxyCommand=x').then(() => 'taken', e => e.message.includes('ipc-sender-refused')),
     await window.p9.pickVault()]),
-  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, undefined, true,
+  [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, { remote: true }, true,
     { status: 409, body: { error: 'server-mode-local-only' } }]);
+  // U4: New chat's Choose folder... lists the remote's own folders (Builder, 2026-11-02: "no window at all"); a click walks in.
+  await mkdir(path.join(remote.workspace, 'proj', 'sub'), { recursive: true });
+  await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
+  await page.locator('#folderDlg #folderList [data-fdir="proj"]').click({ timeout: 10000 });
+  await page.locator('#folderDlg #folderList [data-fdir="sub"]').click({ timeout: 10000 });
+  await page.locator('#folderAt', { hasText: 'Workspace / proj / sub' }).waitFor({ timeout: 10000 });
+  if (process.env.CI !== 'true') console.log('P9_SHOT remote-folder ' + (await page.screenshot()).toString('base64'));
+  await page.locator('#folderDlg button[value="yes"]').click();
+  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
+  await page.keyboard.press('Escape');
   // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this
   // computer's daemon and the forward closes.
   await page.locator('#serverBadge').click();
