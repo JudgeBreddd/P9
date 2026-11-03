@@ -867,7 +867,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,
-    ...createMove({ db, workspace, ownership, row, emit, stopConversation, recovered }),
+    ...createMove({ db, workspace, ownership, row, emit, stopConversation, recovered, loose }),
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).

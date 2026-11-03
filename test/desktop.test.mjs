@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'devStill', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteAgents', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'devStill', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteAgents', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferFolders', 'xferRun', 'onXfer', 'serverUpdate', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -824,15 +824,19 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   await shot('move-reduced', page);
 });
 
-test('Send to remote from a chat outside the workspace: P9 says why in words, not "P9 did not answer"', { timeout: 60000 }, async (t) => {
+test('Send to remote from a chat outside the workspace: main plans it as it is; no remote yet is said in words', { timeout: 60000 }, async (t) => {
   const { page } = await openFirst(t, await daemon(t));
-  // U4 (Unrestricted mode) stores such a chat's folder as an absolute path; the page asks main to plan it as it is.
-  const plan = (folder) => page.evaluate((f) => window.p9.xferPlan(f).then((r) => r, (e) => 'threw ' + e.message), folder);
+  // U4 (Unrestricted mode) stores such a chat's folder as a full path; main plans it (the same folder, or one picked there).
+  const plan = (...args) => page.evaluate((a) => window.p9.xferPlan(...a).then((r) => r, (e) => 'threw ' + e.message), args);
   for (const folder of ['/home/someone/experiments', 'C:\\Users\\someone\\experiments']) {
     const r = await plan(folder);
-    assert.equal(r.error, 'outside-workspace', folder + ': ' + JSON.stringify(r));
-    assert.equal(r.message, 'this chat works in ' + folder + ', outside the workspace. Only a chat in a workspace folder can move to the remote.');
+    assert.equal(r.error, 'no-server', folder + ': ' + JSON.stringify(r));
+    assert.equal(r.message, 'No remote yet: add one in Settings > Remote Connect first.');
+    assert.equal((await plan(folder, '')).error, 'no-server');
   }
-  // A workspace folder that climbs out is still a refused call, as before.
+  // A workspace folder that climbs out is still a refused call, as before, and so is a landing folder that does.
   assert.match(await plan('work/../..'), /^threw .*ipc-sender-refused/);
+  assert.match(await plan('/home/someone/experiments', 'work/../..'), /^threw .*ipc-sender-refused/);
+  // The remote picker's listing needs a remote too.
+  assert.deepEqual(await page.evaluate(() => window.p9.xferFolders('folders', '/')), { status: 409, body: { error: 'no-server' } });
 });

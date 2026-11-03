@@ -348,3 +348,95 @@ test('Send to server with the chat folder: the edited file goes over P9\'s tunne
   assert.ok(seen.filter((e) => e.phase === 'uploading').every((e) => e.percent === Math.floor(99 * e.bytes.sent / total)));
   assert.equal((await listed(server, id)).state, 'stopped');
 });
+
+// U4 (Builder, 2026-11-02: "1. y"): a chat started outside the workspace (Unrestricted mode) can Send to remote. The same full
+// path on the remote when it is there and usable, else the window's remote picker gives one (planFolder's pick-folder); its
+// folder's files go by the same rules as a workspace chat's, relative to the two folders. The window's half is remote.test.mjs.
+const unrestricted = (...instances) => Promise.all(instances.map((d) => call(d, '/file-protection', 'POST', { on: false })));
+async function outsideChat(laptop, folder) {
+  await mkdir(folder, { recursive: true });
+  const made = await call(laptop, '/chat', 'POST', { provider: 'claude', folder });
+  assert.equal(made.status, 201, JSON.stringify(made));
+  await turn(laptop, made.conversation, 'hello');
+  await turn(laptop, made.conversation, 'edit notes.md');
+  return made.conversation;
+}
+
+test('Send to remote from outside the workspace: the same folder on the remote, the chat lands there and resumes in it', { skip, timeout: 60000 }, async (t) => {
+  const { laptop, server, directory, ssh, local, move } = await pair(t);
+  await unrestricted(laptop, server);
+  const outside = path.join(directory, 'experiments'), id = await outsideChat(laptop, outside), userData = path.join(directory, 'user-data');
+  const got = await planFolder({ local: laptop.state, host: 'test-host', folder: outside, userData, ssh, runtime: local });
+  assert.equal(got.error, undefined, JSON.stringify(got));
+  assert.deepEqual(got.plan.roots, { laptop: outside, server: outside });
+  assert.ok(got.plan.same.some((f) => f.path === 'notes.md'), 'paths are relative to the chat folder');
+  const moved = await move(id, { files: { userData, plan: got.plan, work: resolve(got.plan, null, false) }, to: got.plan.roots.server });
+  assert.deepEqual(moved, { status: 200, body: { moved: true, host: 'test-host' } });
+  assert.equal((await listed(laptop, id)).state, 'moved');
+  const row = await listed(server, id);
+  assert.equal(row.state, 'stopped');
+  assert.equal(row.folder, outside);
+  await turn(server, id, 'cwd');
+  assert.ok((await said(server, id)).some((text) => text.startsWith('cwd:') && text.endsWith(outside)), JSON.stringify(await said(server, id)));
+});
+
+test('Send to remote from outside the workspace: no usable same folder, the picked one gets the files and the chat; nothing frozen before', { skip, timeout: 60000 }, async (t) => {
+  const { laptop, server, directory, ssh, local, move } = await pair(t);
+  await unrestricted(laptop, server);
+  // One computer plays both, so "not on the remote" is a folder the remote keeps to itself (inside its recovery folder, U5).
+  const outside = path.join(server.recovery, 'experiments'), id = await outsideChat(laptop, outside), userData = path.join(directory, 'user-data');
+  const asked = await planFolder({ local: laptop.state, host: 'test-host', folder: outside, userData, ssh, runtime: local });
+  assert.equal(asked.error, 'pick-folder', JSON.stringify(asked));
+  assert.equal(asked.locked, false);
+  assert.match(asked.message, /Pick where the chat goes there/);
+  // Asking froze nothing: Cancel in the picker leaves the chat here, runnable, and the remote has nothing.
+  assert.equal((await listed(laptop, id)).state, 'running');
+  assert.ok(!(await events(laptop, id)).some((e) => e.type === 'moving'));
+  assert.equal(await listed(server, id), undefined);
+  const picked = path.join(directory, 'landing');
+  await mkdir(picked);
+  const got = await planFolder({ local: laptop.state, host: 'test-host', folder: outside, to: picked, userData, ssh, runtime: local });
+  assert.equal(got.error, undefined, JSON.stringify(got));
+  assert.deepEqual(got.plan.send.map((f) => f.path), ['notes.md']);
+  const moved = await move(id, { files: { userData, plan: got.plan, work: resolve(got.plan, null, false) }, to: picked });
+  assert.deepEqual(moved, { status: 200, body: { moved: true, host: 'test-host' } });
+  assert.equal(await readFile(path.join(picked, 'notes.md'), 'utf8'), await readFile(path.join(outside, 'notes.md'), 'utf8'));
+  assert.equal((await listed(server, id)).folder, picked);
+  // A different folder there: the first turn tells the agent where its folder went (the existing move note), then it works in it.
+  await turn(server, id, 'cwd');
+  assert.ok((await said(server, id)).some((text) => text.includes('here it is ' + picked + '.')), JSON.stringify(await said(server, id)));
+  await turn(server, id, 'cwd');
+  assert.ok((await said(server, id)).some((text) => text.startsWith('cwd:') && text.endsWith(picked)), JSON.stringify(await said(server, id)));
+  // Sent again later: the record for this pair of folders knows notes.md went, so nothing is asked.
+  const again = await planFolder({ local: laptop.state, host: 'test-host', folder: outside, to: picked, userData, ssh, runtime: local });
+  assert.deepEqual([again.plan.first.length, again.plan.conflicts.length, again.plan.same.length], [0, 0, 1]);
+});
+
+test('Send to remote from outside the workspace: the remote\'s switches on, it says so in words; a workspace folder there still takes it', { skip, timeout: 60000 }, async (t) => {
+  const { laptop, server, directory, ssh, local, move } = await pair(t);
+  await unrestricted(laptop); // the remote keeps File protection on
+  const outside = path.join(directory, 'experiments'), id = await outsideChat(laptop, outside), userData = path.join(directory, 'user-data');
+  const plan = (to) => planFolder({ local: laptop.state, host: 'test-host', folder: outside, to, userData, ssh, runtime: local });
+  const asked = await plan();
+  assert.deepEqual([asked.error, asked.locked], ['pick-folder', true], JSON.stringify(asked));
+  assert.match(asked.message, /^The remote has the agent lock or File protection on, so it takes a chat only into a folder in its workspace\./);
+  const full = await plan(outside);
+  assert.equal(full.error, 'outside-locked', JSON.stringify(full));
+  assert.match(full.message, /agent lock or File protection on.*Pick a workspace folder, or turn both off on the remote\./);
+  // A switch turned on after the plan: the landing refuses in words, and the chat runs here again.
+  const late = await move(id, { to: outside });
+  assert.equal(late.body.error, 'move-failed', JSON.stringify(late));
+  assert.match(late.body.message, /agent lock or File protection on, so it takes a chat only into a folder in its workspace, not .*experiments/);
+  // No landing folder at all (an older window): said in words too.
+  assert.match((await move(id)).body.message, /outside the workspace: pick where it goes on the remote/);
+  assert.equal((await listed(laptop, id)).state, 'stopped');
+  assert.equal(await listed(server, id), undefined);
+  // A folder in the remote's workspace is no restriction's business: the files and the chat land there.
+  await mkdir(path.join(server.workspace, 'landing'));
+  const got = await plan('landing');
+  assert.equal(got.error, undefined, JSON.stringify(got));
+  const moved = await move(id, { files: { userData, plan: got.plan, work: resolve(got.plan, null, false) }, to: 'landing' });
+  assert.deepEqual(moved, { status: 200, body: { moved: true, host: 'test-host' } });
+  assert.equal(await readFile(path.join(server.workspace, 'landing', 'notes.md'), 'utf8'), await readFile(path.join(outside, 'notes.md'), 'utf8'));
+  assert.equal((await listed(server, id)).folder, 'landing');
+});

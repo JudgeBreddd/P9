@@ -67,7 +67,7 @@ const AGENT = { claude: 'Claude Code', codex: 'Codex' };
 const relative = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !value.includes('\0') && !path.isAbsolute(value)
   && value.split(/[\\/]/).every((part) => part && part !== '.' && part !== '..');
 
-export function createMove({ db, workspace, ownership, row, emit, stopConversation, recovered }) {
+export function createMove({ db, workspace, ownership, row, emit, stopConversation, recovered, loose = () => false }) {
   const moves = ownership && path.join(ownership, 'moves');
   const staged = (name) => path.join(moves, name);
   // An Unrestricted-mode chat's folder is absolute (v0.1.6 U4); resolve keeps it as is.
@@ -110,11 +110,12 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
     setInterval(() => sweep().catch(() => {}), SWEEP_EVERY).unref();
   }
 
-  // The files the chat changed: its edit, delete and move tool calls' locations (ACP), workspace-relative, each with its
-  // sha256 here (null: not a file here now, so it must not be one on the server either). Files outside the workspace
-  // are only counted. ponytail: files changed through a shell command are not tool-call locations, so they are not checked.
-  async function edited(id) {
-    const kinds = new Map(), paths = new Set(), real = await realpath(workspace);
+  // The files the chat changed: its edit, delete and move tool calls' locations (ACP), relative to base (the workspace; a chat
+  // outside it, U4, its own folder), each with its sha256 here (null: not a file here now, so it must not be one on the
+  // server either). Files outside base are only counted. ponytail: files changed through a shell command are not tool-call
+  // locations, so they are not checked.
+  async function edited(id, base = workspace) {
+    const kinds = new Map(), paths = new Set(), real = await realpath(base).catch(() => base);
     let outside = 0;
     for (const { data } of db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'update' AND instr(data, 'tool_call') > 0 ORDER BY cursor").iterate(id)) {
       let update;
@@ -124,12 +125,12 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       if (!['edit', 'delete', 'move'].includes(kinds.get(update.toolCallId)) || !Array.isArray(update.locations)) continue;
       for (const location of update.locations) {
         if (typeof location?.path !== 'string' || !path.isAbsolute(location.path)) continue;
-        const inside = [workspace, real].map((base) => path.relative(base, location.path)).find((rel) => relative(rel));
+        const inside = [base, real].map((from) => path.relative(from, location.path)).find((rel) => relative(rel));
         if (inside) paths.add(inside.split(path.sep).join('/')); else outside += 1;
       }
     }
     if (paths.size > MAX_FILES) return null;
-    return { files: await Promise.all([...paths].sort().map(async (rel) => ({ path: rel, sha256: await fileHash(path.join(workspace, rel)) }))), outside };
+    return { files: await Promise.all([...paths].sort().map(async (rel) => ({ path: rel, sha256: await fileHash(path.join(base, rel)) }))), outside };
   }
 
   return {
@@ -153,7 +154,8 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         emit(id, 'moving');
       }
       try {
-        const files = await edited(id);
+        // U4: a chat outside the workspace names its files from its own folder; the desktop says where they land.
+        const files = await edited(id, path.isAbsolute(conversation.folder ?? '') ? cwdOf(conversation) : workspace);
         if (!files) { unfreeze(id); emit(id, 'move-failed', { message: 'This chat changed more than ' + MAX_FILES + ' files; P9 cannot check them all on the remote.' }); return refused(409, 'too-many-files'); }
         await mkdir(moves, { recursive: true, mode: 0o700 });
         // The history the server shows, without this computer's own move events.
@@ -233,14 +235,22 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       // Codex (item 10): a provider of the two, and its rollout's day folder and name, which must name this session.
       const provider = body?.provider ?? 'claude';
       if (!AGENT[provider] || (provider === 'codex' ? typeof body.rollout !== 'string' || ROLLOUT.exec(body.rollout)?.[4] !== body.session : body.rollout !== undefined)) return refused(400, 'request-refused');
-      if (!ID.test(id) || !ID.test(body?.session ?? '') || typeof body.title !== 'string' || body.title.length > 120 || typeof body.folder !== 'string'
+      if (!ID.test(id) || !ID.test(body?.session ?? '') || typeof body.title !== 'string' || body.title.length > 120 || typeof body.folder !== 'string' || body.folder.length > 4096 || body.folder.includes('\0')
           || !fromOk(body.from) || !Number.isSafeInteger(body.created) || !KINDS.every((kind) => part(body.parts?.[kind]))
           || !Array.isArray(body.files) || body.files.length > MAX_FILES || !body.files.every((f) => relative(f?.path) && (f.sha256 === null || HASH.test(f.sha256)))) return refused(400, 'request-refused');
       if (!moves) return refused(503, 'move-unavailable');
       const here = row(id);
       if (here) return here.session === body.session ? { status: 200, already: true } : refused(409, 'id-taken');
       if (db.prepare('SELECT 1 FROM conversations WHERE session = ?').get(body.session)) return refused(409, 'session-here');
-      if (!await listDirectory(workspace, body.folder).then(() => true, () => false)) return refused(409, 'folder-missing', { folder: body.folder });
+      // U4: a full path lands the chat outside the workspace, only as a chat may start there (Unrestricted mode; chat.mjs
+      // folderCheck: a real folder, no link, not P9's own). Its files are named from that folder, not the workspace.
+      let base = workspace, folder = body.folder;
+      if (path.isAbsolute(folder)) {
+        if (!loose()) return refused(409, 'outside-locked', { folder });
+        const real = await realpath(folder).catch(() => null);
+        if (!real || !await listDirectory(real, '').then(() => true, () => false)) return refused(409, 'folder-missing', { folder });
+        base = folder = real;
+      } else if (!await listDirectory(workspace, folder).then(() => true, () => false)) return refused(409, 'folder-missing', { folder });
       const files = Object.fromEntries(KINDS.map((kind) => [kind, staged('in-' + id + '.' + kind)]));
       for (const kind of KINDS) {
         const size = (await stat(files[kind]).catch(() => null))?.size ?? 0;
@@ -251,9 +261,9 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         }
       }
       // Syncthing (or whatever syncs the workspace) may still be on its way: every file the chat changed must be the same here.
-      const root = await realpath(workspace), behind = [];
+      const root = await realpath(base), behind = [];
       for (const file of body.files) {
-        const full = path.join(workspace, file.path), real = await realpath(full).catch(() => null);
+        const full = path.join(base, file.path), real = await realpath(full).catch(() => null);
         const same = file.sha256 === null ? !(await stat(full).catch(() => null))
           : !!real && !path.relative(root, real).startsWith('..') && !path.isAbsolute(path.relative(root, real)) && await fileHash(real) === file.sha256;
         if (!same) behind.push(file.path);
@@ -268,7 +278,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
         if (typeof event?.type !== 'string' || !/^[a-z][a-z-]{0,39}$/.test(event.type) || !Number.isSafeInteger(event.at) || !event.data || typeof event.data !== 'object') return refused(400, 'events-refused');
         events.push(event);
       }
-      const cwd = body.folder ? path.join(workspace, body.folder) : workspace;
+      const cwd = path.isAbsolute(folder) ? folder : folder ? path.join(workspace, folder) : workspace;
       // The transcript goes where Claude Code keeps this folder's sessions, a rollout in the same day folder Codex had it in.
       // One already here for this session is never replaced.
       const existing = await transcriptOf(body.session, provider);
@@ -287,7 +297,7 @@ export function createMove({ db, workspace, ownership, row, emit, stopConversati
       db.exec('BEGIN');
       try {
         db.prepare("INSERT INTO conversations (id, provider, title, session, state, created, folder) VALUES (?, ?, ?, ?, 'stopped', ?, ?)")
-          .run(id, provider, body.title, body.session, body.created, body.folder);
+          .run(id, provider, body.title, body.session, body.created, folder);
         for (const event of events) insert.run(id, event.type, JSON.stringify(event.data), event.at);
         db.exec('COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }

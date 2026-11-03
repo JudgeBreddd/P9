@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { daemonRequest } from '../../scripts/teh.mjs';
 import { connectServer } from './remote.mjs';
-import { runPlan, tagSide } from './xfer.mjs';
+import { isFull, runPlan, tagSide } from './xfer.mjs';
 
 const LONG = 120_000; // a 4 MiB piece over a slow link, or the remote hashing a long transcript
 const SYNC_WAIT = 120_000, SYNC_EVERY = 2000; // Syncthing catching up with the files the chat changed
@@ -21,8 +21,10 @@ const CANCELLED = 'You cancelled the move. The chat stays here.';
 // files (item 23): { userData, plan, work }, the chat's folder as the Send files prompt planned and settled it before the freeze
 // (Builder, 2026-10-27: "Same prompt first"). It goes over P9's tunnel before the chat, so nothing waits for Syncthing. null: a
 // Syncthing folder, which keeps the wait (Builder: "Keep today's wait").
+// to (U4): where a chat started outside the workspace lands on the remote, as planFolder settled it (a full path, or a
+// workspace folder there). The chat's edited files are named from its own folder, so they are checked from that one there.
 export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), syncWait = SYNC_WAIT,
-  onProgress = () => {}, signal, heartbeat = HEARTBEAT, files = null }) {
+  onProgress = () => {}, signal, heartbeat = HEARTBEAT, files = null, to }) {
   let seq = 0, beat, last;
   const send = () => { try { onProgress({ id, seq: ++seq, host, ...last, bytes: { ...last.bytes } }); } catch {} };
   const tell = (phase, percent = last.percent, bytes = last.bytes, extra) => {
@@ -47,6 +49,11 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
       return ok ? { status: 200, body: { moved: true, host } } : { status: 409, body: { error: 'move-failed', message, ...extra } };
     };
     if (files && files.plan.folder !== manifest.folder) return settle(false, 'The files checked were not this chat\'s folder. Press Send to remote again. The chat stays here.');
+    if (isFull(manifest.folder ?? '')) {
+      if (to === undefined) return settle(false, 'This chat works in ' + manifest.folder + ', outside the workspace: pick where it goes on the remote. Press Send to remote again. The chat stays here.');
+      if (!isFull(to) && to) manifest.files = manifest.files.map((f) => ({ ...f, path: to + '/' + f.path }));
+      manifest.folder = to;
+    }
     tell('connecting');
     let tunnel;
     try { tunnel = await connectServer({ host, ssh, runtime: path.join(runtime, 'p9-move-' + id.slice(0, 8)), editor: false }); }
@@ -103,7 +110,8 @@ export async function sendToServer({ local, id, host, ssh = 'ssh', runtime = pro
           return settle(false, files ? 'The remote\'s copy of ' + names + ' is not the one this chat wrote (the remote\'s was kept, or it changed after the send). Send the chat again. The chat stays here.'
             : 'The remote does not have the latest copy of ' + names + '. Let the sync finish, then send the chat again. The chat stays here.');
         }
-        if (landed.body.error === 'folder-missing') return settle(false, 'The remote has no folder ' + landed.body.folder + ' in its workspace. The chat stays here.');
+        if (landed.body.error === 'folder-missing') return settle(false, 'The remote has no folder ' + landed.body.folder + (isFull(landed.body.folder) ? '' : ' in its workspace') + '. The chat stays here.');
+        if (landed.body.error === 'outside-locked') return settle(false, 'The remote has the agent lock or File protection on, so it takes a chat only into a folder in its workspace, not ' + landed.body.folder + '. Turn both off on the remote, or send again and pick a workspace folder. The chat stays here.');
         return settle(false, 'The remote refused the chat (' + landed.body.error + '). The chat stays here.');
       }
     } catch {
