@@ -107,7 +107,8 @@ test('Restart and Repair on Linux: done only when a new daemon answers; no unit,
   assert.deepEqual(await repairLinuxService(state), { restarted: true });
   assert.notEqual((await health(state)).boot.pid, second.pid);
   assert.deepEqual((await readFile(path.join(home, 'systemctl.log'), 'utf8')).trim().split('\n'),
-    ['cat p9-foundation.service', 'daemon-reload', 'reset-failed p9-foundation.service', 'enable p9-foundation.service', 'restart p9-foundation.service']);
+    ['cat p9-foundation.service', 'daemon-reload', 'reset-failed p9-foundation.service', 'enable p9-foundation.service',
+      'show -p MainPID --value p9-foundation.service', 'restart p9-foundation.service']);
   assert.equal(await readFile(path.join(unit + '.d', 'phone.conf'), 'utf8'), '[Service]\nEnvironment=P9_REMOTE=1\n');
 
   // No unit: nothing is restarted or installed; the answer says how to install it.
@@ -143,6 +144,23 @@ test('Restart on Linux, a hung daemon: killed after the grace instead of waiting
   assert.deepEqual(await restartLinuxService(state), { restarted: true });
   assert.notEqual((await health(state)).boot.pid, fresh);
   assert.doesNotMatch(await readFile(path.join(home, 'systemctl.log'), 'utf8'), /^kill /m);
+});
+
+// RS2 for Repair: the same hung daemon, and Repair restarts the unit the way Restart does, so it is killed after the grace
+// too instead of Repair giving up at 60 s while systemd still waits 90 s.
+test('Repair on Linux, a hung daemon: killed after the grace, then a new one answers', { skip: process.platform !== 'linux', timeout: 150000 }, async (t) => {
+  const { home, state } = await unitHome(t);
+  await writeFile(path.join(home, 'stop-timeout'), '90');
+  const hung = (await health(state)).boot.pid;
+  process.kill(hung, 'SIGSTOP');
+  t.after(() => { try { process.kill(hung, 'SIGKILL'); } catch {} });
+  const began = Date.now();
+  assert.deepEqual(await repairLinuxService(state, undefined, 2), { restarted: true });
+  assert.ok(Date.now() - began < 30000, 'not left to the 90 s stop timeout: ' + (Date.now() - began) + ' ms');
+  assert.notEqual((await health(state)).boot.pid, hung);
+  for (const end = Date.now() + 3000; alive(hung) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(alive(hung), false, 'the hung daemon is gone');
+  assert.match(await readFile(path.join(home, 'systemctl.log'), 'utf8'), /^kill --kill-who=main --signal=SIGKILL p9-foundation\.service$/m);
 });
 
 test('The Windows repair runs with only the environment install-windows.ps1 needs (BL8)', () => {
