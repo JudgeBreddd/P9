@@ -73,8 +73,9 @@ test('No ssh key: P9 asks for the password once in its own window, then connects
   assert.equal(await page.locator('#sshL').textContent(), "tester@password-host's password");
   assert.equal(await page.locator('#sshErr').isVisible(), false);
   await both(page, 'ssh-password-window', page);
+  // Enter, as people press it: it must log in, not press Cancel (the form's first button).
   await page.fill('#sshPw', PASSWORD);
-  await page.click('#sshOk');
+  await page.press('#sshPw', 'Enter');
   await connected(page);
   const calls = await s.calls(), asks = calls.filter((c) => 'askpass' in c);
   assert.equal(asks.length, 1, 'asked once: ' + JSON.stringify(asks));

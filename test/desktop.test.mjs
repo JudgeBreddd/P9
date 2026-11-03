@@ -823,3 +823,16 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   assert.deepEqual(await page.evaluate(() => ['#moveSky', '.move-mark'].map((s) => getComputedStyle(document.querySelector(s)).display)), ['none', 'none']);
   await shot('move-reduced', page);
 });
+
+test('Send to remote from a chat outside the workspace: P9 says why in words, not "P9 did not answer"', { timeout: 60000 }, async (t) => {
+  const { page } = await openFirst(t, await daemon(t));
+  // U4 (Unrestricted mode) stores such a chat's folder as an absolute path; the page asks main to plan it as it is.
+  const plan = (folder) => page.evaluate((f) => window.p9.xferPlan(f).then((r) => r, (e) => 'threw ' + e.message), folder);
+  for (const folder of ['/home/someone/experiments', 'C:\\Users\\someone\\experiments']) {
+    const r = await plan(folder);
+    assert.equal(r.error, 'outside-workspace', folder + ': ' + JSON.stringify(r));
+    assert.equal(r.message, 'this chat works in ' + folder + ', outside the workspace. Only a chat in a workspace folder can move to the remote.');
+  }
+  // A workspace folder that climbs out is still a refused call, as before.
+  assert.match(await plan('work/../..'), /^threw .*ipc-sender-refused/);
+});

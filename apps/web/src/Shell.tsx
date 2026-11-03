@@ -40,6 +40,11 @@ const keySteps = (host: string, show: boolean) => {
   const line = 'type $env:USERPROFILE\\.ssh\\id_ed25519.pub | ssh ' + host + ' "umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"';
   if (add.textContent !== line) { add.textContent = line; steps.querySelector('[data-host]')!.textContent = host; } // set once: a poll keeps a selection
 };
+// Enter in a password field presses the window's own button. The form's first button, its default for Enter, is Cancel, so
+// Enter used to cancel what had just been typed ("Connecting stopped before the password was typed").
+const enterPresses = (field: HTMLInputElement, id: string) => {
+  field.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); (document.getElementById(id) as HTMLButtonElement).click(); } };
+};
 type SshAsk = { id: number; prompt: string; again?: boolean; dropped?: boolean };
 const askSsh = (host: string, ask: SshAsk) => {
   const dialog = document.getElementById('sshDlg') as HTMLDialogElement | null, pw = document.getElementById('sshPw') as HTMLInputElement | null;
@@ -50,6 +55,7 @@ const askSsh = (host: string, ask: SshAsk) => {
   pw.required = true;
   document.getElementById('sshErr')!.hidden = !ask.again;
   document.getElementById('sshOk')!.textContent = 'Connect';
+  enterPresses(pw, 'sshOk');
   pw.value = '';
   dialog.returnValue = '';
   // The answer goes to main once; the field is emptied whenever the window closes. Cancel (or Esc) stops the login.
@@ -128,6 +134,7 @@ const askAdmin = (host: string, title: string, lead: string, need: string[], com
   document.getElementById('adminCmd')!.textContent = command;
   document.getElementById('adminL')!.textContent = 'Admin password for your account on ' + host;
   document.getElementById('adminOk')!.textContent = ok;
+  enterPresses(pw, 'adminOk');
   const err = document.getElementById('adminErr')!;
   err.textContent = error; err.hidden = !error;
   pw.value = '';

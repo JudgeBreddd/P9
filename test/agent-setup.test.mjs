@@ -377,7 +377,7 @@ test('Row 61 on a remote: tmux or ssh missing there opens the admin password win
   await shot('c36-remote-deps-admin-event-horizon-prime', page.locator('#adminDlg'));
   await page.evaluate(() => { document.getElementById('themeBtn').click(); document.querySelector('[data-theme-pick="daylight"]').click(); });
   await shot('c36-remote-deps-admin-daylight', page.locator('#adminDlg'));
-  await page.locator('#adminOk').click();
+  await page.press('#adminPw', 'Enter'); // Enter installs; it used to press Cancel, the form's first button
   await page.waitForFunction(() => !document.querySelector('#adminDlg').open, null, { timeout: left() });
   let calls = [];
   for (const end = Date.now() + 5000; Date.now() < end && calls.length < 4; await wait(100)) calls = await app.evaluate(() => globalThis.depsCalls);
