@@ -10,7 +10,7 @@ import { mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { existsSync, mkdirSync, lstatSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { health } from '../../scripts/teh.mjs';
+import { health, RESTART_UNIT, RESTART_GRACE } from '../../scripts/teh.mjs';
 // The admin password's shape (row I2): one line, at most 1024 characters. Also remote-install.mjs's.
 export const PASSWORD = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\0\r\n]/.test(value);
 
@@ -150,10 +150,16 @@ export function startServer(host, ssh = 'ssh') {
     resolve(/^P9_START (ok|none)$/m.exec(out ?? '')?.[1] ?? 'failed')));
 }
 
-// restartServer(host): the server's own unit restarted over ssh, as Restart P9 restarts the local one. Fixed argv.
+// restartServer(host): Restart P9 there, with what runs it there (as startServer picks): its user service where one is installed
+// and P9 is not in background mode (Always on), restarted as the local one is (teh.mjs RESTART_UNIT: a hung daemon killed after
+// the grace); else the background start script's restart (Temporary, the slim P9 too), which has no unit. Fixed argv, BatchMode.
+// XDG_RUNTIME_DIR as startServer sets it: a non-tty ssh session can come without it, and systemctl --user needs it.
 export function restartServer(host, ssh = 'ssh') {
   if (!HOST.test(host)) return Promise.resolve(false);
-  return new Promise(resolve => execFile(ssh, [...sshOptions(), host, 'systemctl --user restart p9-foundation.service'], { timeout: 60000 }, error => resolve(!error)));
+  const command = 'b=' + RUN + '; export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; '
+    + 'if [ -e "$HOME/.config/systemd/user/p9-foundation.service" ] && [ ! -f "$b/background" ]; then set -- p9-foundation.service ' + RESTART_GRACE + '; ' + RESTART_UNIT + '; '
+    + 'elif [ -f "$b/start" ]; then sh "$b/start" restart >/dev/null 2>&1; else exit 1; fi';
+  return new Promise(resolve => execFile(ssh, [...sshOptions(), host, command], { timeout: (RESTART_GRACE + 90) * 1000 }, error => resolve(!error)));
 }
 
 // connectServer({ host }) -> { state, host, close(), check(), background, slim }. slim: the small Temporary P9 there (U8). background: P9 there runs in background mode (row I1). check() is /health, re-reading the credentials after a server restart. state is a folder holding daemon.sock and editor.sock (the forwards) and desktop.json.

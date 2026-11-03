@@ -13,6 +13,7 @@ import { connectServer, restartServer, startServer, sshHosts, serverFolder, prob
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
+import { trimLog } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
@@ -515,8 +516,14 @@ export async function createDesktop({ state, open } = {}) {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   // Freeze record (Builder, 2026-10-20: the window freezes "and i just need to close and reopen the app"): when the window
   // stops answering, the JavaScript it is stuck in goes to p9-freeze.log in the profile folder, then how long it lasted.
-  // "no stack" means it was stuck outside JavaScript (layout, paint, an IPC wait). ponytail: never rotated, a few lines per freeze.
-  const note = line => appendFile(path.join(app.getPath('userData'), 'p9-freeze.log'), new Date().toISOString() + ' ' + line + '\n').catch(() => {});
+  // "no stack" means it was stuck outside JavaScript (layout, paint, an IPC wait). Kept as daemon.log is (trimLog): over 5 MB
+  // it goes to p9-freeze.log.1 and starts again, checked before each line; the lines are written one at a time, in order.
+  const freezeLog = path.join(app.getPath('userData'), 'p9-freeze.log');
+  let noting = Promise.resolve();
+  const note = line => {
+    const text = new Date().toISOString() + ' ' + line + '\n';
+    noting = noting.then(() => trimLog(freezeLog)).then(() => appendFile(freezeLog, text)).catch(() => {});
+  };
   let frozeAt = 0;
   window.webContents.on('unresponsive', async () => {
     frozeAt = Date.now(); note('window unresponsive');

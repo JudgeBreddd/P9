@@ -12,7 +12,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { stage, bash, nodeLog, stopDaemon } from './install-runtime.test.mjs';
 import { createKeeper } from '../apps/desktop/keep.mjs';
-import { READ, remoteMode, startServer } from '../apps/desktop/remote.mjs';
+import { READ, remoteMode, restartServer, startServer } from '../apps/desktop/remote.mjs';
 import { watchIdle } from '../apps/server/idle.mjs';
 import { daemon, fixture, root } from './helpers.mjs';
 
@@ -188,6 +188,39 @@ test('Start P9 there: the user service where one is installed, the background st
   const none = await stage(true, 'refused', { installed: false });
   assert.equal(await startServer('test-host', path.join(none.bin, 'ssh')), 'none');
   assert.equal(await startServer('-oProxyCommand=x', path.join(none.bin, 'ssh')), 'failed', 'HOST check');
+});
+
+// RS2: Restart P9 there. A slim (Temporary) remote has no unit, so a systemctl restart did nothing there: start's restart
+// stops the daemon it started, a hung one killed, and starts a new one. Always on: the unit, as the local Restart does it.
+// The stub daemon holds the lock itself, so SIGSTOP (a busy event loop: no TERM handler runs) leaves it held, as a hung one does.
+const HUNG_NODE = (log) => '#!/bin/sh\n[ "$1" = --version ] && { echo v26.10.0; exit 0; }\necho "XDG=$XDG_RUNTIME_DIR $*" >> "' + log + '"\n'
+  + 's=; p=; for a; do [ "$p" = --state ] && s=$a; p=$a; done\n[ -n "$s" ] || exit 0\nmkdir -p "$s" "$HOME/.local/state/p9-foundation"\n'
+  + 'exec 9>"$HOME/.local/state/p9-foundation/daemon.lock"; flock -n 9 || exit 1\necho "{}" > "$s/desktop.json"\n'
+  + 'trap \'rm -f "$s/desktop.json"; exit 0\' TERM\nwhile :; do sleep 1 9>&-; done\n';
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+test('Restart P9 there: a slim remote\'s hung daemon is replaced by start\'s restart, not the unit it has not got; Always on restarts the unit', { skip, timeout: 90000 }, async (t) => {
+  const s = await background(t);
+  await stopDaemon(s);
+  assert.ok(await until(async () => (await sh(s, ['-c', 'flock -n "$HOME/.local/state/p9-foundation/daemon.lock" true'])).code === 0), 'stopped');
+  await writeFile(path.join(s.bin, 'node'), HUNG_NODE(s.log));
+  const start = await readFile(s.start, 'utf8');
+  await writeFile(s.start, start.replace('\n', '\nslim=1\n'));
+  assert.equal((await sh(s, [s.start, 'up'])).code, 0);
+  const hung = Number(await read(path.join(s.runDir, 'daemon.pid')));
+  process.kill(hung, 'SIGSTOP');
+  t.after(() => { try { process.kill(hung, 'SIGKILL'); } catch {} });
+  assert.equal(await restartServer('test-host', path.join(s.bin, 'ssh')), true);
+  const fresh = Number(await read(path.join(s.runDir, 'daemon.pid')));
+  assert.notEqual(fresh, hung);
+  assert.ok(alive(fresh), 'a new daemon runs');
+  assert.ok(await until(() => !alive(hung)), 'the hung daemon is gone');
+  assert.ok(existsSync(path.join(s.runDir, 'p9-foundation', 'desktop.json')), 'the new daemon answers');
+  assert.equal(await read(s.systemctlLog), '', 'no unit there: never systemctl');
+
+  const service = await stage(true);
+  assert.equal(await restartServer('test-host', path.join(service.bin, 'ssh')), true);
+  assert.match(await read(service.systemctlLog), /^--user restart p9-foundation\.service$/m);
+  assert.equal(await restartServer('-oProxyCommand=x', path.join(service.bin, 'ssh')), false, 'HOST check');
 });
 
 // U8 (threat model row 50 U8 and U9): the slim Temporary P9. install.sh --slim writes a start that marks it and points at the
