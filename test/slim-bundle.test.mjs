@@ -127,6 +127,12 @@ test('U8 packaged: the AppImage\'s resources/daemon, laid out as electron-builde
   const names = (m) => [...m.keys()].sort();
   assert.deepEqual(names(packaged), names(checkout), 'the same files as the checkout\'s slim P9');
   for (const [name, hash] of checkout) assert.equal(packaged.get(name), hash, name + ' differs');
+  // Only what runs (the owner, 2026-11-02): no package README, changelog or other notes; licences and notices stay.
+  const notes = names(packaged).filter((n) => /(^|\/)(readme|changelog|history)[^/]*$|\.(md|markdown)$/i.test(n) && !/(^|\/)(licen[cs]e|notice)[^/]*$/i.test(n));
+  assert.deepEqual(notes, [], 'notes were sent');
+  console.log('P9_SLIM files:\n' + names(packaged).join('\n'));
+  // The installers' app.asar (electron-builder files): apps/desktop's notes stay out.
+  assert.ok(build.files.includes('!apps/desktop/**/*.md'));
   for (const bad of ['node', 'scripts/teh.mjs'])
     assert.ok(!packaged.has(bad), bad + ' was sent');
   assert.ok(!names(packaged).some((n) => /linux-x64\//.test(n)), 'this computer\'s agent binaries were sent');

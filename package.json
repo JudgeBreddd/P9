@@ -124,6 +124,7 @@
     ],
     "files": [
       "apps/desktop/**",
+    "!apps/desktop/**/*.md",
       "apps/web/dist/**",
       "apps/dev/dist/**",
       "apps/server/child-env.mjs",

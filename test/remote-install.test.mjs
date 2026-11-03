@@ -134,6 +134,44 @@ test('U8: a Temporary remote gets the slim P9 in ~/.local/share/p9/remote, no ~/
   assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: slimArchive(first), version: '0.1.6-rc.1', slim: true })).error, 'newer-there');
 });
 
+// The owner, 2026-11-02: a full remote install gets the app, not the build notes. This checkout's .gitattributes export-ignore
+// lines keep tests, docs, contracts and agent folders out of git archive (a checkout's send and GitHub's tag archives) and out
+// of a synced copy's send; what install.sh and the build read stays.
+test('full install source: this checkout sends no tests, docs, contracts or agent folders, as a git checkout or as a synced copy', { skip, timeout: 60000 }, async () => {
+  const root = path.join(import.meta.dirname, '..');
+  const listed = async (folder) => {
+    const list = spawn('tar', ['-tzf', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
+    sourceArchive(folder).pipe(list.stdin);
+    let out = ''; list.stdout.setEncoding('utf8').on('data', (c) => { out += c; });
+    await new Promise((resolve) => list.once('close', resolve));
+    return out.split('\n').filter((f) => f && !f.endsWith('/')).map((f) => f.replace(/^[^/]+\//, ''));
+  };
+  const check = (files, how) => {
+    for (const bad of ['test/', 'docs/', '.cursor/', '.github/', '.githooks/', 'contracts.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/', 'apps/server/AGENTS.md'])
+      assert.ok(!files.some((f) => f === bad || f.startsWith(bad)), how + ' sent ' + bad);
+    for (const good of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/install.sh', 'scripts/background.sh', 'apps/server/main.mjs',
+      'apps/web/package.json', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md'])
+      assert.ok(files.includes(good), how + ' is missing ' + good);
+  };
+  // A synced copy: the files beside the source, with no .git (the dev space copies the checkout without one).
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-rfull-')), copy = path.join(dir, 'app');
+  const tracked = (await listed(root)).filter((f) => !f.startsWith('node_modules/'));
+  const run = (cmd, args, cwd) => new Promise((resolve) => { const c = spawn(cmd, args, { cwd, stdio: 'ignore' }); c.once('close', resolve); });
+  await mkdir(copy);
+  for (const f of ['.gitignore', '.gitattributes', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/install.sh', 'scripts/background.sh', 'apps/server/main.mjs',
+    'apps/web/package.json', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md', 'test/helpers.mjs', 'docs/guide.md',
+    'contracts.md', 'CONTRIBUTING.md', '.github/workflows/x.yml', '.githooks/pre-commit', '.cursor/skills/x.md']) {
+    await mkdir(path.dirname(path.join(copy, f)), { recursive: true });
+    await writeFile(path.join(copy, f), await readFile(path.join(root, f)).catch(() => 'stand-in\n'));
+  }
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/notes.md', 'apps/server/AGENTS.md']) { await mkdir(path.dirname(path.join(copy, f)), { recursive: true }); await writeFile(path.join(copy, f), 'notes\n'); }
+  check(await listed(copy), 'a synced copy');
+  // The same files as a git checkout: git archive HEAD applies .gitattributes.
+  for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'x']]) await run('git', args, copy);
+  check(await listed(copy), 'a git checkout');
+  check(tracked, 'this checkout');
+});
+
 test('U8: slimArchive sends only the named files, never the bundled node, this computer\'s agent binaries or other files', { skip, timeout: 20000 }, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-rslim-')), folder = await slimFolder(dir, 'd');
   const list = spawn('tar', ['-tzf', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
@@ -142,6 +180,17 @@ test('U8: slimArchive sends only the named files, never the bundled node, this c
   await new Promise((resolve) => list.once('close', resolve));
   assert.deepEqual(out.split('\n').filter((f) => f && !f.endsWith('/')).sort(), ['agents.json', 'apps/server/main.mjs', 'package.json', 'scripts/install.sh']);
   assert.throws(() => slimArchive(dir), /slim-bundle-incomplete/);
+  // Inside a named folder only what runs (the owner, 2026-11-02): a package's README, changelog, notes, types and maps stay
+  // here; its licence and notice files go.
+  const docs = await slimFolder(dir, 'docs', { 'node_modules/@openai/codex/README.md': 'r\n', 'node_modules/@openai/codex/CHANGELOG': 'c\n',
+    'node_modules/@openai/codex/bin/codex.js': 'js\n', 'node_modules/@openai/codex/LICENSE.md': 'l\n', 'node_modules/@openai/codex/index.d.ts': 't\n',
+    'node_modules/@openai/codex/bin/codex.js.map': 'm\n', 'apps/server/notes.md': 'n\n', 'packages/files/index.mjs': 'f\n', 'NOTICES.md': 'n\n' });
+  const second = spawn('tar', ['-tzf', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
+  slimArchive(docs).pipe(second.stdin);
+  let sent = ''; second.stdout.setEncoding('utf8').on('data', (c) => { sent += c; });
+  await new Promise((resolve) => second.once('close', resolve));
+  assert.deepEqual(sent.split('\n').filter((f) => f && !f.endsWith('/')).sort(), ['NOTICES.md', 'agents.json', 'apps/server/main.mjs',
+    'node_modules/@openai/codex/LICENSE.md', 'node_modules/@openai/codex/bin/codex.js', 'package.json', 'packages/files/index.mjs', 'scripts/install.sh']);
 });
 
 test('U8: a remote with the full P9 says full-there and gets no slim copy beside it', { skip, timeout: 30000 }, async () => {
