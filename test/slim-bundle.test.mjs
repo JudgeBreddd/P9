@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -95,7 +95,9 @@ const archived = async (folder, into) => {
   return files;
 };
 test('U8 packaged: the AppImage\'s resources/daemon, laid out as electron-builder\'s extraResources say, sends the same slim P9 as a checkout, and it starts', { skip: process.platform !== 'linux' || process.arch !== 'x64' ? 'the AppImage is linux-x64 only' : false, timeout: 300000 }, async (t) => {
-  const tmp = await mkdtemp(path.join(os.tmpdir(), 'p9-slimp-')), extra = path.join(tmp, 'daemon-extra'), resources = path.join(tmp, 'resources');
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'p9-slimp-'));
+  t.after(() => rm(tmp, { recursive: true, force: true }).catch(() => {}));
+  const extra = path.join(tmp, 'daemon-extra'), resources = path.join(tmp, 'resources');
   const packager = await readFile(path.join(root, 'scripts', 'package-linux.mjs'), 'utf8');
   const extras = JSON.parse(/for \(const file of (\[[^\]]*'scripts\/teh\.mjs'[^\]]*\])\)\s*await copyFile\(path\.join\(root, file\), path\.join\(daemonExtra, file\)\)/.exec(packager)[1].replaceAll("'", '"'));
   assert.match(packager, /bundleDaemon\(root, daemonExtra, 'linux-x64'\)/);
@@ -109,8 +111,9 @@ test('U8 packaged: the AppImage\'s resources/daemon, laid out as electron-builde
     const dest = path.join(resources, to);
     await mkdir(path.dirname(dest), { recursive: true });
     if (!source) { await writeFile(dest, 'the bundled node\n'); continue; } // its own pinned binary, never sent
-    const keepModules = path.basename(from) === 'node_modules';
-    await cp(source, dest, { recursive: true, filter: (f) => keepModules || !path.relative(source, f).split(path.sep).includes('node_modules') });
+    // node_modules holds this computer's agent binaries (about 240 MiB): hard links, not a second copy in a 1 GiB /tmp.
+    if (path.basename(from) === 'node_modules') { await mkdir(dest, { recursive: true }); assert.equal((await run('cp', ['-al', source + '/.', dest])).code, 0); continue; }
+    await cp(source, dest, { recursive: true, filter: (f) => !path.relative(source, f).split(path.sep).includes('node_modules') });
   }
   const daemonFolder = path.join(resources, 'daemon');
   // What a packaged app's slimFolder reads: resources/daemon, used when agents.json is there.
