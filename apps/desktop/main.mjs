@@ -292,7 +292,7 @@ export async function createDesktop({ state, open } = {}) {
   const fetchAgents = (host, names) => {
     if (!names.length || !server?.slim || (agentsJob?.host === host && agentsJob.phase === 'running')) return;
     const job = agentsJob = { host, names, phase: 'running' };
-    daemonRequest(state, 'POST', '/setup/agents-fetch', { claude: names.includes('claude'), codex: names.includes('codex') }, undefined, 900000)
+    daemonRequest(state, 'POST', '/setup/agents-fetch', { claude: names.includes('claude'), codex: names.includes('codex') }, undefined, 1320000) // review 3 L4: past the daemon's 1,300 s
       .then(r => r.status === 200 ? { phase: 'done' } : { phase: 'failed', error: r.status === 404 || r.body?.error === 'request-refused' ? 'daemon-outdated' : r.body?.detail ?? r.body?.error ?? 'daemon-unavailable' },
         () => ({ phase: 'failed', error: 'daemon-unavailable' }))
       .then(end => { if (agentsJob === job) agentsJob = { ...job, ...end, at: Date.now() }; });

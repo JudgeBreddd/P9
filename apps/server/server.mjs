@@ -101,6 +101,10 @@ export function authorizeRemote(headers, method, route, auth, remote) {
 // terminals' PATH), so the wizard's Install writes a launcher instead of downloading anything.
 const AGENT_COMMANDS = { claude: { login: 'claude auth login' }, codex: { login: 'codex login' } };
 
+// Review 3 L4: one agents fetch at a time per daemon; a second (another window, a retry) is 409 until the first ends, so two
+// agents.mjs never write the same node_modules folders. Its limit outlasts both downloads (agents.mjs: 600 s each) plus slack.
+let agentsFetching = false;
+export const AGENTS_FETCH_MS = 1_300_000;
 // The rebuild's test stand-ins count only under the test home (P9_TEST_HOME, the daemon's test switch): P9_PACKAGED=1
 // answers as a packaged app would, P9_BUILD runs instead of pnpm build. Outside it both are ignored.
 export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P9_PACKAGED === '1', build: (env.P9_TEST_HOME && env.P9_BUILD) || null });
@@ -875,8 +879,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const script = fileURLToPath(new URL('../../scripts/agents.mjs', import.meta.url));
     if (!existsSync(fileURLToPath(new URL('../../agents.json', import.meta.url)))) return reply(c, { status: 409, error: 'not-a-bundle' });
     const names = AGENTS.filter((agent) => body[agent]);
-    const done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: 900000, maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => resolve(error ? (String(stderr).trim().split('\n').pop() || error.message) : null)));
+    if (agentsFetching) return reply(c, { status: 409, error: 'fetch-running' });
+    agentsFetching = true;
+    let done;
+    try {
+      done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: AGENTS_FETCH_MS, maxBuffer: 1024 * 1024 },
+        (error, stdout, stderr) => resolve(error ? (String(stderr).trim().split('\n').pop() || error.message) : null)));
+    } finally { agentsFetching = false; }
     return reply(c, done ? { status: 500, error: 'agents-not-fetched', detail: done.slice(0, 300) } : { status: 200, fetched: names });
   });
   // Item 15 (threat model row 61): a system package P9 cannot carry, installed with the admin password. The command comes

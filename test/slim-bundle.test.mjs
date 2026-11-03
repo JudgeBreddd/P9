@@ -73,6 +73,28 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
   assert.equal((await fetchAgents(started, { claude: 'yes', codex: true })).status, 400);
   const checkout = await fetchAgents(await daemon(t), { claude: true, codex: false });
   assert.deepEqual([checkout.status, JSON.parse(checkout.text).error], [409, 'not-a-bundle']);
+  // Review 3 L4: one fetch at a time. The package is read from a FIFO (P9_AGENTS_FROM), so the first fetch waits until the
+  // test writes it; a second meanwhile is 409 and starts no agents.mjs. Once the first ends, a fetch runs again.
+  const from = path.join(tmp, 'from'); await mkdir(from);
+  const claudePin = pins['linux-' + process.arch]?.find((p) => p.folder.startsWith('@anthropic-ai/'));
+  if (claudePin) {
+    const fifo = path.join(from, path.basename(new URL(claudePin.url).pathname));
+    assert.equal((await run('mkfifo', [fifo])).code, 0);
+    const held = await daemon(t, path.join(there, 'apps', 'server', 'main.mjs'), false, async () => ({ env: { P9_AGENTS_FROM: from } }));
+    const first = fetchAgents(held, { claude: true, codex: false });
+    for (let i = 0; i < 100 && !(await readdir(path.join(there, 'node_modules')).then((n) => n.some((x) => x.startsWith('.agents-')), () => false)); i++) await new Promise((r) => setTimeout(r, 100));
+    const second = await Promise.race([fetchAgents(held, { claude: true, codex: false }), new Promise((r) => setTimeout(() => r({ status: 0, text: '{"error":"still waiting: it ran a second fetch"}' }), 5000))]);
+    assert.deepEqual([second.status, JSON.parse(second.text).error], [409, 'fetch-running'], 'a second fetch while one runs');
+    await writeFile(fifo, 'not the package');
+    assert.equal((await first).status, 500, 'the first ends on the checksum');
+    await rm(fifo); await writeFile(fifo, 'not the package');
+    assert.equal((await fetchAgents(held, { claude: true, codex: false })).status, 500, 'after the first ends a fetch runs again');
+  }
+  // The limit outlasts both downloads (agents.mjs 600 s each), and the desktop waits longer than the daemon.
+  const { AGENTS_FETCH_MS } = await import('../apps/server/server.mjs');
+  const perDownload = Number(/AbortSignal\.timeout\((\d+)\)/.exec(await readFile(path.join(root, 'scripts', 'agents.mjs'), 'utf8'))[1]);
+  const desktop = Number(/'\/setup\/agents-fetch'[^\n]*undefined, (\d+)\)/.exec(await readFile(path.join(root, 'apps', 'desktop', 'main.mjs'), 'utf8'))[1]);
+  assert.ok(AGENTS_FETCH_MS > 2 * perDownload && desktop > AGENTS_FETCH_MS, [perDownload, AGENTS_FETCH_MS, desktop].join(' '));
 });
 
 // U8, packaged: a packaged app sends resources/daemon (main.mjs slimFolder), never a fresh slimBundle. This lays that folder
