@@ -179,6 +179,14 @@ const connection = new acp.AgentSideConnection(() => ({
       await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'image', data: '', mimeType: '', uri: 'https://example.com/tracker.png' } } });
       return { stopReason: 'end_turn' };
     }
+    // An image made mid-build: three tool calls in a row (the phone folds them into one row), the middle one an image.
+    if (text === 'images in steps') {
+      for (const [i, content] of [[1, []], [2, [{ type: 'content', content: { type: 'image', mimeType: 'image/png', data: png(200, 100) } }]], [3, []]]) {
+        await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'build-' + i, title: 'Build step ' + i, kind: 'other', status: 'completed', content } });
+      }
+      await say('Built.');
+      return { stopReason: 'end_turn' };
+    }
     // Codex's view_image as codex-acp 2.1.1 sends it: only the opened file's path, as a resource_link (threat model row 27).
     if (text === 'images from disk') {
       const dir = mkdtempSync(path.join(os.tmpdir(), 'p9-view-')), at = (name) => path.join(dir, name);

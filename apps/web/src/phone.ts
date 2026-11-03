@@ -369,7 +369,8 @@ function build(picked: string) {
   }
   return { blocks, strip };
 }
-const toolRow = (block: Block) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${agentImgs(block.images, 'the agent')}</article>`;
+// P9: a tool call's images show below it, outside its fold (threat model rows 26-27, checked by the desktop's helpers).
+const toolRow = (block: Block, imgs = true) => `<article data-kind="tool" data-status="${escape(block.status)}">${block.plan ? `<button type="button" class="open-plan" data-art-plan="${escape(block.plan)}">Open plan</button>` : ''}<details><summary><span class="st"></span><span class="t">${escape(block.text)}</span></summary><pre>${escape([block.status, block.detail].filter(Boolean).join('\n'))}</pre></details>${imgs ? agentImgs(block.images, 'the agent') : ''}</article>`;
 function blockHtml(block: Block) {
   const kind = block.kind;
   if (kind === 'user') return `<article data-kind="user" class="msg user">${escape(block.text)}${sentImgs(openId, block.sent)}</article>`;
@@ -386,7 +387,7 @@ function blockHtml(block: Block) {
   }
   return `<article data-kind="${kind}" class="note">${escape(block.text)}</article>`;
 }
-// Three or more tool calls in a row fold into one row. A block's key is its index (a group's is its first block's), so a
+// Three or more tool calls in a row fold into one row; their images stay in the chat below it, as on the desktop. A block's key is its index (a group's is its first block's), so a
 // node is kept while its signature holds; a streaming reply re-renders only its own node.
 function itemsOf(blocks: Block[]) {
   const out: Entry[] = [];
@@ -394,7 +395,7 @@ function itemsOf(blocks: Block[]) {
     let j = i; while (blocks[j].kind === 'tool' && blocks[j + 1]?.kind === 'tool') j++;
     if (j - i >= 2) {
       const run = blocks.slice(i, j + 1);
-      out.push({ key: 'g' + i, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map(toolRow).join('')}</details></article>` });
+      out.push({ key: 'g' + i, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
       i = j;
     } else { const block = blocks[i]; out.push({ key: 'b' + i, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join(''), html: () => blockHtml(block) }); }
   }
