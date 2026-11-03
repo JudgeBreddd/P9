@@ -521,6 +521,10 @@ save; and the setup wizard finding an existing Mission Control layout. Also new 
   and four templates (ICM workspace, Obsidian vault, Homelab, Blank); the Space menu switches, adds, deletes
   spaces and saves one as a template; every P9 chat has a `p9` MCP server whose tools read and edit the space
   and registry (`describe_mission`, `preview_card`, `set_section_items` and the rest).
+- The phone shows images an agent sends in its chat, as the desktop does (PNG/JPEG/GIF/WebP sent as data by
+  the agent; never fetched from a web address), including inside a folded "Ran N tools" row.
+- The artifact panel has two tabs: Artifacts (what the agent made to look at) and Changes (read-only diffs of
+  files the chat changed); its artifacts stay listed after the chat compacts or the window reloads.
 - Tile icons: a Mission app that opens a URL inside a terminal wrapper gets the site's icon. History shows
   each chat's title and when it was last used.
 - Links in an agent's reply ask before opening (Cancel, Open, or Open, don't ask again).

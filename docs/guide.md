@@ -48,6 +48,7 @@ When an agent makes something to look at, such as a page, a diagram or a plan, i
 - The chat shows a chip where the block was. On the desktop the newest artifact of a finished turn opens beside the chat by itself; click a chip to open any other. On the phone, tap the chip: it opens full screen.
 - It runs in a sealed frame with no network, no access to your files and none to P9 itself. Its text is shown as text where it is not code.
 - **Pin** keeps it open beside the chat; **Full screen** fills the stage above the message box, which stays usable (in Chat Focus and in Dev Focus, over the side chat).
+- **Artifacts and Changes.** The panel beside the chat has two tabs. Artifacts lists what the agent made to look at; Changes lists the files the chat edited or created, and clicking one shows a read-only diff taken from the agent's own edits (removed lines red, added green). Nothing there edits the file. Each chat keeps its newest 30 artifacts in this window, so they stay listed after the chat compacts or the window reloads.
 - **Comments.** Select text in the artifact and press *Add comment*. Collect as many as you like, then *Send N comments* sends one message that quotes each. *Cancel* clears them. Nothing is sent until you press Send.
 - The pinned **Plan** card, and the plan Claude shows when it asks to leave plan mode, have an **Open** button that opens the plan the same way, with the same comments.
 
