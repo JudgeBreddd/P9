@@ -243,22 +243,24 @@ const systemctl = (...args) => new Promise((resolve) => execFile('systemctl', ['
 export const RESTART_UNIT = 'o=$(systemctl --user show -p MainPID --value "$1"); timeout "$2" systemctl --user restart "$1"; s=$?; '
   + 'if [ "$s" = 124 ]; then s=0; [ "$(systemctl --user show -p MainPID --value "$1")" != "$o" ] || systemctl --user kill --kill-who=main --signal=SIGKILL "$1" || s=1; fi; [ "$s" = 0 ]';
 export const RESTART_GRACE = 20;
+// Restart and Repair both restart the unit this way (Repair after its daemon-reload, reset-failed and enable).
+const restartUnit = (state, grace) => new Promise((resolve) => execFile('sh', ['-c', RESTART_UNIT, 'sh', unitFor(state), String(grace)], { timeout: (grace + 60) * 1000 }, (error) => resolve(!error)));
 export async function restartLinuxService(state, ms, grace = RESTART_GRACE) {
   if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing' };
   const before = await health(state).then((h) => h.boot, () => null);
-  const restarted = await new Promise((resolve) => execFile('sh', ['-c', RESTART_UNIT, 'sh', unitFor(state), String(grace)], { timeout: (grace + 60) * 1000 }, (error) => resolve(!error)));
-  if (!restarted) return { error: 'restart-failed' };
+  if (!await restartUnit(state, grace)) return { error: 'restart-failed' };
   return answered(state, before, ms);
 }
 
 // Repair on Linux (MT1): the unit enabled and started again from its own file (daemon-reload, and reset-failed after a crash
 // loop), so its drop-ins (phone flags, the GitHub token) stay. No unit: the installer's command, since a daemon this page talks
-// to without a unit was started by hand and holds the lock a new unit would need.
-export async function repairLinuxService(state, ms) {
+// to without a unit was started by hand and holds the lock a new unit would need. A hung daemon is killed after the grace,
+// as in Restart (RS2).
+export async function repairLinuxService(state, ms, grace = RESTART_GRACE) {
   if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing', detail: 'run node scripts/install-service.mjs <workspace folder>' };
   const before = await health(state).then((h) => h.boot, () => null);
   for (const args of [['daemon-reload'], ['reset-failed', unitFor(state)], ['enable', unitFor(state)]]) await systemctl(...args);
-  if (!await systemctl('restart', unitFor(state))) return { error: 'repair-failed' };
+  if (!await restartUnit(state, grace)) return { error: 'repair-failed' };
   return answered(state, before, ms);
 }
 
