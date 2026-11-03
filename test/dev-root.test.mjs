@@ -172,11 +172,12 @@ test('U1: in Unrestricted mode home is a root and saves work in it; U5: never in
   await writeFile(path.join(instance.state, 'keep.txt'), 'keep');
   await writeFile(path.join(instance.recovery, 'keep.txt'), 'keep');
   await mkdir(ownership, { recursive: true }); await writeFile(path.join(ownership, 'keep.txt'), 'keep');
-  // Review 2 M1: the desktop's data folder (P9's ssh key) as well; the daemon has no APPDATA or XDG_CONFIG_HOME here.
-  const desktop = desktopFolders({ home: dir, env: {} });
+  // Review 2 M1: the desktop's data folder (P9's ssh key) as well; the daemon has no XDG_CONFIG_HOME here, and on Windows
+  // its APPDATA is the fixture's roaming-app-data (helpers.mjs).
+  const desktop = desktopFolders({ home: dir, env: win ? { APPDATA: path.join(dir, 'roaming-app-data') } : {} });
   for (const folder of desktop) { await mkdir(folder, { recursive: true }); await writeFile(path.join(folder, 'keep.txt'), 'keep'); }
   for (const folder of [instance.state, instance.recovery, ownership, ...desktop]) {
-    const inner = path.relative(real, await realpath(folder));
+    const inner = path.relative(real, await realpath(folder)).split(path.sep).join('/'); // the daemon takes '/' only (unsafe-path refuses '\')
     assert.deepEqual(await dev('POST', { path: inner + '/new.txt', content: 'x' }), { status: 403, body: { error: 'private-folder' } }, inner + ' create');
     assert.equal((await dev('PUT', { path: inner + '/keep.txt', hash: hash('keep'), content: 'x' })).status, 403, inner + ' save');
     assert.equal(await readFile(path.join(folder, 'keep.txt'), 'utf8'), 'keep', inner + ' unchanged');
