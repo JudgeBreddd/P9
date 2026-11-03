@@ -155,28 +155,68 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
     await window.p9.pickVault()]),
   [{ error: 'server-mode-local-only' }, { error: 'server-mode-local-only' }, { remote: true }, true,
     { status: 409, body: { error: 'server-mode-local-only' } }]);
-  // U4: New chat's Choose folder... lists the remote's own folders (Builder, 2026-11-02: "no window at all"); a click walks in.
+  // U4: New chat's Choose folder... opens a folder dialog over the remote's own folders (Builder, 2026-11-02: "no window at
+  // all"; "just a normal file picker would be better than clicking the .."). With File protection on it walks the workspace
+  // and says why it cannot go higher; a click selects, a double click opens, a breadcrumb goes back.
   await mkdir(path.join(remote.workspace, 'proj', 'sub'), { recursive: true });
-  await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
-  await page.locator('#folderDlg #folderList [data-fdir="proj"]').click({ timeout: 10000 });
-  await page.locator('#folderDlg #folderList [data-fdir="sub"]').click({ timeout: 10000 });
-  await page.locator('#folderAt', { hasText: 'Workspace / proj / sub' }).waitFor({ timeout: 10000 });
+  const dlg = page.locator('#folderDlg'), row = name => dlg.locator('#folderList [data-fdir]', { hasText: new RegExp('^' + name + '$') });
+  const choose = async () => { if (!await page.locator('#newFolder').isVisible()) await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' }); };
+  await choose();
+  await dlg.locator('#folderWhy', { hasText: 'agent lock or File protection is on' }).waitFor({ timeout: 10000 });
+  assert.equal(await dlg.locator('#folderUp').isDisabled(), true, 'the workspace top: Up is off, and the dialog says why');
+  await row('proj').dblclick({ timeout: 10000 });
+  await row('sub').click({ timeout: 10000 });
+  assert.equal(await row('sub').getAttribute('aria-selected'), 'true', 'one click selects, it does not open');
+  await dlg.locator('#folderAt', { hasText: 'Start in: proj/sub' }).waitFor({ timeout: 5000 });
   if (process.env.CI !== 'true') console.log('P9_SHOT remote-folder ' + (await page.screenshot()).toString('base64'));
-  await page.locator('#folderDlg button[value="yes"]').click();
-  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
+  await row('sub').dblclick();
+  await dlg.locator('#folderCrumbs [aria-current]', { hasText: /^sub$/ }).waitFor({ timeout: 10000 });
+  assert.deepEqual(await dlg.locator('#folderCrumbs button').allTextContents(), ['Workspace', 'proj', 'sub']);
+  // A breadcrumb goes back up; Up goes one folder up.
+  await dlg.locator('#folderCrumbs button', { hasText: /^Workspace$/ }).click();
+  await row('proj').waitFor({ timeout: 10000 });
+  await row('proj').dblclick(); await row('sub').waitFor({ timeout: 10000 });
+  await dlg.locator('#folderUp').click();
+  await row('proj').waitFor({ timeout: 10000 });
+  await row('proj').dblclick(); await row('sub').waitFor({ timeout: 10000 });
+  await dlg.locator('button[value="yes"]').click();
+  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj', null, { timeout: 5000 });
+  // Cancel keeps the folder picked before.
+  await choose();
+  await row('proj').dblclick({ timeout: 10000 }); await row('sub').click({ timeout: 10000 });
+  await dlg.locator('button[value="no"]').click();
+  await dlg.waitFor({ state: 'hidden', timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#newFolder').value !== ':pick', null, { timeout: 5000 }); // the select redraws after the dialog closes
+  assert.equal(await page.locator('#newFolder').inputValue(), 'proj', 'Cancel changes nothing');
   // In Unrestricted mode the walk starts at the workspace's full path and goes up past it (Builder, 2026-11-02: "need a
   // picker so i can click in and out of folders"); a folder outside it goes as its full path.
   await http({ socketPath: path.join(remote.state, 'daemon.sock'), route: '/file-protection', method: 'POST',
     headers: { ...authenticated(remote.credentials), 'content-type': 'application/json' }, body: JSON.stringify({ on: false }) });
   await mkdir(path.join(path.dirname(remote.workspace), 'outside-ws'), { recursive: true });
-  if (!await page.locator('#newFolder').isVisible()) await page.click('#newBtn');
-  await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
-  await page.locator('#folderAt', { hasText: 'Workspace · ' }).waitFor({ timeout: 10000 });
-  await page.locator('#folderDlg #folderList button', { hasText: /^\.\.$/ }).click({ timeout: 10000 });
-  await page.locator('#folderDlg #folderList button', { hasText: /^outside-ws$/ }).click({ timeout: 10000 });
-  await page.locator('#folderAt', { hasText: /outside-ws$/ }).waitFor({ timeout: 10000 });
+  await choose();
+  await dlg.locator('#folderCrumbs [aria-current]', { hasText: new RegExp('^' + path.basename(remote.workspace) + '$') }).waitFor({ timeout: 10000 });
+  assert.equal(await dlg.locator('#folderWhy').isVisible(), false, 'no limit to explain');
+  const top = await dlg.locator('#folderPath').inputValue();
+  await dlg.locator('#folderUp').click();
+  await row('outside-ws').click({ timeout: 10000 });
   if (process.env.CI !== 'true') console.log('P9_SHOT remote-folder-loose ' + (await page.screenshot()).toString('base64'));
-  await page.locator('#folderDlg button[value="yes"]').click();
+  await row('outside-ws').dblclick();
+  await page.waitForFunction(top => document.querySelector('#folderPath').value === top.replace(/[^/]+$/, 'outside-ws'), top, { timeout: 10000 });
+  // Typed path: Enter goes there (trailing slash dropped); a missing folder stays put and says why; "/" is a breadcrumb.
+  await dlg.locator('#folderPath').fill(path.join(remote.workspace, 'proj') + '/');
+  await dlg.locator('#folderPath').press('Enter');
+  await row('sub').waitFor({ timeout: 10000 });
+  await dlg.locator('#folderPath').fill(path.join(remote.workspace, 'missing'));
+  await dlg.locator('#folderPath').press('Enter');
+  await dlg.locator('#folderWhy', { hasText: 'There is no folder at' }).waitFor({ timeout: 10000 });
+  assert.equal(await row('sub').isVisible(), true, 'a refused folder leaves the list where it was');
+  await dlg.locator('#folderCrumbs button', { hasText: /^\/$/ }).click();
+  await page.waitForFunction(() => document.querySelector('#folderPath').value === '/', null, { timeout: 10000 });
+  assert.equal(await dlg.locator('#folderUp').isDisabled(), true, '"/" has no parent');
+  await dlg.locator('#folderPath').fill(path.join(path.dirname(remote.workspace), 'outside-ws'));
+  await dlg.locator('#folderPath').press('Enter');
+  await dlg.locator('#folderCrumbs [aria-current]', { hasText: /^outside-ws$/ }).waitFor({ timeout: 10000 });
+  await dlg.locator('button[value="yes"]').click();
   await page.waitForFunction(() => /^\/.*outside-ws$/.test(document.querySelector('#newFolder').value), null, { timeout: 5000 });
   await page.keyboard.press('Escape');
   // The badge's menu says the remote in use is connected; This computer switches to Local: the window reloads onto this

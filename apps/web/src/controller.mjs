@@ -640,45 +640,72 @@ $('#newPop').innerHTML = `<div class="hd eyebrow">Start in</div><select data-slo
 // ':pick' cannot be a folder, the daemon refuses ':' in paths).
 // The daemon checks it again. The choice stays picked until changed.
 let newFolder = '';
-// U4 on a remote (Builder, 2026-11-02: "no window at all"): the server's folders, walked from its workspace with the file
-// list route, or a full path typed in (Unrestricted mode only; the daemon refuses it otherwise when the chat starts).
-// In Unrestricted mode the walk goes past the workspace, anywhere on the server (Builder, 2026-11-02: "need a picker so i can
-// click in and out of folders"): /files/folders answers only then, so its 403 falls back to the workspace walk.
+// U4 on a remote (Builder, 2026-11-02: "no window at all"; "just a normal file picker would be better than clicking the .."):
+// a folder dialog like the system's. A path bar (type or paste, Enter goes there), Up, clickable breadcrumbs, the folder
+// list (a click selects, a double click or Enter opens), Select and Cancel. In Unrestricted mode it walks the whole server
+// (/files/folders); with either switch on, or a server P9 older than that route, it walks the workspace (/files/list) and
+// says why it stops at the workspace's top instead of silently not going up. The daemon checks the folder again at start.
+const FOLDER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>';
+const FOLDER_WHY = {
+  locked: 'Only the workspace is shown because the agent lock or File protection is on. Turn both off in Settings (Unrestricted mode) to choose any folder on the server.',
+  old: 'Only the workspace is shown because the P9 on this server is older than this app and cannot list other folders. Update P9 on the server to browse all of it; a full path typed above still works in Unrestricted mode.',
+};
+const folderRefused = (r, to) => r?.body?.error === 'unrestricted-only' ? FOLDER_WHY.locked
+  : r?.body?.error === 'private-folder' ? `${to} holds P9's own files, so a chat cannot start there.`
+  : r?.status === 404 ? `There is no folder at ${to} on the server.`
+  : r?.status === 403 ? `P9 cannot open ${to}: it is a file, or the server does not let P9 read it.`
+  : r?.status === 400 ? 'Type a full path, starting with /.' : 'The server did not answer. Try again.';
 const pickRemoteFolder = () => new Promise(done => {
-  const d = $('#folderDlg'), list = $('#folderList'); let at = '', abs = null, ws = null, prev = null, shown = 0;
-  const row = (key, label) => `<button type="button" data-fdir="${esc(key)}">${esc(label)}</button>`;
-  const show = async () => {
+  const d = $('#folderDlg'), list = $('#folderList'), bar = $('#folderPath'), why = $('#folderWhy');
+  // whole: null until the first answer, true for the whole server (full paths), false for the workspace walk (paths
+  // relative to it, '' its top). at: the folder shown; up: its parent (null at the top); picked: the row clicked once.
+  let whole = null, ws = '', limit = '', at = '', up = null, picked = null, shown = 0, drawn = false;
+  const say = text => { why.textContent = text; why.hidden = !text; };
+  const label = f => whole ? f : f ? 'Workspace/' + f : 'Workspace';
+  // A relative path typed in whole-server mode is taken from the folder shown.
+  const typed = () => { const t = bar.value.trim().replace(/(.)\/+$/, '$1'); return whole && t && !t.startsWith('/') ? (at === '/' ? '' : at) + '/' + t : t.replace(/^\.\/?/, ''); };
+  const chosen = () => { const t = typed(), f = picked ?? (t && t !== at ? t : at); return whole && f === ws ? '' : f; }; // the workspace stays ''
+  const foot = () => { const f = chosen(); $('#folderAt').textContent = 'Start in: ' + (f === '' ? 'Workspace' : f); };
+  const draw = (to, parent, dirs) => {
+    at = to; up = parent; picked = null; drawn = true; bar.value = at; bar.placeholder = whole ? '' : 'Workspace';
+    $('#folderUp').disabled = up === null;
+    // ponytail: breadcrumbs split on '/', so a Windows server gets one crumb; the bar and Up still work there.
+    const parts = at.split('/').filter(Boolean), base = whole ? [['/', '/']] : [['', 'Workspace']];
+    const crumbs = [...base, ...parts.map((p, i) => [(whole ? '/' : '') + parts.slice(0, i + 1).join('/'), p])];
+    $('#folderCrumbs').innerHTML = crumbs.map(([key, name], i) => `${i > 1 || (i && !whole) ? '<i>›</i>' : ''}<button type="button" data-fcrumb="${esc(key)}"${i === crumbs.length - 1 ? ' aria-current="location"' : ''}>${esc(name)}</button>`).join('');
+    list.innerHTML = dirs ? dirs.map(([key, name]) => `<button type="button" role="option" aria-selected="false" data-fdir="${esc(key)}">${FOLDER_ICON}<span class="truncate">${esc(name)}</span></button>`).join('') || '<p class="sm muted">No folders here.</p>' : '';
+    say(whole ? '' : limit);
+    foot();
+  };
+  const go = async to => {
     const mine = ++shown;
-    list.innerHTML = '<p class="sm muted">Loading…</p>';
-    if (abs !== false) {
-      const all = await window.p9.mission('folders', { path: abs ?? '' }).catch(() => null);
+    if (whole !== false) {
+      const r = await window.p9.mission('folders', { path: to }).catch(() => null);
       if (mine !== shown) return;
-      if (all?.status === 200) {
-        ({ path: abs, workspace: ws } = all.body); $('#folderAt').textContent = abs === ws ? 'Workspace · ' + abs : abs;
-        list.innerHTML = (all.body.parent ? row(all.body.parent, '..') : '') + (all.body.dirs.map(e => row(e.path, e.name)).join('') || '<p class="sm muted">No folders here.</p>');
-        return;
-      }
-      // A folder the server would not list: say why, with the way back. Before the first answer: the mode is off.
-      if (abs) { $('#folderAt').textContent = abs; list.innerHTML = `<p class="sm muted">Not readable: ${esc(all?.body?.error || 'no answer')}</p>` + row(prev, '..'); return; }
-      abs = false;
+      if (r?.status === 200) { whole = true; ws = r.body.workspace; draw(r.body.path, r.body.parent, r.body.dirs.map(e => [e.path, e.name])); return; }
+      if (whole) { say(folderRefused(r, to)); return; } // stays where it was, and says why
+      // The first ask is the workspace itself: 403 means a switch is on; any other refusal, a server P9 without the route.
+      whole = false; limit = r?.body?.error === 'unrestricted-only' ? FOLDER_WHY.locked : FOLDER_WHY.old; to = '';
     }
-    $('#folderAt').textContent = 'Workspace' + (at ? ' / ' + at.split('/').join(' / ') : '');
-    const r = await window.p9.mission('list', { path: at }).catch(() => null);
+    // A full path cannot be listed in the workspace walk: say why; Select still sends it and the daemon decides.
+    if (to.startsWith('/')) { say(limit); foot(); return; }
+    const r = await window.p9.mission('list', { path: to }).catch(() => null);
     if (mine !== shown) return;
-    const dirs = r?.status === 200 ? r.body.entries.filter(e => e.dir).map(e => e.name).sort() : null;
-    list.innerHTML = (at ? row('..', '..') : '')
-      + (!dirs ? `<p class="sm muted">Not readable: ${esc(r?.body?.error || 'no answer')}</p>` : dirs.map(n => row(n, n)).join('') || '<p class="sm muted">No folders here.</p>');
+    if (r?.status === 200) draw(to, to ? to.split('/').slice(0, -1).join('/') : null, r.body.entries.filter(e => e.dir).map(e => e.name).sort().map(n => [(to ? to + '/' : '') + n, n]));
+    else { if (!drawn) draw(to, null, null); say(r?.status === 404 ? `There is no folder at ${label(to)}.` : folderRefused(r, label(to))); }
   };
-  list.onclick = e => {
-    const b = e.target.closest('[data-fdir]'); if (!b) return;
-    if (abs) { prev = abs; abs = b.dataset.fdir; } else at = b.dataset.fdir === '..' ? at.split('/').slice(0, -1).join('/') : (at ? at + '/' : '') + b.dataset.fdir;
-    show();
-  };
-  $('#folderPath').value = ''; d.returnValue = '';
-  $('#folderPath').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); d.close('yes'); } };
-  // The workspace itself stays '' (a chat's usual folder); any other folder walked in the mode goes as its full path.
-  d.onclose = () => done(d.returnValue === 'yes' ? $('#folderPath').value.trim().replace(/(.)\/+$/, '$1') || (abs ? (abs === ws ? '' : abs) : at) : undefined);
-  d.showModal(); show();
+  const pick = key => { picked = key; list.querySelectorAll('[data-fdir]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.fdir === key))); foot(); };
+  list.onclick = e => { const b = e.target.closest('[data-fdir]'); if (b) pick(b.dataset.fdir); };
+  list.ondblclick = e => { const b = e.target.closest('[data-fdir]'); if (b) go(b.dataset.fdir); };
+  list.onkeydown = e => { const b = e.target.closest('[data-fdir]'); if (b && e.key === 'Enter') { e.preventDefault(); go(b.dataset.fdir); } };
+  $('#folderCrumbs').onclick = e => { const b = e.target.closest('[data-fcrumb]'); if (b) go(b.dataset.fcrumb); };
+  $('#folderUp').onclick = () => { if (up !== null) go(up); };
+  bar.oninput = () => { picked = null; list.querySelectorAll('[aria-selected="true"]').forEach(b => b.setAttribute('aria-selected', 'false')); foot(); };
+  // Enter goes to the typed folder; the form never submits from the bar.
+  bar.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); go(typed()); } };
+  d.returnValue = ''; bar.value = ''; drawn = false; list.innerHTML = '<p class="sm muted">Loading…</p>'; $('#folderCrumbs').innerHTML = ''; say(''); $('#folderAt').textContent = '';
+  d.onclose = () => done(d.returnValue === 'yes' ? chosen() : undefined);
+  d.showModal(); go('');
 });
 const recentFolders = () => { try { const r = JSON.parse(localStorage.getItem('eh-chat-folders')); return Array.isArray(r) ? r.filter(f => typeof f === 'string').slice(0, 5) : []; } catch { return []; } };
 function renderNewFolder() {
