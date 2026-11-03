@@ -119,7 +119,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const loose = () => chat.loose();
   let mission = createMission({ workspace, recovery, settings, instance, lifecycle, allowed, drafts, loose });
   const chat = createChat({ ledger, workspace, adapterOverride, instance, lifecycle, socketPath: credentials?.socketPath, state, ownership });
-  const xfer = createXfer({ workspace, ownership, recovery });
+  const xfer = createXfer({ workspace, ownership, recovery, loose });
   const update = createUpdate({ ownership, state, chat, lifecycle, version: VERSION, root: updateRoot, archive: updateArchive, turnLimit: updateTurnMs });
   // Rebuild + reload (remoteApp /rebuild): source checkouts only, as on the desktop (main.mjs source). A bundled daemon has no
   // lockfile or web sources; P9_PACKAGED=1 lets a test see what one answers (under the test home only, as P9_BUILD). Fixed argv, no shell, 10 minutes, one at a
@@ -542,7 +542,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   app.post('/chat-import/:id', async (c) => reply(c, await chat.land(c.req.param('id'), await json(c))));
   // Send files over the tunnel (item 23, xfer.mjs): desktop main copies a folder between two daemons; never the phone's.
   app.post('/xfer/manifest', async (c) => reply(c, await xfer.manifest(await json(c))));
-  app.get('/xfer/file', async (c) => reply(c, await xfer.file(c.req.query('path'), Number(c.req.query('offset')))));
+  app.get('/xfer/file', async (c) => reply(c, await xfer.file(c.req.query('path'), Number(c.req.query('offset')), c.req.query('root'))));
   app.post('/xfer/:id/part', async (c) => reply(c, await xfer.part(c.req.param('id'), await json(c))));
   app.post('/xfer/:id/commit', async (c) => reply(c, await xfer.commit(c.req.param('id'), await json(c))));
   app.post('/xfer/:id/abort', async (c) => reply(c, await xfer.abort(c.req.param('id'))));

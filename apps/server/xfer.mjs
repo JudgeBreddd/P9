@@ -4,7 +4,7 @@
 // staged files and deletes through packages/files (each against the hash the plan saw, old copies to recovery); abort
 // drops the staging. Desktop routes only, never the phone's.
 import { execFile } from 'node:child_process';
-import { appendFile, lstat, mkdir, readdir, rm } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { HEAVY, listDirectory, lockedName, openSafe, removeFile, replaceFile } from '../../packages/files/index.mjs';
@@ -27,7 +27,23 @@ async function gitList(cwd, args) {
   } catch { return null; }
 }
 
-export function createXfer({ workspace, ownership, recovery }) {
+// A chat started outside the workspace (v0.1.6 U4) sends its own folder: root names the folder the paths are relative to, an
+// absolute one (Unrestricted mode only, as a chat may start there: chat.mjs folderCheck) or a workspace folder ('' the
+// workspace). Without root the paths are workspace-relative, as before. The listing rules are the same either way.
+const ROOT_LOCKED = 'P9 here has the agent lock or File protection on, so it reaches only folders in its workspace. Turn both off in Settings (Unrestricted mode), or pick a workspace folder.';
+export function createXfer({ workspace, ownership, recovery, loose = () => false }) {
+  async function baseOf(root) {
+    if (root === undefined) return { base: workspace };
+    if (typeof root !== 'string' || root.length > 4096 || root.includes('\0')) return refused(400, 'request-refused');
+    if (path.isAbsolute(root)) {
+      if (!loose()) return refused(403, 'unrestricted-only', { message: ROOT_LOCKED });
+      // listDirectory wants a root that is its own realpath, and refuses P9's own folders (U5).
+      const real = await realpath(root).catch(() => null);
+      return real && await listDirectory(real, '').then(() => true, () => false) ? { base: real } : refused(409, 'folder-missing', { folder: root });
+    }
+    if (root && !relative(root)) return refused(400, 'request-refused');
+    return await listDirectory(workspace, root).then(() => true, () => false) ? { base: root ? path.join(workspace, root) : workspace } : refused(409, 'folder-missing', { folder: root });
+  }
   const root = ownership && path.join(ownership, 'xfer');
   // No resume across daemon runs, so staging left by an earlier run is dropped at start.
   const swept = root ? rm(root, { recursive: true, force: true }).catch(() => {}) : Promise.resolve();
@@ -67,16 +83,16 @@ export function createXfer({ workspace, ownership, recovery }) {
   }
 
   // Syncthing marks each folder it syncs with .stfolder: in the folder, any folder above it, or any folder inside.
-  async function syncthing(folder, files) {
+  async function syncthing(folder, files, base) {
     const found = new Set(), has = async (dir) => (await lstat(path.join(dir, '.stfolder')).catch(() => null)) !== null;
-    for (let dir = path.dirname(workspace); ; dir = path.dirname(dir)) {
+    for (let dir = path.dirname(base); ; dir = path.dirname(dir)) {
       if (await has(dir)) { found.add('..'); break; }
       if (dir === path.dirname(dir)) break;
     }
     const dirs = new Set(['']);
     for (let part = folder; part; part = part.includes('/') ? part.slice(0, part.lastIndexOf('/')) : '') dirs.add(part);
     for (const file of files) for (let dir = path.posix.dirname(file.path); dir !== '.'; dir = path.posix.dirname(dir)) dirs.add(dir);
-    for (const dir of dirs) if (await has(path.join(workspace, dir))) found.add(dir);
+    for (const dir of dirs) if (await has(path.join(base, dir))) found.add(dir);
     return [...found].sort();
   }
 
@@ -84,14 +100,16 @@ export function createXfer({ workspace, ownership, recovery }) {
     async manifest(body) {
       const folder = body?.folder;
       if (typeof folder !== 'string' || (folder && !relative(folder))) return refused(400, 'request-refused');
+      const { base, ...no } = await baseOf(body.root);
+      if (!base) return no;
       // Checked as a chat's folder is (threat model row 24): no links, no locked names on the way.
-      if (!await listDirectory(workspace, folder).then(() => true, () => false)) return refused(409, 'folder-missing', { folder });
+      if (!await listDirectory(base, folder).then(() => true, () => false)) return refused(409, 'folder-missing', { folder });
       const skipped = { ignored: 0, links: 0, large: 0, special: 0, locked: 0 }, names = [], files = [];
-      await list(folder ? path.join(workspace, folder) : workspace, folder ? folder + '/' : '', skipped, names);
+      await list(folder ? path.join(base, folder) : base, folder ? folder + '/' : '', skipped, names);
       let truncated = false;
       for (const name of names.sort()) {
         if (name.split('/').some(lockedName)) { skipped.locked += 1; continue; }
-        const full = path.join(workspace, name), stat = await lstat(full).catch(() => null);
+        const full = path.join(base, name), stat = await lstat(full).catch(() => null);
         if (!stat) continue;
         if (stat.isSymbolicLink()) { skipped.links += 1; continue; }
         if (!stat.isFile()) { skipped.special += 1; continue; }
@@ -100,12 +118,14 @@ export function createXfer({ workspace, ownership, recovery }) {
         if (files.length >= MAX_COUNT) { truncated = true; break; }
         files.push({ path: name, size: stat.size, sha256: await hashOf(full, stat), mtimeMs: Math.round(stat.mtimeMs) });
       }
-      return { status: 200, files, skipped, truncated, syncthing: await syncthing(folder, files) };
+      return { status: 200, files, skipped, truncated, syncthing: await syncthing(folder, files, base) };
     },
     // One piece of a workspace file, opened without following links (packages/files openSafe).
-    async file(relativePath, offset) {
+    async file(relativePath, offset, folderRoot) {
       if (!relative(relativePath) || !Number.isSafeInteger(offset) || offset < 0) return refused(400, 'request-refused');
-      const safe = await openSafe(workspace, relativePath);
+      const { base, ...no } = await baseOf(folderRoot);
+      if (!base) return no;
+      const safe = await openSafe(base, relativePath);
       try { return await readPiece(safe.file, offset); } finally { await safe.close(); }
     },
     async part(id, body) {
@@ -131,6 +151,8 @@ export function createXfer({ workspace, ownership, recovery }) {
       if (!ID.test(id) || !Array.isArray(files) || !Array.isArray(deletes) || files.length + deletes.length > MAX_COUNT
           || !files.every(file) || !deletes.every(gone)) return refused(400, 'request-refused');
       if (!root) return refused(503, 'xfer-unavailable');
+      const { base, ...no } = await baseOf(body.root);
+      if (!base) return no;
       await swept;
       const paths = uploads.get(id) ?? new Map(), mismatch = [];
       for (const f of files) {
@@ -145,13 +167,13 @@ export function createXfer({ workspace, ownership, recovery }) {
       const tag = new Date().toISOString().replace(/[:.]/g, '-') + '-' + id.slice(0, 8);
       const written = [], replaced = [], removed = [], changed = [];
       for (const f of files) {
-        const staged = staging(id, paths.get(f.path)), result = await replaceFile(workspace, f.path, staged, f.expect, recovery, tag);
+        const staged = staging(id, paths.get(f.path)), result = await replaceFile(base, f.path, staged, f.expect, recovery, tag);
         await rm(staged, { force: true });
         if (result.kind === 'written') written.push(f.path); else changed.push(f.path);
         if (result.recovery && result.kind === 'written') replaced.push({ path: f.path, recovery: result.recovery });
       }
       for (const f of deletes) {
-        const result = await removeFile(workspace, f.path, f.expect, recovery, tag);
+        const result = await removeFile(base, f.path, f.expect, recovery, tag);
         if (result.kind === 'changed') changed.push(f.path); else removed.push({ path: f.path, ...(result.recovery && { recovery: result.recovery }) });
       }
       const done = { written, replaced, removed };

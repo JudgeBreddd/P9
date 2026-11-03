@@ -2,7 +2,7 @@
 // computer's daemon and the server's (apps/server/xfer.mjs) with the record of what was last sent, asks when the two
 // sides disagree, then copies pieces between the daemons as the chat move does (move.mjs), over a tunnel of its own.
 // Every replaced or deleted file lands in that daemon's recovery folder; the record is updated only for what landed.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,16 +22,17 @@ const MiB = 1024 ** 2, GiB = 1024 ** 3;
 const size = (bytes) => bytes >= GiB ? (bytes / GiB).toFixed(1) + ' GiB' : bytes >= MiB ? (bytes / MiB).toFixed(1) + ' MiB' : Math.ceil(bytes / 1024) + ' KiB';
 const clock = (ms) => new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-// The record: { path: sha256 } as last sent or received, one file per server (0600).
-const recordFile = (userData, host) => path.join(userData, 'xfer', encodeURIComponent(host) + '.json');
-export async function readRecord(userData, host) {
+// The record: { path: sha256 } as last sent or received, one file per server (0600). A chat folder outside the workspace
+// (U4) keeps its own, one per pair of folders (pair: the two, hashed into the name), as its paths are relative to them.
+const recordFile = (userData, host, pair) => path.join(userData, 'xfer', encodeURIComponent(host) + (pair ? '-' + createHash('sha256').update(pair).digest('hex').slice(0, 16) : '') + '.json');
+export async function readRecord(userData, host, pair) {
   try {
-    const value = JSON.parse(await readFile(recordFile(userData, host), 'utf8'));
+    const value = JSON.parse(await readFile(recordFile(userData, host, pair), 'utf8'));
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   } catch { return null; }
 }
-async function writeRecord(userData, host, record) {
-  const file = recordFile(userData, host), temporary = file + '.' + randomUUID();
+async function writeRecord(userData, host, record, pair) {
+  const file = recordFile(userData, host, pair), temporary = file + '.' + randomUUID();
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
   await rename(temporary, file);
@@ -121,26 +122,47 @@ export function noAnswer(error, host) {
 }
 
 // Opens the tunnel and gives the two daemons' requests. Closed by the caller.
-async function open({ local, host, ssh, runtime }) {
+export async function open({ local, host, ssh, runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir() }) {
   const tunnel = await connectServer({ host, ssh, editor: false, runtime: path.join(runtime, 'p9-xfer-' + randomUUID().slice(0, 8)) });
   return { tunnel, laptopCall: (method, route, body) => tagSide('local', daemonRequest(local, method, route, body, undefined, LONG)),
     serverCall: (method, route, body) => tagSide('remote', daemonRequest(tunnel.state, method, route, body, undefined, LONG)) };
 }
 
-export async function planFolder({ local, host, folder, userData, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir() }) {
-  const laptop = await tagSide('local', daemonRequest(local, 'POST', '/xfer/manifest', { folder }, undefined, LONG));
-  if (laptop.status !== 200) return { error: laptop.body.error, message: 'This computer could not list ' + (folder || 'the workspace') + ' (' + laptop.body.error + ').' };
+export const isFull = (folder) => path.posix.isAbsolute(folder) || path.win32.isAbsolute(folder);
+// U4 (Builder, 2026-11-02: a chat started outside the workspace can Send to remote): its folder, a full path here, goes to
+// the same full path on the remote when that folder is there and the remote may use it; otherwise the answer is
+// pick-folder, the window's remote folder picker opens, and the plan is made again with to, the folder picked there (a full
+// path, or a remote workspace folder, '' its top). The files go by the same rules as a workspace chat's; their paths are
+// relative to the two folders (roots).
+const LOCKED_THERE = 'The remote has the agent lock or File protection on, so it takes a chat only into a folder in its workspace.';
+export async function planFolder({ local, host, folder, to, userData, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir() }) {
+  const outside = isFull(folder), here = outside ? { root: folder, folder: '' } : { folder };
+  const laptop = await tagSide('local', daemonRequest(local, 'POST', '/xfer/manifest', here, undefined, LONG));
+  if (laptop.status !== 200) return { error: laptop.body.error, message: laptop.body.message ?? 'This computer could not list ' + (folder || 'the workspace') + ' (' + laptop.body.error + ').' };
   let link;
   try { link = await open({ local, host, ssh, runtime }); }
   catch (error) { return { error: 'unreachable', message: 'Could not reach the remote (' + error.message + ').' }; }
   try {
-    const server = await link.serverCall('POST', '/xfer/manifest', { folder });
+    if (outside && to === undefined) {
+      const same = await link.serverCall('GET', '/files/folders?' + new URLSearchParams({ path: folder }));
+      if (same.status !== 200) return { error: 'pick-folder', locked: same.body?.error === 'unrestricted-only', message: same.body?.error === 'unrestricted-only' ? LOCKED_THERE + ' Pick one there, or turn both off on the remote.'
+        : same.status === 404 ? 'The remote has no folder ' + folder + '. Pick where the chat goes there.'
+        : same.body?.error === 'private-folder' ? 'On the remote, ' + folder + ' holds P9\'s own files. Pick where the chat goes there.'
+        : 'The remote cannot use ' + folder + ' (' + (same.body?.error ?? same.status) + '). Pick where the chat goes there.' };
+      to = same.body.path;
+    }
+    const there = outside ? { root: to, folder: '' } : { folder };
+    const server = await link.serverCall('POST', '/xfer/manifest', there);
+    if (outside && server.status !== 200) return { error: server.body.error === 'unrestricted-only' ? 'outside-locked' : server.body.error,
+      message: server.body.error === 'unrestricted-only' ? LOCKED_THERE + ' Pick a workspace folder, or turn both off on the remote.'
+        : server.body.error === 'folder-missing' ? 'The remote has no folder ' + (to || 'workspace') + '.' : 'The remote could not list ' + (to || 'its workspace') + ' (' + server.body.error + ').' };
     if (server.status === 409 && server.body.error === 'folder-missing') server.body = { files: [], skipped: {}, truncated: false, syncthing: [] };
     else if (server.status !== 200) return { error: server.body.error, message: 'The remote could not list ' + (folder || 'its workspace') + ' (' + server.body.error + ').' };
-    const record = await readRecord(userData, host);
+    const pair = outside ? folder + '\0' + to : undefined, record = await readRecord(userData, host, pair);
     // Nothing recorded under this folder yet: a first send for it.
-    const entries = Object.entries(record ?? {}).filter(([name]) => !folder || name.startsWith(folder + '/'));
-    return { plan: plan(laptop.body, server.body, entries.length ? Object.fromEntries(entries) : null, folder) };
+    const entries = Object.entries(record ?? {}).filter(([name]) => outside || !folder || name.startsWith(folder + '/'));
+    const p = plan(laptop.body, server.body, entries.length ? Object.fromEntries(entries) : null, folder);
+    return { plan: outside ? { ...p, roots: { laptop: folder, server: to }, pair } : p };
   } finally { await link.tunnel.close().catch(() => {}); }
 }
 
@@ -194,18 +216,22 @@ export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh
   let link;
   try { link = await open({ local, host, ssh, runtime }); }
   catch (error) { return { error: 'unreachable', message: 'Could not reach the remote (' + error.message + '). Nothing was sent.' }; }
-  const record = { ...(await readRecord(userData, host) ?? {}) };
+  // U4: each side's folder goes with its file reads and commits (planFolder roots); a workspace plan has none.
+  const rooted = (call, root) => root === undefined ? call : (method, route, body) => call(method, route.startsWith('/xfer/file?') ? route + '&root=' + encodeURIComponent(root) : route,
+    route.endsWith('/commit') ? { ...body, root } : body);
+  const laptopCall = rooted(link.laptopCall, p.roots?.laptop), serverCall = rooted(link.serverCall, p.roots?.server);
+  const record = { ...(await readRecord(userData, host, p.pair) ?? {}) };
   const result = { sent: [], received: [], deletedOnServer: [], deletedHere: [], recovery: { server: [], laptop: [] }, changed: [] };
   try {
     for (const { path: name, sha256 } of p.same) record[name] = sha256;
     for (const item of work.forget) delete record[item.path];
-    const up = await oneWay(link.laptopCall, link.serverCall, work.toServer.map((i) => ({ source: i.laptop, expect: i.server?.sha256 ?? null })),
+    const up = await oneWay(laptopCall, serverCall, work.toServer.map((i) => ({ source: i.laptop, expect: i.server?.sha256 ?? null })),
       work.serverDeletes.map((i) => ({ path: i.path, expect: i.server.sha256 })), counted, signal);
     for (const name of up.written) record[name] = work.toServer.find((i) => i.path === name).laptop.sha256;
     for (const name of up.removed) delete record[name];
     Object.assign(result, { sent: up.written, deletedOnServer: up.removed, changed: up.changed });
     result.recovery.server = up.replaced;
-    const down = await oneWay(link.serverCall, link.laptopCall, work.toLaptop.map((i) => ({ source: i.server, expect: i.laptop?.sha256 ?? null })),
+    const down = await oneWay(serverCall, laptopCall, work.toLaptop.map((i) => ({ source: i.server, expect: i.laptop?.sha256 ?? null })),
       work.laptopDeletes.map((i) => ({ path: i.path, expect: i.laptop.sha256 })), counted, signal);
     for (const name of down.written) record[name] = work.toLaptop.find((i) => i.path === name).server.sha256;
     for (const name of down.removed) delete record[name];
@@ -216,7 +242,7 @@ export async function runPlan({ local, host, userData, plan: p, work, ssh = 'ssh
     return { ...result, error: error.code ?? 'lost', message: error.file ? error.file + ': ' + (error.code ?? error.message) + '. The rest was not sent; send again.'
       : 'The send stopped (' + (error.code ?? error.message) + '). Files already written are kept; send again to finish.' };
   } finally {
-    await writeRecord(userData, host, record).catch(() => {});
+    await writeRecord(userData, host, record, p.pair).catch(() => {});
     await link.tunnel.close().catch(() => {});
   }
 }

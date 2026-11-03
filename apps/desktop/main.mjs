@@ -16,7 +16,7 @@ import { adminCommand } from '../server/deps.mjs';
 import { trimLog } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
-import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer } from './xfer.mjs';
+import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer, open as openXfer, isFull } from './xfer.mjs';
 import { ORIGIN, FILE_PROTECTION_RISK, FRAME_CSP, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
 import { WebSocket } from 'ws';
 import { contextMenu, windowsFullName } from './native.mjs';
@@ -1008,22 +1008,28 @@ export async function createDesktop({ state, open } = {}) {
     if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the remote already.' } };
     if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No remote yet: add one in Settings > Remote Connect first.' } };
     if (!localState || sending.has(id)) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
-    let files = null;
+    let files = null, to;
     if (planId) {
       if (xferBusy) return { status: 409, body: { error: 'busy', message: 'A send is running already.' } };
       if (xferPlan?.id !== planId || xferPlan.host !== serverLast) return { status: 409, body: { error: 'stale', message: 'That check of the files is gone: press Send to remote again.' } };
-      const { plan: p } = xferPlan, work = resolveXfer(p, choice, deleteToo);
-      if (!work) return { status: 409, body: { error: 'choice', message: 'Pick how to settle the files that differ.' } };
-      const limit = overLimit(work, settings.xfer, p.truncated);
-      if (limit) return { status: 409, body: limit };
+      const { plan: p } = xferPlan, synced = p.syncthing.laptop.length || p.syncthing.server.length;
+      // U4: a chat outside the workspace lands where its plan settled (p.roots.server). In a Syncthing folder its plan
+      // carries only that: the files wait for the sync, as a workspace chat's do.
+      to = p.roots?.server;
+      if (!synced) {
+        const work = resolveXfer(p, choice, deleteToo);
+        if (!work) return { status: 409, body: { error: 'choice', message: 'Pick how to settle the files that differ.' } };
+        const limit = overLimit(work, settings.xfer, p.truncated);
+        if (limit) return { status: 409, body: limit };
+        files = { userData: app.getPath('userData'), plan: p, work };
+      }
       xferPlan = null;
-      if (!p.syncthing.laptop.length && !p.syncthing.server.length) files = { userData: app.getPath('userData'), plan: p, work };
     }
     const stop = new AbortController();
     sending.set(id, stop);
     if (files) xferBusy = true;
     const onProgress = move => { if (!window.isDestroyed()) window.webContents.send('p9:move', move); };
-    try { return await sendToServer({ local: localState, id, host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal, files }); }
+    try { return await sendToServer({ local: localState, id, host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal, files, to }); }
     catch (error) { return { status: 503, body: { error: 'daemon-unavailable', message: noAnswer(error, serverLast) } }; }
     finally { sending.delete(id); if (files) xferBusy = false; }
   });
@@ -1039,16 +1045,33 @@ export async function createDesktop({ state, open } = {}) {
   // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
   // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
   const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
+  const inWorkspace = f => typeof f === 'string' && f.length <= 4096 && XFER_FOLDER.test(f) && !f.split('/').some(p => p === '.' || p === '..');
+  const fullPath = f => typeof f === 'string' && f.length <= 4096 && !f.includes('\0') && isFull(f);
+  // U4 (Builder, 2026-11-02): the remote folder picker for a chat started outside the workspace walks the remote over a tunnel
+  // of its own ('folders' and 'list', as the window's /files/folders and /files/list). Kept open between clicks, closed after
+  // a minute without one. ponytail: one picker tunnel; a second window's walk shares it.
+  let pickLink = null, pickTimer;
+  const pickCall = async (route) => {
+    clearTimeout(pickTimer);
+    if (pickLink?.host !== serverLast) { pickLink?.link.then(l => l.tunnel.close()).catch(() => {}); pickLink = { host: serverLast, link: openXfer({ local: localState, host: serverLast, ssh: sshCommand }) }; }
+    const mine = pickLink;
+    try { return await (await mine.link).serverCall('GET', route); }
+    catch (error) { if (pickLink === mine) pickLink = null; mine.link.then(l => l.tunnel.close()).catch(() => {}); return { status: 503, body: { error: 'no-answer', message: noAnswer(error, serverLast) } }; }
+    finally { pickTimer = setTimeout(() => { const gone = pickLink; pickLink = null; gone?.link.then(l => l.tunnel.close()).catch(() => {}); }, 60_000); pickTimer.unref?.(); }
+  };
+  // The picker's tunnel goes with P9: an ssh left behind would hold the connection open after quit.
+  app.once('will-quit', () => { clearTimeout(pickTimer); const gone = pickLink; pickLink = null; gone?.link.then(l => l.tunnel.close()).catch(() => {}); });
   ipcMain.handle('p9:xfer', async (event, ...args) => {
     const [action, a, b, c] = args;
-    // U4: a chat started outside the workspace (Unrestricted mode) has an absolute folder. The remote lands a chat only in its
-    // own workspace (move.mjs land), so that is said in words; refused as a bad call, the page showed "P9 did not answer".
-    // ponytail: sending such a chat needs a folder to put it in on the remote; ask before building that.
-    if (fromApp(event) && action === 'plan' && args.length === 2 && typeof a === 'string' && a.length <= 4096 && (path.posix.isAbsolute(a) || path.win32.isAbsolute(a)))
-      return { error: 'outside-workspace', message: 'this chat works in ' + a + ', outside the workspace. Only a chat in a workspace folder can move to the remote.' };
-    const ok = action === 'plan' ? args.length === 2 && typeof a === 'string' && a.length <= 4096 && XFER_FOLDER.test(a) && !a.split('/').some(p => p === '.' || p === '..')
+    // 'plan' with a chat's full path (U4, a chat started outside the workspace) and maybe to, where it goes on the remote.
+    const ok = action === 'plan' ? (args.length === 2 && (inWorkspace(a) || fullPath(a))) || (args.length === 3 && fullPath(a) && (inWorkspace(b) || fullPath(b)))
+      : action === 'folders' ? args.length === 3 && ['folders', 'list'].includes(a) && typeof b === 'string' && b.length <= 4096 && !b.includes('\0')
       : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
     if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
+    if (action === 'folders') {
+      if (serverHost || !serverLast || !localState) return { status: 409, body: { error: 'no-server' } };
+      return pickCall(a === 'folders' ? '/files/folders?' + new URLSearchParams({ path: b }) : '/files/list?' + new URLSearchParams({ path: b }));
+    }
     if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Remote Connect to Local first: Send files copies this computer\'s files to the remote.' };
     if (!serverLast) return { error: 'no-server', message: 'No remote yet: add one in Settings > Remote Connect first.' };
     if (!localState) return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' };
@@ -1056,12 +1079,12 @@ export async function createDesktop({ state, open } = {}) {
     xferBusy = true;
     try {
       if (action === 'plan') {
-        const got = await planFolder({ local: localState, host: serverLast, folder: a, userData: app.getPath('userData'), ssh: sshCommand });
+        const got = await planFolder({ local: localState, host: serverLast, folder: a, to: args.length === 3 ? b : undefined, userData: app.getPath('userData'), ssh: sshCommand });
         if (got.error) return got;
         const p = got.plan, record = !p.first.length; // first: nothing sent to this folder yet
         xferPlan = { id: randomUUID(), host: serverLast, plan: p };
         const asked = [...p.conflicts, ...p.first];
-        return { id: xferPlan.id, host: serverLast, folder: a, send: p.send.length, same: p.same.length, sendBytes: p.send.reduce((n, i) => n + i.laptop.size, 0),
+        return { id: xferPlan.id, host: serverLast, folder: a, ...(p.roots && { to: p.roots.server }), send: p.send.length, same: p.same.length, sendBytes: p.send.reduce((n, i) => n + i.laptop.size, 0),
           kind: p.first.length ? 'first' : p.conflicts.length ? 'conflict' : null, summary: p.summary, asked: asked.length,
           list: asked.slice(0, SHOWN).map(item => ({ path: item.path, text: describeXfer(item, record) })),
           deletes: p.deletes.length, deleteList: p.deletes.slice(0, SHOWN).map(item => item.path), skipped: p.skipped, syncthing: p.syncthing };

@@ -25,7 +25,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     assert.equal(preferences.preferences.nodeIntegration, false);
     assert.ok(!preferences.args.includes('--no-sandbox'));
     if (process.platform === 'linux') assert.match(await readFile(`/proc/${preferences.pid}/status`, 'utf8'), /Seccomp:\s+2/);
-    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'devStill', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteAgents', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferRun', 'onXfer', 'serverUpdate', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
+    assert.deepEqual(await page.evaluate(() => [Object.keys(window.p9), typeof require, typeof process, Object.isFrozen(window.p9)]), [['getStatus', 'usage', 'anymouse', 'mission', 'pickPicture', 'agentLogin', 'workspaceChange', 'restartService', 'repairService', 'rebuild', 'chat', 'lifecycle', 'devView', 'devStill', 'cards', 'onCardAct', 'look', 'getSettings', 'setSettings', 'openDocs', 'openUpdates', 'whatsNew', 'updates', 'openPetdex', 'openLink', 'fileProtection', 'listPets', 'loadPet', 'addPets', 'importPets', 'installPets', 'removePet', 'server', 'remotes', 'remoteKeep', 'remoteAgents', 'remoteKeepSetting', 'remoteState', 'sendToServer', 'cancelMove', 'onMove', 'xferPlan', 'xferFolders', 'xferRun', 'onXfer', 'serverUpdate', 'remoteAdmin', 'remoteDepsCheck', 'sshAnswer', 'sshKey', 'sshKeySetting', 'remoteDeps', 'adminInstall', 'onServerUpdate', 'pickVault', 'pickFolder', 'onFocus', 'terminal', 'terminalOpen', 'terminalSend', 'terminalClose', 'onTerminal', 'landing', 'landingBg', 'version', 'source', 'sample'], 'undefined', 'undefined', true]);
     assert.deepEqual(await page.evaluate(() => window.p9.getStatus()), { status: 'unavailable' });
     // Auto-update (threat model row 39): a source checkout never updates; the bridge takes only its three calls.
     const off = { state: 'off', current: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version, available: null, reason: 'source checkout' };
@@ -824,15 +824,79 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   await shot('move-reduced', page);
 });
 
-test('Send to remote from a chat outside the workspace: P9 says why in words, not "P9 did not answer"', { timeout: 60000 }, async (t) => {
+// Builder's test, 2026-11-02: the first press showed nothing for half a minute, and a second press said "A send is running
+// already". From the press the chat says what is happening, and its button and message box stay off until it lands or fails.
+test('Send to remote: a notice from the first press, the button and message box off until it lands or fails', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const marker of ['uuid-sessions', 'claude-home']) await writeFile(path.join(workspace, marker), '');
+    return { args: ['--acp-override', fake] };
+  });
+  const { app, page } = await openFirst(t, instance);
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' });
+  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  const pane = page.locator(`.pane[data-id="${id}"]`), button = pane.locator('[data-send-away]'), box = pane.locator('.composer textarea');
+  await button.waitFor({ timeout: 20000 });
+  await page.waitForFunction((i) => !document.querySelector(`.pane[data-id="${i}"] [data-send-away]`).disabled, id, { timeout: 20000 });
+  // main's two steps wait until the test lets them go: the plan, then the move (the half minute Builder saw).
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.calls = []; globalThis.answer = null;
+    const held = () => new Promise((done) => { globalThis.release = done; });
+    for (const name of ['p9:xfer', 'p9:send-to-server']) ipcMain.removeHandler(name);
+    ipcMain.handle('p9:xfer', async (_event, ...args) => { globalThis.calls.push(args[0]); await held(); return { id: '00000000-0000-4000-8000-000000000001', asked: 0, deletes: 0, syncthing: { laptop: ['x'], server: [] } }; });
+    ipcMain.handle('p9:send-to-server', async () => { globalThis.calls.push('send'); await held(); return globalThis.answer; });
+  });
+  const release = (answer) => app.evaluate((_e, a) => { globalThis.answer = a; globalThis.release(); }, answer);
+  const notice = pane.locator('.hist', { hasText: /Moving this chat to .+\. This takes about 30 seconds; don't type in this chat or close P9 until it finishes\./ });
+  const calls = () => app.evaluate(() => globalThis.calls);
+  const step = async (n) => { for (let i = 0; i < 100 && (await calls()).length < n; i++) await page.waitForTimeout(100); };
+  const during = async () => {
+    await notice.waitFor({ timeout: 2000 });
+    assert.equal(await button.isDisabled(), true, 'Send to remote is off while it runs');
+    assert.equal(await box.isDisabled(), true, 'the message box is off while it runs');
+    await button.click({ force: true });
+  };
+
+  // It lands: the notice is there from the press, through the plan and the move, and gone after.
+  await button.click();
+  await step(1);
+  await during();
+  await release(null);
+  await step(2);
+  await during();
+  assert.deepEqual(await calls(), ['plan', 'send'], 'a second press started nothing');
+  await release({ status: 200, body: { moved: true, host: 'test-host' } });
+  await page.waitForFunction((i) => !document.querySelector(`.pane[data-id="${i}"]`).textContent.includes('This takes about 30 seconds'), id, { timeout: 5000 });
+  assert.equal(await button.isDisabled(), false);
+  assert.equal(await box.isDisabled(), false);
+
+  // It fails: the notice goes, the reason stays, and the button and box work again.
+  await app.evaluate(() => { globalThis.calls = []; });
+  await button.click();
+  await step(1);
+  await during();
+  await release(null);
+  await step(2);
+  await release({ status: 409, body: { error: 'unreachable', message: 'Could not reach the remote (test).' } });
+  await pane.getByText('Not sent to the remote: Could not reach the remote (test).').waitFor({ timeout: 5000 });
+  assert.equal(await notice.count(), 0);
+  assert.equal(await button.isDisabled(), false);
+  assert.equal(await box.isDisabled(), false);
+});
+
+test('Send to remote from a chat outside the workspace: main plans it as it is; no remote yet is said in words', { timeout: 60000 }, async (t) => {
   const { page } = await openFirst(t, await daemon(t));
-  // U4 (Unrestricted mode) stores such a chat's folder as an absolute path; the page asks main to plan it as it is.
-  const plan = (folder) => page.evaluate((f) => window.p9.xferPlan(f).then((r) => r, (e) => 'threw ' + e.message), folder);
+  // U4 (Unrestricted mode) stores such a chat's folder as a full path; main plans it (the same folder, or one picked there).
+  const plan = (...args) => page.evaluate((a) => window.p9.xferPlan(...a).then((r) => r, (e) => 'threw ' + e.message), args);
   for (const folder of ['/home/someone/experiments', 'C:\\Users\\someone\\experiments']) {
     const r = await plan(folder);
-    assert.equal(r.error, 'outside-workspace', folder + ': ' + JSON.stringify(r));
-    assert.equal(r.message, 'this chat works in ' + folder + ', outside the workspace. Only a chat in a workspace folder can move to the remote.');
+    assert.equal(r.error, 'no-server', folder + ': ' + JSON.stringify(r));
+    assert.equal(r.message, 'No remote yet: add one in Settings > Remote Connect first.');
+    assert.equal((await plan(folder, '')).error, 'no-server');
   }
-  // A workspace folder that climbs out is still a refused call, as before.
+  // A workspace folder that climbs out is still a refused call, as before, and so is a landing folder that does.
   assert.match(await plan('work/../..'), /^threw .*ipc-sender-refused/);
+  assert.match(await plan('/home/someone/experiments', 'work/../..'), /^threw .*ipc-sender-refused/);
+  // The remote picker's listing needs a remote too.
+  assert.deepEqual(await page.evaluate(() => window.p9.xferFolders('folders', '/')), { status: 409, body: { error: 'no-server' } });
 });

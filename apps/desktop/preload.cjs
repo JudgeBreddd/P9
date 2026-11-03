@@ -43,7 +43,9 @@ contextBridge.exposeInMainWorld('p9', Object.freeze({
   sendToServer: (id, plan, choice, deleteToo) => plan ? ipcRenderer.invoke('p9:send-to-server', id, plan, choice, deleteToo) : ipcRenderer.invoke('p9:send-to-server', id),
   cancelMove: (id) => ipcRenderer.invoke('p9:move-cancel', id),
   onMove: (callback) => { ipcRenderer.on('p9:move', (_event, move) => callback(move)); },
-  xferPlan: (folder) => ipcRenderer.invoke('p9:xfer', 'plan', folder), // Send files: a workspace folder ('' is all of it)
+  // Send files: a workspace folder ('' is all of it). U4: a chat's full path, and to, where it goes on the remote once picked.
+  xferPlan: (folder, to) => to === undefined ? ipcRenderer.invoke('p9:xfer', 'plan', folder) : ipcRenderer.invoke('p9:xfer', 'plan', folder, to),
+  xferFolders: (kind, at) => ipcRenderer.invoke('p9:xfer', 'folders', kind, at), // U4: the remote picker's walk, kind 'folders' or 'list'
   xferRun: (id, choice, deleteToo) => ipcRenderer.invoke('p9:xfer', 'run', id, choice, deleteToo),
   onXfer: (callback) => { ipcRenderer.on('p9:xfer', (_event, progress) => callback(progress)); },
   serverUpdate: () => ipcRenderer.invoke('p9:server-update'),
