@@ -186,6 +186,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await row('proj').dblclick({ timeout: 10000 }); await row('sub').click({ timeout: 10000 });
   await dlg.locator('button[value="no"]').click();
   await dlg.waitFor({ state: 'hidden', timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#newFolder').value !== ':pick', null, { timeout: 5000 }); // the select redraws after the dialog closes
   assert.equal(await page.locator('#newFolder').inputValue(), 'proj', 'Cancel changes nothing');
   // In Unrestricted mode the walk starts at the workspace's full path and goes up past it (Builder, 2026-11-02: "need a
   // picker so i can click in and out of folders"); a folder outside it goes as its full path.
