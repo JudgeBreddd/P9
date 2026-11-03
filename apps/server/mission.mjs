@@ -540,7 +540,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       pieces[row.line] = start + body.mark + end + rest;
     } else {
       if (kind === 'review' && (!item.review || !item.review.includes(body.review))) return refused;
-      if (kind === 'apply' && (body.apply !== true || !item.apply || !/^[\w.-]{1,64}$/.test(file.name))) return refused;
+      if (kind === 'apply' && (body.apply !== true || !item.apply || !/^\w[\w.-]{0,63}$/.test(file.name))) return refused; // review 3 L7: never a leading -, which the script would take as a flag
       const lines = pieces.flatMap((piece, index) => (index % 2 === 0 && REVIEW.test(piece) ? [index] : []));
       if (kind === 'apply' && (lines.length !== 1 || pieces[lines[0]] !== 'review: pending')) return { status: 409, error: 'not-pending' };
       if (lines.length !== 1) return { status: 409, error: 'review-line-count' };

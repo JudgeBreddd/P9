@@ -139,6 +139,29 @@ test('checklists: Approve one row and Deny another, only those marks change; ref
   console.log('PASS checklist: 7 refusals change nothing; Approve K03 + Deny K01 change 2 marks; Apply writes review: apply and runs with 2026-10-28, twice refused; inbox reject; CRLF kept; far root marked once allowed; vault root refused without the yes, file unchanged');
 });
 
+// Review 3 L7: Apply passes the run's name to the script as its argument; a name a sync partner made, like -rf, is refused,
+// so the script never takes it for a flag. Nothing is written and nothing runs.
+test('checklists: Apply refuses a run whose name starts with -', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    for (const folder of ['projects', 'hub', '_waiting', 'runs/-rf']) await mkdir(path.join(workspace, folder), { recursive: true });
+    await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(workspace, SETTINGS.registry), JSON.stringify({ scripts: [] }));
+    await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify({ sections: [{ title: 'Wiki', buttons: SPACE.sections[0].buttons,
+      checklists: [{ id: 'dash', title: 'Dash', path: 'runs', file: '_decision.md', review: ['merge'], apply: 'audit-apply' }] }] }));
+    await writeFile(path.join(workspace, 'runs/-rf/_decision.md'), 'review: pending\n');
+    await writeFile(path.join(directory, 'settings.json'), JSON.stringify(SETTINGS));
+    return { args: ['--settings', path.join(directory, 'settings.json')] };
+  });
+  const dash = await get(instance, 'dash');
+  assert.deepEqual(dash.body.files.map((file) => file.name), ['-rf']);
+  const applied = await set(instance, { id: 'dash', path: dash.body.files[0].path, hash: dash.body.files[0].hash, apply: true });
+  assert.equal(applied.status, 400, 'a name starting with - is refused');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(await readFile(path.join(instance.directory, 'workspace', 'runs/-rf/_decision.md'), 'utf8'), 'review: pending\n');
+  await assert.rejects(readFile(path.join(instance.directory, 'workspace', 'applied.txt')), 'the script never ran');
+  console.log('PASS checklist L7: Apply on a run named -rf is refused; the file is unchanged and the script never ran');
+});
+
 test('the weekly Wiki audit on the phone at 390x844: Approve, Park, Deny per row and Apply', { timeout: 90000, skip: process.platform === 'win32' && 'Windows CI has no Playwright Chromium' }, async (t) => {
   const server = await remoteDaemon(t, { setup: seed });
   const browser = await chromium.launch();
