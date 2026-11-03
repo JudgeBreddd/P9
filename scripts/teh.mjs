@@ -235,10 +235,19 @@ export async function restartWindowsTask(state, ms) {
 // The unit is named after its RuntimeDirectory, the state folder: p9-foundation, or the dev build's p9-dev beside it.
 export const unitFor = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation') + '.service';
 const systemctl = (...args) => new Promise((resolve) => execFile('systemctl', ['--user', ...args], { timeout: 60_000 }, (error) => resolve(!error)));
-export async function restartLinuxService(state, ms) {
+// RS2, a hung daemon (its SIGTERM handler never runs, so main.mjs's own 10 s stop never fires): systemd would wait the unit's
+// TimeoutStopSec (90 s by default) before its SIGKILL, longer than this command used to wait. sh -c this with $1 the unit and $2
+// the seconds of grace: systemctl restart; still stopping after the grace, the same main process is killed (KillMode=process:
+// the main process only, tmux and detached apps stay). Killing the systemctl client leaves its restart job queued in systemd,
+// which starts the unit once the old process is gone. Server mode runs the same lines over ssh (remote.mjs restartServer).
+export const RESTART_UNIT = 'o=$(systemctl --user show -p MainPID --value "$1"); timeout "$2" systemctl --user restart "$1"; s=$?; '
+  + 'if [ "$s" = 124 ]; then s=0; [ "$(systemctl --user show -p MainPID --value "$1")" != "$o" ] || systemctl --user kill --kill-who=main --signal=SIGKILL "$1" || s=1; fi; [ "$s" = 0 ]';
+export const RESTART_GRACE = 20;
+export async function restartLinuxService(state, ms, grace = RESTART_GRACE) {
   if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing' };
   const before = await health(state).then((h) => h.boot, () => null);
-  if (!await systemctl('restart', unitFor(state))) return { error: 'restart-failed' };
+  const restarted = await new Promise((resolve) => execFile('sh', ['-c', RESTART_UNIT, 'sh', unitFor(state), String(grace)], { timeout: (grace + 60) * 1000 }, (error) => resolve(!error)));
+  if (!restarted) return { error: 'restart-failed' };
   return answered(state, before, ms);
 }
 

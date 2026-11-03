@@ -9,6 +9,7 @@
 #                     stdin's first line, as keep admin) that command run as admin (row 61 on a remote)
 #   sh start release  P9's service off, and linger if P9 turned it on, then the background daemon (Keep P9 running: No)
 #   sh start stop     stop the background daemon (an install that replaces it: U8)
+#   sh start restart  stop it, a hung one killed, then up (the desktop's Restart P9 on a background-mode remote, the slim one's too)
 # A line slim=1 before this body marks the small Temporary P9 (U8, ~/.local/share/p9/remote): keep answers P9_KEEP full.
 # The file background marks background mode: remote.mjs READ runs "up" at each connect only while it is there.
 # POSIX sh, as the desktop runs it with sh. It runs as this user only and never asks for a password; the functions of
@@ -41,12 +42,19 @@ up() {
 }
 
 # Only the daemon this script started: its pid file can be stale, so that process must still name this state folder.
-# Then up to 15 s for its lock to go; fails while a daemon still holds it.
+# Then up to 15 s for its lock to go; fails while a daemon still holds it. $1: the signal, TERM unless named.
 stop() {
   pid=$(cat "$r/daemon.pid" 2>/dev/null || true)
-  if [ -n "$pid" ] && tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -qxF -- "$state"; then kill -TERM "$pid"; fi
+  if [ -n "$pid" ] && tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -qxF -- "$state"; then kill -"${1:-TERM}" "$pid"; fi
   for _ in $(seq 30); do running || break; sleep 0.5; done
   ! running
+}
+
+# RS2: a hung daemon never runs its TERM handler (main.mjs's own 10 s stop never fires), so after stop's 15 s it is killed,
+# the main process only, as the service's KillMode=process does.
+restart() {
+  stop || stop KILL || return 1
+  up
 }
 
 unit="$HOME/.config/systemd/user/p9-foundation.service"
@@ -113,5 +121,6 @@ case "${1:-up}" in
   keep) keep "${2:-}" ;;
   release) release ;;
   stop) stop ;;
+  restart) restart ;;
   *) exit 2 ;;
 esac
