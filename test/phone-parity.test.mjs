@@ -113,6 +113,17 @@ test('P9: the phone shows the agent\'s own pictures and real links, and loads no
   assert.equal(await page.evaluate(() => document.querySelector('dialog.picture').open), true);
   await page.click('dialog.picture');
   assert.equal(await page.evaluate(() => document.querySelector('dialog.picture').open), false);
+  // An image from a tool call folded into "Ran 3 tools" shows in the chat with the fold closed, once, as on the desktop.
+  await send(page, 'images in steps');
+  await page.waitForFunction(() => [...document.querySelectorAll('#events .md')].some((el) => el.textContent.includes('Built.')), null, { timeout: 15000 });
+  const folded = page.locator('#events [data-kind="group"]').last();
+  assert.equal(await folded.locator('summary').first().textContent(), 'Ran 3 tools');
+  assert.equal(await folded.evaluate((el) => el.querySelector(':scope > details').open), false, 'the fold opened itself');
+  assert.equal(await folded.locator('.agent-imgs img').count(), 1, 'the image is missing or shown twice');
+  assert.equal(await folded.locator('.agent-imgs img').isVisible(), true, 'the image is hidden in the closed fold');
+  assert.deepEqual(await folded.locator('.agent-imgs img').evaluate(async (img) => { await img.decode(); return [img.src.slice(0, 22), img.naturalWidth, img.naturalHeight]; }), ['data:image/png;base64,', 200, 100]);
+  await folded.scrollIntoViewIfNeeded();
+  await shot(page, 'phone-folded-tool-image');
 
   // The fake agent echoes the prompt: one web link becomes a real link with its host; the rest stay text.
   await send(page, 'see [the docs](https://docs.example.test/p) [x](javascript:alert(1)) [f](file:///etc/passwd) [u](https://u:p@a.test/)');
@@ -319,6 +330,9 @@ test('P8: images attach on the phone from the + sheet or a paste, show as chips 
   await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true }));
   await send(page, 'look');
   await replied('echo:look' + seen.repeat(4));
+  // After a reload the sent photos still show, fetched again by hash.
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('#events .user-imgs img[src^="data:image/png;base64,"]').length === 5, null, { timeout: 15000 });
 });
 test('P4: one tap on send posts the message and the box keeps focus (the keyboard stays up)', { timeout: 60000 }, async (t) => {
   const { page } = await phoneOn(t);
