@@ -3,7 +3,6 @@
 # needs none of them to install, build or run. docs/brand stays: the packaged app's icon (package.json build.icon) is there.
 /test export-ignore
 /docs/guide.md export-ignore
-/docs/plan.md export-ignore
 /.cursor export-ignore
 /.github export-ignore
 /.githooks export-ignore

@@ -3623,7 +3623,7 @@ function onServerUpdate(u) {
     'waiting-turns': [on + ' will update to ' + u.version + ': waiting for ' + u.turns + ' chat' + (u.turns === 1 ? '' : 's') + ' to finish ' + (u.turns === 1 ? 'its' : 'their') + ' turn.', 'ok'],
     restarting: [on + ' is restarting on ' + u.version + '.', 'ok'],
     done: [on + ' is now ' + u.version + '.', 'ok', true],
-    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote.'), 'bad', true],
+    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote (or journalctl _SYSTEMD_USER_UNIT=p9-foundation.service where the journal is kept in memory).'), 'bad', true],
     failed: [on + ' was not updated to ' + u.version + ' (' + why + '). It runs on as before.', 'bad', true],
     'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
     'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],

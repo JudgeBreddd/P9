@@ -39,6 +39,8 @@ Description=P9: daemon, chats, terminals and editor host
 MemoryHigh=${limit('P9_MEMORY_HIGH', '25%')}
 MemoryMax=${limit('P9_MEMORY_MAX', '33%')}
 `, { mode: 0o600 });
+// Rewritten each install too: a reinstall over a machine whose old unit is still there (a moved-aside ~/p9) used to stop on
+// EEXIST before the editor step and kept the old unit's paths (fixed in 0.1.7).
 await writeFile(path.join(directory, 'p9-foundation.service'), `[Unit]
 Description=P9 foundation daemon
 [Service]
@@ -56,7 +58,7 @@ NoNewPrivileges=yes
 KillMode=process
 [Install]
 WantedBy=default.target
-`, { flag: 'wx', mode: 0o600 });
+`, { mode: 0o600 });
 async function answers() {
   // Up to 15 s for the first start (sqlite, tmux); a daemon that crashes keeps restarting and never answers.
   for (let tries = 0; tries < 30; tries += 1) {
@@ -64,10 +66,12 @@ async function answers() {
     if (health?.status === 200) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('daemon-not-answering: see journalctl --user -u p9-foundation');
+  throw new Error('daemon-not-answering: see journalctl --user -u p9-foundation (where the journal is kept in memory: journalctl _SYSTEMD_USER_UNIT=p9-foundation.service)');
 }
 // daemon-reload is inside the cleanup too: a failed one must not leave the unit behind (release r2 R2-10).
-try { execFileSync('systemctl', ['--user', 'daemon-reload']); execFileSync('systemctl', ['--user', 'enable', '--now', 'p9-foundation.service']); await answers(); }
+try { execFileSync('systemctl', ['--user', 'daemon-reload']); execFileSync('systemctl', ['--user', 'enable', 'p9-foundation.service']);
+  // restart, not enable --now: a daemon already running from the old unit would otherwise keep running the old code.
+  execFileSync('systemctl', ['--user', 'restart', 'p9-foundation.service']); await answers(); }
 catch (error) {
   // Leave nothing behind, so fixing the cause and running this again works.
   try { execFileSync('systemctl', ['--user', 'disable', '--now', 'p9-foundation.service'], { stdio: 'ignore' }); } catch {}

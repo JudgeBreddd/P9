@@ -230,10 +230,11 @@ if [ -n "$headless" ]; then pnpm install --frozen-lockfile --ignore-scripts; els
 pnpm build
 mkdir -p -- "$workspace"
 if [ -n "$headless" ]; then write_start; fi
-if [ -n "$background" ]; then sh "$run_dir/start" up; else node scripts/install-service.mjs "$workspace"; fi
 # Dev Focus's editor server (pinned and checked, threat model row 52). Headless too: a desktop in Server mode runs Dev Focus
-# on the server's editor server. If it fails, Dev Focus offers the same install as a button.
+# on the server's editor server. If it fails, Dev Focus offers the same install as a button. It runs before the service step, so a
+# service step that stops the install cannot skip it.
 node scripts/install-editor.mjs || echo "Dev Focus's editor server was not installed; Dev Focus offers Install the editor server."
+if [ -n "$background" ]; then sh "$run_dir/start" up; else node scripts/install-service.mjs "$workspace"; fi
 write_menu
 if [ ${#path_added[@]} -gt 0 ]; then
   new_path=$(IFS=:; echo "${path_added[*]}")
