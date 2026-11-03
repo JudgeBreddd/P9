@@ -6,11 +6,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { slimBundle } from '../scripts/bundle-daemon.mjs';
+import { bundleDaemon, slimBundle } from '../scripts/bundle-daemon.mjs';
 import { slimArchive } from '../apps/desktop/remote-install.mjs';
 import { authenticated, daemon, http, root } from './helpers.mjs';
 
@@ -72,6 +73,73 @@ test('U8: the slim bundle holds the daemon and its helpers only, pins both Linux
   assert.equal((await fetchAgents(started, { claude: 'yes', codex: true })).status, 400);
   const checkout = await fetchAgents(await daemon(t), { claude: true, codex: false });
   assert.deepEqual([checkout.status, JSON.parse(checkout.text).error], [409, 'not-a-bundle']);
+});
+
+// U8, packaged: a packaged app sends resources/daemon (main.mjs slimFolder), never a fresh slimBundle. This lays that folder
+// out the way the AppImage gets it: package-linux.mjs's daemon-extra (its extra files, then bundleDaemon for linux-x64), placed
+// by package.json's electron-builder extraResources (the top list, then linux's), with node_modules left out of a folder
+// unless the entry names it (what the 0.1.5 AppImage's resources/daemon holds). Its slim archive must be the checkout's,
+// byte for byte, and start.
+const archived = async (folder, into) => {
+  const tgz = into + '.tar.gz';
+  await new Promise((resolve, reject) => { const out = spawn('sh', ['-c', 'cat > "$0"', tgz], { stdio: ['pipe', 'ignore', 'ignore'] }); slimArchive(folder).pipe(out.stdin); out.once('close', resolve); out.once('error', reject); });
+  await mkdir(into);
+  assert.equal((await run('tar', ['-xzf', tgz, '-C', into])).code, 0);
+  const files = new Map();
+  for (const entry of await readdir(into, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const file = path.join(entry.parentPath, entry.name), hash = createHash('sha256');
+    await new Promise((resolve, reject) => createReadStream(file).on('data', (d) => hash.update(d)).on('end', resolve).on('error', reject));
+    files.set(path.relative(into, file).split(path.sep).join('/'), hash.digest('hex'));
+  }
+  return files;
+};
+test('U8 packaged: the AppImage\'s resources/daemon, laid out as electron-builder\'s extraResources say, sends the same slim P9 as a checkout, and it starts', { skip: process.platform !== 'linux' || process.arch !== 'x64' ? 'the AppImage is linux-x64 only' : false, timeout: 300000 }, async (t) => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'p9-slimp-'));
+  t.after(() => rm(tmp, { recursive: true, force: true }).catch(() => {}));
+  const extra = path.join(tmp, 'daemon-extra'), resources = path.join(tmp, 'resources');
+  const packager = await readFile(path.join(root, 'scripts', 'package-linux.mjs'), 'utf8');
+  const extras = JSON.parse(/for \(const file of (\[[^\]]*'scripts\/teh\.mjs'[^\]]*\])\)\s*await copyFile\(path\.join\(root, file\), path\.join\(daemonExtra, file\)\)/.exec(packager)[1].replaceAll("'", '"'));
+  assert.match(packager, /bundleDaemon\(root, daemonExtra, 'linux-x64'\)/);
+  for (const file of extras) { await mkdir(path.dirname(path.join(extra, file)), { recursive: true }); await cp(path.join(root, file), path.join(extra, file)); }
+  await bundleDaemon(root, extra, 'linux-x64');
+  const build = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).build;
+  const entries = [...build.extraResources, ...build.linux.extraResources].filter((e) => e.to === 'daemon' || e.to.startsWith('daemon/'));
+  for (const { from, to } of entries) {
+    const source = from.startsWith('.build/daemon-extra') ? path.join(extra, from.slice('.build/daemon-extra'.length))
+      : from === '.build/node-linux/bin/node' ? null : path.join(root, from);
+    const dest = path.join(resources, to);
+    await mkdir(path.dirname(dest), { recursive: true });
+    if (!source) { await writeFile(dest, 'the bundled node\n'); continue; } // its own pinned binary, never sent
+    // node_modules holds this computer's agent binaries (about 240 MiB): hard links, not a second copy in a 1 GiB /tmp.
+    if (path.basename(from) === 'node_modules') { await mkdir(dest, { recursive: true }); assert.equal((await run('cp', ['-al', source + '/.', dest])).code, 0); continue; }
+    await cp(source, dest, { recursive: true, filter: (f) => !path.relative(source, f).split(path.sep).includes('node_modules') });
+  }
+  const daemonFolder = path.join(resources, 'daemon');
+  // What a packaged app's slimFolder reads: resources/daemon, used when agents.json is there.
+  const main = await readFile(path.join(root, 'apps', 'desktop', 'main.mjs'), 'utf8');
+  assert.match(main, /const packaged = path\.join\(process\.resourcesPath \?\? '', 'daemon'\);\s*if \(app\.isPackaged \|\| process\.env\.P9_PACKAGED === '1'\) return await stat\(path\.join\(packaged, 'agents\.json'\)\)\.then\(\(\) => \(\{ folder: packaged \}\)/);
+  assert.ok(existsSync(path.join(daemonFolder, 'agents.json')), 'resources/daemon/agents.json');
+  for (const own of ['node', 'node_modules/@openai/codex-linux-x64', 'node_modules/@anthropic-ai/claude-agent-sdk-linux-x64', 'scripts/teh.mjs'])
+    assert.ok(existsSync(path.join(daemonFolder, own)), own + ' is in resources/daemon (the AppImage\'s own)');
+  const packaged = await archived(daemonFolder, path.join(tmp, 'from-packaged'));
+  const checkout = await archived(await slimBundle(root, tmp), path.join(tmp, 'from-checkout'));
+  const names = (m) => [...m.keys()].sort();
+  assert.deepEqual(names(packaged), names(checkout), 'the same files as the checkout\'s slim P9');
+  for (const [name, hash] of checkout) assert.equal(packaged.get(name), hash, name + ' differs');
+  // Only what runs (the owner, 2026-11-02): no package README, changelog or other notes; licences and notices stay.
+  const notes = names(packaged).filter((n) => /(^|\/)(readme|changelog|history)[^/]*$|\.(md|markdown)$/i.test(n) && !/(^|\/)(licen[cs]e|notice)[^/]*$/i.test(n));
+  assert.deepEqual(notes, [], 'notes were sent');
+  console.log('P9_SLIM files:\n' + names(packaged).join('\n'));
+  // The installers' app.asar (electron-builder files): apps/desktop's notes stay out.
+  assert.ok(build.files.includes('!apps/desktop/**/*.md'));
+  for (const bad of ['node', 'scripts/teh.mjs'])
+    assert.ok(!packaged.has(bad), bad + ' was sent');
+  assert.ok(!names(packaged).some((n) => /linux-x64\//.test(n)), 'this computer\'s agent binaries were sent');
+  const started = await daemon(t, path.join(tmp, 'from-packaged', 'apps', 'server', 'main.mjs'));
+  const health = await http({ socketPath: started.credentials.socketPath, headers: authenticated(started.credentials) });
+  assert.equal(health.status, 200, JSON.stringify(health));
+  console.log('P9_SLIM packaged ' + packaged.size + ' files, the same as the checkout\'s');
 });
 
 // A stand-in for registry.npmjs.org: P9_AGENTS_FROM, a folder of .tgz files, with the same check.

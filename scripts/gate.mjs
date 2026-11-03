@@ -120,7 +120,7 @@ export async function mutationInventory(directory) {
   // phone Security settings (c18, row 66) = no new writes: the phone listener gets the desktop's POST /agent-lock and /file-protection (prefs rows) and /setup/settings (settings.json, .bak, temp + rename).
   // frame runtimes (item 19, row 65) = scripts/frame-runtimes.mjs, a build step: copies Mermaid's and TypeScript's browser builds and writes the React bundle into apps/web/dist/frame; nothing at run time.
   // sprint (#35) = apps/server/sprint.mjs reads the sprint status file only (open 'r', then stat and read); it writes nothing.
-  // windows trimLog (0107bfa) = daemon.log beside P9's state folder on Windows only: copied to daemon.log.1, then truncated in place when over 5 MB; a fixed path, never one a request names.
+  // windows trimLog (0107bfa) = daemon.log beside P9's state folder (the Windows task's, Linux background mode's; none beside the unit's): copied to daemon.log.1, then truncated in place when over 5 MB; a fixed path, never one a request names.
   // desktop rollback (AU5) = update-state.json in the profile folder and rollback.json's shown mark in P9's folder (a temp file, then rename); it starts nothing (main does).
   // files/win32 = the Windows form of the file guard's handle walk (index.mjs's writes, through NtCreateFile handles);
   // conpty = a terminal's input pipe (write), no filesystem; installer.nsh = runs install-windows.ps1 on install and

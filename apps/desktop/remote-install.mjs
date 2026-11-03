@@ -4,7 +4,7 @@
 // into ~/p9 there and runs install.sh --headless. Where an admin is needed it stops with what is missing, why, and the one
 // command (P9_ADMIN lines); the window asks for the admin password and runs it again with that (threat model row I2).
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { names } from './server-update.mjs';
 // PASSWORD: one line, so the remote's read takes exactly it and the archive after it is untouched.
@@ -123,14 +123,24 @@ export function slimScript(version, admin = false, force = false) {
 export const SLIM = ['apps/server', 'apps/desktop/tools.sh', 'apps/desktop/editor-host.mjs', 'scripts/install.sh', 'scripts/background.sh',
   'scripts/deps.mjs', 'scripts/install-editor.mjs', 'scripts/agents.mjs', 'node_modules/@agentclientprotocol', 'node_modules/@openai/codex',
   'node_modules/@anthropic-ai/claude-agent-sdk', 'packages', 'package.json', 'agents.json', 'LICENSE', 'NOTICES.md'];
+// Inside them, only what runs: no package's README, changelog or other notes, type declarations or source maps (the owner,
+// 2026-11-02: the slim P9 carries only what chat and the ssh editor need). Licence and notice files stay.
+const NOT_RUN = /(^|\/)(readme|changelog|history|contributing)[^/]*$|\.(d\.[cm]?ts|map)$/i;
+const DOC = /\.(md|markdown)$/i, LEGAL = /(^|\/)(licen[cs]e|notice|copying)[^/]*$/i;
 export function slimArchive(folder) {
   const present = SLIM.filter((name) => existsSync(path.join(folder, name)));
   if (!present.includes('agents.json') || !present.includes('apps/server')) throw new Error('slim-bundle-incomplete');
-  return run('tar', ['-czf', '-', '-C', folder, ...present]);
+  // Named file by file, so the platform's tar (GNU, or bsdtar on Windows and macOS) never matches a pattern of its own.
+  const files = present.flatMap((name) => statSync(path.join(folder, name)).isDirectory()
+    ? readdirSync(path.join(folder, name), { recursive: true, withFileTypes: true }).filter((e) => !e.isDirectory())
+      .map((e) => path.relative(folder, path.join(e.parentPath, e.name)).split(path.sep).join('/')) : [name])
+    .filter((name) => LEGAL.test(name) || !(NOT_RUN.test(name) || DOC.test(name)));
+  return run('tar', ['-czf', '-', '-C', folder, ...files]);
 }
 
 // This app's source as tar.gz for the script's stdin, one top folder (the script strips it). A git checkout sends its
-// committed HEAD; a copy without .git (a synced folder) sends only what its .gitignore does not exclude (threat model row 67):
+// committed HEAD less its .gitattributes export-ignore files; a copy without .git (a synced folder) sends only what neither its
+// .gitignore nor those export-ignore lines exclude (threat model row 67):
 // private notes and agent files sit beside the source there and never go to a remote.
 // ponytail: each .gitignore line becomes a plain tar --exclude, matched at any depth (a leading / is dropped, so an anchored
 // line excludes more, never less); ! lines are skipped, so a re-included file stays out. Only the folder's top .gitignore.
@@ -139,6 +149,9 @@ export function sourceArchive(folder) {
   if (existsSync(path.join(folder, '.git'))) return run('git', ['-C', folder, 'archive', '--format=tar.gz', '--prefix=p9/', 'HEAD']);
   let ignored = [];
   try { ignored = readFileSync(path.join(folder, '.gitignore'), 'utf8').split('\n').map(l => l.trim().replace(/^\/+|\/+$/g, '')).filter(l => l && !l.startsWith('#') && !l.startsWith('!')); } catch {}
+  // .gitattributes' export-ignore lines (tests, build notes, agent files): what git archive and GitHub's tag archive leave out.
+  try { ignored.push(...readFileSync(path.join(folder, '.gitattributes'), 'utf8').split('\n').map(l => l.trim().split(/\s+/))
+    .filter(([p, ...a]) => p && !p.startsWith('#') && a.includes('export-ignore')).map(([p]) => p.replace(/^\/+|\/+$/g, ''))); } catch {}
   const excludes = [...new Set(['node_modules', '.git', 'dist', '.env', '.env.*', '.cursor', ...ignored])].map(p => '--exclude=' + p);
   return run('tar', ['-czf', '-', ...excludes, '-C', path.dirname(folder), path.basename(folder)]);
 }
