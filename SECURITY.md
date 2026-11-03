@@ -594,6 +594,16 @@ version never replaces a newer one, except by the rollback below.
   `latest.yml`. The failed version is not offered again; the restored app says what happened once and
   offers a prefilled GitHub bug report with the logs, home folder, user and machine names, tokens and IP
   addresses removed, which you read and submit yourself.
+- **What rollback cannot do.**
+  - A version that has never started healthy on this machine has nothing to go back to. Rollback arrived
+    in 0.1.5, so an update from 0.1.4 (or a first install) that fails its starts only writes "no healthy
+    version to go back to" to `p9-update.log` and keeps trying.
+  - On Linux the old version comes back only from its kept copy in `~/.local/share/p9/appimage/` (the
+    running version and the one before it; a copy that failed, for example on a full disk, is not there).
+    With no kept copy, P9 quits, the launcher writes "no kept AppImage" to `rollback.log`, and the failed
+    version starts again next time; there is no download fallback on Linux as there is on Windows.
+  - Only the first 180 s of a start are watched. A version that started healthy once is never rolled back,
+    however it breaks later, and a start that takes longer than 180 s counts as a failed one.
 - **What a person who controls a release can do.** Anyone who can publish a release in P9's repository
   (the owner's GitHub account, or the CI token that uploads the files) can ship any program, and every
   installed P9 will download it and run it as you, with everything you can reach. HTTPS and the sha512
