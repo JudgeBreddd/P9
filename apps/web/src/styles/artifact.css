@@ -28,7 +28,7 @@
 /* Phone: the artifact fills the full-screen sheet under its title. */
 #sheet.full #sheetBody:has(>.art-host){flex:1;min-height:0;display:grid}
 .art-host{min-height:0;height:calc(100dvh - 80px)}
-/* Chat files (desktop, 2026-10-30): the 'chat-files' side slot, one list of a chat's artifacts and the files it wrote, newest first. */
+/* Chat files (desktop, 2026-10-30): the 'chat-files' side slot, a chat's artifacts and the files it wrote (with their diffs), newest first. */
 .cf-list{margin:0;padding:8px;list-style:none;display:grid;gap:6px;align-content:start;overflow:auto;min-height:0}
 .cf-list li{display:flex;align-items:center;gap:4px;min-width:0}
 .cf-item{flex:1;min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:8px;align-items:baseline;padding:8px 12px;border:1px solid var(--border,var(--line));border-radius:calc(var(--radius,10px) - 2px);background:var(--card,var(--raised));color:var(--foreground,var(--text));font:inherit;font-size:13px;text-align:left}
@@ -38,3 +38,9 @@ button.cf-item:hover{border-color:var(--primary,var(--cyan))}
 .cf-item .cf-name,.cf-item .cf-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cf-item .cf-sub{font-size:11.5px;color:var(--muted-foreground,var(--muted))}
 .sbody>.empty{margin:0;padding:16px;color:var(--muted-foreground,var(--muted));font-size:13px}
+/* Its two tabs (2026-11-02): Artifacts and Changes, above the list. */
+.sbody:has(>.cf-tabs){grid-template-rows:auto minmax(0,1fr);align-content:start}
+.cf-tabs{display:flex;gap:4px;padding:8px 8px 0;border-bottom:1px solid var(--border,var(--line))}
+.cf-tabs [role=tab]{border-radius:6px 6px 0 0}
+.cf-tabs [aria-selected=true]{background:var(--accent,var(--field));box-shadow:inset 0 -2px 0 var(--primary,var(--cyan))}
+.cf-tabs .cf-n{color:var(--muted-foreground,var(--muted));font-size:11px}
