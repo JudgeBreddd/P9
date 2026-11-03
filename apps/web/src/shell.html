@@ -120,10 +120,12 @@
   <button data-slot="button" data-variant="ghost" data-size="icon" class="land-set" id="landSet" title="Settings"></button>
 </dialog>
 <dialog id="folderDlg" aria-labelledby="folderT"><form method="dialog">
-  <div class="dlg-head"><div><h2 id="folderT">Start the chat in</h2><p class="muted sm" id="folderAt"></p></div></div>
-  <div id="folderList" class="folder-list"></div>
-  <label class="folder-path"><span class="sm muted">Or a full path (Unrestricted mode)</span><input data-slot="input" id="folderPath" spellcheck="false" autocomplete="off"></label>
-  <div class="dlg-foot"><button data-slot="button" data-variant="outline" value="no">Cancel</button><button data-slot="button" value="yes" autofocus>Start here</button></div>
+  <div class="dlg-head"><div><h2 id="folderT">Choose a folder on the server</h2></div></div>
+  <div class="folder-bar"><button type="button" data-slot="button" data-variant="outline" data-size="sm" id="folderUp" title="Up one folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Up</button><input data-slot="input" id="folderPath" aria-label="Folder path: type or paste one, Enter goes there" spellcheck="false" autocomplete="off"></div>
+  <nav id="folderCrumbs" class="folder-crumbs" aria-label="Folders above this one"></nav>
+  <p id="folderWhy" class="sm folder-why" role="status" hidden></p>
+  <div id="folderList" class="folder-list" role="listbox" aria-label="Folders"></div>
+  <div class="dlg-foot"><span class="sm muted truncate folder-at" id="folderAt"></span><button data-slot="button" data-variant="outline" value="no">Cancel</button><button data-slot="button" value="yes" autofocus>Select</button></div>
 </form></dialog>
 <dialog id="linkDlg" aria-labelledby="linkT" aria-describedby="linkU"><form method="dialog">
   <div class="dlg-head"><div><h2 id="linkT">Open this link in your browser?</h2><p class="link-url" id="linkU"></p><p class="muted sm">An agent wrote it. Check the address before you open it.</p></div></div>
