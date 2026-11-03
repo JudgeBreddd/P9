@@ -1034,6 +1034,11 @@ export async function createDesktop({ state, open } = {}) {
   const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
   ipcMain.handle('p9:xfer', async (event, ...args) => {
     const [action, a, b, c] = args;
+    // U4: a chat started outside the workspace (Unrestricted mode) has an absolute folder. The remote lands a chat only in its
+    // own workspace (move.mjs land), so that is said in words; refused as a bad call, the page showed "P9 did not answer".
+    // ponytail: sending such a chat needs a folder to put it in on the remote; ask before building that.
+    if (fromApp(event) && action === 'plan' && args.length === 2 && typeof a === 'string' && a.length <= 4096 && (path.posix.isAbsolute(a) || path.win32.isAbsolute(a)))
+      return { error: 'outside-workspace', message: 'this chat works in ' + a + ', outside the workspace. Only a chat in a workspace folder can move to the remote.' };
     const ok = action === 'plan' ? args.length === 2 && typeof a === 'string' && a.length <= 4096 && XFER_FOLDER.test(a) && !a.split('/').some(p => p === '.' || p === '..')
       : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
     if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
