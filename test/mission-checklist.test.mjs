@@ -5,6 +5,7 @@ import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { daemon, http, authenticated, remoteDaemon, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { oneLineChange } from '../apps/server/mission.mjs';
+import { checklistHtml } from '../apps/web/src/checklist.mjs';
 
 // Mission M4: checklists (threat model row M4-a). The weekly Wiki audit's decision file (Approve, Park, Deny per row, then
 // Apply) and the Wiki inbox's review line, each written one mark or one line at a time through the guarded save.
@@ -160,6 +161,33 @@ test('checklists: Apply refuses a run whose name starts with -', { timeout: 6000
   assert.equal(await readFile(path.join(instance.directory, 'workspace', 'runs/-rf/_decision.md'), 'utf8'), 'review: pending\n');
   await assert.rejects(readFile(path.join(instance.directory, 'workspace', 'applied.txt')), 'the script never ran');
   console.log('PASS checklist L7: Apply on a run named -rf is refused; the file is unchanged and the script never ran');
+});
+
+// Review 3 L2: a _private checklist lists with File protection on (P11) but every write is refused, so it comes marked
+// read-only and draws with its buttons disabled and no Apply; with File protection off it is a normal checklist again.
+test('checklists: a _private checklist is read-only while File protection is on', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
+    for (const folder of ['projects', 'hub', '_waiting', '_private/runs/a', 'open']) await mkdir(path.join(workspace, folder), { recursive: true });
+    await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(workspace, SETTINGS.registry), JSON.stringify({ scripts: [] }));
+    await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify({ sections: [{ title: 'Wiki', buttons: SPACE.sections[0].buttons, checklists: [
+      { id: 'priv', title: 'Private', path: '_private/runs', file: '_decision.md', review: ['merge'], apply: 'audit-apply' },
+      { id: 'open', title: 'Open', path: 'open/todo.md', marks: { x: 'Done', ' ': 'Not done' } }] }] }));
+    await writeFile(path.join(workspace, '_private/runs/a/_decision.md'), 'review: pending\n');
+    await writeFile(path.join(workspace, 'open/todo.md'), '- [ ] one\n');
+    await writeFile(path.join(directory, 'settings.json'), JSON.stringify(SETTINGS));
+    return { args: ['--settings', path.join(directory, 'settings.json')] };
+  });
+  const priv = await get(instance, 'priv'), open = await get(instance, 'open');
+  assert.deepEqual([priv.status, priv.body.files.map((file) => [file.name, file.readOnly])], [200, [['a', true]]]);
+  assert.deepEqual(open.body.files.map((file) => file.readOnly), [undefined]);
+  const html = checklistHtml('priv', priv.body, (text) => text);
+  assert.ok(/data-ck-readonly/.test(html) && !/data-ck-apply/.test(html) && (html.match(/<button/g) ?? []).length === (html.match(/<button[^>]* disabled>/g) ?? []).length, html);
+  assert.ok(!/ disabled>/.test(checklistHtml('open', open.body, (text) => text)), 'an open checklist keeps its buttons');
+  assert.equal((await set(instance, { id: 'priv', path: priv.body.files[0].path, hash: priv.body.files[0].hash, review: 'merge' })).status, 400, 'the write it no longer offers is still refused');
+  await call(instance, '/file-protection', 'POST', { on: false });
+  assert.equal((await get(instance, 'priv')).body.files[0].readOnly, undefined, 'File protection off: writable again');
+  console.log('PASS checklist L2: _private checklist marked read-only with File protection on, drawn with disabled buttons and no Apply; off, writable');
 });
 
 test('the weekly Wiki audit on the phone at 390x844: Approve, Park, Deny per row and Apply', { timeout: 90000, skip: process.platform === 'win32' && 'Windows CI has no Playwright Chromium' }, async (t) => {

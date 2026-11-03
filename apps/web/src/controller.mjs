@@ -1843,6 +1843,8 @@ function noteModal(m, body) {
   if (!m.asked && !dirty(key)) {
     m.asked = true;
     window.p9.mission('noteRead', { root: m.root, path: m.path }).then(r => {
+      if (r.status === 200) m.readOnly = !!r.body.readOnly; // review 3 L2: _private with File protection on
+      if (m.readOnly) m.edit = false;
       if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
       else if (r.status !== 200) m.error = r.body?.error || String(r.status);
       if (S.modal === m) renderModal();
@@ -1863,7 +1865,9 @@ function noteModal(m, body) {
 }
 function noteFoot(m) {
   const key = noteKey(m.root, m.path), base = m.path.split('/').pop();
-  $('#mdlFoot').innerHTML = m.renaming
+  $('#mdlFoot').innerHTML = m.readOnly
+    ? `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><span class="muted sm" data-readonly>Read-only: File protection is on</span>`
+    : m.renaming
     ? `<input data-slot="input" data-rename value="${esc(m.newName ?? base)}" aria-label="New name"><button data-slot="button" data-size="sm" data-rename-go>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-rename-x>Cancel</button>`
     : `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-rename-open>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-mode>${m.edit ? 'Preview' : 'Edit'}</button>${dirty(key) ? `<span data-slot="badge">draft</span><button data-slot="button" data-size="sm" data-savenote>Save</button>` : '<span class="muted sm">saved</span>'}`;
   const on = (sel, fn) => { const b = $('#mdlFoot ' + sel); if (b) b.onclick = fn; };

@@ -24,13 +24,13 @@ const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char
 let restored: { id: string; text: string } | null = (() => {
   try { const kept = JSON.parse(localStorage.getItem('p9-draft') ?? 'null'); return typeof kept?.id === 'string' && typeof kept.text === 'string' && kept.text.trim() ? kept : null; } catch { return null; }
 })();
-const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
+const state = { seen: Number(localStorage.getItem('p9-cursor') ?? 0), cursor: 0, events: [] as Json[], file: null as null | { path: string; hash: string; content: string; root?: string; place?: string; readOnly?: boolean; disk?: { content: string; hash: string } }, conversations: [] as Json[], base: 0, replayed: false, stubs: new Set<string>() };
 const editor = new EditorView({ parent: one('#editor'), extensions: [basicSetup, EditorView.lineWrapping, EditorView.updateListener.of((update) => { if (update.docChanged) syncSave(); }),
   EditorView.theme({ '&': { color: '#edf3fb', backgroundColor: '#0d131c' }, '.cm-content': { caretColor: '#6ee7f2' }, '&.cm-focused': { outline: 'none' }, '.cm-gutters': { backgroundColor: '#0d131c', color: '#65758d', border: 'none' } }, { dark: true })] });
 
 // Save is live only once the draft differs from what was loaded (spec §6).
 const dirty = () => !!state.file && editor.state.doc.toString() !== state.file.content;
-function syncSave() { one<HTMLButtonElement>('#save').disabled = !navigator.onLine || !dirty(); }
+function syncSave() { one<HTMLButtonElement>('#save').disabled = !navigator.onLine || !dirty() || !!state.file?.readOnly; }
 function online() {
   const value = navigator.onLine;
   one<HTMLElement>('#stale').hidden = value;
@@ -1713,12 +1713,13 @@ async function openFile(path: string, root?: string) {
   if (!root && FILE_IMAGE.test(path)) return openImage(path);
   showImage(false);
   try {
-    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }) };
+    const file = await request(root ? '/mission/notes/file?' + new URLSearchParams({ root, path }) : '/files?' + at(path)); state.file = { path, hash: file.hash, content: file.content, root, ...(!root && place && { place }), ...(file.readOnly && { readOnly: true }) };
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: file.content } });
     one('#openPath').textContent = path.split('/').pop()!; one<HTMLElement>('#openPath').title = path; one<HTMLElement>('#browser').hidden = true; one<HTMLElement>('#fileView').hidden = false;
     preview(!!root);
-    one('#fileState').textContent = 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
-    online();
+    // review 3 L2: a _private note with File protection on reads, but its save would be refused
+    one('#fileState').textContent = state.file.readOnly ? 'Read-only: File protection is on' : 'Loaded'; one<HTMLElement>('#conflict').hidden = true;
+    online(); syncSave();
     return true;
   } catch (error) {
     // Binary, oversize, symlinked or locked files are refused by the daemon (request-refused); say so instead of "Unavailable".
@@ -1727,7 +1728,7 @@ async function openFile(path: string, root?: string) {
   }
 }
 async function saveFile(hash: string) {
-  if (!state.file) return;
+  if (!state.file || state.file.readOnly) return;
   const { path, root } = state.file, content = editor.state.doc.toString();
   const result = await mutate(root ? '/mission/notes/save' : '/files', root ? { root, path, hash, content } : { path, hash, content, ...(state.file.place && { root: state.file.place }) });
   if (result.status === 200) { state.file = { ...state.file, hash: String(result.body.hash), content, disk: undefined }; one('#fileState').textContent = 'Saved'; one<HTMLElement>('#conflict').hidden = true; syncSave(); }

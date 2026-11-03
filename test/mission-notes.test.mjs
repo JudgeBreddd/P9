@@ -99,6 +99,8 @@ test('notes: File protection hides key names in a notes root and keeps the write
   for (const file of ['secrets/keys.md', '_' + 'private/secrets/token.md']) assert.equal((await read(instance, 'vault', file)).status, 400, file);
   const diary = await read(instance, 'vault', '_' + 'private/diary.md');
   assert.deepEqual([diary.status, diary.body.content, diary.body.hash], [200, 'private', hash('private')]);
+  // Review 3 L2: said read-only, so the page offers no save that is refused; a note outside _private is not.
+  assert.deepEqual([diary.body.readOnly, (await read(instance, 'vault', 'sub/today.md')).body.readOnly], [true, undefined]);
   for (const file of ['secrets/new.md', '_' + 'private/new.md']) assert.equal((await call(instance, '/mission/notes/create', 'POST', { root: 'vault', path: file, content: 'x' })).status, 400, file);
   assert.equal((await call(instance, '/mission/notes/save', 'POST', { root: 'vault', path: '_' + 'private/diary.md', hash: hash('private'), content: 'x' })).status, 400);
   assert.equal(await readFile(path.join(vaultOf(instance), '_private', 'diary.md'), 'utf8'), 'private');

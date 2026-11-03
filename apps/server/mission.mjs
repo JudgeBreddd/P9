@@ -7,7 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { realpath, readdir as fsReaddir, readFile as fsReadFile, writeFile as fsWriteFile, rename as fsRename } from 'node:fs/promises';
-import { readFile, listDirectory, guardedSave, createFile, renameFile, WALK_SKIP } from '../../packages/files/index.mjs';
+import { readFile, listDirectory, guardedSave, createFile, renameFile, lockedName, WALK_SKIP } from '../../packages/files/index.mjs';
 const SPACE = { space: true }; // P11: Mission's reads of the folders a space names see _private (packages/files spaceLocked)
 import { launchTree, endTree, stopScopes, windowsArgv, windowsJobCommand } from './process-tree.mjs';
 import { ID, web, problem, unknownFields, extras, sectionId, dataShape, RECORD, PAGE, SECTION, LOG, FOLDER, CHECKLIST, MARK, DATA, CARD, CARD_BYTES, WEBLINK, DATA_LIMITS, SETTINGS, spaceName, NEVER_SCHEMES, schemeOf } from './mission-fields.mjs';
@@ -362,7 +362,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
       ...(section.data ?? []).map((item) => item.script)]).filter(Boolean));
     // A card file's version (its hash, cut short): an edit to the HTML changes the overview, so an open card draws again.
     const cardV = new Map();
-    for (const item of reg.space.flatMap((section) => section.cards ?? [])) cardV.set(item.id, await readFile(workspace, item.html).then((file) => file.hash.slice(0, 12), () => ''));
+    for (const item of reg.space.flatMap((section) => section.cards ?? [])) cardV.set(item.id, await readFile(workspace, item.html, SPACE).then((file) => file.hash.slice(0, 12), () => ''));
     return { waiting: settings.waiting, icmFiles: Boolean(settings.registry || settings.waiting), scripts: reg.scripts.filter((script) => !applies.has(script.id)).map((script) => ({ ...strip(script), ...(onCards.has(script.id) ? { hidden: true } : {}) })), apps: reg.apps.map(strip), pages: reg.pages.map(strip), invalid: reg.invalid.filter((entry) => entry.reason !== 'unknown-field'), // shown and kept: only validate names them
      
       // Every field the parser kept goes to the page as it is (W-F), except a section's buttons (scripts above) and what P9 alone reads: a
@@ -493,6 +493,9 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
   // notes root the user said yes to (allow_folder, whose question names these writes). A write is one mark or one review
   // line, checked again by oneLineChange, saved only over the hash the client read.
   const CHECK_FILES = 200;
+  // Review 3 L2: a file P11 lets Mission show but File protection still keeps from writes (_private with it on). The page
+  // shows it with no save, rename or mark instead of offering one that is refused.
+  const readOnly = (relative) => relative.split('/').some(lockedName);
   async function checklistFiles(item) {
     const target = item.root ? await namedRoot(item.root) : { root: workspace };
     if (target.error) return target;
@@ -524,7 +527,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const list = await checklistFiles(item);
     if (list.error) return list;
     return { status: 200, marks: item.marks ?? null, review: item.review ?? null, apply: Boolean(item.apply),
-      files: list.files.map(({ path: relative, name, hash, review, rows }) => ({ path: relative, name, hash, review, rows: rows.map(({ n, mark, text }) => ({ n, mark, text })) })) };
+      files: list.files.map(({ path: relative, name, hash, review, rows }) => ({ path: relative, name, hash, review, rows: rows.map(({ n, mark, text }) => ({ n, mark, text })), ...(readOnly(relative) ? { readOnly: true } : {}) })) };
   }
   async function checklistSet(body) {
     const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body).sort().join(',') : '';
@@ -566,7 +569,7 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const target = await notesRoot(name);
     if (target.error) return target;
     const file = await readFile(target.root, relative, SPACE);
-    return { status: 200, path: relative, content: file.content, hash: file.hash };
+    return { status: 200, path: relative, content: file.content, hash: file.hash, ...(readOnly(relative) ? { readOnly: true } : {}) };
   }
   // The same guarded save and conflict reply as answer(): a note changed on disk since it was read is never overwritten.
   async function notesSave(body) {
