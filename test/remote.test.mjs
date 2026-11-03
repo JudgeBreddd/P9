@@ -493,7 +493,8 @@ test('U6: a remote P9 that starts but never answers stops with a plain line and 
   const ran = await s.calls(), count = (word) => ran.filter((c) => c.argv.some((a) => a.includes(word))).length;
   assert.deepEqual([count('P9_START'), count('P9_INSTALL')], [1, 0], 'started once, never installed over');
   await retry.click();
-  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 20000 });
+  // Try again first waits out connectServer's ready loop on the dead daemon (60 checks, one ssh each: 15 s or more), then the 5 s status poll.
+  await page.locator('#connStep', { hasText: 'Starting P9' }).waitFor({ timeout: 60000 });
   for (const end = Date.now() + 20000; Date.now() < end && count('P9_START') < 2; await page.waitForTimeout(250)) ran.splice(0, Infinity, ...await s.calls());
   assert.equal(count('P9_START'), 2, 'Try again starts it again');
   // Quitting while that start's forward still waits for /health ends the forward too: no ssh is left running on its own.

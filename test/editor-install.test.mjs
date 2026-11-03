@@ -151,10 +151,12 @@ test('D5: Dev Focus without the editor server names it and installs it with one 
   assert.equal(served.hits.length, 1);
   const installed = path.join(home, '.local', 'share', 'p9', 'codium-server');
   assert.equal(JSON.parse(await readFile(path.join(installed, 'product.json'), 'utf8')).commit, EDITOR_COMMIT);
-  // The stand-in server exits at once, so Dev Focus now says it did not start: no longer "not installed", no button.
+  // The stand-in server exits at once, so Dev Focus now says it did not start: no longer "not installed".
   // With no systemd user session (a container) issue #14's page names that cause instead.
-  assert.match(await dev.locator('#cause').innerText(), /the editor server on this computer did not start|this computer has no systemd user session/);
-  assert.equal(await dev.locator('#install').count(), 0);
+  // Did not start offers the install button again (it replaces a damaged copy, main.mjs devErrorPage); no user session has none.
+  const cause = await dev.locator('#cause').innerText();
+  assert.match(cause, /the editor server on this computer did not start|this computer has no systemd user session/);
+  assert.equal(await dev.locator('#install').count(), / did not start \(/.test(cause) ? 1 : 0);
   await shot('d5-dev-focus-after-install', dev);
 });
 

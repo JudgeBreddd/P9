@@ -56,6 +56,13 @@ test('B10: the bundled daemon is a few dozen files, starts, and its agents answe
     + "console.log(createRequire(import.meta.resolve('@anthropic-ai/claude-agent-sdk')).resolve(process.argv[2]));\n");
   const probe = spawnSync(process.execPath, [path.join(claudeDist, 'probe.mjs'), `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`], { encoding: 'utf8' });
   assert.equal(probe.stdout.trim(), path.join(modules, '@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude'), probe.stderr);
+  // claude-usage.mjs (the Claude 5 h meter) imports the SDK by path from the adapter's folder: 0.1.6's Windows build
+  // shipped without sdk.mjs and the meter showed a dash.
+  await writeFile(path.join(claudeDist, 'probe-sdk.mjs'), "import { createRequire } from 'node:module';\n"
+    + "const sdk = await import(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));\n"
+    + "console.log(typeof sdk.query);\n");
+  const sdkProbe = spawnSync(process.execPath, [path.join(claudeDist, 'probe-sdk.mjs')], { encoding: 'utf8' });
+  assert.equal(sdkProbe.stdout.trim(), 'function', sdkProbe.stderr);
 });
 
 // Item 15 (Windows): CI run 40611561200 found rg.exe importing vcruntime140.dll on Windows arm64 with no copy beside it.

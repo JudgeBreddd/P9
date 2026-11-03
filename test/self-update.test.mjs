@@ -262,8 +262,8 @@ async function swapStage(t, { broken = false, slow = false, activeAfter = 0, wai
   await mkdir(state); await mkdir(bin);
   const pid = path.join(directory, 'pid'), log = path.join(directory, 'systemctl.log');
   const at = path.join(directory, 'restarted');
-  await sh(path.join(bin, 'systemctl'), `[ "$2" = is-active ] && { [ $(( $(date +%s) - $(cat '${at}' 2>/dev/null || echo 0) )) -ge ${activeAfter} ] && echo active || echo activating; exit 0; }\n`
-    + `date +%s > '${at}'\necho "$*" >> '${log}'\n[ -e '${pid}' ] && kill "$(cat '${pid}')" 2>/dev/null\n`
+  await sh(path.join(bin, 'systemctl'), `[ "$2" = is-active ] && { [ $(( $(date +%s%3N) - $(cat '${at}' 2>/dev/null || echo 0) )) -ge ${activeAfter * 1000} ] && echo active || echo activating; exit 0; }\n`
+    + `date +%s%3N > '${at}'\necho "$*" >> '${log}'\n[ -e '${pid}' ] && kill "$(cat '${pid}')" 2>/dev/null\n`
     + `'${process.execPath}' '${source}/tiny.mjs' '${state}' </dev/null >/dev/null 2>&1 &\necho $! > '${pid}'\n`);
   t.after(() => { try { process.kill(Number(execFileSync('cat', [pid]).toString())); } catch {} });
   // The old one running, as the service would be.

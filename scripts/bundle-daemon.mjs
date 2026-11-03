@@ -82,9 +82,11 @@ export async function bundleDaemon(root, out, platform) {
   const codex = await packageDir(codexAcp, '@openai/codex');
   // codex-acp is already one bundle; codex.js finds its binary package by require.resolve, and claude-agent-acp finds
   // claude.exe through import.meta.resolve of the SDK, which reads only its package.json (sdk.mjs itself is inlined).
+  // claude-usage.mjs imports sdk.mjs at run time by path (the Claude 5 h meter), so it ships too; 0.3.293's sdk.mjs
+  // imports only Node's standard library.
   const copies = [
     [claudeAcp, '@agentclientprotocol/claude-agent-acp', ['package.json', 'LICENSE']],
-    [sdk, '@anthropic-ai/claude-agent-sdk', ['package.json', 'LICENSE.md']],
+    [sdk, '@anthropic-ai/claude-agent-sdk', ['package.json', 'LICENSE.md', 'sdk.mjs']],
     [codexAcp, '@agentclientprotocol/codex-acp'],
     [codex, '@openai/codex'],
     ...platform ? [[await packageDir(codex, `@openai/codex-${platform}`), `@openai/codex-${platform}`],
