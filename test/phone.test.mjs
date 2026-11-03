@@ -457,7 +457,8 @@ test('Phase 17: phone terminal (threat model surface 13, phone cases 2-4)', asyn
   await page.screenshot({ path: path.join(evidence, 'phone-terminal.png') });
   // Resize: the shell sees the phone's width, and a wider screen widens it.
   await type('echo COLS-$(tput cols)-END');
-  await shows('-END');
+  // The typed command holds '-END' too: wait for the number, or a slow run reads the screen before the output.
+  await page.waitForFunction(() => /COLS-\d+-END/.test(document.querySelector('#screen .xterm-rows')?.textContent), null, { timeout: 10000 });
   const cols = async () => Number([...(await screen()).matchAll(/COLS-(\d+)-END/g)].at(-1)?.[1]);
   const narrow = await cols();
   assert.ok(narrow >= 20 && narrow < 60, 'phone columns ' + narrow);
