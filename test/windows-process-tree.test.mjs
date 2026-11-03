@@ -218,7 +218,7 @@ test('Windows Stop ends detached chat and script children through Job Objects wi
 
 // 016 item 6: daemon.log is trimmed while the daemon runs, not only at the host's start. The writer here holds it open for
 // append, as the Windows host gives it to node (FILE_APPEND_DATA); after the trim its next line lands at the new end, no gap.
-test('daemon.log: over the limit it is copied to .1 and emptied in place while a writer holds it open; main.mjs checks it every 10 min on Windows', async (t) => {
+test('daemon.log: over the limit it is copied to .1 and emptied in place while a writer holds it open; main.mjs checks it every 10 min on every platform (the Windows task\'s and Linux background mode\'s log)', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-log-')), log = path.join(directory, 'daemon.log');
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { open } = await import('node:fs/promises'), writer = await open(log, 'a');
@@ -231,5 +231,10 @@ test('daemon.log: over the limit it is copied to .1 and emptied in place while a
   assert.equal(await readFile(log + '.1', 'utf8'), 'old line\n'.repeat(200));
   assert.equal(await trimLog(path.join(directory, 'missing.log')), false);
   const main = await readFile(path.join(root, 'apps/server/main.mjs'), 'utf8');
-  assert.match(main, /if \(windows\) setInterval\(\(\) => trimLog\(path\.join\(values\.state, '\.\.', 'daemon\.log'\)\)\.catch\(\(\) => \{\}\), 600000\)\.unref\(\);/);
+  assert.match(main, /\nsetInterval\(\(\) => trimLog\(path\.join\(values\.state, '\.\.', 'daemon\.log'\)\)\.catch\(\(\) => \{\}\), 600000\)\.unref\(\);/);
+  // Linux background mode: the daemon's state folder is $r/p9-foundation and sh appends its output to $r/daemon.log, the
+  // same file the check above names (values.state/../daemon.log); sh's >> is append-only, as the writer above.
+  const background = await readFile(path.join(root, 'scripts/background.sh'), 'utf8');
+  assert.match(background, /state="\$r\/p9-foundation"/);
+  assert.match(background, /--state "\$state"[^\n]*\n[^\n]*>>"\$r\/daemon\.log" 2>&1 &/);
 });

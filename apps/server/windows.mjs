@@ -13,7 +13,7 @@ export function windowsStateRoot(environment = process.env, home = os.homedir())
   return path.join(environment.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'P9');
 }
 
-// daemon.log on Windows (016 item 6): the host opens it for append only and shares it, so the daemon copies it to .1 and empties it
+// daemon.log on Windows (016 item 6), and Linux background mode's (sh's >>): the writer has it open for append only, so the daemon copies it to .1 and empties it
 // in place while running; the next write lands at the new end. ponytail: a line written between the copy and the truncate is lost.
 export const LOG_MAX = 5 * 1024 * 1024;
 export async function trimLog(file, max = LOG_MAX) {
