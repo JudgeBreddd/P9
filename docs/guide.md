@@ -4,16 +4,16 @@ What each part of P9 does, for you and for the agent helping you set it up. Inst
 
 ## First start
 
-The first time P9 opens, a setup wizard walks through what it needs. A **Set up** card waits in the Notification Center until every check passes, and Settings → Setup opens the wizard again. Skip it any time; the x on the card skips the card for good. Eight steps:
+The first time P9 opens, a setup wizard walks through what it needs. A **Set up** card waits in the Notification Center until every check passes, and Settings → Setup opens the wizard again. Skip it any time; the x on the card skips the card for good. Up to eight steps:
 
-1. **Welcome.** Offers *Connect to a P9 on another machine* if you already run P9 on a server (see [Server mode](#server-mode-send-to-server-and-send-files)).
+1. **Welcome.** Offers *Connect to a remote* if you want this window to work on a P9 on another machine (see [Remote Connect](#remote-connect-send-to-remote-and-send-files)).
 2. **Your workspace.** The folder P9 can write to. *Change the folder* restarts P9's background service, so running chats, scripts and terminals stop.
 3. **Claude, Codex or both?** Pick the agents you have an account with. *Install* sets up the copies that come with P9: nothing is downloaded and no admin password is needed.
 4. **Sign in to an agent.** *Sign in* opens your browser at the agent's sign-in page (Claude then shows a code to paste into the wizard). *Sign in in a terminal* types the agent's own sign-in command into a P9 terminal and waits for your Enter. P9 never stores your provider login.
-5. **Mission Control.** P9 looks around your workspace (read only, three folders deep, skipping `node_modules`, `.venv`, `dist`, `build`, `.cache` and similar) for an `AGENTS.md`, a `registry.json` and `needs-you` or `waiting` folders. It shows the paths it found, lets you change them, and lists exactly what the button will add. **Use these files** saves only the settings file. **Create the starter files** adds empty starter files. Nothing that already exists is changed or replaced. The fields are listed under [Mission Control](#mission-control).
-6. **Terminal.** P9's terminals run in tmux. If tmux is missing, this step says why it is needed and shows the command. Anything else that only an admin password can install gets the same treatment: the reason first, then the command, and P9 types it into a P9 terminal for you to read and run.
-7. **You.** Your name, and a pointer to pets.
-8. **Done.** Take the tour (the walkthrough, about two minutes) or close.
+5. **Terminal.** P9's terminals run in tmux. If tmux is missing, this step says why it is needed and shows the command. Anything else that only an admin password can install gets the same treatment: the reason first, then the command, and P9 types it into a P9 terminal for you to read and run.
+6. **You.** Your name, and a pointer to pets.
+7. **Done.** What is set up and what is not yet, and *Take the tour* (the walkthrough, about two minutes).
+8. **Mission Control**, last. Mission starts empty; **Open Mission Control** takes you to its own first card, where an agent builds it with you or you start from a template (see [Building your space](#building-your-space)). If you already have Mission files, **I already have Mission files** shows the paths P9 found in your workspace (read only, three folders deep, skipping `node_modules`, `.venv`, `dist`, `build`, `.cache` and similar), lets you change them, and lists what does not exist yet. **Use these files** saves the settings file and creates only what is missing; nothing that already exists is changed or replaced. The fields are listed under [Mission Control](#mission-control).
 
 ## Focus modes
 
@@ -23,7 +23,7 @@ One window, three modes. Switch with the buttons at the top of the window.
 - **Dev**: a VS Code-style editor on your workspace.
 - **Mission Control**: your scripts as buttons, your apps and pages, and what is waiting on you.
 
-You can turn off modes you don't use in Settings → Focus modes. At least one stays on. Each mode keeps its own theme.
+You can turn off modes you don't use: each mode's page in Settings has its own on/off row. At least one stays on. The look you pick applies to every focus mode, Dev Focus included.
 
 ## Chat
 
@@ -36,8 +36,9 @@ You can turn off modes you don't use in Settings → Focus modes. At least one s
 - **Meters** above the message box show context used and your 5-hour and weekly limits, where the provider reports them.
 - **Attach** (the paperclip) sends a photo to the agent.
 - **Images from the agent** show in the chat when the agent sends the picture itself, such as one Codex generates or one a tool opened. P9 never downloads an image from a web address; a Markdown image in a reply shows as its description.
-- **Links in replies.** A link to an `http` or `https` address opens in your browser, never in P9's window, and the real host shows after the link text when the text is not the address itself. Any other kind of link (`javascript:`, `file:`, a relative path) shows as text.
-- **Send to server** and **Send files to server** (beside Hand off and in the files panel) move work to a server's P9: see [Server mode](#server-mode-send-to-server-and-send-files).
+- **Links in replies.** A link to an `http` or `https` address opens in your browser, never in P9's window, and the real host shows after the link text when the text is not the address itself. Clicking one first shows the full address and asks: **Cancel**, **Open**, or **Open, don't ask again** (remembered in this window's profile). Any other kind of link (`javascript:`, `file:`, a relative path) shows as text. Ctrl+click in a terminal and Mission tiles open without this question, as before.
+- **History** lists every chat with its title and when it was last used.
+- **Send to remote** and **Send files to remote** (beside Hand off and in the files panel) move work to a remote's P9: see [Remote Connect](#remote-connect-send-to-remote-and-send-files).
 - **Hand off** (Claude chats) stops the chat and types `claude --resume <session> --remote-control` into a terminal. Nothing runs until you press Enter.
 
 ### Artifacts
@@ -60,7 +61,7 @@ A VS Code-style editor (VSCodium's server) on your workspace folder, with its fi
 
 - **Saving.** A file is written only when you press Ctrl+S or Save; the editor no longer writes by itself after you stop typing. A white dot on a tab marks a file you have not saved. A file you open from Chat Focus saves the same way.
 - **Guarded save.** If a file changed on disk after you opened it, P9 won't overwrite it. It shows the conflict and keeps your text as a recovery draft. The README explains how to get a draft back.
-- **Editor server.** Dev needs VSCodium's server. The install script, the AppImage and the Windows installer carry it. If it is missing, Dev offers an **Install the editor server** button (in Server mode, **Install the editor server on the server**).
+- **Editor server.** Dev needs VSCodium's server. The install script, the AppImage and the Windows installer carry it. If it is missing, Dev offers an **Install the editor server** button (on a remote, **Install the editor server on the remote**).
 - **New File** creates a file. It never replaces one that exists. **Save As** onto a name that already exists asks you whether to replace it.
 - New folders, renames and deletes from the file tree aren't available yet. Do those in a terminal.
 - From any terminal, `p9 edit <file>[:line]` opens a file in Dev, and `p9 diff <a> <b>` compares two.
@@ -82,6 +83,18 @@ Mission Control reads `~/.config/p9/settings.json`. Paths are relative to your w
 | `space` (optional) | a JSON file of your own sections (below) |
 
 P9 re-reads the file every time Mission refreshes, so changes show within one refresh with no restart. If the file is broken, Mission keeps the last good settings and says so. The one case that asks you to restart is a saved workspace folder that was missing at start; the notice has a **Restart P9 to apply** button.
+
+### Building your space
+
+An empty Mission shows one card with three ways to start:
+
+- **Have Claude build it** or **Have Codex build it** opens a chat with that agent, which asks what you want and builds the space with you. While File protection is on, the agent cannot write your space; the card says so, and you turn it back on once the build is done.
+- **Or start from a template**: **ICM workspace**, **Obsidian vault**, **Homelab** or **Blank**, plus any template you saved. A click shows what the template holds; only **Choose template** writes it. The Obsidian template asks for your vault folder as it is added.
+- Every part of it can be changed later.
+
+The **Space** button at the top of Mission (it shows the current space's name, *Main* by default) switches between spaces, adds one (**+ Add**), deletes the one you are on, and saves the current one as a template (**Save as template…**, with a name and an optional one-line description).
+
+**Agents edit the space with tools.** Every chat P9 starts has P9's own MCP server, `p9`. Its tools read and change the space and the registry one item at a time: `describe_mission` explains the format with an example of every item type and the templates, `preview_card` shows a card before you place it, and others add, update, move and remove buttons, apps, pages and sections, check a whole file (`validate_space`, `validate_registry`), list and answer what waits on you, and run a registry script. Each write says what changed and is refused while the agent lock is on; the space and registry are read-only to them while File protection is on. `run_script`, `answer_needs_you` and `allow_folder` ask you in the chat first, except in Unrestricted mode.
 
 ### Buttons, apps and pages
 
@@ -123,11 +136,13 @@ A **Sprint** button shows while the machine you are connected to has a sprint st
 - **Robot heads** in the rail are numbered; the tooltip names the chat and whether it is working.
 - **Waiting on you**: one card per file in your `waiting` folder.
 - **+ New idea**: writes a new file to the `_ideas/` folder in your workspace (`_ideas/needs-done/` for a fix to an existing project). It never replaces an existing file.
-- **Fix with Claude**: on an incident, starts a Claude chat that already holds the incident's details.
+- **Fix with Claude**: a folder list in your space with a `fix` text gives the files it opens a **Fix with Claude** button, which starts a Claude chat with that text, then the file.
 
 ## Terminal
 
 The terminal at the bottom of the window is a real shell, kept by the daemon, so it keeps running when you close the window. The phone can open the same terminals.
+
+Settings → General → **Show the shell's welcome message in terminals** (on by default). Off: new terminals get `P9_NO_GREETING=1` for your shell config to read, and fish starts with its greeting emptied (that hides a logo or `fastfetch`). PowerShell always starts without its logo. Terminals already open keep theirs.
 
 ## Pets
 
@@ -140,27 +155,32 @@ A pet from [petdex.dev](https://petdex.dev) can stand in for the "agent is worki
 
 Each focus mode has its own pet settings: on or off, size, and a pet for System, Claude and Codex. Drag a pet to move it; Reset positions puts them back.
 
-## Server mode, Send to server and Send files
+## Remote Connect, Send to remote and Send files
 
-Server mode points this window at a P9 running on another computer. Chat, Mission Control, the terminal and Dev Focus use the server's P9 through an ssh tunnel (the way VS Code Remote-SSH works). This computer's own P9 keeps running, and **Use Local** goes back.
+Remote Connect points this window at a P9 on another Linux machine (a remote). Chat, Mission Control, the terminal and Dev Focus use the remote's P9 through an ssh tunnel (the way VS Code Remote-SSH works). This computer's own P9 keeps running.
 
-1. Make sure `ssh <server>` works from this computer without a password prompt (an entry in `~/.ssh/config` with a key).
-2. Settings → Server → pick the server → **Connect**. A badge in the title bar says you are on the server. The setup wizard's welcome step offers the same choice.
-3. Connecting to a server whose P9 is 0.1.6 or later but older than this one updates it. A failed build leaves the server as it was, and a new build that does not start is put back. A server whose P9 is current is left alone. A server still on 0.1.5 does not update itself: update it once as a source checkout (the README's Update steps: git pull, build, restart), then run `bash scripts/install.sh` there.
-4. Dev Focus runs its editor on the server. If the editor server is missing there, Dev offers **Install the editor server on the server**.
-5. Some things stay on this computer. In Server mode the folder pickers, Dev Focus **Open Folder**, **Open in VS Code**, **Change the workspace folder** and **Repair** do nothing, or say they are Local-only. Switch to **Use Local** for them. The server's workspace folder is set where P9 is installed on the server.
+1. **Pick the machine.** Click the Local/Remote badge in the top bar: its menu lists this computer, each saved remote with whether P9 there is reachable, **Add a machine…**, and, for a saved remote, **Remove**. Settings → Remote Connect has the same list: every `Host` in your `~/.ssh/config`, plus any `Host` name or `user@address` you add, each with **Connect**. The setup wizard's welcome step offers the same.
+2. **Log in.** A key works as with `ssh`. Without one, P9 asks for your password in its own window (from Linux only; Windows needs a key). The password goes to ssh through a pipe and is never saved, logged or put on a command line; the login is kept for 10 idle minutes so you type it once. Afterwards P9 offers **Log in without a password next time** (ticked), which adds a key of P9's own on the remote. If this computer has no ssh program, P9 says `ssh-missing` with how to install it, and **Try again**.
+3. **The host key.** The first connect to a machine trusts whatever host key it shows (ssh's `StrictHostKeyChecking=accept-new`), without asking. That means: if someone could sit between you and that machine on that first connect, ssh would not notice. From then on a different key stops the connect, and P9 names the `known_hosts` line to check before you remove it.
+4. **P9 on the remote.** If P9 is not running there, Connect starts it, or installs a small P9 in `~/.local/share/p9/remote` (no source checkout, no `~/p9`) with one progress line. Then one question: **Temporary** (P9 there runs while you are connected and stops 5 minutes after the last window leaves) or **Always on** (installs the full P9 there and keeps it running, so your phone can reach it and long tasks finish; if your account there needs an admin setting for that, P9 shows the exact command and asks for the admin password in its own window). Tick **Do not ask again for this machine** to keep the answer; Settings → Remote Connect changes it per machine. The small Temporary P9 has no Mission Control. P9 also asks which AI agents to download there: Claude, Codex, both or none (none: just the editor and terminal); the machine menu's **AI agents on <machine>…** asks again.
+5. **Disconnect** beside the remote label, **This computer** in the machine menu, or **Use this computer** in Settings goes back to this computer's P9.
+6. **Updates.** Connecting to a remote whose P9 is 0.1.6 or later but older than this one updates it. A failed build leaves it as it was, and a new build that does not start is put back. One whose P9 is current is left alone, and P9 refuses to replace a newer one with an older one. A remote still on 0.1.5 does not update itself: update it once as a source checkout (the README's Update steps: git pull, build, restart), then run `bash scripts/install.sh` there.
+7. **Dev Focus** runs its editor on the remote. If the editor server is missing there, Dev offers **Install the editor server on the remote**. **Open Folder** lists the remote's folders to click through, and New chat's **Choose folder** does the same. Both stay inside the remote's workspace unless Unrestricted mode is on there; then they walk the whole machine, with `..` up to `/`.
+8. **Some things stay on this computer.** The setup **Pick** buttons, **Open in VS Code**, the Obsidian vault picker, **Change the workspace folder** and **Repair** do nothing on a remote, or say they are for this computer. The remote's workspace folder is set where P9 is installed there.
 
-### Send to server
+If a connection drops on its own and is still down 30 s later, a notification says so. If it needs your password again, the password window says the connection dropped.
 
-In a Claude or Codex chat, **Send to server** moves that chat to the server and carries on there. Codex chats move too. A black-hole animation with a progress bar shows the move; **Cancel** stops it. Before the chat moves, P9 sends the workspace's files the same way as Send files (below), so the chat finds what it was working on. When the move finishes, P9 asks **Open it on <server>?**; tick "Don't show again" to always open it, or always stay. A loosened mode (Bypass permissions, Full access) does not carry to the new chat.
+### Send to remote
+
+In a Claude or Codex chat, **Send to remote** moves that chat to the remote and carries on there. Codex chats move too. A black-hole animation with a progress bar shows the move; **Cancel** stops it. Before the chat moves, P9 sends the workspace's files the same way as Send files (below), so the chat finds what it was working on. When the move finishes, P9 asks **Open it on <host>?**; tick "Don't show again" to always open it, or always stay. A loosened mode (Bypass permissions, Full access) does not carry to the new chat.
 
 ### Send files
 
-The files panel's **Send files to server** copies your workspace's files to the server's workspace, over the same ssh tunnel, with no Syncthing.
+The files panel's **Send files to remote** copies your workspace's files to the remote's workspace, over the same ssh tunnel, with no Syncthing.
 
-- The first send from this computer to a server stops to ask when files differ. It lists each differing file in words (which copy is newer, with both times) before anything is copied.
-- Choose **Laptop wins**, **Keep the server's** or **Keep the newer of each**, or **Cancel**. Any file the send replaces goes to P9's recovery folder first, so it can be put back.
-- Settings → Send files sets three limits: the largest file, the most files in one send, and the most data in one send. A send over a limit is refused before anything is copied, and the message names the limit.
+- The first send from this computer to a folder there stops to ask when files differ: **Laptop wins** or **Keep the newer of each**. A later send asks only about files changed on both sides since the last one: **Keep the laptop's**, **Keep the remote's** or **Keep the newer of each**. Either way it lists each differing file in words before anything is copied, and **Cancel** stops it. Files deleted here since the last send are deleted there only if you tick **Delete on the remote too**.
+- Any file the send replaces goes to P9's recovery folder first, so it can be put back.
+- Settings → Remote Connect → Send files sets three limits: the largest file, the most files in one send, and the most data in one send. A send over a limit is refused before anything is copied, and the message names the limit.
 
 ## Phone
 
@@ -189,7 +209,7 @@ Closing the window keeps chats and terminals running. The red session button swi
 
 ## Settings
 
-The gear opens Settings. Each row has an **i**: hover it for what the row does, click it to open its part of this guide.
+The gear opens Settings. It has five pages, picked on the left: **General**, **Chat Focus**, **Dev Focus**, **Mission Control** and **Remote Connect**; each focus mode's page holds its on/off switch. Each row has an **i**: hover it for what the row does, click it to open its part of this guide.
 
 - **P9 docs on GitHub**, **Anymouse** and **Setup**, at the top: this guide, [Anymouse](#anymouse) and the [first-start](#first-start) window again.
 - **Zoom** makes everything in the window bigger or smaller, in every focus mode. Ctrl = and Ctrl - do the same; Ctrl 0 resets.
@@ -198,7 +218,8 @@ The gear opens Settings. Each row has an **i**: hover it for what the row does, 
 - **Close the chat window on send** closes a chat window opened from a Chat Focus card or the Notification Center once your message is sent.
 - **New chats start in** sets the mode a new chat starts in, for Claude and for Codex. "Last mode picked" is the default. A loosened mode (Bypass permissions, Full access) asks first, in red, unless you ticked "Don't show again" for it.
 - **Focus modes** and **Pets**: see [Focus modes](#focus-modes) and [Pets](#pets).
-- **Server** and **Send files** show when this window can reach a server: see [Server mode, Send to server and Send files](#server-mode-send-to-server-and-send-files) and [Send files](#send-files).
+- **Show the shell's welcome message in terminals** (General): see [Terminal](#terminal).
+- **Remote** and **Send files** (the Remote Connect page): see [Remote Connect](#remote-connect-send-to-remote-and-send-files) and [Send files](#send-files).
 
 ### Security settings
 
@@ -207,7 +228,7 @@ Four switches in one group, on the desktop and on a paired phone. The defaults a
 - **Agent lock** (off by default): agents can read and answer but cannot edit files or run anything that asks permission. See [Agent lock](#agent-lock).
 - **File protection** (on by default): the editor cannot open or change secrets, `.env` files, `_private`, `.git` or P9's own files. See [File protection](#file-protection). Turning it off asks first.
 - **Warn before Full access and Bypass permissions** (on by default): a red warning before a chat switches to one of those modes. This is stored on the device you change it on.
-- **Unrestricted mode**: turns the lock, File protection and the warnings off in one step, and makes new chats on this device start in Codex Full access and Claude Bypass permissions. It asks once. Turning it off puts File protection and the warnings back on and removes those two start modes (a mode you picked by hand stays); the lock stays off.
+- **Unrestricted mode**: turns the lock, File protection and the warnings off in one step, and makes new chats on this device start in Codex Full access and Claude Bypass permissions. It asks once. Turning it off puts File protection and the warnings back on and removes those two start modes (a mode you picked by hand stays); the lock stays off. While it is on, Dev Focus and Mission may open any folder, including your home folder and `/` (P9's own state and recovery folders stay closed); a folder outside the workspace asks **Trust this folder?** with **Don't ask again** (remembered per machine, this computer or each remote, and only while the mode is on); and the `p9` tools `run_script`, `answer_needs_you` and `allow_folder` run without asking in the chat.
 
 The lock and File protection belong to P9, so one setting covers the desktop and every phone. The warnings and the start modes belong to the device.
 

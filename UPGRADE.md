@@ -23,23 +23,51 @@ Installing restarts the background service, which ends a chat turn in progress.
   chat, and your comments on it go back as one message. A file you open from Chat Focus can be saved (the same
   guarded save as Dev Focus), and Chat Focus full keeps only the text box under a full-screen artifact.
 - Mission Control: chips read `needs <your name>`, rail robot heads are numbered, rows have a Run pill and cost in
-  cents, and an empty Mission explains itself. A Sprint button appears while the machine you are connected to has a sprint status file; its window shows a ring for the whole sprint and one per chunk.
-- The setup wizard has a *Claude, Codex or both?* step that installs the CLIs P9 ships, a Mission step that finds an
-  existing layout (an `AGENTS.md`, a `registry.json`, a `needs-you` or `waiting` folder) and offers *Use these files*,
-  and a welcome choice to connect to a P9 on another machine. The wizard, the Mission plans list and the hub queue no
-  longer look inside `node_modules`, `.venv`, `dist`, `build`, `.cache` and similar folders.
+  cents. A Sprint button appears while the machine you are connected to has a sprint status file; its window shows a ring for the whole sprint and one per chunk.
+- **The built-in hub sections are gone** (notices, incidents, Wiki inbox, work in flight, solo run, the hub's logs and
+  Workspace). Your space file builds the same things now, with cards, data tiles, folder lists, log views and
+  checklists. The `hub` and `server_host` settings are still accepted, so an older settings file loads, but P9 ignores
+  them.
+- An empty Mission shows one card: **Have Claude build it**, **Have Codex build it**, or a template (ICM workspace,
+  Obsidian vault, Homelab, Blank). The Space button switches, adds and deletes spaces and saves one as a template.
+- The setup wizard has a *Claude, Codex or both?* step that installs the CLIs P9 ships, and a welcome choice to
+  connect to a P9 on another machine. Mission Control is now its last step: it opens Mission's own first card, and
+  *I already have Mission files* finds an existing layout (an `AGENTS.md`, a `registry.json`, a `needs-you` or
+  `waiting` folder) and offers *Use these files*. The wizard and the Mission plans list no longer look inside
+  `node_modules`, `.venv`, `dist`, `build`, `.cache` and similar folders.
+- Settings has five pages: General, Chat Focus, Dev Focus, Mission Control and Remote Connect. Every row moved,
+  unchanged, to the page it mainly affects.
+- One look for every focus mode. A look you had picked per focus is dropped; the last look you picked stays.
+- A link in an agent's reply asks before it opens, showing the full address (Cancel, Open, or Open, don't ask again).
+- History shows each chat's title and when it was last used. A Mission app that opens a URL in a terminal wrapper
+  (`konsole -e ...` with a `url`) gets that site's icon.
 
 **What you can now do**
 
-- Settings > Server works on a server's P9, Dev Focus included. In Chat Focus, *Send to server* moves a Claude or
-  Codex chat to it, and *Send files to server* copies a folder, with no Syncthing. Settings > Send files sets the
-  limits. From 0.1.6 on, connecting from a newer P9 updates a server that already runs 0.1.6 (a failed build leaves the
-  server as it was; a new build that does not start is put back). A server still on 0.1.5 needs one update by hand. You need an `ssh` entry for the server that works without a password prompt.
+- **Remote Connect** (the Local/Remote badge's machine menu, or Settings > Remote Connect) works on another Linux
+  machine's P9, Dev Focus included. If P9 is not there, Connect installs a small Temporary one in
+  `~/.local/share/p9/remote` by itself, then asks once: Temporary or Always on (the full P9, kept running). From Linux
+  you can log in with a password; P9 asks in its own window, never saves it, and offers to add its own key. The first
+  connect to a machine trusts the host key it sees (ssh `accept-new`); a changed key later stops the connect. In Chat
+  Focus, *Send to remote* moves a Claude or Codex chat there, and *Send files to remote* copies a folder, with no
+  Syncthing. Settings > Remote Connect > Send files sets the limits. Connecting from a newer P9 updates a remote that
+  already runs 0.1.6 (a failed build leaves it as it was; a new build that does not start is put back). A remote still
+  on 0.1.5 needs one update by hand. Windows connects with an ssh key only.
+- On a remote, Dev Focus *Open Folder* and New chat's *Choose folder* list the remote's folders to click through
+  (the whole machine in Unrestricted mode, otherwise its workspace).
+- `bash scripts/install.sh --headless` installs only the daemon (no window, no Electron download) on a machine with no
+  screen.
+- Settings > General can hide the shell's welcome message in new terminals.
+- Every P9 chat has P9's own MCP tools for Mission (`describe_mission`, `preview_card`, `set_section_items` and more),
+  so an agent can build and edit your space and registry.
 
 **What you must do**
 
 - **Linux AppImage, new installs:** it needs `libfuse2t64` (the AppImage mounts itself with FUSE, and Ubuntu Desktop
-  24.04 does not ship it): `sudo apt install libfuse2t64`. It still needs `tmux` installed.
+  24.04 does not ship it): `sudo apt install libfuse2t64`. It no longer needs `tmux` installed: with none on the
+  system, it places the pinned tmux it carries in P9's own folder.
+- **If you used the built-in hub sections:** rebuild them in your space (the Space menu's **+ Add**, then **Have Claude build it** or the
+  ICM workspace template), since 0.1.6 no longer draws them.
 - **Linux source checkout:** run `bash scripts/install.sh` again after you update. It installs Dev Focus's editor
   server into `~/.local/share/p9/codium-server`, downloads P9's pinned static tmux 3.8 when you have no tmux, and shows
   the reason before it asks for your admin password for anything else. Without it, Dev Focus offers an *Install the

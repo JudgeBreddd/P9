@@ -15,10 +15,12 @@ One workspace. Every agent. Your focus.
   joins only after you approve a 6-digit code on the computer.
 - **Claude and Codex side by side, with your existing logins.** P9 starts each provider's Agent Client
   Protocol adapter and shows its approvals, models and Stop in one chat UI. It never stores your provider login.
-- **Move work to your own server without losing the chat.** Send to server copies a chat, between turns,
-  over your own ssh, and Send files copies the project folder the same way, asking before it replaces
-  anything. From 0.1.6 on, connecting from a newer P9 updates the server's P9; a server still on 0.1.5
-  needs one update by hand (see Update).
+- **Work on another Linux machine from this window, without installing anything there first.** Remote
+  Connect opens an ssh tunnel to it (with a key, or from a Linux computer your password); the first connect puts a small
+  P9 there by itself and asks once whether it runs only while you are connected or always. Send to remote
+  then moves a chat there between turns, and Send files to remote copies the project folder, asking before
+  it replaces anything. Connecting from a newer P9 updates the one there; one still on 0.1.5 needs one
+  update by hand (see Update).
 - **See what an agent makes, not just a description of it.** A fenced block the agent marks as an
   artifact (HTML, SVG, Mermaid, React, Markdown or code) opens in a sealed frame beside the chat with no
   network access; you comment on it and the comments go back as one message.
@@ -41,8 +43,8 @@ list, including what the install script asks your package manager for: [Requirem
 
 **Real cost:** P9 itself is free under PolyForm Shield (see [Licenses](#licenses)); you pay for your own
 Claude or Codex plan. Linux installs from source (`pnpm install` and `pnpm build`, Node 26.10.0 fetched if
-missing); install time was not measured. Server mode, Send to server and Send files need a second machine
-you can reach with `ssh` without a password prompt, with P9 running on it.
+missing); install time was not measured. Remote Connect, Send to remote and Send files to remote need a
+second Linux machine you can reach with `ssh`; P9 puts itself there on the first connect.
 
 ## Install
 
@@ -61,13 +63,13 @@ The repository is public: downloading and updating need no GitHub account.
 
 **Linux AppImage** (x64; the file name says x86_64)
 
-Install `tmux` and `libfuse2t64` (an AppImage mounts itself with FUSE, and Ubuntu Desktop 24.04 does not
-ship that library): `sudo apt install tmux libfuse2t64`. Download
+Install `libfuse2t64` (an AppImage mounts itself with FUSE, and Ubuntu Desktop 24.04 does not ship that
+library): `sudo apt install libfuse2t64`. Download
 `p9-event-horizon-<version>-linux-x86_64.AppImage` from the same page (its checksum is in `SHA256SUMS-linux-x64`), then `chmod +x` it and run it. On its
 first start it copies its daemon to `~/.local/share/p9/daemon`, installs the Dev Focus editor server it
 carries into `~/.local/share/p9/codium-server` (checked against a pinned SHA-256), and installs the
-`p9-foundation` user service with `~/P9` as the workspace; without tmux it installs nothing and says
-`tmux-required`. If it already finds a `p9-foundation` service from a source install, it leaves that alone. On
+`p9-foundation` user service with `~/P9` as the workspace. With no system `tmux` it puts the pinned tmux
+it carries into P9's own folder first (no admin password, no download). If it already finds a `p9-foundation` service from a source install, it leaves that alone. On
 Ubuntu 23.10 and newer, AppArmor can stop an AppImage's sandbox from starting: allow it with an AppArmor
 profile for the file, never with `--no-sandbox`. Like the Windows app, it updates itself.
 
@@ -160,9 +162,11 @@ A mismatch means do not run it.
 
   `~/.local/share/p9/codium-server/bin/codium-server` must exist afterwards. `P9_EDITOR_HOST` points P9 at a
   different folder.
-- For Server mode, Send to server and Send files: an `ssh` client, a `Host` entry for the server in
-  `~/.ssh/config`, and P9 running on the server. The install script asks for the ssh client only if it is
-  missing.
+- For Remote Connect, Send to remote and Send files to remote: an `ssh` client here (without one P9 says
+  `ssh-missing` and how to install it) and a Linux machine there that takes your ssh key, or your password
+  when you connect from Linux (Windows connects with a key only). A `Host` name from `~/.ssh/config` or
+  `user@address` both work. P9 itself need not be on the remote: the first connect installs it. The
+  install script asks for the ssh client only if it is missing.
 - Optional, per feature: `konsole` for registry buttons marked `"terminal": true`, `xdg-open` for apps and
   pages that open a URL, and VS Code at `/usr/bin/code` for "Open in VS Code". Everything else works
   without them.
@@ -330,16 +334,26 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   phone, only when you tap the chip). It runs in a frame with no network, no access to your files and none
   to P9 itself. Select text and press *Add comment*, collect several, and *Send N comments* sends them back
   as one message that quotes each. Details: [docs/guide.md](docs/guide.md#artifacts).
-- **A second machine.** Settings > Server makes this window work on a server's P9 over an ssh tunnel (the
-  way VS Code Remote-SSH works), Dev Focus included. In Chat Focus, *Send to server* copies one Claude or
-  Codex chat to that server between turns and marks the local copy as moved, so the two never both run.
-  *Send files to server* (the files panel) copies a folder to the same folder on the server, shows what
-  differs, asks before it replaces or deletes anything and keeps every replaced file in P9's recovery
-  folder. Limits are under Settings > Send files. When you connect to a server running 0.1.6 or later with an
-  older P9, this one builds and installs itself there after chats finish their turn. A failed build leaves the
-  server as it was; a new build that does not start is put back. A server still on 0.1.5 has no update
-  route, so it needs one update by hand first (see Update).
-  Details: [docs/guide.md](docs/guide.md#server-mode-send-to-server-and-send-files).
+- **A second machine (Remote Connect).** The Local/Remote badge in the top bar, or Settings > Remote
+  Connect, makes this window work on another Linux machine's P9 over an ssh tunnel (the way VS Code
+  Remote-SSH works), Dev Focus included. If P9 is not running there, Connect starts it, or installs a small
+  one in `~/.local/share/p9/remote` (no source checkout), and then asks once: **Temporary** (stops a few
+  minutes after you disconnect) or **Always on** (installs the full P9 there and keeps it running; this may
+  need the remote's admin password once, typed into P9's own window). The small one has no Mission Control;
+  Always on brings it. It also asks which AI agents to
+  download there: Claude, Codex, both or none. If ssh asks for a password, P9 asks in its own window, never
+  saves it and offers to add its own key there so the next connect needs none. **The first connect to a
+  machine trusts whatever host key it shows** (ssh's `accept-new`): if someone sat between you and that
+  machine on that first connect, ssh would not notice; after that a changed key stops the connect and P9
+  names the `known_hosts` line to check. A connection that drops and is still down 30 s later shows a
+  notification. In Chat Focus, *Send to remote* copies one Claude or Codex chat there between turns and marks
+  the local copy as moved, so the two never both run. *Send files to remote* (the files panel) copies a
+  folder to the same folder there, shows what differs, asks before it replaces or deletes anything and keeps
+  every replaced file in P9's recovery folder. Limits are under Settings > Remote Connect > Send files. When
+  you connect to a remote running 0.1.6 or later with an older P9, this one updates it after chats finish
+  their turn. A failed build leaves it as it was; a new build that does not start is put back. One still on
+  0.1.5 has no update route, so it needs one update by hand first (see Update).
+  Details: [docs/guide.md](docs/guide.md#remote-connect-send-to-remote-and-send-files).
 - **Dev Focus limits.** Saves go through the guarded save, and only Ctrl+S or Save writes (a white dot on the
   tab marks an unsaved file). New File creates a file and never replaces one;
   creating folders, renaming and deleting from the editor's explorer is refused in v1. Do those in a
@@ -422,7 +436,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   `SECURITY.md` § Auto-update. Remove the AppImage's service with
   `node ~/.local/share/p9/daemon/<version>/scripts/uninstall-service.mjs`, then delete the AppImage.
 
-- **A server running P9** is updated from the computer you connect from once it runs 0.1.6: when this P9 is
+- **A remote running P9** is updated from the computer you connect from once it runs 0.1.6 (the small Temporary P9 is not built
+  there: it is replaced whole by this version's): when this P9 is
   newer (compared by version number), it sends its source, builds beside the running copy, waits until no chat
   is mid-turn, swaps and restarts. A failed build leaves the running copy as it was; a restart that does not
   answer puts the previous copy back. A server still on 0.1.5 has no update route and does not update itself:
@@ -489,11 +504,29 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 **Version 0.1.6, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
 
-**New in 0.1.6:** the phone shell and Chats screens, and phone parity with the desktop chat; Send to server
-and Send files over your own ssh; the server updating itself on connect; artifacts; the Security settings
+**New in 0.1.6:** the phone shell and Chats screens, and phone parity with the desktop chat; Send to remote
+and Send files to remote over your own ssh; the remote updating itself on connect; artifacts; the Security settings
 group; the Sprint tracker window; the Dev Focus editor server installed by the install script, the AppImage
 and a button; P9's own tmux; a saved-only-on-Ctrl+S editor; the side-panel Chat Focus file window that can
-save; and the setup wizard finding an existing Mission Control layout.
+save; and the setup wizard finding an existing Mission Control layout. Also new since then:
+
+- Remote Connect: the Local/Remote badge's machine menu (this computer, saved remotes with their state, Add a
+  machine, Disconnect); the small Temporary P9 that Connect installs over ssh by itself, or Always on; ssh
+  password login from Linux, with an offer to add P9's key; a choice of agents to download there; the server's
+  folders in Dev Focus Open Folder and New chat's Choose folder (in Unrestricted mode); `ssh-missing` with how to
+  install ssh; a notification when a dropped connection stays down 30 s.
+- A headless install for servers (`scripts/install.sh --headless`, the daemon without the window), and a
+  second Linux daemon (a dev build's) with its own state, lock and tmux.
+- Mission Control from a blank slate: an empty space shows **Have Claude build it**, **Have Codex build it**
+  and four templates (ICM workspace, Obsidian vault, Homelab, Blank); the Space menu switches, adds, deletes
+  spaces and saves one as a template; every P9 chat has a `p9` MCP server whose tools read and edit the space
+  and registry (`describe_mission`, `preview_card`, `set_section_items` and the rest).
+- Tile icons: a Mission app that opens a URL inside a terminal wrapper gets the site's icon. History shows
+  each chat's title and when it was last used.
+- Links in an agent's reply ask before opening (Cancel, Open, or Open, don't ask again).
+- Settings in five pages (General, Chat Focus, Dev Focus, Mission Control, Remote Connect), and a General
+  switch to hide the shell's welcome message in new terminals.
+- Update rollback (from 0.1.5) is documented with its limits in `SECURITY.md` § Auto-update.
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
   daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
@@ -502,15 +535,17 @@ save; and the setup wizard finding an existing Mission Control layout.
   Ubuntu (Actions, Installers; a runner session, not a real desktop).
 - **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
   that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`). New in 0.1.6 and
-  not run on real machines: Send to server, Send files and the server's self-update over real ssh between
+  not run on real machines: Send to remote, Send files to remote and the remote's self-update over real ssh between
   two computers (the tests use two daemons in one container joined by a stand-in ssh); the AppImage on a
   bare Ubuntu Desktop 24.04 through the wizard's sign-in; how fast the phone's Mission tab is against a
-  real daemon.
+  real daemon; the small Temporary P9 installed from a packaged app (only from a source checkout); Cancel
+  in the server folder picker; a chat sent to a remote, the laptop closed, then carried on from the phone.
 - **Not supported:** macOS.
 - **Known gaps:** installers are unsigned (checksum only, see above); a daemon restart cuts off the chat turn
   in progress (reopen to resume); Dev Focus refuses folder creation, rename and delete; recovery drafts have
   no screen yet; the phone view uses the browser's online flag, so it can miss a daemon that is unreachable;
-  the AppImage still asks you to install `tmux` and needs `libfuse2t64`.
+  the AppImage needs `libfuse2t64`; Windows connects to a remote with an ssh key only; on Linux, Dev Focus
+  can still say "editor host did not start" (issue #14, open).
 
 ## Licenses
 
