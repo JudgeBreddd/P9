@@ -20,7 +20,7 @@ const SPACE = { sections: [
     { id: 'run-logs', title: 'Run logs', path: 'logs', pattern: 'run-??.log' },
     { id: 'wide', title: 'Wide', root: 'wide' }] },
   { title: 'Bad', folders: [{ id: 'slash', title: 'Slash', pattern: 'a/b' }, { id: 'extra', title: 'Extra', where: 'x' }] },
-  { title: 'Private', folders: [{ id: 'solo', title: 'Solo runs', path: '_private/solo-runs', pattern: '*.md' }] }] };
+  { title: 'Private', folders: [{ id: 'solo', title: 'Solo runs', path: '_private/solo-runs', pattern: '*.md', fix: 'Tidy this run.' }] }] };
 
 async function seed({ directory, workspace }) {
   for (const folder of ['projects', 'hub', '_waiting', 'logs']) await mkdir(path.join(workspace, folder));
@@ -114,7 +114,17 @@ test('P11: a space folder inside _private lists and opens with File protection o
   assert.deepEqual([opened.status, opened.body.text], [200, '# Solo run\n']);
   assert.equal((await open(instance, 'solo', '_private/solo-runs/.env.md')).status, 404);
   assert.equal((await call(instance, '/files?' + new URLSearchParams({ path: '_private/solo-runs/run.md' }))).status >= 400, true, 'the editor still refuses it');
-  console.log('PASS P11: _private/solo-runs lists run.md and opens it with File protection on; .env.md hidden; /files refuses');
+  // Review 3 L1: seeing it is not sending it. Fix with Claude would put the file in a chat's prompt, so with File protection
+  // on it is refused before any chat is made; off, Fix goes ahead as before.
+  const fix = () => call(instance, '/mission/fix', 'POST', { id: 'solo', path: '_private/solo-runs/run.md' });
+  const chats = async () => (await call(instance, '/chat')).body;
+  const before = JSON.stringify(await chats());
+  assert.deepEqual([(await fix()).status, (await fix()).body.error], [403, 'file-protection'], 'Fix with File protection on');
+  assert.equal(JSON.stringify(await chats()), before, 'no chat was made');
+  assert.equal((await call(instance, '/file-protection', 'POST', { on: false })).body.on, false);
+  const off = await fix();
+  assert.notEqual(off.body?.error, 'file-protection', 'Fix with File protection off: ' + JSON.stringify(off));
+  console.log('PASS P11: _private/solo-runs lists run.md and opens it with File protection on; .env.md hidden; /files refuses; Fix refused until File protection is off');
 });
 
 test('refs: found ones name their script, app or page; a missing ID says so', { timeout: 60000 }, async (t) => {

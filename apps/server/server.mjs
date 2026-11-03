@@ -340,7 +340,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const { id, path: file } = (await json(c)) ?? {};
     // Wall 15: a space folder's file. The folder's own fix text (the user's space file) leads; the daemon reads both again.
     if (id !== undefined) {
-      const read = await mission.folderRead(id, file);
+      const read = await mission.folderRead(id, file, { toAgent: true });
       if (read.status !== 200) return reply(c, read);
       if (!read.fix) return reply(c, { status: 404, error: 'no-fix', detail: 'This folder has no fix text in the space file.' });
       const made = await chat.create({ provider: 'claude', title: 'Fix: ' + file.split('/').pop().slice(0, 100) });

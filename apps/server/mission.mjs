@@ -477,12 +477,17 @@ export function createMission({ workspace, recovery, settings, instance = 'test'
     const { root, ...list } = await folderFiles(id);
     return list;
   }
-  async function folderRead(id, relative) {
+  // Review 3 L1: toAgent (Fix with Claude) reads under File protection's own lock, not P11's: P11 lets the user see a
+  // _private file, but sending it to an agent's provider waits until File protection is off. Off, nothing changes.
+  async function folderRead(id, relative, { toAgent = false } = {}) {
     if (typeof relative !== 'string' || relative.length > 1024) return refused;
     const list = await folderFiles(id);
     if (list.error) return list;
     if (!list.files.some((file) => file.path === relative)) return { status: 404, error: 'not-found' };
-    try { return { status: 200, text: (await readFile(list.root, relative, SPACE)).content, ...(list.fix ? { fix: list.fix } : {}) }; } catch { return { status: 404, error: 'not-found' }; }
+    try { return { status: 200, text: (await readFile(list.root, relative, toAgent ? {} : SPACE)).content, ...(list.fix ? { fix: list.fix } : {}) }; } catch (error) {
+      if (toAgent && error.message === 'locked-path') return { status: 403, error: 'file-protection', detail: 'File protection is on, so this file is not sent to an agent. Turn it off in Settings to use Fix.' };
+      return { status: 404, error: 'not-found' };
+    }
   }
   // Checklists (threat model row M4-a): the files an item names, read through packages/files: in the workspace, or in a
   // notes root the user said yes to (allow_folder, whose question names these writes). A write is one mark or one review
