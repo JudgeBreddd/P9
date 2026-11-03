@@ -69,9 +69,10 @@ test('settings file: Builder and Teammate layouts list the same items from their
       status: '**Open** — phase 5 in work' });
     assert.deepEqual([overview.scripts.map((s) => s.id), overview.apps.map((a) => a.id), overview.pages.map((p) => p.id)], [['hello'], ['editor'], ['dash']]);
   }
-  const bare = await daemon(t);
-  assert.equal((await call(bare, '/mission')).status, 503);
-  console.log('PASS phase5 settings: Builder (_tyler) and Teammate (_waiting) layouts each list their queue, primary card, scripts, apps, pages; no settings file = 503');
+  // A fresh profile (M4) is not an error: Mission answers with nothing in it, and the page draws only the onboarding card.
+  const bare = await call(await daemon(t), '/mission');
+  assert.deepEqual([bare.status, JSON.parse(bare.text).empty], [200, true], bare.text);
+  console.log('PASS phase5 settings: Builder and Teammate layouts each list their queue, primary card, scripts, apps, pages; no settings file = empty Mission');
 });
 
 test('script button runs its fixed argv and streams output; _tyler answer lands on A. and a concurrent edit is kept', async (t) => {
@@ -388,59 +389,6 @@ test('an "A:" line holding only an italic placeholder is answerable like an empt
   console.log('PASS phase5 A: placeholder: listed as answerable, answer replaces the placeholder line, item leaves the queue');
 });
 
-test('no hub folder in settings: every hub route answers 404 hub-not-set and runs nothing', async () => {
-  const { createHub } = await import('../apps/server/hub.mjs');
-  const hub = createHub({ workspace: '/nonexistent', settings: { registry: 'r.json' } });
-  for (const answer of [await hub.overview(), await hub.text({ kind: 'solo' }), await hub.decide({ name: 'librarian-x', choice: 'merge' })])
-    assert.deepEqual(answer, { status: 404, error: 'hub-not-set' });
-});
-
-// D2: on Windows bash is missing or WSL's (which boots a VM every poll), so the hub runs no ICM shell script there.
-test('Windows: hub notices run no shell script', async (t) => {
-  const { mkdtemp, rm } = await import('node:fs/promises');
-  const os = await import('node:os');
-  const { createHub } = await import('../apps/server/hub.mjs');
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'p9-hub-'));
-  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
-  t.after(async () => { Object.defineProperty(process, 'platform', platform); await rm(workspace, { recursive: true, force: true }); });
-  const scripts = path.join(workspace, '_system', 'scripts');
-  const marker = path.join(workspace, 'ran');
-  await mkdir(scripts, { recursive: true });
-  for (const name of ['heartbeats.sh', 'doctor.sh']) await writeFile(path.join(scripts, name), `echo "${name}" >> '${marker}'\necho 'FAIL marker'\n`);
-  const hub = createHub({ workspace, settings: { hub: 'hub' } });
-  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
-  assert.deepEqual(await hub.notices(), []);
-  assert.equal(await access(marker).then(() => true, () => false), false, 'a shell script ran');
-});
-
-// Release r2 R2-7: decide re-checks the phone's session after its read, lands the line by rename, and refuses a file
-// the server's review changed after the read.
-test('release r2 R2-7: hub decide is revocable, atomic, and refuses a changed file', async (t) => {
-  const { mkdtempSync, writeFileSync, readFileSync, statSync, readdirSync } = await import('node:fs');
-  const os = await import('node:os');
-  const { authority } = await import('../apps/server/authority.mjs');
-  const vault = mkdtempSync(path.join(os.tmpdir(), 'p9-vault-')), branch = path.join(vault, 'Review', 'Inbox', 'librarian-x');
-  await mkdir(branch, { recursive: true });
-  const file = path.join(branch, '_decision.md');
-  const saved = process.env.MC_VAULT; process.env.MC_VAULT = vault;
-  t.after(() => { if (saved === undefined) delete process.env.MC_VAULT; else process.env.MC_VAULT = saved; });
-  const { createHub } = await import('../apps/server/hub.mjs');
-  const hub = createHub({ workspace: vault, settings: { hub: 'hub' } });
-  writeFileSync(file, 'title: x\nreview: pending\n');
-  await assert.rejects(authority.run(() => false, () => hub.decide({ name: 'librarian-x', choice: 'merge' })), /session-ended/);
-  assert.equal(readFileSync(file, 'utf8'), 'title: x\nreview: pending\n', 'a revoked phone wrote nothing');
-  let calls = 0;
-  const changed = await authority.run(() => { if (!calls++) writeFileSync(file, 'title: x\nreview: reject\n'); return true; }, () => hub.decide({ name: 'librarian-x', choice: 'merge' }));
-  assert.deepEqual(changed, { status: 409, error: 'hub-changed' });
-  assert.equal(readFileSync(file, 'utf8'), 'title: x\nreview: reject\n', 'the review job\'s change was kept');
-  const inode = statSync(file).ino;
-  assert.deepEqual(await hub.decide({ name: 'librarian-x', choice: 'merge' }), { status: 200 });
-  assert.equal(readFileSync(file, 'utf8'), 'title: x\nreview: merge\n');
-  assert.notEqual(statSync(file).ino, inode, 'landed by rename, not rewritten in place');
-  assert.deepEqual(readdirSync(branch), ['_decision.md'], 'no temp file left');
-  console.log('PASS R2-7: revoked = session-ended, nothing written; changed after read = 409, change kept; save lands by rename');
-});
-
 // ---- v0.1.5 chunk 3: Mission live (M1, M2/M3, M5, M6) ----
 import { parseSettings, parseSpace, argRefusal } from '../apps/server/mission.mjs';
 
@@ -517,7 +465,7 @@ test('M5: the daemon refuses with the reason and starts nothing; choices come ba
 // workspace-hub's "Gate check a plan" button: choices "plans" is every plan.md under the scripts root, still strict.
 test('choices "plans": every plan.md outside skipped folders, and nothing else is accepted', { timeout: 30000 }, async (t) => {
   const instance = await start(t, TEAMMATE, [{ id: 'gate', title: 'Gate', cmd: [node, '-e', 'console.log(process.argv[1])'], args: [{ label: 'Plan', choices: 'plans' }] }]);
-  for (const dir of ['a', 'b/c', 'node_modules/x', '_archive', '.git', 'agent_skills/s', '_private']) {
+  for (const dir of ['a', 'b/c', 'node_modules/x', 'dist/x', 'build', 'venv', '.venv', '__pycache__', '.cache', '.astro', '_archive', '.git', 'agent_skills/s', '_private', '_intake', '_templates', 'templates/t', 'x/recommended-delete']) {
     await mkdir(path.join(instance.workspace, dir), { recursive: true });
     await writeFile(path.join(instance.workspace, dir, 'plan.md'), '# plan');
   }

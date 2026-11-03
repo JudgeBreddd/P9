@@ -50,6 +50,11 @@ test('Phase 13: a unit that starts but whose daemon never answers is removed too
   const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace], { env, encoding: 'utf8' });
   // The unit carries the installer's PATH, so tmux and agent CLIs found here are found by the service (R1-10).
   assert.ok(readFileSync(path.join(home, 'unit.copy'), 'utf8').includes('\nEnvironment="PATH=' + bin + ':'));
+  // The daemon runs in p9.slice, capped so P9 can only take itself down (default share of RAM when unset).
+  assert.ok(readFileSync(path.join(home, 'unit.copy'), 'utf8').includes('\nSlice=p9.slice\n'));
+  assert.match(readFileSync(path.join(home, '.config', 'systemd', 'user', 'p9.slice'), 'utf8'), /\nMemoryHigh=25%\nMemoryMax=33%\n/);
+  const bad = spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace], { env: { ...env, P9_MEMORY_MAX: '10G\nExecStart=/bin/sh' }, encoding: 'utf8' });
+  assert.match(bad.stderr, /invalid-P9_MEMORY_MAX/);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /daemon-not-answering/);
   assert.doesNotMatch(result.stdout, /P9_SERVICE_INSTALLED/);
@@ -97,7 +102,7 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(uninstall, /\$\{ifNot\} \$\{isUpdated\}[^]*Unregister-ScheduledTask[^]*\$\{endIf\}/, 'an update must not unregister the task');
   assert.doesNotMatch(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Unregister-ScheduledTask/);
   // Stop-ScheduledTask ends only conhost.exe; the daemon outlived it (GitHub run 39540753837), so the uninstaller ends its node.exe.
-  assert.match(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process/, 'the uninstaller ends the daemon itself');
+  assert.match(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq \(\$\$env:P9_INSTDIR \+ '\\resources\\daemon\\node\.exe'\)[^\n]*Stop-Process/, 'the uninstaller ends the daemon itself');
   // A silent install (/S) still shows a MessageBox with no /SD and waits for a click nobody can give. /SD goes after the text:
   // before it, makensis takes the text for a jump label and the build fails (GitHub run 39527149502).
   for (const box of nsh.split('\n').filter((line) => /^\s*MessageBox /.test(line))) assert.match(box, /"\s+\/SD ID\w+\s*$/, 'silent default, after the text (NSIS reads text after /SD as a jump label): ' + box.trim());
@@ -124,7 +129,15 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /\$hostArguments \+ @\('-Log', \('"' \+ \$log \+ '"'\)/);
   // Issue #6 B10: the installer stops the old task and daemon before it replaces files, as the uninstaller does.
   const init = nsh.slice(nsh.indexOf('!macro customInit'));
-  assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
+  assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq \(\$\$env:P9_INSTDIR \+ '\\resources\\daemon\\node\.exe'\)[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
+  // Review 3 L6: an apostrophe in the install folder (C:\Users\O'Brien) ended the quoted PowerShell text, so nothing stopped.
+  // No NSIS variable sits inside a -Command; the folder goes in through the environment, set before each stop.
+  for (const line of nsh.split('\n').filter((text) => /-Command "/.test(text))) assert.doesNotMatch(line.slice(line.indexOf('-Command "')).replaceAll('$$', ''), /\$\w/, 'no NSIS variable inside a -Command: ' + line.trim().slice(0, 80));
+  for (const part of [init, uninstall.slice(0, uninstall.indexOf('${ifNot}'))]) {
+    assert.ok(part.indexOf("System::Call 'Kernel32::SetEnvironmentVariable(t \"P9_INSTDIR\", t \"$INSTDIR\")'") >= 0
+      && part.indexOf('SetEnvironmentVariable') < part.search(/nsExec[^\n]*Stop-ScheduledTask/), 'P9_INSTDIR is set before the stop');
+    assert.match(part, /-like \(\[WildcardPattern\]::Escape\(\$\$env:LOCALAPPDATA\)/, '[ and ] in LOCALAPPDATA are not wildcards');
+  }
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
 });
@@ -151,7 +164,9 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   const change = main.slice(main.indexOf("ipcMain.handle('p9:workspace-change'"), main.indexOf("ipcMain.handle('p9:pet-remove'"));
   assert.match(change, /if \(win\) \{[^]*\/stop-all[^]*repairWindowsTask\(process\.resourcesPath, folder\)[^]*repairWindowsTask\(process\.resourcesPath, old\)[^]*workspace-not-started/, 'Stop All, then the script, else the old folder again');
   // Fable review finding 3: wake()'s schtasks /Run between Stop All and the new task restarted the old task on the old folder.
-  assert.match(main, /const wake = async \(\) => \{\s*if \(changing \|\| Date\.now\(\) - woke < 30000\) return;/, 'wake() does nothing during a change');
+  // Server mode: no task wake either while the window is on a server (that daemon is not this machine's task).
+  assert.match(main, /const wake = async \(\) => \{\s*if \(changing \|\| serverHost \|\| Date\.now\(\) - woke < 30000\) return;/, 'wake() does nothing during a change');
+  assert.ok(main.indexOf('health(localState).catch(wake)') > main.indexOf('let serverHost'), 'the launch wake runs once serverHost exists');
   assert.match(change, /changing = true;\s*try \{\s*const ran = await repairWindowsTask\(process\.resourcesPath, folder\)[^]*\} finally \{ changing = false; \}/, 'the change holds wake() off until it returns');
   // Fable review finding 1: the page names a saved folder that was not there at the daemon's start.
   assert.match(main, /h\.savedWorkspace \? \{ savedWorkspace: h\.savedWorkspace, workspace: h\.workspace \}/);
@@ -166,11 +181,11 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-sh-')), bin = path.join(home, 'bin'), log = path.join(home, 'log');
   t.after(() => rm(home, { recursive: true, force: true }));
   await mkdir(bin);
-  for (const tool of ['realpath', 'dirname', 'mkdir', 'mktemp', 'mv', 'rm', 'rmdir', 'chmod']) {
+  for (const tool of ['realpath', 'dirname', 'mkdir', 'mktemp', 'mv', 'rm', 'rmdir', 'chmod', 'wc', 'sed', 'cat', 'id']) {
     await symlink(['/usr/bin/', '/bin/'].map((dir) => dir + tool).find(existsSync), path.join(bin, tool));
   }
   const stub = (name, body) => writeFile(path.join(bin, name), '#!/bin/sh\n' + body + '\n', { mode: 0o755 });
-  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run']) await stub(tool, 'exit 0');
+  for (const tool of ['git', 'npm', 'tmux', 'systemctl', 'systemd-run', 'gzip', 'flock', 'setsid']) await stub(tool, 'exit 0');
   await stub('node', '[ "$1" = --version ] && { echo "${FAKE_NODE:-v26.10.0}"; exit 0; }\necho "node $*" >> ' + log);
   await stub('pnpm', 'echo "pnpm $*" >> ' + log);
   // The Node download: curl writes a file, sha256sum passes only with FAKE_SUM_OK, tar unpacks a node that logs as p9node.
@@ -181,59 +196,75 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
     + 'printf \'#!/bin/sh\\n[ "$1" = --version ] && { echo v26.10.0; exit 0; }\\necho "p9node $*" >> ' + log + '\\n\' > "$dir/node-v26.10.0-linux-x64/bin/node"\n'
     + 'chmod +x "$dir/node-v26.10.0-linux-x64/bin/node"');
   const share = path.join(home, '.local', 'share', 'p9'), ownNode = path.join(share, 'node-v26.10.0-linux-x64');
-  const run = (env = {}) => {
+  const run = (env = {}, args = ['ws']) => {
     rmSync(log, { force: true });
-    const result = spawnSync('/bin/bash', [path.join(root, 'scripts', 'install.sh'), 'ws'],
+    const result = spawnSync('/bin/bash', [path.join(root, 'scripts', 'install.sh'), ...args],
       { cwd: home, encoding: 'utf8', env: { HOME: home, XDG_RUNTIME_DIR: home, PATH: bin, ...env } });
     return { ...result, log: existsSync(log) ? readFileSync(log, 'utf8') : '' };
   };
 
   const ok = run();
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
-  assert.equal(ok.log, 'pnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
+  // Item 15: first what P9 needs from the system (deps.mjs; this stub node reports nothing missing).
+  // D5: then Dev Focus's editor server, through the same pinned install the Dev Focus button uses.
+  assert.equal(ok.log, 'node scripts/deps.mjs --place\npnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
   assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
 
   assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
+
+  // --headless (a server with no screen): the install skips postinstall, the step that downloads Electron.
+  // It still installs the editor server: Dev Focus in Server mode runs it on this server (c10, item 33).
+  const headless = run({}, ['--headless', 'ws']);
+  assert.equal(headless.status, 0, headless.stdout + headless.stderr);
+  assert.equal(headless.log, 'node scripts/deps.mjs --headless --place\npnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
+  assert.match(headless.stdout, /P9 runs on this server/);
+  assert.doesNotMatch(headless.stdout, /pnpm desktop/);
 
   // Wrong Node: a download that fails its checksum installs nothing and leaves nothing behind.
   const badSum = run({ FAKE_NODE: 'v24.19.0' });
   assert.equal(badSum.status, 1);
   assert.match(badSum.stdout, /does not match its pinned checksum/);
   assert.doesNotMatch(badSum.log, /^(tar|pnpm|p9node|node) ?/m, 'nothing unpacked or installed after a bad checksum');
-  assert.deepEqual(readdirSync(share), [], 'no Node and no temp folder left');
+  // Besides Node: run/, the start script every install since c1a42dd writes (row I1), here from the runs above.
+  const left = () => readdirSync(share).filter((name) => name !== 'run');
+  assert.ok(existsSync(path.join(share, 'run', 'start')), 'the start script is written');
+  assert.deepEqual(left(), [], 'no Node and no temp folder left');
 
   // Wrong Node, good download: P9's own Node is pinned, unpacked, and runs the service install.
   const oldNode = run({ FAKE_NODE: 'v24.19.0', FAKE_SUM_OK: '1' });
   assert.equal(oldNode.status, 0, oldNode.stdout + oldNode.stderr);
   assert.match(oldNode.log, new RegExp('^curl -fsSL -o \\S+/node\\.tar\\.gz https://nodejs\\.org/dist/v26\\.10\\.0/node-v26\\.10\\.0-linux-x64\\.tar\\.gz\n'
-    + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\npnpm install --frozen-lockfile\npnpm build\n'
-    + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\n$'));
-  assert.deepEqual(readdirSync(share), ['node-v26.10.0-linux-x64'], 'temp folder removed');
+    + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\np9node scripts/deps\\.mjs --place\npnpm install --frozen-lockfile\npnpm build\n'
+    + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\np9node scripts/install-editor\\.mjs\n$'));
+  assert.deepEqual(left(), ['node-v26.10.0-linux-x64'], 'temp folder removed');
   assert.ok(oldNode.stdout.includes('export PATH="' + path.join(ownNode, 'bin') + ':$PATH"'), 'PATH line printed');
   const cached = run({ FAKE_NODE: 'v24.19.0' });
   assert.equal(cached.status, 0, cached.stdout + cached.stderr);
-  assert.match(cached.log, /^pnpm install --frozen-lockfile\npnpm build\np9node /, 'a second run reuses the downloaded Node');
+  assert.match(cached.log, /^p9node scripts\/deps\.mjs --place\npnpm install --frozen-lockfile\npnpm build\np9node /, 'a second run reuses the downloaded Node');
 
-  await rm(path.join(bin, 'tmux'));
-  const noTmux = run();
-  assert.equal(noTmux.status, 1);
-  assert.match(noTmux.stdout, /MISSING: tmux\b/);
-  assert.equal(noTmux.log, '', 'nothing installed with a tool missing');
-  await stub('tmux', 'exit 0');
+  // Item 15: tmux is no longer one of these; scripts/deps.mjs asks for it with its reason (deps.test.mjs, bare-machine.sh).
+  await rm(path.join(bin, 'systemctl'));
+  const noTool = run();
+  assert.equal(noTool.status, 1);
+  assert.match(noTool.stdout, /^- systemctl: /m);
+  assert.equal(noTool.log, '', 'nothing installed with a tool missing');
+  await stub('systemctl', 'exit 0');
 
   // No pnpm and a global npm install that needs root: the ~/.local fallback is used and the run carries on.
   await rm(path.join(bin, 'pnpm'));
   await stub('npm', 'case "$*" in *--prefix*) mkdir -p "$HOME/.local/bin"; printf \'#!/bin/sh\\necho "pnpm $*" >> ' + log + '\\n\' > "$HOME/.local/bin/pnpm"; chmod +x "$HOME/.local/bin/pnpm";; *) exit 1;; esac');
   const fallback = run();
   assert.equal(fallback.status, 0, fallback.stdout + fallback.stderr);
-  assert.match(fallback.log, /^pnpm install --frozen-lockfile\npnpm build\n/);
+  assert.match(fallback.log, /^node scripts\/deps\.mjs --place\npnpm install --frozen-lockfile\npnpm build\n/);
 
   await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
   await writeFile(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service'), '');
   const again = run();
   assert.equal(again.status, 0);
   assert.match(again.stdout, /already installed/);
-  assert.equal(again.log, '', 'an existing install is left alone');
+  // Issue #14: an existing install gets the editor server step only; install-editor.mjs leaves the pinned commit alone.
+  // Item 15: and the system check again, since a new version can need something the old one did not.
+  assert.equal(again.log, 'node scripts/deps.mjs --update --place\nnode scripts/install-editor.mjs\n', 'an existing install is left alone but for the system check and the editor server');
 });
 
 // The Windows installer carries every licence notice in resources/licenses (package-windows.mjs gathers them).

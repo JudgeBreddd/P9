@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir, chmod, unlink, symlink, rename, truncate, utimes, rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { request } from 'node:http';
@@ -308,10 +308,12 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'look', images: [{ mimeType: 'image/png', data: png }] })).status, 202);
   const { hit, seen } = await until(instance, said(id, 'echo:'));
   assert.equal(hit.data.content.text, `echo:look[image image/png ${bytes}]`);
-  const hash = createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex'), images = path.join(instance.state, 'images');
+  const hash = createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex'), images = path.join(instance.directory, '.local', 'state', 'p9-foundation', 'images');
   assert.deepEqual(seen.find((event) => event.type === 'user').data, { text: 'look', images: [{ hash, type: 'image/png' }] }, 'the event keeps the hash and type, not the image');
-  // CP3 (threat model row 43): kept by hash in the state folder, and served only to the chat whose message names it.
+  // CP3 (threat model row 43): kept by hash in the ownership folder (item 26: not the state folder, which the unit empties
+  // each time the daemon stops), and served only to the chat whose message names it.
   assert.deepEqual(await readdir(images), [hash + '.png']);
+  assert.equal(existsSync(path.join(instance.state, 'images')), false, 'nothing in the state folder');
   const back = await json(call(instance, `/chat/${id}/images/${hash}`));
   assert.deepEqual([back.status, back.body.mimeType, Buffer.from(back.body.data, 'base64').equals(Buffer.from(png, 'base64'))], [200, 'image/png', true]);
   const other = await create(instance);
@@ -336,7 +338,42 @@ test('images: a photo reaches the agent as an image block; bad types, encodings,
   const refused = await json(call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'look', images: [image] }));
   assert.deepEqual([refused.status, refused.body.error], [400, 'images-unsupported']);
   assert.equal((await call(instance, `/chat/${plain}/prompt`, 'POST', { text: 'words' })).status, 202, 'the conversation still takes text');
-  console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused');
+  // Item 26: a reboot, or any stop (the unit's RuntimeDirectory goes with the daemon), empties the state folder; the photo stays.
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  await rm(instance.state, { recursive: true, force: true });
+  const second = await restart(t, instance, 'state-2');
+  const after = await json(call(second, `/chat/${id}/images/${hash}`));
+  assert.deepEqual([after.status, after.body.mimeType], [200, 'image/png'], 'the photo is still there after the state folder went');
+  // Item 26 upgrade: a photo kept before it sits in the state folder (Windows never empties that one). It moves to the
+  // ownership folder; it no longer makes the start refuse with state-directory-not-empty. A link named like a photo stays.
+  second.child.kill('SIGTERM');
+  await once(second.child, 'exit');
+  const old = createHash('sha256').update('kept before item 26').digest('hex') + '.jpg', leftover = path.join(instance.directory, 'state-3', 'images');
+  await mkdir(leftover, { recursive: true, mode: 0o700 }); await chmod(path.dirname(leftover), 0o700);
+  await writeFile(path.join(leftover, old), 'kept before item 26');
+  const third = await restart(t, instance, 'state-3');
+  assert.deepEqual((await readdir(images)).sort(), [hash + '.png', old].sort(), 'the old photo moved to the ownership folder');
+  assert.equal(await readFile(path.join(images, old), 'utf8'), 'kept before item 26');
+  assert.equal(existsSync(leftover), false, 'the old images folder is gone from the state folder');
+  third.child.kill('SIGTERM');
+  await once(third.child, 'exit');
+  // v0.1.5 also cached site icons in <state>/icons; that cache is dropped at start so it cannot refuse the start either.
+  const cache = path.join(instance.directory, 'state-5', 'icons');
+  await mkdir(cache, { recursive: true, mode: 0o700 }); await chmod(path.dirname(cache), 0o700);
+  await writeFile(path.join(cache, 'a'.repeat(32) + '.json'), '{}');
+  const fifth = await restart(t, instance, 'state-5');
+  assert.equal(existsSync(cache), false, 'the old icons cache is gone from the state folder');
+  fifth.child.kill('SIGTERM');
+  await once(fifth.child, 'exit');
+  if (process.platform !== 'win32') { // a symlink there needs a privilege
+    const stray = path.join(instance.directory, 'state-4', 'images');
+    await mkdir(stray, { recursive: true, mode: 0o700 }); await chmod(path.dirname(stray), 0o700);
+    await symlink(path.join(instance.workspace, 'no-images'), path.join(stray, 'a'.repeat(64) + '.png'));
+    await assert.rejects(restart(t, instance, 'state-4'), /state-directory-not-empty/, 'anything but plain photo files still refuses the start');
+    assert.equal(existsSync(path.join(images, 'a'.repeat(64) + '.png')), false, 'the link was not moved');
+  }
+  console.log('PASS images: PNG delivered as an image block and kept by hash for its own chat only (5 other routes 404), oldest pruned past 200 MB, photo-only message, 7 bad requests 400, image-free agent refused, kept across a restart with the state folder gone; a photo left in the state folder from before item 26 moved to the ownership folder and the start went on; a link there still refuses the start');
 });
 
 test('operation IDs: required, replayed once finished, refused when reused, outcome unknown after a crash', async (t) => {
@@ -408,8 +445,8 @@ test('agents see only allowlisted environment names, in a new session and a resu
   const { childEnv } = await import('../apps/server/child-env.mjs');
   assert.deepEqual(Object.keys(childEnv({ LC_TIME: 'C', LC_ALL: 'C', LC_SECRET_TOKEN: 'sentinel' })), ['LC_TIME', 'LC_ALL']);
   // A unit without a PATH line still finds tmux in ~/.local/bin, once, after the system directories.
-  assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'linux').PATH, '/usr/bin:/h/.local/bin');
-  assert.equal(childEnv({ HOME: '/h', PATH: '/h/.local/bin:/usr/bin' }, 'linux').PATH, '/h/.local/bin:/usr/bin');
+  assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'linux').PATH, '/usr/bin:/h/.local/bin:/h/.local/share/p9/bin');
+  assert.equal(childEnv({ HOME: '/h', PATH: '/h/.local/bin:/usr/bin' }, 'linux').PATH, '/h/.local/bin:/usr/bin:/h/.local/share/p9/bin');
   assert.equal(childEnv({ HOME: '/h', PATH: '/usr/bin' }, 'darwin').PATH, '/usr/bin');
   console.log(`PASS child env: agent saw ${fresh.length} names (no sentinel, no API key), same after resume; every server spawn passes childEnv`);
 });
@@ -728,3 +765,42 @@ for (const provider of ['claude', 'codex']) {
     console.log(`PASS chat list ${provider}: used first, sent flagged, close stops idle and used chats without moving them`);
   });
 }
+
+// v0.1.6 U4 (threat model row 24): in Unrestricted mode (agent lock off and File protection off) a new chat may start in any
+// folder, by its absolute path; off, that path is refused as before, and a chat made in one is refused at its next start.
+test('U4: a chat starts in a folder outside the workspace only in Unrestricted mode', async (t) => {
+  const instance = await start(t);
+  const outside = path.join(instance.directory, 'elsewhere');
+  await mkdir(outside);
+  assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside })).status, 400, 'mode off: refused as before');
+  assert.equal((await call(instance, '/files/folders?path=')).status, 403, 'mode off: no walk past the workspace');
+  assert.equal(JSON.parse((await call(instance, '/file-protection', 'POST', { on: false })).text).on, false);
+  // The picker's walk (Builder, 2026-11-02: "click in and out of folders"): '' is the workspace, '..' is its parent, folders only.
+  await writeFile(path.join(instance.directory, 'loose.txt'), 'x');
+  const home = await json(call(instance, '/files/folders?path='));
+  assert.equal(home.body.path, home.body.workspace);
+  const up = await json(call(instance, '/files/folders?' + new URLSearchParams({ path: home.body.parent })));
+  assert.equal(up.status, 200, up.text);
+  assert.ok(up.body.dirs.some((e) => e.name === 'elsewhere' && e.path === path.join(up.body.path, 'elsewhere')), up.text);
+  assert.ok(!up.body.dirs.some((e) => e.name === 'loose.txt'), 'folders only');
+  // Review 3 L8: P9's own folders beside the workspace (state, recovery) are not listed, and are not walked into.
+  assert.deepEqual(['workspace', 'state', 'recovery'].map((name) => up.body.dirs.some((e) => e.name === name)), [true, false, false], up.text);
+  assert.deepEqual([(await call(instance, '/files/folders?' + new URLSearchParams({ path: instance.state }))).status], [403], 'state is not walked');
+  for (const [bad, status] of [['relative/x', 400], [path.join(instance.directory, 'missing'), 404]])
+    assert.equal((await call(instance, '/files/folders?' + new URLSearchParams({ path: bad }))).status, status, bad);
+  for (const folder of [path.join(instance.directory, 'missing'), path.join(instance.directory, 'workspace', 'note.txt'), instance.state])
+    assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder })).status, 400, folder);
+  // Typed with a trailing slash (Builder, 2026-11-02: "Chat create: request-refused"): the same folder.
+  assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: outside + '/' })).status, 201, 'trailing slash');
+  const made = await json(call(instance, '/chat', 'POST', { provider: 'claude', folder: outside }));
+  assert.equal(made.status, 201, made.text);
+  const id = made.body.conversation;
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 202);
+  const hit = await until(instance, said(id, 'cwd:'));
+  assert.equal(hit.hit.data.content.text, 'cwd:new:' + outside);
+  await until(instance, (e) => e.type === 'turn-end' && e.conversation === id, hit.cursor - 1);
+  assert.equal((await call(instance, `/chat/${id}/stop`, 'POST')).status, 200);
+  await call(instance, '/file-protection', 'POST', { on: true });
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 502, 'mode off again: refused at start');
+  console.log('PASS U4: outside folder 400 with the mode off; with it on, 3 bad folders 400 and the agent starts in it; off again, refused at start');
+});

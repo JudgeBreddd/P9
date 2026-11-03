@@ -1,0 +1,11 @@
+# Left out of git archive, so out of GitHub's tag archives (a packaged app's remote install and server update download
+# one), a checkout's remote install and server update, and a synced copy's (remote-install.mjs sourceArchive). The app
+# needs none of them to install, build or run. docs/brand stays: the packaged app's icon (package.json build.icon) is there.
+/test export-ignore
+/docs/guide.md export-ignore
+/.cursor export-ignore
+/.github export-ignore
+/.githooks export-ignore
+/contracts.md export-ignore
+/CONTRIBUTING.md export-ignore
+/.gitattributes export-ignore

@@ -5,12 +5,14 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { daemonRequest } from './teh.mjs';
+import { childEnv } from '../apps/server/child-env.mjs';
 
 const workspace = process.argv[2];
 if (!workspace || !path.isAbsolute(workspace)) throw new Error('absolute-workspace-required');
 if (!(await stat(workspace)).isDirectory()) throw new Error('workspace-must-be-a-directory');
 if (!process.env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR-unset: run this from your own login session');
-try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); }
+// The PATH P9's own children get, so a tmux in P9's bin folder (deps.mjs placeTmux) counts.
+try { execFileSync('tmux', ['-V'], { stdio: 'ignore', env: childEnv() }); }
 catch { throw new Error('tmux-required'); }
 const main = fileURLToPath(new URL('../apps/server/main.mjs', import.meta.url));
 function quote(value) {
@@ -24,10 +26,24 @@ const launcher = main.startsWith(path.join(share, 'daemon') + path.sep) ? quote(
 const directory = path.join(os.homedir(), '.config', 'systemd', 'user');
 const recovery = path.join(os.homedir(), '.local', 'state', 'p9-foundation', 'conflicts');
 await mkdir(directory, { recursive: true });
+// p9.slice holds the daemon, its tmux server, every chat and the editor host, so P9 running out of memory kills only
+// P9, never the rest of the machine. P9_MEMORY_HIGH / P9_MEMORY_MAX set it (systemd sizes: 8G, 33%); rewritten each install.
+const limit = (name, fallback) => {
+  const value = process.env[name] || fallback;
+  if (!/^(\d+(\.\d+)?[KMGT%]?|infinity)$/.test(value)) throw new Error('invalid-' + name);
+  return value;
+};
+await writeFile(path.join(directory, 'p9.slice'), `[Unit]
+Description=P9: daemon, chats, terminals and editor host
+[Slice]
+MemoryHigh=${limit('P9_MEMORY_HIGH', '25%')}
+MemoryMax=${limit('P9_MEMORY_MAX', '33%')}
+`, { mode: 0o600 });
 await writeFile(path.join(directory, 'p9-foundation.service'), `[Unit]
 Description=P9 foundation daemon
 [Service]
 Type=simple
+Slice=p9.slice
 RuntimeDirectory=p9-foundation
 RuntimeDirectoryMode=0700
 UMask=0077

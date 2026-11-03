@@ -28,6 +28,9 @@ export function sniff(bytes) {
 const uri = (ext, bytes) => `data:${MIME[ext]};base64,${bytes.toString('base64')}`;
 // Shells, interpreters and env, by base name without .exe or a version (python3.12 is python).
 const INTERPRETERS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'env', 'node', 'python', 'perl', 'ruby', 'pnpm', 'npm', 'npx', 'cmd', 'powershell', 'pwsh']);
+// Terminal wrappers (konsole -e python run.py): with a url the tile is that site's; without one it keeps the terminal's own icon.
+const TERMINALS = new Set(['konsole', 'gnome-terminal', 'xterm', 'xfce4-terminal', 'alacritty', 'kitty', 'wezterm', 'x-terminal-emulator']);
+const terminal = (program) => TERMINALS.has(path.basename(program).toLowerCase().replace(/\.exe$/, ''));
 const interpreter = (program) => INTERPRETERS.has(path.basename(program).toLowerCase().replace(/\.exe$/, '').replace(/[\d.]+$/, ''));
 
 // Loopback, link-local, private, carrier-grade and multicast addresses: a site (not the user) must not aim the daemon at these.
@@ -89,18 +92,19 @@ async function follow(url, origin, limit) {
 }
 
 const attributes = (tag) => Object.fromEntries([...tag.matchAll(/([a-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)].map((m) => [m[1].toLowerCase(), m[2] ?? m[3] ?? m[4]]));
-// The icon links in a page head, the largest first: an apple-touch-icon, then the biggest declared size. SVG is skipped.
+// The icon links in a page head, the largest first: an apple-touch-icon, then the biggest declared size. SVG links come
+// back marked svg, for discover to try last: a site that offers only an SVG got the letter tile before (0.1.6 item 3).
 export function iconLinks(html, base) {
   const found = [];
   for (const [tag] of html.slice(0, html.search(/<\/head>/i) < 0 ? undefined : html.search(/<\/head>/i)).matchAll(/<link\b[^>]*>/gi)) {
     const attr = attributes(tag), rel = (attr.rel ?? '').toLowerCase().split(/\s+/);
     if (!attr.href || !(rel.includes('icon') || rel.includes('apple-touch-icon') || rel.includes('apple-touch-icon-precomposed'))) continue;
-    if (/svg/i.test(attr.type ?? '') || /\.svg(\?|#|$)/i.test(attr.href)) continue;
+    const svg = /svg/i.test(attr.type ?? '') || /\.svg(\?|#|$)/i.test(attr.href);
     let href;
     try { href = new URL(attr.href, base); } catch { continue; }
     if (!/^https?:$/.test(href.protocol)) continue;
     const size = Math.max(0, ...(attr.sizes ?? '').split(/\s+/).map((part) => Number.parseInt(part, 10) || 0)) || (rel.some((r) => r.startsWith('apple')) ? 180 : 0);
-    found.push({ href: href.href, size });
+    found.push({ href: href.href, size, ...(svg && { svg }) });
   }
   return found.sort((a, b) => b.size - a.size);
 }
@@ -110,12 +114,14 @@ export async function discover(link) {
   const origin = new URL(link).origin;
   const page = await follow(link, origin, 131_072).catch(() => null);
   const html = page && page.status === 200 && /html/i.test(page.headers['content-type'] ?? '') ? page.body.toString('utf8') : '';
-  const urls = [...iconLinks(html, page?.url ?? link).map((entry) => entry.href), origin + '/favicon.ico'].filter((url, i, all) => all.indexOf(url) === i).slice(0, 4);
+  // A raster icon wins: the page's raster links, then /favicon.ico, and only then its SVG (shown only through <img>, so no script runs).
+  const links = iconLinks(html, page?.url ?? link), urls = [...links.filter((entry) => !entry.svg).map((entry) => entry.href), origin + '/favicon.ico',
+    ...links.filter((entry) => entry.svg).map((entry) => entry.href)].filter((url, i, all) => all.indexOf(url) === i).slice(0, 4);
   for (const url of urls) {
     const response = await follow(url, origin, SITE_MAX).catch(() => null);
     if (!response || response.status !== 200 || response.big) continue;
     const ext = sniff(response.body);
-    if (ext && ext !== 'svg') return { ext, bytes: response.body };
+    if (ext) return { ext, bytes: response.body };
   }
   return null;
 }
@@ -150,7 +156,7 @@ export async function programIcon(program, env = process.env) {
   return null;
 }
 
-// dir: the state folder's icons cache; without one (a listener built without a state folder) no site is fetched.
+// dir: where the icons cache lives (the ownership folder, never the state folder: Windows refuses to start with anything in it); without one no site is fetched.
 // registry(): the registry's path under the workspace; pictures live in icons/ beside it.
 export function createIcons({ dir, workspace, registry, discoverIcon = discover, now = Date.now }) {
   const cache = dir && path.join(dir, 'icons');
@@ -180,7 +186,7 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
 
   // The icons folder under the workspace; null when the registry's folder is not really inside the workspace.
   const folder = async (make) => {
-    const root = await realpath(workspace), beside = path.join(root, path.dirname(registry()));
+    const root = await realpath(workspace), beside = path.join(root, path.dirname(registry() ?? 'registry.json')); // no registry set: icons/ at the workspace root
     const real = await realpath(beside).catch(() => null);
     if (!real || (real !== root && !real.startsWith(root + path.sep))) return null;
     const icons = path.join(real, 'icons');
@@ -214,13 +220,13 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
     } catch { return null; }
   }
 
-  // The art for the tiles now: {pages, apps, sections} each {key: {picture?, auto?}}, key = id (section: title). A tile with a
+  // The art for the tiles now: {pages, apps, sections} each {key: {picture?, auto?}}, key = id (a section's too, W-C). A tile with a
   // picture or a text icon is not fetched for. programs (not Linux): apps left for the desktop to ask the OS about.
   async function collect({ pages, apps, sections }, { platform = process.platform, env = process.env } = {}) {
     const art = { pages: {}, apps: {}, sections: {} }, programs = [];
     const put = (kind, key, field, value) => { if (value) (art[kind][key] ??= {})[field] = value; };
     await Promise.all([
-      ...sections.map(async (item) => put('sections', item.title, 'picture', item.picture && await picture(item.picture))),
+      ...sections.map(async (item) => put('sections', item.id, 'picture', item.picture && await picture(item.picture))),
       ...pages.map(async (item) => {
         put('pages', item.id, 'picture', item.picture && await picture(item.picture));
         if (!item.picture && !item.icon) put('pages', item.id, 'auto', await site(item.url));
@@ -231,7 +237,7 @@ export function createIcons({ dir, workspace, registry, discoverIcon = discover,
         // A browser's --app window is the site it opens, and an interpreter runs someone else's script: neither program's
         // icon is the tile's. The site's icon (the --app link, else the link the tile names), else the letter tile.
         const link = item.cmd.map((arg) => arg.match(/^--app=(https?:\/\/.+)/)?.[1]).find(Boolean);
-        if (link || item.cmd.some((arg) => arg.startsWith('--app=')) || interpreter(item.cmd[0])) { put('apps', item.id, 'auto', await site(link ?? item.url)); return; }
+        if (link || item.cmd.some((arg) => arg.startsWith('--app=')) || interpreter(item.cmd[0]) || item.url && terminal(item.cmd[0])) { put('apps', item.id, 'auto', await site(link ?? item.url)); return; }
         if (platform !== 'linux') { programs.push({ id: item.id, program: item.cmd[0] }); return; }
         const found = await programIcon(item.cmd[0], env);
         if (found) put('apps', item.id, 'auto', uri(found.ext, found.bytes));

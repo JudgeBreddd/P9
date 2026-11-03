@@ -1,4 +1,4 @@
-/* Builder's EH editor session, 2026-10-14 (docs/tyler-edits-2026-10-14.json, 142 ops), baked into rules.
+/* Builder's EH editor session, 2026-10-14 (its edits file, 142 ops), baked into rules.
    Loaded after the page's own <style> so these win the way his inline edits did.
    Markup changes from the same session live in index.html: "/ for commands" folded into the hint span,
    Session id, .pfoot and .attach removed; .plan gets fx-title fx-lift, .pending gets fx-halo,
@@ -19,12 +19,15 @@
   animation:eh-halo-spin 4s linear infinite}
 @media (prefers-reduced-motion:reduce){.fx-halo>.halo>i{animation:none;will-change:auto}}
 
-/* Pure-black working surfaces */
-nav.rail{background-color:#000;border-width:0}
-#tree,.hist,.bottom,#term{background-color:#000}
+/* Pure-black working surfaces, in dark themes only: in a light one the chat read dark text on black. :where adds no
+   specificity, so the rules that override these still win. */
+nav.rail{border-width:0}
+:where(.dark) nav.rail{background-color:#000}
+:where(.dark) #tree,:where(.dark) .hist,:where(.dark) .bottom,:where(.dark) #term{background-color:#000}
 .hist{border-radius:0;box-shadow:none}
 #term{box-shadow:none;border-style:none}
-details.tool summary{background-color:#000;border-width:0}
+details.tool summary{border-width:0}
+:where(.dark) details.tool summary{background-color:#000}
 .dock .tb{background-color:var(--background);opacity:.8}
 .statusbar{background-color:color-mix(in oklab,var(--background) 60%,transparent)}
 .ptool{background-color:transparent}

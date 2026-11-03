@@ -66,7 +66,7 @@ export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', sc
   } else if (scope && hasUserBus()) {
     unit = `${prefix}-${instance}-${randomUUID()}`;
     // ponytail: each chat is capped at 4 GiB; raise MemoryMax if a real session ever needs more.
-    full = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--unit', unit, '-p', 'MemoryMax=4G',
+    full = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=p9.slice', '--unit', unit, '-p', 'MemoryMax=4G',
       '-p', 'TimeoutStopSec=2', '--', ...argv];
   }
   const child = spawn(full[0], full.slice(1), { cwd, env: childEnv(), shell: false, detached, stdio });

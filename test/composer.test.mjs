@@ -96,6 +96,7 @@ for (const provider of ['claude', 'codex']) {
     await pane.locator('.queue [data-held]', { hasText: 'Queued: later' }).waitFor({ timeout: 5000 });
     assert.deepEqual(await pane.locator('.queue [data-held] span').allInnerTexts(), ['After this step: mid', 'Queued: later']);
     await until(() => agentSaid('echo:mid\n\nlater'), 'both went as one prompt after the turn', 25000);
+    await pane.locator('.queue [data-held]').first().waitFor({ state: 'detached', timeout: 5000 }); // the window drops them on its next poll
     assert.deepEqual([await users(instance, id), await steers(instance), await pane.locator('.queue [data-held]').count()], [['hello', 'tool-open', 'mid\n\nlater'], '', 0]);
     console.log('PASS CP1 ' + provider + ': the turn ended with its tool call open; the held and the queued message went as one prompt, held first, no steer');
   });

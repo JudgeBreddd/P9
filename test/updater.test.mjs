@@ -85,6 +85,22 @@ test('a skipped version is not downloaded; a newer one is, and clears the skip',
   assert.deepEqual([updates.read().state, updates.read().available, calls, skipped], ['downloading', '1.0.2', ['download'], null]);
 });
 
+// With no normal release GitHub answers its 404 page, and electron-updater logs the whole page after "Data:"; the log
+// keeps only the first line.
+test('an electron-updater error with GitHub\'s 404 page logs one line, without the page', async () => {
+  const fake = new EventEmitter(), lines = [];
+  fake.checkForUpdates = async () => {};
+  await startUpdater({ app: { isPackaged: true }, version: '1.0.0', log: (l) => lines.push(l), resources: await feed(), platform: 'linux',
+    env: { APPIMAGE: '/x/P9.AppImage' }, load: async () => fake });
+  const page = '<!DOCTYPE html>\n<html lang="en">\n' + '<div>x</div>\n'.repeat(2000) + '</html>';
+  fake.logger.error('Error: Error: Unable to find latest version on GitHub (https://github.com/o/r/releases/latest), please ensure a production release exists: HttpError: 404 \n"method: GET url: https://github.com/o/r/releases/latest\n\nData:\n ' + page);
+  const logged = lines.at(-1);
+  assert.match(logged, /^Error: Error: Unable to find latest version on GitHub \(https:\/\/github\.com\/o\/r\/releases\/latest\).*HttpError: 404 +\(\d+ more characters not logged\)$/);
+  assert.equal(logged.includes('<'), false, 'no HTML in the log: ' + logged.slice(0, 300));
+  fake.logger.info('Checking for update');
+  assert.equal(lines.at(-1), 'Checking for update');
+});
+
 // AU3: CI merges the two Windows runners' latest.yml into the release's one. Written and read back with the js-yaml
 // electron-builder writes it with and electron-updater reads it with.
 test('the merged latest.yml lists both Windows installers and keeps the first one\'s top level', () => {

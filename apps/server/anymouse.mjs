@@ -15,7 +15,8 @@ const LINK_MAX = 7000;
 const quiet = (text) => text.replaceAll('@', '@​');
 
 // GitHub's prefilled new-issue page for params (title, body, labels, or an issue form's template and field ids), with
-// params[field] cut to fit the link; cut says whether it was. Anymouse and the rollback report (desktop) both use it.
+// params[field] cut to fit the link; cut says whether it was, kept and total how many of its characters went. Anymouse and
+// the rollback report (desktop) both use it.
 export function issueLink(params, field, more = '[cut to fit a link; the full note is in P9]') {
   const full = params[field];
   let cut = full, link = NEW_ISSUE + new URLSearchParams(params);
@@ -24,7 +25,7 @@ export function issueLink(params, field, more = '[cut to fit a link; the full no
     cut = full.slice(0, Math.floor(cut.length * 0.9));
     link = NEW_ISSUE + new URLSearchParams({ ...params, [field]: cut + '\n\n' + more });
   }
-  return { link, cut: cut !== full };
+  return { link, cut: cut !== full, kept: cut.length, total: full.length };
 }
 
 export function createAnymouse({ token, api = 'https://api.github.com', limit = 10 } = {}) {
@@ -41,8 +42,8 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
     const body = quiet(text) + '\n\n---\nSent with Anymouse from P9' + (page ? ' (' + quiet(page) + ')' : '') + '.';
     // browser: the box's "Open on GitHub" after a refused token sends the same note the tokenless way.
     if (!token || b.browser === true) {
-      const { link, cut } = issueLink({ title, body, labels: kind }, 'body');
-      return { status: 200, open: link, ...(cut ? { cut: true } : {}) };
+      const { link, cut, kept, total } = issueLink({ title, body, labels: kind }, 'body');
+      return { status: 200, open: link, ...(cut ? { cut: true, kept, total } : {}) };
     }
 
     const now = Date.now();
@@ -58,9 +59,10 @@ export function createAnymouse({ token, api = 'https://api.github.com', limit = 
       });
       if (!res.ok) {
         console.error(JSON.stringify({ event: 'P9_ANYMOUSE_REFUSED', status: res.status }));
-        // 401/403: the token itself was refused (wrong or expired, or without Issues write); the box then offers GitHub's own page.
-        if (res.status === 401 || res.status === 403) return { status: 502, refused: true, error: 'GitHub refused the token P9 files notes with ('
-          + res.status + (res.status === 401 ? ': wrong or expired' : ': it lacks Issues write on ' + REPO)
+        // 401/403/404: the token itself was refused (wrong or expired, without Issues write, or without access to the repository:
+        // GitHub answers 404, not 403, to a token that cannot see it); the box then offers GitHub's own page.
+        if ([401, 403, 404].includes(res.status)) return { status: 502, refused: true, error: 'GitHub refused the token P9 files notes with ('
+          + res.status + ({ 401: ': wrong or expired', 403: ': it lacks Issues write on ' + REPO, 404: ': it cannot see ' + REPO })[res.status]
           + '). Fix: on GitHub, give the token Repository permissions, Issues: Read and write, for ' + REPO
           + ' (README, Anymouse). Your note is still here: Open on GitHub files it under your own login.' };
         return { status: 502, error: 'GitHub refused it (' + res.status + ')' };

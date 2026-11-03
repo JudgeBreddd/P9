@@ -1,4 +1,5 @@
-// Settings → Maintenance (MT1) below the page: Restart and Repair on Linux (RS1: done only when a new daemon answers), the
+// Settings → Maintenance (MT1) below the page: Restart and Repair on Linux (RS1: done only when a new daemon answers; RS2: a
+// hung one killed after the grace), the
 // environment the Windows repair runs with (BL8), and the Updates row against a stand-in updater (the A ↔ B1 shape).
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,17 +8,27 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { root } from './helpers.mjs';
-import { health, restartLinuxService, repairLinuxService, repairEnv } from '../scripts/teh.mjs';
+import { health, restartLinuxService, repairLinuxService, repairEnv, unitFor } from '../scripts/teh.mjs';
+
+// Restart and Repair act on the unit that owns the window's state folder: a dev window (p9-dev) never restarts the daily daemon.
+test('the unit is named after the state folder', () => {
+  assert.equal(unitFor('/run/user/1000/p9-dev'), 'p9-dev.service');
+  assert.equal(unitFor('/run/user/1000/p9-foundation'), 'p9-foundation.service');
+  assert.equal(unitFor('/tmp/fixture/state'), 'p9-foundation.service');
+  assert.equal(unitFor('/tmp/p9-Dev;rm'), 'p9-foundation.service');
+});
 
 // A stand-in systemctl that runs the unit's ExecStart for real and never touches the machine's own user units. Every call
 // is logged. $HOME/restart-mode: "nothing" is a restart that leaves the old daemon running, "dead" one that starts nothing.
+// As in systemd, a restart is a job of the manager (here a detached process), so a client killed meanwhile leaves it
+// running; its stop sends SIGTERM and SIGKILLs only after $HOME/stop-timeout seconds (TimeoutStopSec; 10 unless named).
 const SYSTEMCTL = String.raw`
 import { appendFileSync, existsSync, readFileSync, writeFileSync, rmSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 const [, , , command, ...rest] = process.argv, unit = rest.at(-1), pid = path.join(process.env.HOME, 'p9-foundation.service.pid');
 const file = path.join(process.env.HOME, '.config/systemd/user/p9-foundation.service');
-appendFileSync(path.join(process.env.HOME, 'systemctl.log'), [command, ...rest].join(' ') + '\n');
+if (command !== 'job') appendFileSync(path.join(process.env.HOME, 'systemctl.log'), [command, ...rest].join(' ') + '\n');
 const mode = existsSync(path.join(process.env.HOME, 'restart-mode')) ? readFileSync(path.join(process.env.HOME, 'restart-mode'), 'utf8').trim() : '';
 const start = () => {
   const line = readFileSync(file, 'utf8').match(/^ExecStart=(.*)$/m)[1];
@@ -29,9 +40,10 @@ const start = () => {
 };
 const stop = () => {
   try {
-    const id = Number(readFileSync(pid, 'utf8')), end = Date.now() + 10000;
+    const limit = path.join(process.env.HOME, 'stop-timeout'), timeout = existsSync(limit) ? Number(readFileSync(limit, 'utf8')) : 10;
+    const id = Number(readFileSync(pid, 'utf8')), end = Date.now() + timeout * 1000;
     process.kill(id);
-    while (true) { try { process.kill(id, Date.now() > end ? 'SIGKILL' : 0); } catch { break; } }
+    while (true) { try { process.kill(id, Date.now() > end ? 'SIGKILL' : 0); } catch { break; } Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); }
   } catch {}
   // RuntimeDirectory=: systemd removes the daemon's state folder when the unit stops.
   rmSync(pid, { force: true }); rmSync(path.join(process.env.XDG_RUNTIME_DIR, 'p9-foundation'), { recursive: true, force: true });
@@ -39,11 +51,15 @@ const stop = () => {
 if (command === 'cat') process.exit(existsSync(file) ? 0 : 1);
 if (command === 'enable' && rest.includes('--now')) start();
 if (command === 'disable') stop();
-if (command === 'restart' && mode !== 'nothing') { stop(); if (mode !== 'dead') start(); }
+if (command === 'show') process.stdout.write((existsSync(pid) ? readFileSync(pid, 'utf8') : '0') + '\n');
+if (command === 'kill' && rest.includes('--kill-who=main') && rest.includes('--signal=SIGKILL')) try { process.kill(Number(readFileSync(pid, 'utf8')), 'SIGKILL'); } catch {}
+if (command === 'job') { stop(); if (mode !== 'dead') start(); }
+if (command === 'restart' && mode !== 'nothing') spawn(process.execPath, [process.argv[1], '--user', 'job', unit], { detached: true, stdio: 'ignore' }).on('exit', (code) => process.exit(code ?? 1));
 `;
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-test('Restart and Repair on Linux: done only when a new daemon answers; no unit, a dead or an unchanged daemon is reported, and the unit\'s drop-ins stay', { skip: process.platform !== 'linux', timeout: 180000 }, async (t) => {
+// A temp HOME with the stand-in systemctl first on PATH and the unit installed and running, as install-service.mjs makes it.
+async function unitHome(t) {
   const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-restart-'))), bin = path.join(home, 'bin'), run = path.join(home, 'run');
   const workspace = path.join(home, 'workspace');
   for (const directory of [bin, workspace]) await mkdir(directory);
@@ -51,12 +67,20 @@ test('Restart and Repair on Linux: done only when a new daemon answers; no unit,
   await writeFile(path.join(bin, 'systemctl'), '#!' + process.execPath + '\n' + SYSTEMCTL);
   await chmod(path.join(bin, 'systemctl'), 0o755);
   // teh.mjs runs systemctl from this process's PATH, so the stand-in is set here, not only in a child's env.
+  const saved = { HOME: process.env.HOME, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, PATH: process.env.PATH };
   Object.assign(process.env, { HOME: home, XDG_RUNTIME_DIR: run, PATH: bin + ':' + process.env.PATH });
   const installed = spawnSync(process.execPath, [path.join(root, 'scripts/install-service.mjs'), workspace], { env: process.env, encoding: 'utf8' });
-  t.after(() => spawnSync(path.join(bin, 'systemctl'), ['--user', 'disable', '--now', 'p9-foundation.service'], { env: process.env }));
+  t.after(() => {
+    spawnSync(path.join(bin, 'systemctl'), ['--user', 'disable', '--now', 'p9-foundation.service'], { env: process.env });
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  });
   assert.match(installed.stdout, /P9_SERVICE_INSTALLED/, installed.stderr);
-  const state = path.join(run, 'p9-foundation'), unit = path.join(home, '.config/systemd/user/p9-foundation.service');
-  const mode = (value) => writeFile(path.join(home, 'restart-mode'), value);
+  return { home, state: path.join(run, 'p9-foundation'), unit: path.join(home, '.config/systemd/user/p9-foundation.service'),
+    mode: (value) => writeFile(path.join(home, 'restart-mode'), value) };
+}
+
+test('Restart and Repair on Linux: done only when a new daemon answers; no unit, a dead or an unchanged daemon is reported, and the unit\'s drop-ins stay', { skip: process.platform !== 'linux', timeout: 180000 }, async (t) => {
+  const { home, state, unit, mode } = await unitHome(t);
 
   // A restart: the old daemon is gone and one new one answers, with a boot of its own.
   const first = (await health(state)).boot;
@@ -83,7 +107,8 @@ test('Restart and Repair on Linux: done only when a new daemon answers; no unit,
   assert.deepEqual(await repairLinuxService(state), { restarted: true });
   assert.notEqual((await health(state)).boot.pid, second.pid);
   assert.deepEqual((await readFile(path.join(home, 'systemctl.log'), 'utf8')).trim().split('\n'),
-    ['cat p9-foundation.service', 'daemon-reload', 'reset-failed p9-foundation.service', 'enable p9-foundation.service', 'restart p9-foundation.service']);
+    ['cat p9-foundation.service', 'daemon-reload', 'reset-failed p9-foundation.service', 'enable p9-foundation.service',
+      'show -p MainPID --value p9-foundation.service', 'restart p9-foundation.service']);
   assert.equal(await readFile(path.join(unit + '.d', 'phone.conf'), 'utf8'), '[Service]\nEnvironment=P9_REMOTE=1\n');
 
   // No unit: nothing is restarted or installed; the answer says how to install it.
@@ -93,6 +118,49 @@ test('Restart and Repair on Linux: done only when a new daemon answers; no unit,
   assert.equal((await repairLinuxService(state)).error, 'service-missing');
   assert.deepEqual((await health(state)).boot, running);
   await rename(unit + '.away', unit);
+});
+
+// RS2: a hung daemon (SIGSTOP stands in for a busy event loop: its SIGTERM handler never runs) under systemd's 90 s stop
+// timeout. Restart used to give up at 60 s while systemd still waited; now the same main process is killed after the grace,
+// systemd's restart job starts the unit, and a new daemon answers. A daemon that stops within the grace is never killed.
+test('Restart on Linux, a hung daemon: killed after the grace instead of waiting out systemd\'s 90 s, then a new one answers', { skip: process.platform !== 'linux', timeout: 150000 }, async (t) => {
+  const { home, state } = await unitHome(t);
+  await writeFile(path.join(home, 'stop-timeout'), '90');
+  const hung = (await health(state)).boot.pid;
+  process.kill(hung, 'SIGSTOP');
+  t.after(() => { try { process.kill(hung, 'SIGKILL'); } catch {} });
+  const began = Date.now();
+  assert.deepEqual(await restartLinuxService(state, undefined, 2), { restarted: true });
+  assert.ok(Date.now() - began < 30000, 'not left to the 90 s stop timeout: ' + (Date.now() - began) + ' ms');
+  const fresh = (await health(state)).boot.pid;
+  assert.notEqual(fresh, hung);
+  for (const end = Date.now() + 3000; alive(hung) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(alive(hung), false, 'the hung daemon is gone');
+  assert.match(await readFile(path.join(home, 'systemctl.log'), 'utf8'), /^kill --kill-who=main --signal=SIGKILL p9-foundation\.service$/m);
+
+  // A daemon that answers stops within the grace: restarted, nothing killed.
+  await writeFile(path.join(home, 'stop-timeout'), '10');
+  await writeFile(path.join(home, 'systemctl.log'), '');
+  assert.deepEqual(await restartLinuxService(state), { restarted: true });
+  assert.notEqual((await health(state)).boot.pid, fresh);
+  assert.doesNotMatch(await readFile(path.join(home, 'systemctl.log'), 'utf8'), /^kill /m);
+});
+
+// RS2 for Repair: the same hung daemon, and Repair restarts the unit the way Restart does, so it is killed after the grace
+// too instead of Repair giving up at 60 s while systemd still waits 90 s.
+test('Repair on Linux, a hung daemon: killed after the grace, then a new one answers', { skip: process.platform !== 'linux', timeout: 150000 }, async (t) => {
+  const { home, state } = await unitHome(t);
+  await writeFile(path.join(home, 'stop-timeout'), '90');
+  const hung = (await health(state)).boot.pid;
+  process.kill(hung, 'SIGSTOP');
+  t.after(() => { try { process.kill(hung, 'SIGKILL'); } catch {} });
+  const began = Date.now();
+  assert.deepEqual(await repairLinuxService(state, undefined, 2), { restarted: true });
+  assert.ok(Date.now() - began < 30000, 'not left to the 90 s stop timeout: ' + (Date.now() - began) + ' ms');
+  assert.notEqual((await health(state)).boot.pid, hung);
+  for (const end = Date.now() + 3000; alive(hung) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(alive(hung), false, 'the hung daemon is gone');
+  assert.match(await readFile(path.join(home, 'systemctl.log'), 'utf8'), /^kill --kill-who=main --signal=SIGKILL p9-foundation\.service$/m);
 });
 
 test('The Windows repair runs with only the environment install-windows.ps1 needs (BL8)', () => {

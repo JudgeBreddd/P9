@@ -22,13 +22,16 @@ async function seed(paths) {
     { title: 'Wide', notes: 'wide' }, { title: 'Ws', notes: 'ws' }] }));
   await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ ...BUILDER, space: 'space.json',
     notes_roots: { vault, spare: vault, wide: paths.directory, ws: w } }));
-  for (const dir of ['sub', '.obsidian', 'secrets', '_private']) await mkdir(path.join(vault, dir), { recursive: true });
+  for (const dir of ['sub', '.obsidian', 'secrets', '_private/secrets']) await mkdir(path.join(vault, dir), { recursive: true });
   await writeFile(path.join(vault, 'old.md'), '# Old\n');
   await new Promise((resolve) => setTimeout(resolve, 20));
   await writeFile(path.join(vault, 'sub', 'today.md'), '# Today\n');
   await writeFile(path.join(vault, '.obsidian', 'workspace.md'), 'hidden');
   await writeFile(path.join(vault, 'secrets', 'keys.md'), 'locked');
-  await writeFile(path.join(vault, '_private', 'diary.md'), 'locked');
+  await writeFile(path.join(vault, '_private', 'secrets', 'token.md'), 'locked');
+  await writeFile(path.join(vault, '_private', '.env'), 'KEY=locked');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await writeFile(path.join(vault, '_private', 'diary.md'), 'private');
   await writeFile(path.join(vault, 'picture.png'), 'not a note');
   await writeFile(path.join(paths.directory, 'outside.md'), 'outside the vault');
   await symlink(path.join(paths.directory, 'outside.md'), path.join(vault, 'link.md'));
@@ -45,17 +48,19 @@ const call = async (instance, route, method = 'GET', body) => {
 const read = (instance, root, file) => call(instance, '/mission/notes/file?' + new URLSearchParams({ root, path: file }));
 const vaultOf = (instance) => path.join(instance.directory, 'vault');
 
-test('notes: the list is the root\'s .md files, newest first, without dot folders or locked names', async (t) => {
+// P11 (owner, 2026-11-02: "don't restrict access to people's machine or files"): with File protection on, a notes root's
+// _private notes are listed and read, also in a folder outside the workspace such as an Obsidian vault; key names stay hidden.
+test('notes: the list is the root\'s .md files, newest first, with _private notes but without dot folders or key names', async (t) => {
   const instance = await start(t);
   const space = (await call(instance, '/mission')).body.space;
   assert.deepEqual(space.find((s) => s.title === 'Journal').notes, 'vault');
   const list = await call(instance, '/mission/notes?root=vault');
   assert.equal(list.status, 200);
-  assert.deepEqual(list.body.files.map((f) => f.path), ['sub/today.md', 'old.md']);
-  assert.deepEqual([list.body.total, list.body.shown, list.body.partial], [2, 500, false]);
+  assert.deepEqual(list.body.files.map((f) => f.path), ['_' + 'private/diary.md', 'sub/today.md', 'old.md']);
+  assert.deepEqual([list.body.total, list.body.shown, list.body.partial], [3, 500, false]);
   const note = await read(instance, 'vault', 'sub/today.md');
   assert.deepEqual([note.status, note.body.content, note.body.hash], [200, '# Today\n', hash('# Today\n')]);
-  console.log('PASS notes list: newest first; .obsidian, secrets, _private, .png and links left out; read returns content and hash');
+  console.log('PASS notes list: newest first with the _' + 'private note; .obsidian, secrets, _' + 'private/secrets, .png and links left out; read returns content and hash');
 });
 
 test('notes: a path outside the root is refused', async (t) => {
@@ -89,13 +94,18 @@ test('notes: a root must be in settings and named by a space section, and may no
   console.log('PASS notes roots: not in settings 404, in settings but no section 404, a root holding home or the workspace 403');
 });
 
-test('notes: File protection refuses locked names inside a notes root', async (t) => {
+test('notes: File protection hides key names in a notes root and keeps the write lock; a _private note reads', async (t) => {
   const instance = await start(t);
-  for (const file of ['secrets/keys.md', '_' + 'private/diary.md']) assert.equal((await read(instance, 'vault', file)).status, 400, file);
-  assert.equal((await call(instance, '/mission/notes/create', 'POST', { root: 'vault', path: 'secrets/new.md', content: 'x' })).status, 400);
-  assert.equal((await call(instance, '/mission/notes/save', 'POST', { root: 'vault', path: '_' + 'private/diary.md', hash: hash('locked'), content: 'x' })).status, 400);
-  assert.equal(await readFile(path.join(vaultOf(instance), '_private', 'diary.md'), 'utf8'), 'locked');
-  console.log('PASS notes protection: secrets/ and _' + 'private/ refused for read, create and save');
+  for (const file of ['secrets/keys.md', '_' + 'private/secrets/token.md']) assert.equal((await read(instance, 'vault', file)).status, 400, file);
+  const diary = await read(instance, 'vault', '_' + 'private/diary.md');
+  assert.deepEqual([diary.status, diary.body.content, diary.body.hash], [200, 'private', hash('private')]);
+  // Review 3 L2: said read-only, so the page offers no save that is refused; a note outside _private is not.
+  assert.deepEqual([diary.body.readOnly, (await read(instance, 'vault', 'sub/today.md')).body.readOnly], [true, undefined]);
+  for (const file of ['secrets/new.md', '_' + 'private/new.md']) assert.equal((await call(instance, '/mission/notes/create', 'POST', { root: 'vault', path: file, content: 'x' })).status, 400, file);
+  assert.equal((await call(instance, '/mission/notes/save', 'POST', { root: 'vault', path: '_' + 'private/diary.md', hash: hash('private'), content: 'x' })).status, 400);
+  assert.equal(await readFile(path.join(vaultOf(instance), '_private', 'diary.md'), 'utf8'), 'private');
+  await assert.rejects(access(path.join(vaultOf(instance), '_private', 'new.md')));
+  console.log('PASS notes protection: secrets/ and _' + 'private/secrets/ refused for read; _' + 'private/diary.md reads; create in both and a _' + 'private save refused, disk unchanged');
 });
 
 test('notes: a save over a change on disk is a 409 with the disk version, and the disk is unchanged', async (t) => {
@@ -160,7 +170,7 @@ test('notes on the phone: list, preview, and the conflict box', { timeout: 60000
   await page.locator('#mission [data-open]', { has: page.locator('span', { hasText: /^Journal$/ }) }).click();
   await page.click('#mission dialog[open] summary:has-text("Notes")');
   await page.locator('#mission dialog[open] button[data-note="old.md"]').waitFor({ timeout: 10000 });
-  assert.deepEqual(await page.locator('#mission dialog[open] button[data-note]').evaluateAll((b) => b.map((x) => x.dataset.note)), ['sub/today.md', 'old.md']);
+  assert.deepEqual(await page.locator('#mission dialog[open] button[data-note]').evaluateAll((b) => b.map((x) => x.dataset.note)), ['_' + 'private/diary.md', 'sub/today.md', 'old.md']);
   // Files opens with the note already set, so it lists no workspace folder (whose "Pick a file" could land over "Loaded").
   let listed = 0;
   page.on('request', (request) => { if (request.url().includes('/files/list')) listed++; });
@@ -170,7 +180,7 @@ test('notes on the phone: list, preview, and the conflict box', { timeout: 60000
   assert.equal(await page.locator('#fileState').innerText(), 'Loaded');
   assert.equal(listed, 0, 'no folder list over the note');
   const edit = async (text) => {
-    if (await page.locator('#editor').isHidden()) await page.click('#preview');
+    if (await page.locator('#editor').isHidden()) { await page.click('#moreFile'); await page.click('#sheetBody [data-file="preview"]'); }
     await page.click('#editor .cm-content');
     await page.keyboard.press('Control+End');
     await page.keyboard.type(text);
@@ -194,6 +204,6 @@ test('notes on the phone: list, preview, and the conflict box', { timeout: 60000
   await page.locator('#fileState', { hasText: 'Saved' }).waitFor({ timeout: 10000 });
   assert.equal(await readFile(file, 'utf8'), '# Old\nfrom the notes app\nmine\n');
   await page.click('#closeFile');
-  await page.locator('[data-view="mission"]').waitFor({ state: 'visible' });
+  await page.locator('section[data-view="mission"]').waitFor({ state: 'visible' });
   console.log('PASS notes phone: Journal → Notes lists newest first; a note opens as a preview; Load disk version and Save mine over it after a change on disk');
 });

@@ -28,7 +28,11 @@ on:
         required: false
         default: ''
       only:
-        description: rollback runs only the x64 build and the steps the rollback check needs (no arm64, no AppImage). Leave the tag empty
+        description: rollback runs only the x64 build and the steps the rollback check needs (no arm64, no AppImage); appimage runs only the AppImage job (no Windows). Leave the tag empty
+        required: false
+        default: ''
+      files:
+        description: Windows test files to run instead of the Windows checks (space-separated, e.g. test/files-windows.test.mjs); no installer build, no AppImage, no installs or updates. Empty runs everything. Leave the tag empty
         required: false
         default: ''
 
@@ -37,6 +41,7 @@ permissions:
 
 jobs:
   installer:
+    if: inputs.only != 'appimage'
     strategy:
       # One architecture failing still finishes the other's installer.
       fail-fast: false
@@ -78,7 +83,9 @@ jobs:
           test -z "$TAG" || { echo "::error::A candidate attaches nothing to a release: leave the tag empty"; exit 1; }
           version=$(node scripts/candidate-version.mjs "$VERSION")
           npm pkg set "version=$version"
-      - run: pnpm package:win
+      # files (dispatch only) runs just the named tests: they need no installer, so the build is skipped.
+      - if: inputs.files == ''
+        run: pnpm package:win
       - name: Attach to the release
         if: env.TAG != ''
         shell: bash
@@ -95,7 +102,7 @@ jobs:
           path: dist/windows/latest.yml
           retention-days: 1
       - name: Show the check build
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         shell: bash
         run: |
           cat dist/windows/SHA256SUMS-$P9_ARCH
@@ -104,7 +111,7 @@ jobs:
           ls -l dist/windows/*-unpacked/resources/app.asar
       # The check build, to download from the run's page and install by hand (a tester's laptop).
       - uses: actions/upload-artifact@v4
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         with:
           name: windows-installer-${{ matrix.arch }}
           path: |
@@ -114,41 +121,57 @@ jobs:
       # The Windows-only tests on a real Windows machine of each architecture: the host (.cmd through cmd.exe, a new
       # console, the folder ACL check, the prebuilt DLL) and Job Object stop. After the upload, so a failure keeps the installer.
       - name: Windows host and process-tree tests
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         run: node --test test/windows-process-tree.test.mjs
       # GitHub issue #11: the dock's terminal on Windows (ConPTY), through the real routes and the daemon's pipe.
       - name: Windows terminal test
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         run: node --test test/windows-terminal.test.mjs
       # GitHub issue #11 (v0.1.5 N1): Mission notes in a folder outside the workspace, through win.canonical and the new
       # renameNamed (no replace): links out, locked names, the 409 conflict and rename onto an existing name.
       - name: Windows notes test
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         run: node --test test/mission-notes.test.mjs
       # BL9: the file guard's and the editor host's owner-only checks compare SDDL text. The runner's account is the
       # built-in Administrator (RID 500), which SDDL writes as LA, so the tests now ask Windows for that form.
       # Their powershell.exe (5.1) would inherit this pwsh 7 step's module folders and fail to load Get-Acl's module
       # (run 40139947301): keep only its own folders, as install-windows.ps1 does.
       - name: Windows file guard test
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         run: |
           $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
           node --test test/files-windows.test.mjs
       - name: Windows editor host test
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         run: |
           $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
           node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs
       # v0.1.5 DV2: Dev Focus's folder outside the workspace, on Windows paths: %LOCALAPPDATA%\P9 and the drive root refused,
       # saves there through the guarded save, a junction out refused.
       - name: Windows Dev folder test
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         run: node --test test/dev-root.test.mjs
+      # files (dispatch only): just these test files on this leg, for a chunk proving its Windows test without the
+      # 40-minute install and update steps.
+      - name: The chosen Windows tests
+        if: env.TAG == '' && inputs.files != ''
+        shell: pwsh
+        env:
+          P9_FILES: ${{ inputs.files }}
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          $files = @($env:P9_FILES -split '\s+' | Where-Object { $_ })
+          foreach ($f in $files) {
+            if ($f -notmatch '^test/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.test\.mjs$' -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "files: not a test file here: $f" }
+          }
+          Write-Output ('node --test ' + ($files -join ' '))
+          node --test @files
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # GitHub issue #4: install the check build here, then see the daemon task start with no window, come back after the
       # daemon dies, the way the desktop app restarts it, and leave nothing running after the real uninstaller. A runner's session is not a real desktop, so this proves the task and the
       # daemon, not what a person sees.
       - name: Install it here and start the daemon
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         shell: pwsh
         timeout-minutes: 28
         run: |
@@ -190,6 +213,13 @@ jobs:
             if (-not (Test-Path -LiteralPath (Join-Path $app $f))) { throw "the installer left out $f" }
           }
           if (-not (Get-ChildItem (Join-Path $app ($daemon + '@openai\codex-win32-' + $env:P9_ARCH)) -Recurse -Filter codex.exe -ErrorAction SilentlyContinue)) { throw 'the installer left out codex.exe' }
+          # Item 15: Codex's file search (rg.exe in codex-path) runs as installed, with the vcruntime140.dll bundleDaemon puts
+          # beside it (the runner has the VC++ runtime, so --version alone passes without that copy), and the doctor's
+          # child-env.mjs finds deps.mjs.
+          $rg = Get-ChildItem (Join-Path $app ($daemon + '@openai\codex-win32-' + $env:P9_ARCH)) -Recurse -Filter rg.exe | Where-Object { $_.Directory.Name -eq 'codex-path' } | Select-Object -First 1
+          if (-not $rg -or -not (Test-Path -LiteralPath (Join-Path $rg.DirectoryName 'vcruntime140.dll'))) { throw 'the installer left out codex-path\rg.exe or the vcruntime140.dll beside it' }
+          & $rg.FullName --version; if ($LASTEXITCODE -ne 0) { throw "rg.exe --version exited $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath (Join-Path $app 'resources\daemon\apps\server\deps.mjs'))) { throw 'the installer left out deps.mjs' }
           # AU2: the app and the daemon's node.exe are this runner's architecture (the PE header's machine field), not an
           # x64 file running under ARM64 emulation.
           $machine = @{ x64 = 0x8664; arm64 = 0xAA64 }[$env:P9_ARCH]
@@ -378,14 +408,15 @@ jobs:
       # every later release ships the bundled daemon. Install that release, wait for its daemon, install this build over
       # it, then count. Uninstalls at the end, so the next step starts clean.
       - name: Update over the newest release
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         shell: pwsh
         timeout-minutes: 40
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Pre-releases count: every P9 release so far is one.
-          $tag = gh release list -R $env:GITHUB_REPOSITORY --exclude-drafts --limit 1 --json tagName -q '.[0].tagName'
+          # Pre-releases count: every P9 release so far is one. Only a P9 version's tag (vN...): a dependency release such as
+          # deps-tmux-3.8 has no installer.
+          $tag = gh release list -R $env:GITHUB_REPOSITORY --exclude-drafts --limit 20 --json tagName -q '[.[] | select(.tagName | test("^v\\d"))][0].tagName'
           if ($LASTEXITCODE -ne 0 -or -not $tag) { throw 'gh release list found no release' }
           $old = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'p9-newest')).FullName
           gh release download $tag -R $env:GITHUB_REPOSITORY -D $old -p "*-windows-$env:P9_ARCH.exe" -p "SHA256SUMS-$env:P9_ARCH" --clobber
@@ -431,7 +462,7 @@ jobs:
       # again, then runs teh doctor. p9user's files are owner-only, so every check runs as p9user, through a Scheduled Task
       # with its password (a batch logon); the scripts and their output go through C:\p9ci, which p9user may write.
       - name: Install twice as a standard user
-        if: env.TAG == '' && inputs.only != 'rollback'
+        if: env.TAG == '' && inputs.only != 'rollback' && inputs.files == ''
         shell: pwsh
         timeout-minutes: 40
         run: |
@@ -549,7 +580,7 @@ jobs:
       # GitHub's: the real feed can only be checked once two public releases that are not pre-releases exist. Last in the
       # job: the N+1 build replaces the files in dist/windows.
       - name: Update itself from a local feed
-        if: env.TAG == '' && matrix.arch == 'x64'
+        if: env.TAG == '' && matrix.arch == 'x64' && inputs.files == ''
         shell: pwsh
         timeout-minutes: 50
         run: |
@@ -605,7 +636,7 @@ jobs:
       # whose window is never ready to show. That one fails 2 starts, goes back on its own (its kept installer, run by the
       # launcher), and the restored version shows the notice. Its screenshot goes to the rollback-evidence artifact.
       - name: Roll back an update that does not start
-        if: env.TAG == '' && matrix.arch == 'x64'
+        if: env.TAG == '' && matrix.arch == 'x64' && inputs.files == ''
         shell: pwsh
         timeout-minutes: 60
         run: |
@@ -810,7 +841,7 @@ jobs:
           Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Output "$good updated itself to $bad, which failed 2 starts and went back to $good on its own; the notice showed"
       - uses: actions/upload-artifact@v4
-        if: always() && env.TAG == '' && matrix.arch == 'x64'
+        if: always() && env.TAG == '' && matrix.arch == 'x64' && inputs.files == ''
         with:
           name: rollback-evidence
           path: ${{ runner.temp }}/rollback-evidence
@@ -820,7 +851,7 @@ jobs:
   # AU2: the Linux AppImage, x64 only (no arm64 Linux build yet). Its daemon cannot run from the AppImage's mount, which
   # goes away when the app quits: AU4 copies it to ~/.local/share/p9/daemon first.
   appimage:
-    if: inputs.only != 'rollback'
+    if: inputs.only != 'rollback' && inputs.files == ''
     runs-on: ubuntu-24.04
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-appimage
@@ -868,6 +899,43 @@ jobs:
           test "$("$root/daemon/node" --version)" = v26.10.0
           test -f "$root/daemon/apps/server/main.mjs"
           test ! -e "$root/daemon/node.exe"
+          # Item 16: the pinned editor server rides along, unchanged (the hash is editor-host.mjs EDITOR_DOWNLOADS.x64).
+          sha=$(node --input-type=module -e "import('./apps/desktop/editor-host.mjs').then(m => console.log(m.EDITOR_DOWNLOADS.x64[1]))")
+          echo "$sha  $root/editor/reh.tar.gz" | sha256sum -c
+          test -f "$root/licenses/editor-server-NOTICE.md"
+          # K7: the pinned static tmux rides along (deps.mjs TMUX_SHA256.x64).
+          sha=$(node --input-type=module -e "import('./apps/server/deps.mjs').then(m => console.log(m.TMUX_SHA256.x64))")
+          echo "$sha  $root/tmux/tmux" | sha256sum -c
+      # Item 15: what this AppImage's runtime needs to mount it on a bare Ubuntu 24.04, round by round, each package checked
+      # against Ubuntu Desktop's manifest (scripts/bare-machine.sh appimage).
+      - name: The AppImage on a bare Ubuntu 24.04
+        run: set -o pipefail; bash scripts/bare-machine.sh appimage dist/linux/*.AppImage 2>&1 | tee "$RUNNER_TEMP/appimage-bare.log"
+      # Item 16: a first start on a computer with no P9 installs the editor server from that copy, with no network asked of
+      # it. The unpacked AppImage, as its runtime would start it (APPIMAGE set), with a fresh home; no FUSE on the runner.
+      - name: The AppImage installs the editor server
+        run: |
+          # K7: no tmux on this machine, so the first start places the AppImage's own copy.
+          sudo apt-get remove -y -q tmux > /dev/null 2>&1 || true
+          ! command -v tmux
+          sha=$(node --input-type=module -e "import('./apps/server/deps.mjs').then(m => console.log(m.TMUX_SHA256.x64))")
+          command -v xvfb-run > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+          image=$(realpath dist/linux/*.AppImage) home="$RUNNER_TEMP/first-start"
+          commit=$(node --input-type=module -e "import('./apps/desktop/editor-host.mjs').then(m => console.log(m.EDITOR_COMMIT))")
+          mkdir -p "$home"
+          HOME="$home" APPIMAGE="$image" XDG_CONFIG_HOME= XDG_DATA_HOME= xvfb-run -a "$RUNNER_TEMP/squashfs-root/AppRun" --no-sandbox > "$RUNNER_TEMP/first-start.log" 2>&1 &
+          product="$home/.local/share/p9/codium-server/product.json"
+          placed="$home/.local/share/p9/service-install.log"
+          for i in $(seq 120); do test -f "$product" && grep -q 'tmux from the AppImage' "$placed" 2>/dev/null && break; sleep 1; done
+          pkill -f "$RUNNER_TEMP/squashfs-root" || true
+          cat "$RUNNER_TEMP/first-start.log"
+          ls -l "$home/.local/share/p9" "$home/.local/share/p9/codium-server/bin"
+          test "$(node -p "require('$product').commit")" = "$commit"
+          test -x "$home/.local/share/p9/codium-server/bin/codium-server"
+          grep -q 'P9: editor server installed from the AppImage' "$RUNNER_TEMP/first-start.log"
+          cat "$home/.local/share/p9/service-install.log"
+          grep -q 'tmux from the AppImage: placed' "$home/.local/share/p9/service-install.log"
+          echo "$sha  $home/.local/share/p9/bin/tmux" | sha256sum -c
+          "$home/.local/share/p9/bin/tmux" -V
       - name: Attach to the release
         if: env.TAG != ''
         env:
@@ -903,6 +971,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 26.10.0
+          package-manager-cache: false
       - uses: actions/download-artifact@v4
         with:
           pattern: feed-*

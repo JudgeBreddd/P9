@@ -4,7 +4,7 @@ import { writeFile, readFile as diskRead, symlink, link, mkdir, chmod, unlink, r
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { readFile, guardedSave, createFile, hash, quietFfi } from '../packages/files/index.mjs';
+import { readFile, guardedSave, createFile, hash, quietFfi, guardFolders, desktopFolders, listDirectory, createDirectory, renameFile } from '../packages/files/index.mjs';
 import { open } from 'node:fs/promises';
 import { fixture, externalEdit, daemon, authenticated, http } from './helpers.mjs';
 
@@ -310,4 +310,46 @@ test('W4: loading the Windows file guard drops only the FFI experimental warning
     await new Promise((resolve) => setImmediate(resolve));
   } finally { process.off('warning', listener); }
   assert.deepEqual(seen, ['another warning', 'FFI is an experimental feature (after loading)']);
+});
+
+// Review 3 L3: the guarded folders hold behind a symlinked config folder (stored as their real path too, also when made
+// later), guard a file as well as a folder, and cover both config bases and a source run's P9 files in the Electron folder.
+test('L3: guarded folders hold through a symlink, for a file, and under both config bases', { skip: process.platform === 'win32' ? 'symlinks' : false }, async () => {
+  const { directory } = await fixture();
+  const root = await realpath(directory), real = path.join(root, 'config-real'), link = path.join(root, 'config');
+  await mkdir(path.join(real, 'P9x'), { recursive: true }); await writeFile(path.join(real, 'P9x', 'key'), 'keep');
+  await writeFile(path.join(real, 'p9-trust.json'), '{}'); await writeFile(path.join(real, 'other.json'), 'open');
+  await symlink(real, link);
+  guardFolders(path.join(link, 'P9x'), path.join(link, 'later'), path.join(link, 'p9-trust.json'));
+  await mkdir(path.join(real, 'later')); await writeFile(path.join(real, 'later', 'key'), 'keep');
+  for (const inner of ['config-real/P9x/key', 'config-real/later/key', 'config-real/p9-trust.json'])
+    await assert.rejects(readFile(root, inner), /private-folder/, inner);
+  await assert.rejects(listDirectory(root, 'config-real/P9x'), /private-folder/, 'list');
+  assert.equal((await readFile(root, 'config-real/other.json')).content, 'open', 'the rest of the folder still reads');
+  const folders = desktopFolders({ platform: 'linux', home: '/h', env: { XDG_CONFIG_HOME: '/x' } });
+  for (const want of ['/x/P9 Event Horizon', '/h/.config/P9 Event Horizon', '/h/.config/Electron/ssh', '/h/.config/Electron/p9-trust.json', '/x/Electron/p9-server.json', '/h/.config/Electron/p9-settings.json'])
+    assert.ok(folders.includes(want), want);
+  assert.ok(!folders.includes('/h/.config/Electron'), 'not the whole Electron folder, which other apps share');
+  console.log('PASS L3: 3 reads and a list behind a symlink refused, a sibling file reads; both config bases and the source-run files guarded');
+});
+// v0.1.6 U1/U5 (threat model rows 34, 41): Unrestricted mode lets a root hold P9's own folders (home, a drive root). Saves
+// outside them work (the draft still goes to recovery); nothing reads, lists, saves, creates or renames inside one.
+test('U5: a root holding P9\'s own folders reaches everything but them; a save into the recovery folder is refused', async () => {
+  const { directory, recovery: made } = await fixture();
+  const root = await realpath(directory), recovery = await realpath(made), state = path.join(root, 'state');
+  await mkdir(state); await writeFile(path.join(state, 'secret.txt'), 'keep');
+  await writeFile(path.join(root, 'open.txt'), 'one');
+  await writeFile(path.join(recovery, 'draft.txt'), 'draft');
+  guardFolders(state);
+  assert.equal((await guardedSave(root, 'open.txt', hash('one'), 'two', recovery)).kind, 'saved', 'a root holding recovery saves outside it');
+  assert.equal(await diskRead(path.join(root, 'open.txt'), 'utf8'), 'two');
+  assert.equal((await createFile(root, 'new.txt', 'x')).kind, 'created');
+  const tries = { read: () => readFile(root, 'state/secret.txt'), list: () => listDirectory(root, 'state'), 'list as root': () => listDirectory(state, ''),
+    save: () => guardedSave(root, 'state/secret.txt', hash('keep'), 'x', recovery), create: () => createFile(root, 'state/new.txt', 'x'),
+    folder: () => createDirectory(root, 'state/sub'), 'rename in': () => renameFile(root, 'state/secret.txt', 'gone.txt'), 'rename onto': () => renameFile(root, 'new.txt', 'state') };
+  for (const [name, attempt] of Object.entries(tries)) await assert.rejects(attempt(), /private-folder/, name);
+  await assert.rejects(guardedSave(root, path.relative(root, path.join(recovery, 'draft.txt')), hash('draft'), 'x', recovery), /unsafe-recovery-directory/, 'a save into recovery');
+  assert.deepEqual([await diskRead(path.join(state, 'secret.txt'), 'utf8'), await diskRead(path.join(recovery, 'draft.txt'), 'utf8')], ['keep', 'draft']);
+  assert.deepEqual(await readdir(state), ['secret.txt']);
+  console.log('PASS U5: root holding state and recovery saves outside them; 8 reads/writes inside state and a save into recovery refused, both unchanged');
 });

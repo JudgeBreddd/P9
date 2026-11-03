@@ -1,0 +1,255 @@
+// v0.1.6 c23: the desktop polish items (D1, D14, D2, D11, D12, D6), in the real Electron shell with sample data.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { _electron, chromium } from '@playwright/test';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+
+async function launch(t, files = {}) {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'p9-c23-'));
+  for (const [name, text] of Object.entries(files)) await writeFile(path.join(profile, name), text);
+  const env = { ...process.env, P9_SAMPLE_DATA: '1' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--user-data-dir=' + profile], env, timeout: 15000 });
+  t.after(() => app.close());
+  const page = await app.firstWindow({ timeout: 15000 });
+  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
+  // The window's native children (Dev Focus's editor view first), in window pixels (zoom 1).
+  const native = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.map(c => ({ ...c.getBounds(), visible: c.getVisible(), url: c.webContents.getURL() })));
+  // page.screenshot leaves out native views: stack each view's own picture at its bounds, in order (side-panel.test.mjs).
+  // live: a toast's fade-out run to its end (animations: 'disabled') removes the toast, so its pictures keep the animations.
+  const shot = async (name, withViews = false, live = false) => {
+    let png = await page.screenshot(live ? {} : { animations: 'disabled' });
+    if (withViews) {
+      const layers = await app.evaluate(async ({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0], out = [{ b: { x: 0, y: 0, ...win.getContentBounds() }, png: (await win.webContents.capturePage()).toPNG().toString('base64') }];
+        for (const c of win.contentView.children) if (c.getVisible()) out.push({ b: c.getBounds(), png: (await c.webContents.capturePage()).toPNG().toString('base64') });
+        return out;
+      });
+      const browser = await chromium.launch(), p = await browser.newPage({ viewport: { width: layers[0].b.width, height: layers[0].b.height } });
+      await p.setContent('<body style="margin:0;background:#000">' + layers.map(l => `<img style="position:absolute;left:${l.b.x}px;top:${l.b.y}px;width:${l.b.width}px;height:${l.b.height}px" src="data:image/png;base64,${l.png}">`).join(''));
+      png = await p.screenshot(); await browser.close();
+    }
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+  };
+  return { app, page, native, shot };
+}
+const overlap = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+test('D1: a toast shows its whole message; a click opens it with where to start, and the toast stays', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  await page.evaluate(() => document.documentElement.style.setProperty('--toast-life', '600s'));
+  const txt = 'Could not save plan-for-the-long-weekend.md: no permission to write it. Your text is still here.';
+  await page.evaluate((txt) => {
+    window.__toast({ kind: 'not saved', txt, level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
+    window.__toast({ kind: 'not attached', txt: 'holiday-photo-from-the-lake.heic: PNG, JPEG, GIF or WebP only.', level: 'warn' }, true);
+  }, txt);
+  await page.locator('#toasts .toast', { hasText: 'holiday-photo' }).waitFor({ timeout: 5000 });
+  for (const toast of await page.locator('#toasts .toast .truncate').all()) {
+    assert.deepEqual(await toast.evaluate((el) => [getComputedStyle(el).whiteSpace, el.scrollWidth <= el.clientWidth]), ['normal', true], 'the whole message shows');
+  }
+  await shot('c23-d1-toasts', false, true);
+  await page.locator('#toasts .toast', { hasText: 'plan-for-the-long-weekend' }).click();
+  await page.locator('#mdl[open] #mdlBody', { hasText: txt }).waitFor({ timeout: 5000 });
+  assert.match(await page.locator('#mdlBody .start').innerText(), /^Where to start: Your text is still in the editor/);
+  assert.equal(await page.locator('#toasts .toast', { hasText: 'plan-for-the-long-weekend' }).count(), 1, 'the toast does not vanish on click');
+  assert.doesNotMatch(await page.locator('#mdlBody').innerText(), /In the real app/, 'no sample-only line on a real failure');
+  await shot('c23-d1-panel', false, true);
+  await page.click('#mdlFoot [data-dismiss]');
+  // A done toast is not added to the bell's list by opening it.
+  assert.equal(await page.locator('#mdl[open]').count(), 0);
+  console.log('PASS D1');
+});
+
+test('D14: the terminal is never under a panel: floating above a full side panel, and docked in Dev Focus beside the editor view', { timeout: 90000 }, async (t) => {
+  const { page, native, shot } = await launch(t);
+  await page.click('#rDev');
+  await page.keyboard.press('Control+Backquote');
+  await page.locator('#dock:not([hidden])').waitFor({ timeout: 5000 });
+  // Dev Focus docks the terminal only: the editor view is drawn above the page, so a floating terminal went behind it.
+  assert.equal(await page.locator('#dock.float').count(), 0, 'docked in Dev Focus');
+  assert.equal(await page.locator('#dFloat').isVisible(), false, 'no float button in Dev Focus');
+  let dock, view;
+  const deadline = Date.now() + 5000;
+  do {
+    await page.waitForTimeout(150);
+    dock = await page.locator('#dock').boundingBox();
+    view = (await native()).find((c) => c.url.startsWith('p9://dev'));
+  } while ((!view?.visible || overlap(dock, view)) && Date.now() < deadline);
+  assert.ok(view?.visible, 'the editor view shows');
+  assert.ok(!overlap(dock, view), 'the editor view keeps clear of the docked terminal: ' + JSON.stringify({ dock, view }));
+  await shot('c23-d14-dev', true);
+  // Chat Focus with the side panel full: the floating terminal is on top of it.
+  await page.click('#rChat');
+  await page.evaluate(() => window.__side.open('artifact', { title: 'Editor', mode: 'full', render: (b) => { b.textContent = 'editor'; } }));
+  await page.waitForFunction(() => document.querySelector('.stage')?.dataset.sideMode === 'full', null, { timeout: 5000 });
+  if (await page.locator('#dock[hidden]').count()) await page.keyboard.press('Control+Backquote');
+  if (!(await page.locator('#dock.float').count())) await page.click('#dFloat');
+  const box = await page.locator('#dock').boundingBox();
+  assert.equal(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('#dock'), [box.x + 20, box.y + box.height / 2]), true, 'the terminal is above the full side panel');
+  await shot('c23-d14-chat-full');
+  console.log('PASS D14');
+});
+
+test('D2: a dragged pet keeps its place beside the message box when a side panel moves the box', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  const pane = page.locator('#chats .pane').first(), pet = pane.locator('canvas.pet'), box = pane.locator('.composer');
+  await pet.waitFor({ timeout: 10000 });
+  const from = async () => { const p = await pet.boundingBox(), b = await box.boundingBox(); return [p.x + p.width / 2 - b.x, p.y + p.height / 2 - b.y, b.x]; };
+  // The pet may still be settling into its spot when the page first shows it: grab it again until the drag is saved.
+  const saved = () => page.waitForFunction(() => Object.values(JSON.parse(localStorage.getItem('p9-pet-spots') || '{}')).some((spot) => Array.isArray(spot.box)), null, { timeout: 4000 }).then(() => true, () => false);
+  for (let i = 0; i < 4; i++) {
+    await page.waitForTimeout(500);
+    const p = await pet.boundingBox(), b = await box.boundingBox();
+    await page.mouse.move(p.x + p.width / 2, p.y + p.height / 2); await page.mouse.down();
+    await page.mouse.move(b.x + 60, b.y - 40, { steps: 5 }); await page.mouse.up();
+    if (await saved()) break;
+    assert.ok(i < 3, 'the drag is saved');
+  }
+  const before = await from();
+  await page.evaluate(() => window.__side.open('artifact', { title: 'Editor', render: (b) => { b.textContent = 'editor'; } }));
+  await page.waitForFunction(() => !!document.querySelector('.stage')?.dataset.side, null, { timeout: 5000 });
+  await page.waitForTimeout(400);
+  const after = await from();
+  assert.notEqual(after[2], before[2], 'the side panel moved the message box');
+  assert.ok(Math.abs(after[0] - before[0]) <= 2 && Math.abs(after[1] - before[1]) <= 2, 'the pet moved with the box: ' + JSON.stringify({ before, after }));
+  await shot('c23-d2-pet-with-panel');
+  console.log('PASS D2');
+});
+
+test('D11: a Dev Focus that could not start keeps one editor view while the layout moves (no new view to flash)', { timeout: 90000 }, async (t) => {
+  const { app, page } = await launch(t);
+  await page.click('#rDev');
+  const view = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.map((c) => ({ id: c.webContents.id, url: c.webContents.getURL(), visible: c.getVisible() }))[0]); // the editor view is the first child (dev.test.mjs)
+  let first; const deadline = Date.now() + 10000;
+  while (!(first = await view())?.visible && Date.now() < deadline) await page.waitForTimeout(150);
+  await page.waitForTimeout(800); // the failed start has finished
+  first = await view();
+  for (const width of [1300, 1200, 1350, 1400]) {
+    await app.evaluate(({ BrowserWindow }, w) => BrowserWindow.getAllWindows()[0].setContentSize(w, 900), width);
+    await page.waitForTimeout(250);
+  }
+  const last = await view();
+  assert.deepEqual([last.id, last.visible], [first.id, true], 'the same view, moved');
+  // Coming back to Dev Focus still tries again (a new view).
+  await page.click('#rChat'); await page.waitForTimeout(200); await page.click('#rDev');
+  const again = Date.now() + 5000; let next;
+  while ((!(next = await view()) || next.id === first.id) && Date.now() < again) await page.waitForTimeout(150);
+  assert.notEqual(next.id, first.id, 'back in Dev Focus, it tries again');
+  console.log('PASS D11');
+});
+
+test('D12: the brand mark is the real P9 logo in every theme', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  for (const theme of ['event-horizon-prime', 'daylight', 'redline', 'ascii']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
+    // The brand file that reads at 20 px (docs/brand/icon-simplified-256.png at 64 px), loaded, not the old D-in-a-ring SVG.
+    await page.locator('#brandBtn img.p9mark').evaluate((el) => el.decode());
+    const mark = await page.locator('#brandBtn img.p9mark').evaluate((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height), new URL(el.src).pathname, el.naturalWidth]; });
+    assert.deepEqual(mark, [20, 20, '/p9-mark.png', 64], theme);
+    assert.equal(await page.locator('#brandBtn svg').count(), 0, 'no inline placeholder');
+    assert.equal(await page.locator('#brandBtn .mark').count(), 0, 'no old square');
+    if (theme === 'event-horizon-prime' || theme === 'daylight') await shot('c23-d12-' + theme, false, true);
+  }
+  console.log('PASS D12');
+});
+
+test('Attempt 2 items 5-7: Settings has five pages picked on the left, no All, every control from before still there, no jump', { timeout: 120000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  const pages = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
+  // Controls that were in Settings before the move (the rest depend on the window: remotes, pets, mission files).
+  const before = ['#setDocs', '#setAm', '#setName', '#setStartLast', '#setCloseSend', '#setF-chat', '#setF-dev', '#setF-mission', '#setWarn', '[data-default-mode]'];
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.click('#setBtn'); await page.locator('#setDlg[open] .set-pages').waitFor({ timeout: 10000 }); await page.waitForTimeout(400);
+    assert.deepEqual(await page.locator('.set-pages button').allInnerTexts(), pages, 'five pages, no All');
+    const nav = await page.locator('.set-pages').boundingBox(), body = await page.locator('#setBody').boundingBox();
+    assert.ok(nav.x + nav.width <= body.x + 1 && nav.height > nav.width, 'the picker is a column on the left: ' + JSON.stringify([nav, body]));
+    const where = {}; let top;
+    for (const n of pages) {
+      await page.click('[data-set-page="' + n + '"]');
+      assert.equal(await page.locator('#setBody>.set-page:visible').count(), 1, n + ': one page shown');
+      const head = await page.locator('#setDlg .dlg-head').boundingBox();
+      top ??= head.y; assert.ok(Math.abs(head.y - top) < 1, n + ': the header does not move (' + head.y + ' vs ' + top + ')');
+      where[n] = await page.locator('#setBody>.set-page:visible legend').allInnerTexts();
+      await shot('a2-settings-' + n.toLowerCase().replace(' ', '-') + '-' + theme);
+    }
+    for (const sel of before) assert.ok(await page.locator('#setBody ' + sel).count() > 0, sel + ' is still in Settings');
+    console.log('A2 pages ' + JSON.stringify(where));
+    await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  }
+  console.log('PASS A2 settings');
+});
+
+test('Attempt 2 item 4: Dev Focus opens with no chat pane; the toggle still opens it', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.click('#rDev'); await page.waitForTimeout(600);
+    assert.notEqual(await page.evaluate(() => window.__side.current()?.slot), 'dan-chat', 'no chat pane on entry');
+    assert.equal(await page.locator('#sideChats').count(), 0);
+    assert.notEqual(await page.locator('#sideToggle').getAttribute('aria-pressed'), 'true');
+    await shot('a2-dev-entry-' + theme, true);
+    await page.click('#rChat');
+  }
+  await page.click('#rDev'); await page.click('#sideToggle');
+  await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat', null, { timeout: 5000 });
+  console.log('PASS A2 dev');
+});
+
+test('K11: the Mission page makes room for the cards; no card covers a Mission panel', { timeout: 90000 }, async (t) => {
+  const { page, shot } = await launch(t);
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await page.click('#rMission'); await page.locator('#fMission [data-panel]').first().waitFor({ timeout: 10000 });
+    await page.locator('#cards .card').first().waitFor({ timeout: 10000 }); await page.waitForTimeout(300);
+    const cards = await page.locator('#cards .card').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()));
+    const panels = await page.locator('#fMission [data-panel]').evaluateAll((els) => els.map((e) => ({ name: e.dataset.panel, ...e.getBoundingClientRect().toJSON() })));
+    assert.ok(cards.length > 0 && panels.length > 0);
+    for (const p of panels) for (const c of cards) assert.ok(!overlap(p, c), theme + ': a card covers the ' + p.name + ' panel');
+    await shot('c23-k11-mission-' + theme);
+  }
+  console.log('PASS K11');
+});
+
+test('Machine menu: the Local/Remote badge lists This computer and the saved remotes; pick, Remove, Add a machine', { timeout: 120000 }, async (t) => {
+  const { page, shot } = await launch(t, { 'p9-server.json': JSON.stringify({ host: null, last: null, remotes: ['build-box', 'gpu-rig'] }) });
+  const badge = page.locator('#serverBadge'), pop = page.locator('#serverPop');
+  await badge.filter({ hasText: 'Local' }).waitFor({ timeout: 15000 });
+  const rows = () => pop.locator('[data-server-go]').evaluateAll((els) => els.map((el) => [el.dataset.serverGo, el.querySelector('.muted').textContent]));
+  for (const theme of ['event-horizon-prime', 'daylight']) {
+    await page.click('#themeBtn'); await page.click('[data-theme-pick="' + theme + '"]'); await page.keyboard.press('Escape');
+    await badge.click();
+    await pop.locator('#serverAdd').waitFor({ timeout: 5000 });
+    await shot('c23-machine-menu-' + theme);
+    await page.keyboard.press('Escape');
+  }
+  await badge.click();
+  // Saved remotes are probed as the menu opens (remote.test.mjs covers each state); no such machines here, so Unreachable.
+  for (const h of ['build-box', 'gpu-rig']) await pop.locator('[data-server-go="' + h + '"] .muted', { hasText: 'Unreachable' }).waitFor({ timeout: 15000 });
+  const listed = await rows();
+  assert.deepEqual(listed.slice(0, 3), [['', 'In use'], ['build-box', 'Unreachable'], ['gpu-rig', 'Unreachable']]);
+  // Remove beside a saved remote: gone from the menu and from the list Settings shows.
+  await pop.locator('[data-server-rm="gpu-rig"]').click();
+  await pop.locator('[data-server-go="gpu-rig"]').waitFor({ state: 'detached', timeout: 5000 });
+  assert.deepEqual((await page.evaluate(() => window.p9.server())).remotes, ['build-box']);
+  // Add a machine opens Settings at the Remote group, its name box focused.
+  await pop.locator('#serverAdd').click();
+  await page.locator('#setRemoteName:focus').waitFor({ timeout: 5000 });
+  assert.equal(await pop.isHidden(), true);
+  await page.keyboard.press('Escape');
+  // A pick connects at once, through the same call as Settings' Connect: the window now works on that remote.
+  await badge.click();
+  await pop.locator('[data-server-go="build-box"]').click();
+  const deadline = Date.now() + 15000;
+  let host = null;
+  while (Date.now() < deadline && host !== 'build-box') { host = await page.evaluate(() => window.p9.server().then((r) => r.host)).catch(() => null); await page.waitForTimeout(250); }
+  assert.equal(host, 'build-box');
+  console.log('PASS machine menu');
+});

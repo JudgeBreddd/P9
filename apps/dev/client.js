@@ -3,6 +3,7 @@
 // guarded save (packages/files). Writes extensions, terminals or language servers make on the host are "runs as you, not guarded".
 import { initialize, getService, IFileService, IThemeService, IExtensionService, ITextFileService, IFileDialogService } from '@codingame/monaco-vscode-api';
 import getWorkbench from '@codingame/monaco-vscode-workbench-service-override';
+import { folderError } from '../desktop/dev-folder.mjs';
 import getModel from '@codingame/monaco-vscode-model-service-override';
 import getAuthentication from '@codingame/monaco-vscode-authentication-service-override';
 import getTesting from '@codingame/monaco-vscode-testing-service-override';
@@ -33,6 +34,7 @@ import 'vscode/localExtensionHost';
 import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-typescript-basics-default-extension';
 import '@codingame/monaco-vscode-python-default-extension';
+import '@codingame/monaco-vscode-markdown-basics-default-extension';
 import EditorWorker from '@codingame/monaco-vscode-editor-api/esm/vs/editor/editor.worker?worker';
 import TextmateWorker from '@codingame/monaco-vscode-textmate-service-override/worker?worker';
 
@@ -58,12 +60,15 @@ await initUserConfiguration(JSON.stringify({ 'workbench.colorTheme': 'P9 Prime',
   'files.hotExit': 'onExitAndWindowClose', 'workbench.localHistory.enabled': false, 'security.workspace.trust.enabled': false,
   'extensions.autoUpdate': false, 'telemetry.telemetryLevel': 'off', 'remote.extensionKind': { 'openai.codex-audio': ['workspace'] },
   // Builder's long-running VS Code-over-SSH OOM: the watcher took one inotify watch per folder (29,346 on the real ICM tree,
-  // 82% of them in these folders) and search walked them too. Generated and dependency folders only; the tree stays visible.
-  'files.watcherExclude': heavy, 'search.exclude': heavy, 'search.followSymlinks': false }));
+  // 82% of them in these folders) and search walked them too. Generated and dependency folders only (packages/files HEAVY);
+  // since item 23 (Builder, 2026-10-27: "keep them out of P9's file crawler") the tree leaves them out too.
+  'files.watcherExclude': heavy, 'search.exclude': heavy, 'files.exclude': heavy, 'search.followSymlinks': false }));
 const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
   contributes: { themes: [{ id: 'P9 Prime', label: 'P9 Prime', uiTheme: 'vs-dark', path: './prime-theme.json' }],
-    // A default, not a user setting: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles it.
-    configurationDefaults: { 'editor.wordWrap': 'on' } } }, ExtensionHostKind.LocalProcess);
+    // Defaults, not user settings: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles wrap.
+    // files.autoSave: the web workbench defaults to afterDelay, which wrote every edit a second after the last key (Builder, 2026-10-26:
+    // "save only on ctrl s or save button"). Off: an edit stays in the editor, with the unsaved dot on its tab, until Save.
+    configurationDefaults: { 'editor.wordWrap': 'on', 'files.autoSave': 'off' } } }, ExtensionHostKind.LocalProcess);
 theme.registerFileUrl('./prime-theme.json', new URL('./prime-theme.json', location.href).href);
 
 // The guard boundary, installed on the remote file provider's class before the workbench starts, so no instance of it
@@ -134,10 +139,56 @@ for (const op of ['rename', 'delete', 'mkdir']) guarded[op] = async function (ur
 };
 
 // Open Folder: main's picker (and its confirm for a folder outside the workspace); main loads this page again on the folder it took.
+// Server mode: the picker would list this computer's folders, so this lists the server's and main checks the pick (rows 41/50).
+// VS Code's own remote Open Folder dialog is not in this build (no dialogs override), so this is its shape: a quick pick of
+// the server's folders, read through the editor's remote file provider; type a path, or walk into folders, then Open.
+const pickServerFolder = start => new Promise(resolve => {
+  const pick = v.window.createQuickPick();
+  Object.assign(pick, { title: 'Open Folder on the server', placeholder: 'A folder\'s full path on the server', ignoreFocusOut: true });
+  let dir = null, folders = [], read = 0;
+  const show = () => {
+    const typed = pick.value, part = typed.slice(typed.lastIndexOf('/') + 1).toLowerCase();
+    const matches = folders.filter(name => name.toLowerCase().startsWith(part)).map(name => ({ label: '$(folder) ' + name, name, alwaysShow: true }));
+    pick.items = part ? (matches.length ? matches : [{ label: '$(folder-opened) Open ' + typed, path: typed, alwaysShow: true }])
+      : [{ label: '$(folder-opened) Open this folder', path: dir, description: dir, alwaysShow: true },
+        ...(dir === '/' ? [] : [{ label: '$(arrow-up) ..', name: '..', alwaysShow: true }]), ...matches];
+  };
+  const load = async next => {
+    dir = next; folders = [];
+    const mine = ++read;
+    pick.busy = true;
+    const stat = await service.resolve(URI.from({ scheme: 'vscode-remote', authority, path: next })).catch(() => null);
+    if (mine !== read) return;
+    pick.busy = false;
+    folders = (stat?.children ?? []).filter(child => child.isDirectory).map(child => child.name).sort((a, b) => a.localeCompare(b));
+    pick.validationMessage = stat ? undefined : 'P9 cannot read ' + next + ' on the server.';
+    show();
+  };
+  const go = next => { pick.value = next === '/' ? '/' : next + '/'; load(next); };
+  pick.onDidChangeValue(typed => {
+    const at = typed.lastIndexOf('/');
+    if (at < 0) return show();
+    const folder = at === 0 ? '/' : typed.slice(0, at);
+    if (folder !== dir) load(folder); else show();
+  });
+  pick.onDidAccept(() => {
+    const [item] = pick.activeItems;
+    if (!item) return;
+    if (item.path) { resolve(item.path); pick.hide(); return; }
+    go(item.name === '..' ? (dir.slice(0, dir.lastIndexOf('/')) || '/') : (dir === '/' ? '' : dir) + '/' + item.name);
+  });
+  pick.onDidHide(() => { resolve(undefined); pick.dispose(); });
+  pick.show();
+  go(start.replace(/\/+$/, '') || '/');
+});
 const openFolder = async () => {
-  const result = await window.p9dev.openFolder();
-  if (result.error) v.window.showErrorMessage(result.error === 'root-refused'
-    ? 'P9 does not open that folder: it holds the workspace, your home folder or P9\'s own files.' : 'P9 could not open that folder: ' + result.error);
+  let result = await window.p9dev.openFolder();
+  if (result.pathNeeded) {
+    const typed = await pickServerFolder(result.value);
+    if (!typed) return false;
+    result = await window.p9dev.openFolder(typed);
+  }
+  if (result.error) v.window.showErrorMessage(folderError(result.error, result.server));
   return Boolean(result.ok);
 };
 await initialize({ ...getAuthentication(), ...getTesting(), ...getTask(), ...getGallery({ webOnly: false }), ...getConfiguration(), ...getModel(),

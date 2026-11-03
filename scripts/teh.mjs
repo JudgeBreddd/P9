@@ -10,6 +10,7 @@ import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
 import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
+import { found, placeTmux } from '../apps/server/deps.mjs';
 
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
@@ -44,13 +45,17 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(new Error('bad-response')); } });
+      res.on('end', () => { try { resolve({ status: res.statusCode, body: JSON.parse(text) }); } catch { reject(Object.assign(new Error('bad-response'), { status: res.statusCode })); } });
     });
     req.on('error', reject);
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.end(data);
   });
 }
+
+// D16: a daemon older than the app answers a route it lacks with a plain-text 404: that is not "not answering", and
+// retrying never helps, so the page is told the daemon is out of date.
+export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } } : { status: 503, body: { error: 'daemon-unavailable' } };
 
 export function collectBundle({ status, journal, daemon }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
@@ -162,6 +167,9 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
     const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
       say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
     await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    // K7: the daemon cannot start without tmux. A system tmux wins; with none, the AppImage's pinned copy goes into P9's
+    // bin folder first (before the slow copy below and the service), so a machine with no tmux needs no admin password and no network.
+    if (!await found('tmux', { env })) await say('tmux from the AppImage: ' + await placeTmux({ from: path.join(resources, 'tmux', 'tmux') }));
     // A copy that fails (a full disk) costs the rollback only; the service below goes on.
     try {
       const kept = path.join(share, 'appimage'), copy = path.join(kept, version + '.AppImage');
@@ -189,9 +197,10 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
 // RS1: a restart is done when /health answers with a boot other than the one before it (the old daemon's, or none when it
 // was not answering); a service that started but never answers is reported, not called restarted. Up to 90 s, the most a
 // first start has taken on CI (Wait-Daemon). Resolves { restarted: true } or { error }.
-export async function answered(state, before, ms = 90_000) {
+// probe: how /health is asked; Server mode passes its own, which re-reads the restarted server's credentials (remote.mjs).
+export async function answered(state, before, ms = 90_000, probe = health) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 500))) {
-    const boot = await health(state).then((h) => h.boot, () => null);
+    const boot = await probe(state).then((h) => h.boot, () => null);
     if (boot && (boot.pid !== before?.pid || boot.started !== before?.started)) return { restarted: true };
   }
   return { error: 'daemon-not-answering' };
@@ -223,22 +232,35 @@ export async function restartWindowsTask(state, ms) {
 
 // The same on Linux: the p9-foundation user unit, restarted by systemd. No unit means there is nothing to restart
 // (install-service.mjs makes one). Resolves { restarted: true } or { error }.
+// The unit is named after its RuntimeDirectory, the state folder: p9-foundation, or the dev build's p9-dev beside it.
+export const unitFor = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation') + '.service';
 const systemctl = (...args) => new Promise((resolve) => execFile('systemctl', ['--user', ...args], { timeout: 60_000 }, (error) => resolve(!error)));
-export async function restartLinuxService(state, ms) {
-  if (!await systemctl('cat', 'p9-foundation.service')) return { error: 'service-missing' };
+// RS2, a hung daemon (its SIGTERM handler never runs, so main.mjs's own 10 s stop never fires): systemd would wait the unit's
+// TimeoutStopSec (90 s by default) before its SIGKILL, longer than this command used to wait. sh -c this with $1 the unit and $2
+// the seconds of grace: systemctl restart; still stopping after the grace, the same main process is killed (KillMode=process:
+// the main process only, tmux and detached apps stay). Killing the systemctl client leaves its restart job queued in systemd,
+// which starts the unit once the old process is gone. Server mode runs the same lines over ssh (remote.mjs restartServer).
+export const RESTART_UNIT = 'o=$(systemctl --user show -p MainPID --value "$1"); timeout "$2" systemctl --user restart "$1"; s=$?; '
+  + 'if [ "$s" = 124 ]; then s=0; [ "$(systemctl --user show -p MainPID --value "$1")" != "$o" ] || systemctl --user kill --kill-who=main --signal=SIGKILL "$1" || s=1; fi; [ "$s" = 0 ]';
+export const RESTART_GRACE = 20;
+// Restart and Repair both restart the unit this way (Repair after its daemon-reload, reset-failed and enable).
+const restartUnit = (state, grace) => new Promise((resolve) => execFile('sh', ['-c', RESTART_UNIT, 'sh', unitFor(state), String(grace)], { timeout: (grace + 60) * 1000 }, (error) => resolve(!error)));
+export async function restartLinuxService(state, ms, grace = RESTART_GRACE) {
+  if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing' };
   const before = await health(state).then((h) => h.boot, () => null);
-  if (!await systemctl('restart', 'p9-foundation.service')) return { error: 'restart-failed' };
+  if (!await restartUnit(state, grace)) return { error: 'restart-failed' };
   return answered(state, before, ms);
 }
 
 // Repair on Linux (MT1): the unit enabled and started again from its own file (daemon-reload, and reset-failed after a crash
 // loop), so its drop-ins (phone flags, the GitHub token) stay. No unit: the installer's command, since a daemon this page talks
-// to without a unit was started by hand and holds the lock a new unit would need.
-export async function repairLinuxService(state, ms) {
-  if (!await systemctl('cat', 'p9-foundation.service')) return { error: 'service-missing', detail: 'run node scripts/install-service.mjs <workspace folder>' };
+// to without a unit was started by hand and holds the lock a new unit would need. A hung daemon is killed after the grace,
+// as in Restart (RS2).
+export async function repairLinuxService(state, ms, grace = RESTART_GRACE) {
+  if (!await systemctl('cat', unitFor(state))) return { error: 'service-missing', detail: 'run node scripts/install-service.mjs <workspace folder>' };
   const before = await health(state).then((h) => h.boot, () => null);
-  for (const args of [['daemon-reload'], ['reset-failed', 'p9-foundation.service'], ['enable', 'p9-foundation.service']]) await systemctl(...args);
-  if (!await systemctl('restart', 'p9-foundation.service')) return { error: 'repair-failed' };
+  for (const args of [['daemon-reload'], ['reset-failed', unitFor(state)], ['enable', unitFor(state)]]) await systemctl(...args);
+  if (!await restartUnit(state, grace)) return { error: 'repair-failed' };
   return answered(state, before, ms);
 }
 

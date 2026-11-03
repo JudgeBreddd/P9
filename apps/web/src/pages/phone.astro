@@ -1,65 +1,108 @@
 ---
+// The desktop's look (c18): DUWOP's boot script and theme packs, so the picked theme paints on the first frame.
+import DuwopBoot from '../components/DuwopBoot.astro';
+import '../styles/fonts.css';
+import '../lib/duwop.css';
+import '../lib/command-center.css';
+import '../lib/gods.css';
+import '../lib/aphrodite.css';
+import '../styles/theme-picker.css';
 import '../styles/phone.css';
+import '../styles/black-hole.css';
+import hole from '../black-hole.html?raw';
+import '../styles/artifact.css';
 ---
 <!doctype html>
 <html lang="en" class="dark">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#080b10" />
+    <DuwopBoot />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/p9-icon.png" />
     <link rel="apple-touch-icon" href="/p9-icon.png" />
     <title>P9 phone</title>
   </head>
-  <body>
-    <header><span class="mark" aria-hidden="true"></span><strong>P9</strong><span id="syncState">Connecting</span></header>
-    <div id="stale" role="status" hidden>Offline — showing stale data. Commands and saves are disabled.</div>
-    <div id="gap" role="alert" hidden>History gap detected. Refresh to reload the conversation.</div>
+  <body data-view="chat">
+    <div class="fx-ambient"><div class="fx-horizon"></div></div>
+    <!-- L2, P4: a small P9 black hole bobbing inside a turning broken ring from first paint until the chat list has loaded, so the page never looks
+         frozen. Inline SVG with no image file, so it paints on the first frame with no request. -->
+    <div id="boot" role="status" aria-label="Loading"><Fragment set:html={hole} /></div>
+    <div id="app">
+    <div id="stale" role="status" hidden>Offline: showing stale data</div>
+    <div id="gap" role="alert" hidden>History gap. Tap to reload.</div>
     <main>
-      <section data-view="chat" aria-labelledby="chatTitle">
-        <div class="heading"><div><p class="eyebrow">Agent workspace</p><h1 id="chatTitle">Chat</h1></div><button id="refreshChat" class="quiet">Refresh</button></div>
-        <label>Conversation<select id="conversation"></select></label>
-        <div class="actions start"><button class="quiet" data-new="claude">New Claude chat</button><button class="quiet" data-new="codex">New Codex chat</button></div>
-        <div id="pinned" aria-live="polite"></div>
-        <div id="events" class="feed" aria-live="polite"></div>
-        <div id="queued" class="stack" aria-live="polite" hidden></div>
-        <form id="composer"><div class="actions start"><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select></div><label for="prompt">Message</label><textarea id="prompt" rows="3" placeholder="Tell the agent what to do"></textarea><button type="submit">Send message</button></form>
+      <section data-view="chat">
+        <header class="bar" data-bar="chat"></header>
+        <div id="chatList" class="scroll" aria-label="Chats"></div>
+        <div id="chatArea" hidden>
+          <div id="chips" class="chips" hidden></div>
+          <div class="scrollwrap">
+            <div class="scroll" id="chatBody">
+              <select id="conversation" hidden aria-label="Conversation"></select>
+              <div id="pinned" hidden></div>
+              <button type="button" id="earlier" hidden>Load earlier</button>
+              <div id="events" aria-live="polite"></div>
+            </div>
+            <button type="button" id="jump" aria-label="Jump to the latest message" hidden></button>
+          </div>
+        </div>
+        <!-- COMPOSER SLOT (c2 builds the composer here): sits below the chat scroller, never scrolls away, rides the keyboard. Keep it one flex child; the queued list and the form are today's composer. -->
+        <div id="composerSlot" hidden>
+          <div id="queued" class="stack" aria-live="polite" hidden></div>
+          <!-- P18: sending while the agent works, as the desktop's Steer / Queue chip and its Ctrl Enter interrupt. -->
+          <div id="midTurn" role="group" aria-label="Send while the agent works" hidden><span id="midTurnLabel">Claude is working</span><button type="submit" form="composer" data-when="steer" title="Send into this turn when its current step ends">Steer</button><button type="submit" form="composer" class="quiet" data-when="queue" title="Send when this turn ends">Queue</button><button type="submit" form="composer" class="quiet" data-when="now" title="Stop this turn and send this now">Interrupt</button></div>
+          <div id="box">
+            <div id="attached" class="attached" hidden></div>
+            <div id="slash" class="slash" role="listbox" aria-label="Slash commands" hidden></div>
+            <form id="composer"><textarea id="prompt" rows="1" aria-label="Message" placeholder="Message Claude"></textarea><p id="composerNote" class="muted" role="status" hidden></p><button type="submit" id="send"><span class="vh">Send message</span></button></form>
+            <button type="button" id="attach" class="quiet" aria-label="Attach images" aria-haspopup="dialog">+</button>
+            <button type="button" id="modePill" class="quiet" aria-haspopup="dialog">Mode ▾</button>
+            <input type="file" id="attachInput" multiple hidden>
+            <span id="modeHome" hidden><select id="mode" aria-label="Mode"></select><select id="model" aria-label="Model" hidden></select><span id="more"><span id="pickers"></span></span></span>
+          </div>
+        </div>
       </section>
-      <section data-view="terminal" aria-labelledby="terminalTitle" hidden>
-        <div class="heading"><div><p class="eyebrow">P9 tmux sessions</p><h1 id="terminalTitle">Terminal</h1></div><button id="refreshTerminal" class="quiet">Refresh</button></div>
-        <label>Terminal<select id="terminal"></select></label>
-        <div class="actions start"><button class="quiet" id="newTerminal">New terminal</button><button class="quiet" id="stopTerminal">Stop</button><span id="termState" role="status">No terminal open</span></div>
+      <section data-view="terminal" hidden>
+        <header class="bar" data-bar="terminal"></header>
+        <select id="terminal" aria-label="Terminal" hidden></select>
         <div id="screen" aria-label="Terminal"></div>
-        <div id="keys" class="actions start keys"><button class="quiet" data-key="esc">Esc</button><button class="quiet" data-key="tab">Tab</button><button class="quiet" data-key="ctrlc">Ctrl+C</button><button class="quiet" data-key="up" aria-label="Up arrow">↑</button><button class="quiet" data-key="down" aria-label="Down arrow">↓</button></div>
+        <div id="keys" class="keys"><button data-key="esc">Esc</button><button data-key="tab">Tab</button><button data-key="ctrlc">Ctrl+C</button><button data-key="up" aria-label="Up arrow">↑</button><button data-key="down" aria-label="Down arrow">↓</button><button data-key="left" aria-label="Left arrow">←</button><button data-key="right" aria-label="Right arrow">→</button><button data-key="paste">Paste</button></div>
       </section>
-      <section data-view="mission" aria-labelledby="missionTitle" hidden>
-        <div class="heading"><div><p class="eyebrow">Live workspace</p><h1 id="missionTitle">Mission Control</h1></div><button id="refreshMission" class="quiet">Refresh</button></div>
+      <section data-view="mission" hidden>
+        <header class="bar" data-bar="mission"></header>
         <div id="mission" class="stack"></div>
       </section>
-      <section data-view="usage" aria-labelledby="usageTitle" hidden>
-        <div class="heading"><div><p class="eyebrow">Recorded only</p><h1 id="usageTitle">Usage</h1></div><button id="refreshUsage" class="quiet">Refresh</button></div>
+      <section data-view="usage" hidden>
+        <header class="bar" data-bar="usage"></header>
+        <div id="signIn" class="stack"></div>
         <div id="usage" class="stack"></div>
       </section>
-      <section data-view="files" aria-labelledby="filesTitle" hidden>
-        <div class="heading"><div><p class="eyebrow">Guarded save</p><h1 id="filesTitle">File editor</h1></div><span id="fileState">Not loaded</span></div>
-        <div id="browser"><div class="crumbs"><button id="up" class="quiet" disabled>Up</button><span id="dirPath">Workspace</span></div><ul id="fileList" class="list"></ul></div>
+      <section data-view="files" hidden>
+        <header class="bar" data-bar="files"></header>
+        <div id="browser"><ul id="fileList" class="list"></ul></div>
         <div id="fileView" hidden>
-          <div class="crumbs"><button id="closeFile" class="quiet">Back</button><span id="openPath"></span><button id="preview" class="quiet" hidden>Preview</button></div>
-          <div id="rendered" class="md card" hidden></div>
+          <div id="conflict" class="conflict" role="alert" hidden><span>Changed on disk after you opened it. Your draft is kept and not saved.</span><button id="loadDisk" class="quiet">Load disk version</button><button id="saveMine" class="quiet">Save mine</button></div>
+          <div id="rendered" class="md" hidden></div>
           <div id="editor" aria-label="File contents"></div>
-          <div id="conflict" class="conflict" role="alert" hidden>The file changed on disk after you opened it. Your draft is still here and was not saved.<div class="actions"><button id="loadDisk" class="quiet">Load disk version</button><button id="saveMine">Save mine over it</button></div></div>
-          <div class="actions"><button id="discard" class="quiet" disabled>Discard</button><button id="save" disabled>Save</button></div>
+          <div id="imageView" aria-label="Image" hidden></div>
         </div>
       </section>
     </main>
+    <dialog id="looseDlg" class="loose" aria-labelledby="looseT" aria-describedby="looseP"><form method="dialog">
+      <h2 id="looseT"></h2><p id="looseP"></p><p class="note">The agent lock in the desktop's Settings still overrides it. Mode changes back at any time.</p>
+      <div class="stack"><button class="danger" value="yes">Turn on</button><button class="quiet" value="never">Turn on, don't show again</button><button class="quiet" value="no" autofocus>Cancel</button></div>
+    </form></dialog>
     <nav aria-label="Phone workspace">
-      <button data-nav="chat" aria-current="page"><span>●</span>Chat</button>
-      <button data-nav="terminal"><span>▮</span>Terminal</button>
-      <button data-nav="mission"><span>◆</span>Mission</button>
-      <button data-nav="usage"><span>◒</span>Usage</button>
-      <button data-nav="files"><span>▤</span>Files</button>
+      <button data-nav="chat" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg>Chat</button>
+      <button data-nav="terminal"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 10 3 2-3 2M12 15h4"/></svg>Terminal</button>
+      <button data-nav="mission"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7v7H4zM13 5h7v4h-7zM13 12h7v7h-7zM4 15h7v4H4z"/></svg>Mission</button>
+      <button data-nav="usage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V4M19 20v-6"/></svg>Usage</button>
+      <button data-nav="files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Files</button>
     </nav>
+    </div>
+    <dialog id="sheet" class="sheet"><div class="grab" aria-hidden="true"></div><h2 id="sheetTitle"></h2><div id="sheetBody"></div></dialog>
     <script src="../phone.ts"></script>
   </body>
 </html>

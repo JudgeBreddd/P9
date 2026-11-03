@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { root, daemon } from './helpers.mjs';
+import { editorFor } from './editor-fixture.mjs';
 import { startEditorHost, stopEditorHost, hostWritable, openInCode, EDITOR_DIR, EDITOR_COMMIT } from '../apps/desktop/editor-host.mjs';
 
 const host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
@@ -643,3 +644,73 @@ test('Dev Focus: Open Folder inside and outside the workspace', { skip, timeout:
   await dev.waitForFunction(() => window.devFocus.v.window.activeTextEditor?.document.uri.path.endsWith('/note.txt'), null, { timeout: 30000 });
   console.log('PASS Open Folder: inside at once, outside after one question, saves there guarded, a folder holding the workspace refused, p9 edit back to the workspace');
 });
+
+// ---- Chunk 5: D11 (save only on Ctrl+S / Save, white dot while unsaved) ----
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const fixtures = path.join(root, '_private', 'fixtures');
+// The dev space prints a failure's detail only when the whole run ends; print it where it happens too.
+// The editor asks the extension gallery on start; with no network that rejects (not what these tests check).
+const online = errors => errors.filter(error => !/EAI_AGAIN|ENOTFOUND|ECONNREFUSED/.test(error));
+const logged = body => async t => { try { await body(t); } catch (error) { console.log('FAILED ' + (error.stack ?? error)); throw error; } };
+// Prints the picture into the run's log (the dev space keeps no files) and, with P9_EVIDENCE, saves it.
+async function shot(page, name) {
+  const png = await page.screenshot({ type: 'jpeg', quality: 80 });
+  console.log('SHOT ' + name + ' ' + png.toString('base64'));
+  if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(path.join(evidence, name + '.jpg'), png); }
+}
+async function openDevFocus(t, editor, extra = {}) {
+  const instance = await daemon(t), home = await mkdtemp(path.join(os.tmpdir(), 'p9-dev-home-'));
+  const env = { ...process.env, HOME: home, PATH: editor.path, P9_EDITOR_HOST: editor.host, ...extra }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), sleep(15000)]); proc.kill(); });
+  const shell = await app.firstWindow();
+  await shell.locator('#cards .card').first().waitFor();
+  const devWindow = app.waitForEvent('window', { predicate: page => page.url().startsWith('p9://dev/'), timeout: 60000 });
+  await shell.keyboard.press('Control+2');
+  const dev = await devWindow;
+  const errors = []; dev.on('pageerror', error => errors.push(error.stack ?? error.message));
+  await dev.waitForFunction(() => window.devFocusReady || document.querySelector('#status')?.textContent, null, { timeout: 120000 });
+  assert.equal(await dev.locator('#status').textContent(), '');
+  return { instance, home, app, shell, dev, errors };
+}
+
+test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot while unsaved', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const { instance, dev, errors } = await openDevFocus(t, editor, {});
+  const plain = path.join(instance.workspace, 'plain.txt');
+  await writeFile(plain, 'before\n');
+  assert.equal(await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('files').get('autoSave')), 'off');
+  await dev.evaluate(async () => {
+    const { v, open } = window.devFocus, editor = await open('plain.txt');
+    await editor.edit(edit => edit.insert(new v.Position(0, 0), 'typed '));
+  });
+  // The old behaviour wrote the edit one second after the last change; wait three times that, and a window change on top.
+  await sleep(3500);
+  assert.equal(await readFile(plain, 'utf8'), 'before\n', 'an edit is not on disk until Save');
+  assert.equal(await dev.evaluate(() => window.devFocus.v.window.activeTextEditor.document.isDirty), true);
+  const dot = await dev.evaluate(() => {
+    const label = document.querySelector('.tab.dirty .tab-actions .action-label');
+    return label && { color: getComputedStyle(label).color, mark: getComputedStyle(label, '::before').content };
+  });
+  assert.ok(dot, 'the edited tab is marked unsaved');
+  assert.equal(dot.color, 'rgb(255, 255, 255)', 'the unsaved dot is white');
+  assert.notEqual(dot.mark, 'none', 'the dot is drawn');
+  await shot(dev, 'd11-unsaved-dot');
+  // Ctrl+S saves, through the guarded save, and the dot goes.
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.focusActiveEditorGroup'));
+  await dev.keyboard.press('Control+s');
+  for (let i = 0; i < 60 && (await readFile(plain, 'utf8')) === 'before\n'; i++) await sleep(250);
+  assert.equal(await readFile(plain, 'utf8'), 'typed before\n', 'Ctrl+S writes the edit');
+  await dev.waitForFunction(() => !document.querySelector('.tab.dirty'), null, { timeout: 10000 });
+  await shot(dev, 'd11-saved');
+  // File > Save is the same command.
+  await dev.evaluate(async () => { const { v } = window.devFocus; await v.window.activeTextEditor.edit(edit => edit.insert(new v.Position(0, 0), 'again ')); });
+  await sleep(2500);
+  assert.equal(await readFile(plain, 'utf8'), 'typed before\n');
+  await dev.evaluate(() => window.devFocus.v.commands.executeCommand('workbench.action.files.save'));
+  for (let i = 0; i < 60 && (await readFile(plain, 'utf8')) === 'typed before\n'; i++) await sleep(250);
+  assert.equal(await readFile(plain, 'utf8'), 'again typed before\n', 'Save writes the edit');
+  assert.deepEqual(online(errors), []);
+}));
