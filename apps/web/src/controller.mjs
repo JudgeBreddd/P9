@@ -166,7 +166,7 @@ function openArtifact(art) {
   }
   side.open('artifact', { title: art.title, mode: ART.mode, focuses: [S.focus], defaultWidth: w => w / 2, // it goes with its chat's focus: hidden in another, back (still pinned) on return
     render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [
-      ...(art.list ? [{ label: 'All files', go: () => openChatFiles(art.sid) }] : []), // opened from the chat's list: back to it
+      ...(art.list ? [{ label: 'Back to list', go: () => openChatFiles(art.sid) }] : []), // opened from the chat's list: back to it
       { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; side.mode(ART.mode); } }, full] }),
     onClose: why => { if (why === 'close' && art.list) localStorage.removeItem(cfKey(art.sid)); // its x closes the chat's list too
       if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
@@ -187,24 +187,40 @@ function autoArtifact(s) {
 side.onResize(() => { ART.state?.refresh?.(); keepBox(); });
 // Chat files (the request, 2026-10-30: "a button just to the left of the running indicator that will open a side pannel and show me
 // the artifacts and files and such? just like anthropic does"). The button sits left of the chat's own Running label (pane());
-// its list, the side panel's 'chat-files' slot, is newest first: every artifact the chat's replies posted (a click opens it as
-// its chip does) and every file its finished edit calls wrote (editFiles), created or edited. A file opens read-only in the
-// artifact view through the Files pane's own reads (p9:mission read and image: GET /files and /files/image, workspace paths
-// only), so the daemon's walk and File protection decide what shows; a file outside the workspace is listed with Copy path only.
-// The open list is remembered per chat (localStorage 'p9-chat-files:<id>'): that chat shown again in Chat Focus opens it again.
-// ponytail: only the chat's loaded events are read (its latest TAIL steps until Show earlier), as the chat itself shows them.
-const CF = { sid: null, ws: null, asked: false, html: null };
+// its panel, the side panel's 'chat-files' slot, has two tabs (Builder, 2026-11-02: "separate the artifacts from the diffs into
+// their own tabs"), each newest first. Artifacts: every artifact the chat's replies posted (a click opens it as its chip does).
+// Changes: every file its finished edit calls wrote (editFiles), created or edited; a click shows that file's diffs, read-only
+// ("let me at lease read only the diff"), from the edit calls themselves, so nothing is read from the disk and nothing can be
+// applied. The open list and its tab are remembered per chat (localStorage 'p9-chat-files:<id>'): that chat shown again in
+// Chat Focus opens it again.
+// ponytail: only the chat's loaded events are read (its latest TAIL steps until Show earlier), as the chat itself shows them;
+// artifacts are the exception (keptArts, below).
+const CF = { sid: null, ws: null, asked: false, html: null, tab: 'artifacts' };
 const cfKey = id => 'p9-chat-files:' + id;
+// Artifacts outlive the loaded events (Builder, 2026-11-02: "the artifacts are lost on compact"): a chat long enough to compact
+// loads only its newest TAIL steps after a reload, and its older artifacts fell out of the list. Every artifact a chat's loaded
+// replies hold is kept for that chat (localStorage 'p9-artifacts:<id>') and listed after the loaded ones.
+// ponytail: this window's storage only, the newest 30 per chat; an artifact this window never loaded shows once Show earlier reaches it.
+const artKey = id => 'p9-artifacts:' + id;
+const artSig = a => a.sig ??= JSON.stringify([a.kind, a.lang, a.title, a.src]);
+const keptArts = s => s.keptArts ??= (() => { try { const a = JSON.parse(localStorage.getItem(artKey(s.id))); return Array.isArray(a) ? a.filter(x => typeof x?.src === 'string' && KIND_NAMES[x.kind]) : []; } catch { return []; } })();
 function chatItems(s) {
-  const out = [], seen = new Map();
+  const out = [], seen = new Map(), loaded = new Set();
   s.events.forEach((e, i) => {
-    if (e.t === 'agent' && e.text?.includes('artifact')) { if (e.artText !== e.text) { e.artText = e.text; e.arts = artifactsIn(e.text); } for (const art of e.arts) out.push({ type: 'artifact', at: i, art }); }
+    if (e.t === 'agent' && e.text?.includes('artifact')) { if (e.artText !== e.text) { e.artText = e.text; e.arts = artifactsIn(e.text); } for (const art of e.arts) { out.push({ type: 'artifact', at: i, art }); loaded.add(artSig(art)); } }
     else if (e.t === 'tool' && e.files && e.status === 'completed') for (const f of e.files) {
       const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created || !!was?.created };
       if (was) out.splice(out.indexOf(was), 1); // one row per file, at its newest write
       seen.set(f.path, item); out.push(item);
     }
   });
+  const kept = keptArts(s), known = new Set(kept.map(artSig)), fresh = out.filter(it => it.type === 'artifact' && !known.has(artSig(it.art)));
+  if (fresh.length) {
+    kept.push(...fresh.map(({ art: { kind, lang, mode, title, src } }) => ({ kind, lang, mode, title, src })));
+    kept.splice(0, Math.max(0, kept.length - 30));
+    try { localStorage.setItem(artKey(s.id), JSON.stringify(kept)); } catch {} // full storage: listed while loaded, as before
+  }
+  out.unshift(...kept.filter(a => !loaded.has(artSig(a))).map(art => ({ type: 'artifact', at: -1, art })));
   return out.reverse();
 }
 const fwd = p => String(p).replace(/\\/g, '/');
@@ -220,36 +236,39 @@ function wsPath(p, folder) {
 const loadWs = () => { if (CF.asked) return; CF.asked = true; loadSetup().then(b => { CF.ws = b?.workspace ?? null; if (!CF.ws) CF.asked = false; renderChatFiles(); }, () => { CF.asked = false; }); };
 function openChatFiles(sid) {
   if (CF.sid !== sid && side.current()?.slot === 'chat-files') localStorage.removeItem(cfKey(CF.sid)); // one list open at a time
-  CF.sid = sid; localStorage.setItem(cfKey(sid), '1'); loadWs();
-  side.open('chat-files', { title: 'Artifacts and files', focuses: ['chat'], defaultWidth: w => w / 3, render: () => { CF.html = null; renderChatFiles(); },
+  if (CF.sid !== sid) CF.tab = localStorage.getItem(cfKey(sid)) === 'changes' ? 'changes' : 'artifacts';
+  CF.sid = sid; localStorage.setItem(cfKey(sid), CF.tab); loadWs();
+  side.open('chat-files', { title: 'Artifacts and changes', focuses: ['chat'], defaultWidth: w => w / 3, render: () => { CF.html = null; renderChatFiles(); },
     onClose: why => { if (why === 'close') localStorage.removeItem(cfKey(sid)); queueMicrotask(() => renderChats()); } }); // 'hidden' and 'replaced' keep it remembered
   renderChats();
 }
 function renderChatFiles() {
   const b = side.body; if (side.current()?.slot !== 'chat-files') return;
-  const s = S.sessions.find(x => x.id === CF.sid), items = s ? chatItems(s) : [];
+  const s = S.sessions.find(x => x.id === CF.sid), all = s ? chatItems(s) : [], changes = CF.tab === 'changes';
+  const arts = all.filter(it => it.type === 'artifact'), files = all.filter(it => it.type === 'file'), items = changes ? files : arts;
   const row = (it, i) => {
     if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact</span></button></li>`;
     const rel = wsPath(it.path, s.folder), shown = rel ?? fwd(it.path), cut = shown.lastIndexOf('/');
     const where = rel === null ? (CF.ws ? 'outside the workspace, ' : '') + (shown.slice(0, cut) || '/') : cut < 0 ? 'workspace' : shown.slice(0, cut);
-    const tag = rel === null ? 'div' : 'button';
-    return `<li><${tag}${rel === null ? '' : ` type="button" data-cf="${i}" title="Open ${esc(shown)} read-only"`} class="cf-item" data-cf-file><span class="art-kind">File</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></${tag}>`
+    return `<li><button type="button" data-cf="${i}" title="Show the changes to ${esc(shown)} (read-only)" class="cf-item" data-cf-file><span class="art-kind">Diff</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></button>`
       + `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-cf-copy="${i}" title="Copy ${esc(fwd(it.path))}">Copy path</button></li>`;
   };
-  const html = items.length ? `<ul class="cf-list">${items.map(row).join('')}</ul>` : '<p class="empty">Nothing yet. The artifacts this chat posts and the files it writes show here.</p>';
+  const tab = (id, label, n) => `<button type="button" role="tab" data-slot="button" data-variant="ghost" data-size="sm" data-cf-tab="${id}" aria-selected="${CF.tab === id}">${label} <span class="cf-n">${n}</span></button>`;
+  const html = `<div class="cf-tabs" role="tablist">${tab('artifacts', 'Artifacts', arts.length)}${tab('changes', 'Changes', files.length)}</div>`
+    + (items.length ? `<ul class="cf-list" role="tabpanel">${items.map(row).join('')}</ul>` : `<p class="empty" role="tabpanel">${changes ? 'No changes yet. The files this chat edits show here; click one to read its diff.' : 'No artifacts yet. The artifacts this chat posts show here.'}</p>`);
   if (CF.html === html) return; // called on every chat change: the DOM is left alone when nothing in it changed
   CF.html = html; b.innerHTML = html;
-  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true }); else openChatFile(s, it); });
+  b.querySelectorAll('[data-cf-tab]').forEach(el => el.onclick = () => { CF.tab = el.dataset.cfTab; localStorage.setItem(cfKey(CF.sid), CF.tab); renderChatFiles(); });
+  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true }); else openChange(s, it); });
   b.querySelectorAll('[data-cf-copy]').forEach(el => el.onclick = () => copy(fwd(items[+el.dataset.cfCopy].path), el));
 }
-// A file, read-only, as an artifact: Markdown rendered, an image as itself, anything else as code (an .html file is not run).
-async function openChatFile(s, it) {
-  const rel = wsPath(it.path, s.folder), name = rel.split('/').pop(), image = FILE_IMAGE.test(name);
-  const r = await window.p9?.mission?.(image ? 'image' : 'read', { path: rel }).catch(() => null);
-  const src = r?.status === 200 ? image ? fileImageSrc(r.body) : r.body?.content : null;
-  if (typeof src !== 'string') return toast({ kind: 'file', txt: rel + ': ' + (fileImageError[r?.status === 200 ? 'not-an-image' : r?.body?.error] || 'P9 cannot show it (' + (r?.body?.error || r?.status || 'no daemon') + ').'), level: 'warn' }, true);
-  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'text', kind = image ? 'image' : /^(md|markdown)$/.test(ext) ? 'markdown' : 'code';
-  openArtifact({ kind, lang: ext, mode: 'panel', title: rel, src, sid: s.id, list: true });
+// A changed file's diffs, read-only, in the artifact view as plain text (artifact.mjs frameDoc 'diff'): every finished edit call
+// of the loaded chat that wrote it, oldest first, each as the line diff the chat shows (editFiles keeps one per file).
+function openChange(s, it) {
+  const edits = s.events.filter(e => e.t === 'tool' && e.status === 'completed' && e.files?.some(f => f.path === it.path)).map(e => e.files.find(f => f.path === it.path).diff);
+  const src = edits.map((rows, i) => (edits.length > 1 ? `@@ Edit ${i + 1} of ${edits.length} @@\n` : '')
+    + (rows?.length ? rows.map(([k, l]) => (k === 'add' ? '+ ' : k === 'del' ? '- ' : '  ') + l).join('\n') : 'No diff was recorded for this edit.')).join('\n\n');
+  openArtifact({ kind: 'diff', lang: 'diff', mode: 'panel', title: wsPath(it.path, s.folder) ?? fwd(it.path), src, sid: s.id, list: true });
 }
 // From renderChats, in Chat Focus: the open list follows its chat (another chat shown hides it, still remembered), and a
 // remembered one comes back when its chat is shown and the panel is free.
@@ -3262,12 +3281,15 @@ addEventListener('click', async e => {
 // Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
 // and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff with no old text, else a Write.
 // ponytail: a Write over a file that was already there, with no diff, reads as created.
+// Each file keeps its own line diff for the Changes tab (an update with no content keeps the one it had).
+// ponytail: up to 2,000 rows a file, against the chat's 200.
 const editFiles = (d, tool) => {
   if (tool.kind !== 'edit') return tool.files;
   const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
+  const rows = p => { const r = diffs.filter(c => c.path === p).flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
   const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
   const created = p => { const c = diffs.find(c => c.path === p); return c ? c.oldText == null || c.oldText === '' : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
-  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p) })) : tool.files;
+  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), diff: rows(p) })) : tool.files;
 };
 const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
 // Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.

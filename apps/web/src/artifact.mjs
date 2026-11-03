@@ -6,7 +6,7 @@ import { esc, md } from './helpers.mjs';
 // this (an older P9, a terminal) shows it as ordinary code. Desktop (controller.mjs) and phone (phone.ts) share this file.
 const KINDS = { html: 'html', svg: 'svg', mermaid: 'mermaid', jsx: 'react', tsx: 'react', react: 'react', md: 'markdown', markdown: 'markdown' };
 export const ART_MODES = ['panel', 'pinned', 'full'];
-export const KIND_NAMES = { html: 'HTML', svg: 'SVG', mermaid: 'Mermaid', react: 'React', markdown: 'Markdown', code: 'Code', image: 'Image' };
+export const KIND_NAMES = { html: 'HTML', svg: 'SVG', mermaid: 'Mermaid', react: 'React', markdown: 'Markdown', code: 'Code', image: 'Image', diff: 'Diff' };
 export function artifactInfo(info) {
   const w = String(info ?? '').trim().split(/\s+/);
   if (w[1]?.toLowerCase() !== 'artifact' || !/^[\w+#.-]{1,32}$/.test(w[0])) return null;
@@ -33,6 +33,9 @@ export function frameDoc(a) {
   if (a.kind === 'html') return { html: a.src, runtimes: [] };
   if (a.kind === 'svg') return { html: page(a.src), runtimes: [] };
   if (a.kind === 'markdown') return { html: page(md.parse(a.src)), runtimes: [] };
+  // A chat's file changes (controller.mjs openChange): text, its + and - lines tinted. P9 makes this kind; an agent cannot.
+  if (a.kind === 'diff') return { html: page(`<pre>${String(a.src).split('\n').map(l => `<span class="${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : l.startsWith('@@') ? 'hunk' : ''}">${esc(l)}</span>`).join('\n')}</pre>`,
+    '<style>.add{background:#2ea0432e}.del{background:#f851492e}.hunk{opacity:.65}</style>'), runtimes: [] };
   if (a.kind === 'image') return { html: page(`<img src="${esc(a.src)}" alt="${esc(a.title)}" style="max-width:100%">`), runtimes: [] }; // a chat's image file, as a data: URL (the frame allows no other)
   if (a.kind === 'mermaid') return { runtimes: ['mermaid'], html: page(`<pre class="mermaid">${esc(a.src)}</pre>`,
     `<script>mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' }); mermaid.run().catch(${fail});</script>`) };

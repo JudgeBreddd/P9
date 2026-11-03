@@ -333,7 +333,8 @@ test('artifacts: with an artifact panel open the notification cards sit below it
 // wrote; its side panel lists them newest first, and each opens: the artifact as its chip does, the file read-only through
 // GET /files. Real Electron against a real daemon and the fake agent ("edit <name>" writes the file as Claude's adapter
 // reports it; any other prompt comes back as "echo:<text>", so an artifact block comes back as an artifact).
-test('artifacts: the chat files button lists the chat\'s artifact and the file it wrote, and opens each', { timeout: 120000 }, async (t) => {
+// A daemon with the fake agent and a chat in proj, and the desktop on it (the chat files tests).
+async function chatDesktop(t, prompts) {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {
     await mkdir(path.join(workspace, 'proj'));
@@ -347,12 +348,10 @@ test('artifacts: the chat files button lists the chat\'s artifact and the file i
     for (let after = 0, page; (page = await call('/chat/events?after=' + after + '&only=' + id)).events.length; after = page.cursor) all.push(...page.events);
     return all.some(e => e.type === 'update' && e.data.content?.text?.startsWith(text));
   };
-  const until = async (check, what) => { for (const end = Date.now() + 15000; Date.now() < end; await wait(200)) if (await check()) return; assert.fail('timed out: ' + what); };
+  const until = async (check, what) => { for (const end = Date.now() + 20000; Date.now() < end; await wait(200)) if (await check()) return; assert.fail('timed out: ' + what); };
   const id = (await call('/chat', 'POST', { provider: 'claude', folder: 'proj' })).conversation;
-  await call('/chat/' + id + '/prompt', 'POST', { text: 'edit notes.md' });
-  await until(() => said(id, 'edited'), 'the edit turn');
-  await call('/chat/' + id + '/prompt', 'POST', { text: `Here:\n${F}markdown artifact Release notes\n# Shipped\n\nThe list works.\n${F}` });
-  await until(() => said(id, 'echo:Here'), 'the artifact turn');
+  const turn = async (text, reply) => { await call('/chat/' + id + '/prompt', 'POST', { text }); await until(() => said(id, reply), reply); };
+  for (const [text, reply] of prompts) await turn(text, reply);
 
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-cf-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -366,42 +365,94 @@ test('artifacts: the chat files button lists the chat\'s artifact and the file i
     if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
     if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
   };
-  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
-  const pane = page.locator('.pane[data-id="' + id + '"]');
+  const show = async () => {
+    await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
+    await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+    const pane = page.locator('.pane[data-id="' + id + '"]'), button = pane.locator('.ptool [data-chat-files]');
+    await button.waitFor({ timeout: 15000 });
+    return { pane, button };
+  };
+  const frame = async () => {
+    await page.locator('#side .art[data-rendered]').waitFor({ timeout: 20000 });
+    assert.equal(await page.locator('#side .art').getAttribute('data-rendered'), 'rendered');
+    return (await page.locator('#side .art-frame').elementHandle()).contentFrame();
+  };
+  return { id, turn, page, shot, show, frame };
+}
+
+test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an edited file shows its diff, read-only', { timeout: 120000 }, async (t) => {
+  const { id, page, shot, show, frame } = await chatDesktop(t, [['edit made.md', 'edited'], ['diff and code', 'Run this'],
+    [`Here:\n${F}markdown artifact Release notes\n# Shipped\n\nThe list works.\n${F}`, 'echo:Here']]);
+  const { pane, button } = await show();
   // The button: in the chat's own toolbar, right before its Running / Stopped label, with the count.
-  const button = pane.locator('.ptool [data-chat-files]');
-  await button.waitFor({ timeout: 15000 });
-  assert.equal((await button.textContent()).trim(), '2');
+  assert.equal((await button.textContent()).trim(), '3');
   assert.equal(await pane.locator('.ptool [data-chat-files] + .state').count(), 1, 'just left of the chat\'s state label');
   await button.click();
-  const items = page.locator('#side .cf-item');
-  await items.nth(1).waitFor({ timeout: 8000 });
-  assert.equal(await page.locator('#side .stitle').textContent(), 'Artifacts and files');
-  assert.equal(await items.count(), 2);
-  assert.match(await items.nth(0).textContent(), /^MarkdownRelease notesArtifact$/, 'newest first: the artifact');
-  await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Created · proj' }).waitFor({ timeout: 8000 }); // once the workspace path is known
-  assert.match(await items.nth(1).textContent(), /^Filenotes\.mdCreated · proj$/);
+  const items = page.locator('#side .cf-item'), tabs = page.locator('#side .cf-tabs [role=tab]');
+  await items.first().waitFor({ timeout: 8000 });
+  assert.equal(await page.locator('#side .stitle').textContent(), 'Artifacts and changes');
+  // Two tabs with their counts; Artifacts first and chosen: the artifact only.
+  assert.deepEqual(await tabs.allTextContents(), ['Artifacts 1', 'Changes 2']);
+  assert.equal(await tabs.nth(0).getAttribute('aria-selected'), 'true');
+  assert.equal(await items.count(), 1);
+  assert.match(await items.nth(0).textContent(), /^MarkdownRelease notesArtifact$/);
   assert.equal(await button.getAttribute('aria-pressed'), 'true');
-  await shot('chat-files-list');
+  await shot('chat-files-artifacts-tab');
   // The artifact opens as its chip does.
   await items.nth(0).click();
-  await page.locator('#side .art[data-rendered]').waitFor({ timeout: 20000 });
-  assert.equal(await page.locator('#side .art').getAttribute('data-rendered'), 'rendered');
-  let frame = await (await page.locator('#side .art-frame').elementHandle()).contentFrame();
-  assert.equal(await frame.locator('h1').textContent(), 'Shipped');
-  // Back to the list, then the file: read-only, rendered as Markdown, from the disk.
-  await page.locator('#side [data-art-mode]', { hasText: 'All files' }).click();
-  await items.nth(1).click();
+  assert.equal(await (await frame()).locator('h1').textContent(), 'Shipped');
+  await page.locator('#side [data-art-mode]', { hasText: 'Back to list' }).click();
+  // Changes: the two files, newest first, no artifact.
+  await tabs.nth(1).click();
+  assert.equal(await tabs.nth(1).getAttribute('aria-selected'), 'true');
+  await page.locator('#side .cf-item[data-cf-file] .cf-sub', { hasText: 'Created · proj' }).waitFor({ timeout: 8000 }); // once the workspace path is known
+  assert.equal(await items.count(), 2);
+  assert.match(await items.nth(0).textContent(), /^Diffnotes\.mdEdited · proj$/);
+  assert.match(await items.nth(1).textContent(), /^Diffmade\.mdCreated · proj$/);
+  assert.equal(await page.evaluate(id => localStorage.getItem('p9-chat-files:' + id), id), 'changes', 'the tab is remembered');
+  await shot('chat-files-changes-tab');
+  // An edited file: its diff, as text in the sandboxed frame, nothing to type into and nothing to apply.
+  await items.nth(0).click();
   await page.locator('#side .art-bar .art-title', { hasText: 'proj/notes.md' }).waitFor({ timeout: 8000 });
-  await page.locator('#side .art[data-rendered="rendered"]').waitFor({ timeout: 20000 });
-  frame = await (await page.locator('#side .art-frame').elementHandle()).contentFrame();
-  assert.equal((await frame.locator('body').textContent()).trim(), 'edited by the agent');
-  await shot('chat-files-file');
+  let f = await frame();
+  assert.equal(await page.locator('#side .art-frame').getAttribute('sandbox'), 'allow-scripts');
+  assert.deepEqual(await f.locator('.del').allTextContents(), ['- five']);
+  assert.match((await f.locator('.add').allTextContents()).join('|'), /^\+ FIVE( long)+$/);
+  assert.match(await f.locator('pre').textContent(), /^ {2}two\n {2}three\n {2}four\n- five\n\+ FIVE[ a-z]+\n {2}six\n {2}seven\n {2}eight\n {2}⋯$/, 'three lines of context each side');
+  assert.equal(await f.locator('textarea, input, [contenteditable]').count(), 0, 'nothing editable');
+  assert.equal(await page.locator('#side button', { hasText: /Apply|Save|Accept/ }).count(), 0, 'nothing to apply');
+  await shot('chat-files-diff');
+  // A file whose edit call carried no diff says so.
+  await page.locator('#side [data-art-mode]', { hasText: 'Back to list' }).click();
+  await items.nth(1).click();
+  await page.locator('#side .art-bar .art-title', { hasText: 'proj/made.md' }).waitFor({ timeout: 8000 });
+  f = await frame();
+  assert.equal((await f.locator('pre').textContent()).trim(), 'No diff was recorded for this edit.');
   // The x closes it, and the chat no longer remembers it as open.
   await page.locator('#side [data-side-close]').click();
   assert.equal(await page.locator('#side').isHidden(), true);
-  await button.click(); await items.nth(1).waitFor({ timeout: 8000 });
+  await button.click(); await items.first().waitFor({ timeout: 8000 });
   await page.locator('#side [data-side-close]').click();
   assert.equal(await page.evaluate(id => localStorage.getItem('p9-chat-files:' + id), id), null);
+});
+
+test('artifacts: a chat\'s artifact is still listed after it compacts and the window reloads', { timeout: 120000 }, async (t) => {
+  const { id, turn, page, shot, show, frame } = await chatDesktop(t, [[`Here:\n${F}markdown artifact Release notes\n# Shipped\n\nThe list works.\n${F}`, 'echo:Here']]);
+  await show();
+  await page.waitForFunction(id => document.querySelector('.pane[data-id="' + id + '"] .ptool [data-chat-files]')?.textContent.trim() === '1', id, { timeout: 15000 });
+  // The chat compacts and works on: the artifact falls out of the newest 200 blocks a reload loads.
+  await turn('compact', 'after compact');
+  await turn('many steps', 'All steps done.');
+  await page.reload();
+  const { pane, button: again } = await show();
+  await pane.locator('[data-earlier]').waitFor({ timeout: 15000 });
+  assert.equal(await pane.getByText('Release notes').count(), 0, 'the artifact\'s reply is not loaded');
+  await again.click();
+  const items = page.locator('#side .cf-item');
+  await items.first().waitFor({ timeout: 8000 });
+  assert.equal(await items.count(), 1);
+  assert.match(await items.nth(0).textContent(), /^MarkdownRelease notesArtifact$/);
+  await shot('chat-files-after-compact');
+  await items.nth(0).click();
+  assert.equal(await (await frame()).locator('h1').textContent(), 'Shipped');
 });
