@@ -7,6 +7,8 @@
 // first takes each pinned package the old install there already has (hard links, no download), and alone fetches nothing,
 // so install.sh --slim keeps the owner's agents through an update and the desktop fetches the rest once connected. No
 // arguments: every agent, as before. A package already here at its pinned version is left as it is.
+// Review 3 L4: only a download is checked against its sha512. A kept package (--keep) or one already here is matched by its
+// package.json version alone and is not checked again: it came through this check, or pnpm's, when it was installed.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';

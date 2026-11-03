@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { chromium, _electron } from '@playwright/test';
 import { daemon, http, authenticated, remoteDaemon, passkeyDevice, enrollDevice, root, versionSeen } from './helpers.mjs';
@@ -82,16 +83,23 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test('M5 cards (server): the HTML file is read inside the workspace only; the script waits for Allow and returns any JSON', { timeout: 60000 }, async (t) => {
   const extra = [{ id: 'outside', title: 'Outside', html: '../secret.html', script: 'nums' }, { id: 'notes', title: 'Not html', html: 'cards/a.md', script: 'nums' },
-    { id: 'gone', title: 'Gone', html: 'cards/none.html', script: 'nums' }, { id: 'linked', title: 'Linked', html: 'cards/link.html', script: 'nums' }];
+    { id: 'gone', title: 'Gone', html: 'cards/none.html', script: 'nums' }, { id: 'linked', title: 'Linked', html: 'cards/link.html', script: 'nums' },
+    { id: 'priv', title: 'Private', html: '_private/card.html', script: 'nums' }];
   const instance = await daemon(t, undefined, false, async (paths) => {
     const result = await files(paths, 9, extra);
     await writeFile(path.join(paths.directory, 'secret.html'), '<p>outside the workspace</p>');
     await symlink(path.join(paths.directory, 'secret.html'), path.join(paths.workspace, 'cards/link.html'));
+    await mkdir(path.join(paths.workspace, '_private'), { recursive: true }); await writeFile(path.join(paths.workspace, '_private/card.html'), '<p>private card</p>');
     return result;
   });
   const overview = (await call(instance, '/mission')).body;
   const home = overview.space.find((section) => section.id === 'home');
-  assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'tall', 'logs', 'gone', 'linked'], 'a card with .. or a non-.html file is dropped');
+  assert.deepEqual(home.cards.map((c) => c.id), ['inbox', 'probe', 'broken', 'throws', 'tall', 'logs', 'gone', 'linked', 'priv'], 'a card with .. or a non-.html file is dropped');
+  // Review 3 L2: a _private card (P11) draws with File protection on, and its version is its hash as for any card, so an edit
+  // to it draws again; before, the overview read it under the lock and gave it no version.
+  assert.equal((await call(instance, '/file-protection')).body.on, true);
+  assert.deepEqual([(await call(instance, '/mission/card?id=priv')).body.html, home.cards.find((c) => c.id === 'priv').v],
+    ['<p>private card</p>', createHash('sha256').update('<p>private card</p>').digest('hex').slice(0, 12)]);
   assert.ok(overview.invalid.some((x) => x.cards !== undefined && x.reason === 'malformed-record'), JSON.stringify(overview.invalid));
   const hidden = overview.scripts.filter((x) => x.hidden).map((x) => x.id).sort();
   assert.deepEqual(hidden, ['hello', 'homefeed', 'nums', 'oops', 'ship'], 'feeders and title-bar buttons come marked hidden; plain stays a row');

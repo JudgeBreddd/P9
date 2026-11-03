@@ -1843,6 +1843,8 @@ function noteModal(m, body) {
   if (!m.asked && !dirty(key)) {
     m.asked = true;
     window.p9.mission('noteRead', { root: m.root, path: m.path }).then(r => {
+      if (r.status === 200) m.readOnly = !!r.body.readOnly; // review 3 L2: _private with File protection on
+      if (m.readOnly) m.edit = false;
       if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
       else if (r.status !== 200) m.error = r.body?.error || String(r.status);
       if (S.modal === m) renderModal();
@@ -1863,7 +1865,9 @@ function noteModal(m, body) {
 }
 function noteFoot(m) {
   const key = noteKey(m.root, m.path), base = m.path.split('/').pop();
-  $('#mdlFoot').innerHTML = m.renaming
+  $('#mdlFoot').innerHTML = m.readOnly
+    ? `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><span class="muted sm" data-readonly>Read-only: File protection is on</span>`
+    : m.renaming
     ? `<input data-slot="input" data-rename value="${esc(m.newName ?? base)}" aria-label="New name"><button data-slot="button" data-size="sm" data-rename-go>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-rename-x>Cancel</button>`
     : `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-rename-open>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-mode>${m.edit ? 'Preview' : 'Edit'}</button>${dirty(key) ? `<span data-slot="badge">draft</span><button data-slot="button" data-size="sm" data-savenote>Save</button>` : '<span class="muted sm">saved</span>'}`;
   const on = (sel, fn) => { const b = $('#mdlFoot ' + sel); if (b) b.onclick = fn; };
@@ -2568,6 +2572,7 @@ function securityGroup(box) {
     + (window.p9?.chat ? box('setLock', lock[0], agentLock === true, agentLock === null ? SECURITY.unknown : lock[1], agentLock === null, lock[2], 'agent-lock') : '')
     + (window.p9?.fileProtection ? box('setProtect', protect[0], fileProtect !== false, fileProtect === null ? SECURITY.unknown : fileProtect ? protect[1] : SECURITY.protectOff, fileProtect === null, protect[2], 'file-protection') : '')
     + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
+    + (window.p9?.openLink ? box('setLinks', SECURITY.links[0], !localStorage.getItem('p9-link-ok'), SECURITY.links[1], false, SECURITY.links[2], 'security-settings') : '')
     + (both ? box('setFree', free[0], unrestricted(agentLock, fileProtect, START), free[1], agentLock === null || fileProtect === null, free[2], 'security-settings') : '')
     + '</fieldset>';
 }
@@ -2580,6 +2585,7 @@ async function setUnrestricted(on) {
   if (fileProtect !== !on) return renderSettings();
   if (on && agentLock) { const l = await liveChat.call('setLock', { on: false }); agentLock = l.status === 200 ? l.body.on : agentLock; }
   setWarnsLoose(!on); setStarts(on, START);
+  if (!on) localStorage.removeItem('p9-link-ok'); // review 3 L5: off asks before agent links again
   renderSettings();
 }
 // Attempt 2 items 6 and 7 (the owner): five pages, picked on the left; every row moves, unchanged, to the page it mainly
@@ -2674,6 +2680,7 @@ function renderSettings() {
   // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
   if ($('#setProtect')) $('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); fileProtect = r?.status === 200 ? r.body.on : fileProtect; renderSettings(); };
   $('#setWarn').onchange = e => { setWarnsLoose(e.target.checked); renderSettings(); };
+  if ($('#setLinks')) $('#setLinks').onchange = e => { e.target.checked ? localStorage.removeItem('p9-link-ok') : localStorage.setItem('p9-link-ok', '1'); renderSettings(); };
   if ($('#setFree')) $('#setFree').onchange = e => setUnrestricted(e.target.checked);
   $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
   $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };

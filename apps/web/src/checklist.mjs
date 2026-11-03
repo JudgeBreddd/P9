@@ -22,13 +22,16 @@ export function checklistHtml(id, r, esc, armed = '') {
   if (!r.files.length) return note + '<p class="tile-note">Nothing to review.</p>';
   return note + r.files.map((f, i) => {
     const key = id + '\n' + f.path, marks = r.marks ? Object.entries(r.marks) : [];
+    // Review 3 L2: a _private file with File protection on shows, but takes no mark, review or Apply (they would be refused).
+    const off = f.readOnly ? ' disabled' : '';
     return `<div class="ck-file" data-ck-file="${i}"><p class="ck-name"><b>${esc(f.name)}</b>`
+      + (f.readOnly ? '<span class="ck-state" data-ck-readonly>read-only: File protection is on</span>' : '')
       + (f.review !== null || r.review ? `<span class="ck-state" data-ck-review>${f.review === null ? 'review line unclear' : 'review: ' + esc(f.review)}</span>` : '') + '</p>'
-      + (r.review ? `<div class="ck-marks" role="group" aria-label="Review ${esc(f.name)}">${r.review.map((w) => `<button type="button" data-ck-word="${esc(w)}" aria-pressed="${f.review === w}">${esc(w)}</button>`).join('')}</div>` : '')
+      + (r.review ? `<div class="ck-marks" role="group" aria-label="Review ${esc(f.name)}">${r.review.map((w) => `<button type="button" data-ck-word="${esc(w)}" aria-pressed="${f.review === w}"${off}>${esc(w)}</button>`).join('')}</div>` : '')
       + (marks.length ? (f.rows.length ? `<ol class="ck-rows">${f.rows.map((x) => `<li data-ck-row="${x.n}"><p>${esc(x.text)}</p><div class="ck-marks" role="group" aria-label="${esc(x.text.slice(0, 80))}">`
-        + marks.map(([k, label]) => `<button type="button" data-ck-mark="${esc(k)}" aria-pressed="${x.mark === k}">${esc(label)}</button>`).join('') + '</div></li>').join('')}</ol>`
+        + marks.map(([k, label]) => `<button type="button" data-ck-mark="${esc(k)}" aria-pressed="${x.mark === k}"${off}>${esc(label)}</button>`).join('') + '</div></li>').join('')}</ol>`
         : '<p class="tile-note">No rows to mark.</p>') : '')
-      + (r.apply && f.review === 'pending' ? `<button type="button" class="ck-apply" data-ck-apply${armed === key ? ' data-armed' : ''}>${armed === key ? 'Apply: press again to run it' : 'Apply'}</button>` : '')
+      + (r.apply && f.review === 'pending' && !f.readOnly ? `<button type="button" class="ck-apply" data-ck-apply${armed === key ? ' data-armed' : ''}>${armed === key ? 'Apply: press again to run it' : 'Apply'}</button>` : '')
       + '</div>';
   }).join('');
 }

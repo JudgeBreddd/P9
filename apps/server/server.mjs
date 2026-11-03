@@ -11,7 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
@@ -101,6 +101,10 @@ export function authorizeRemote(headers, method, route, auth, remote) {
 // terminals' PATH), so the wizard's Install writes a launcher instead of downloading anything.
 const AGENT_COMMANDS = { claude: { login: 'claude auth login' }, codex: { login: 'codex login' } };
 
+// Review 3 L4: one agents fetch at a time per daemon; a second (another window, a retry) is 409 until the first ends, so two
+// agents.mjs never write the same node_modules folders. Its limit outlasts both downloads (agents.mjs: 600 s each) plus slack.
+let agentsFetching = false;
+export const AGENTS_FETCH_MS = 1_300_000;
 // The rebuild's test stand-ins count only under the test home (P9_TEST_HOME, the daemon's test switch): P9_PACKAGED=1
 // answers as a packaged app would, P9_BUILD runs instead of pnpm build. Outside it both are ignored.
 export const rebuildStandIns = (env) => ({ packaged: !!env.P9_TEST_HOME && env.P9_PACKAGED === '1', build: (env.P9_TEST_HOME && env.P9_BUILD) || null });
@@ -253,11 +257,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const asked = c.req.query('path') || workspace;
     if (!path.isAbsolute(asked) || asked.length > 4096 || asked.includes('\0')) return c.json({ error: 'request-refused' }, 400);
     let at; try { at = await realpath(asked); } catch { return c.json({ error: 'not-found' }, 404); }
+    // Review 3 L8: P9's own folders (U5) are neither walked nor listed; a chat cannot start in one either (folderCheck).
+    if (isGuarded(at)) return c.json({ error: 'private-folder' }, 403);
     const entries = await readdir(at, { withFileTypes: true }).catch(() => null);
     if (!entries) return c.json({ error: 'not-readable' }, 403);
     const parent = path.dirname(at);
     return c.json({ path: at, workspace: await realpath(workspace), parent: parent === at ? null : parent,
-      dirs: entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().map((name) => ({ name, path: path.join(at, name) })) });
+      dirs: entries.filter((e) => e.isDirectory() && !isGuarded(path.join(at, e.name))).map((e) => e.name).sort().map((name) => ({ name, path: path.join(at, name) })) });
   });
   api.get('/files/root', (c) => (c.get('device') ? c.json({ root: phoneRoot }) : c.json({ error: 'not-found' }, 404)));
   api.post('/files/root', async (c) => {
@@ -334,7 +340,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const { id, path: file } = (await json(c)) ?? {};
     // Wall 15: a space folder's file. The folder's own fix text (the user's space file) leads; the daemon reads both again.
     if (id !== undefined) {
-      const read = await mission.folderRead(id, file);
+      const read = await mission.folderRead(id, file, { toAgent: true });
       if (read.status !== 200) return reply(c, read);
       if (!read.fix) return reply(c, { status: 404, error: 'no-fix', detail: 'This folder has no fix text in the space file.' });
       const made = await chat.create({ provider: 'claude', title: 'Fix: ' + file.split('/').pop().slice(0, 100) });
@@ -875,8 +881,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const script = fileURLToPath(new URL('../../scripts/agents.mjs', import.meta.url));
     if (!existsSync(fileURLToPath(new URL('../../agents.json', import.meta.url)))) return reply(c, { status: 409, error: 'not-a-bundle' });
     const names = AGENTS.filter((agent) => body[agent]);
-    const done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: 900000, maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => resolve(error ? (String(stderr).trim().split('\n').pop() || error.message) : null)));
+    if (agentsFetching) return reply(c, { status: 409, error: 'fetch-running' });
+    agentsFetching = true;
+    let done;
+    try {
+      done = await new Promise((resolve) => execFile(process.execPath, [script, ...names], { timeout: AGENTS_FETCH_MS, maxBuffer: 1024 * 1024 },
+        (error, stdout, stderr) => resolve(error ? (String(stderr).trim().split('\n').pop() || error.message) : null)));
+    } finally { agentsFetching = false; }
     return reply(c, done ? { status: 500, error: 'agents-not-fetched', detail: done.slice(0, 300) } : { status: 200, fetched: names });
   });
   // Item 15 (threat model row 61): a system package P9 cannot carry, installed with the admin password. The command comes

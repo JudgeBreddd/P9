@@ -779,7 +779,8 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
     const where = all.sections.find((entry) => (entry.cards ?? []).some((item) => item.id === id)), card = where?.cards.find((item) => item.id === id);
     if (!card) return { error: 'unknown-id', id, file };
     let html;
-    try { html = (await readFile(workspace, card.html)).content; } catch { return { error: 'not-found', detail: 'The card file ' + card.html + ' was not found in the workspace.', file }; }
+    // Review 3 L2: read as the page reads it (P11).
+    try { html = (await readFile(workspace, card.html, { space: true })).content; } catch { return { error: 'not-found', detail: 'The card file ' + card.html + ' was not found in the workspace.', file }; }
     if (Buffer.byteLength(html) > CARD_BYTES) return { error: 'too-big', detail: 'The card file ' + card.html + ' is over 256 KiB.', file };
     const json = data === undefined ? 'undefined' : JSON.stringify(data).replace(/</g, '\\u003c');
     const head = `<script>window.p9data = ${json}; addEventListener('load', () => { if (window.p9data !== undefined) dispatchEvent(new CustomEvent('p9data', { detail: window.p9data })); });</script>`;

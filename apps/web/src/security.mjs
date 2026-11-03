@@ -15,6 +15,9 @@ export const SECURITY = {
     'On: picking Codex Full access or Claude Bypass permissions asks first, in red. Off: it never asks on this device.'],
   unrestricted: ['Unrestricted mode', 'Turns all of the above off, and new chats on this device start in Codex Full access and Claude Bypass permissions. Off puts File protection and the warnings back on.',
     'Every restriction above off at once. Turning it off puts the defaults back: File protection on, the warnings on, new chats in the agents\' own modes; the agent lock stays off.'],
+  // Review 3 L5: "Open, don't ask again" in the link question, shown and undone here (desktop only; the phone never asks).
+  links: ['Ask before opening agent links', 'A link in an agent reply opens in your browser only after a question showing its whole address, on this computer.',
+    'On: a link in an agent reply asks first, showing its whole address. Off: it opens on a click. Turning Unrestricted mode off turns this back on.'],
   unknown: 'Unknown: the daemon did not answer.',
 };
 // The mode Unrestricted mode starts new chats in, per agent.

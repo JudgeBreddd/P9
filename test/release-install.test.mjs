@@ -102,7 +102,7 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(uninstall, /\$\{ifNot\} \$\{isUpdated\}[^]*Unregister-ScheduledTask[^]*\$\{endIf\}/, 'an update must not unregister the task');
   assert.doesNotMatch(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Unregister-ScheduledTask/);
   // Stop-ScheduledTask ends only conhost.exe; the daemon outlived it (GitHub run 39540753837), so the uninstaller ends its node.exe.
-  assert.match(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process/, 'the uninstaller ends the daemon itself');
+  assert.match(uninstall.slice(0, uninstall.indexOf('${ifNot}')), /Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq \(\$\$env:P9_INSTDIR \+ '\\resources\\daemon\\node\.exe'\)[^\n]*Stop-Process/, 'the uninstaller ends the daemon itself');
   // A silent install (/S) still shows a MessageBox with no /SD and waits for a click nobody can give. /SD goes after the text:
   // before it, makensis takes the text for a jump label and the build fails (GitHub run 39527149502).
   for (const box of nsh.split('\n').filter((line) => /^\s*MessageBox /.test(line))) assert.match(box, /"\s+\/SD ID\w+\s*$/, 'silent default, after the text (NSIS reads text after /SD as a jump label): ' + box.trim());
@@ -129,7 +129,15 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   assert.match(ps1, /\$hostArguments \+ @\('-Log', \('"' \+ \$log \+ '"'\)/);
   // Issue #6 B10: the installer stops the old task and daemon before it replaces files, as the uninstaller does.
   const init = nsh.slice(nsh.indexOf('!macro customInit'));
-  assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq '\$INSTDIR\\resources\\daemon\\node\.exe'[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
+  assert.match(init, /^[^]*?\$\{DisableX64FSRedirection\}[^]*nsExec[^\n]*Stop-ScheduledTask[^\n]*\$\$_\.ExecutablePath -eq \(\$\$env:P9_INSTDIR \+ '\\resources\\daemon\\node\.exe'\)[^\n]*Stop-Process[^]*\$\{EnableX64FSRedirection\}/);
+  // Review 3 L6: an apostrophe in the install folder (C:\Users\O'Brien) ended the quoted PowerShell text, so nothing stopped.
+  // No NSIS variable sits inside a -Command; the folder goes in through the environment, set before each stop.
+  for (const line of nsh.split('\n').filter((text) => /-Command "/.test(text))) assert.doesNotMatch(line.slice(line.indexOf('-Command "')).replaceAll('$$', ''), /\$\w/, 'no NSIS variable inside a -Command: ' + line.trim().slice(0, 80));
+  for (const part of [init, uninstall.slice(0, uninstall.indexOf('${ifNot}'))]) {
+    assert.ok(part.indexOf("System::Call 'Kernel32::SetEnvironmentVariable(t \"P9_INSTDIR\", t \"$INSTDIR\")'") >= 0
+      && part.indexOf('SetEnvironmentVariable') < part.search(/nsExec[^\n]*Stop-ScheduledTask/), 'P9_INSTDIR is set before the stop');
+    assert.match(part, /-like \(\[WildcardPattern\]::Escape\(\$\$env:LOCALAPPDATA\)/, '[ and ] in LOCALAPPDATA are not wildcards');
+  }
   assert.match(ps1, /New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries /);
   console.log('PASS R2-6/R2-8 (text): installer keeps the task workspace on update; task allowed on battery');
 });

@@ -335,6 +335,20 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   for (let i = 0; i < 50 && (await app.evaluate(() => globalThis.linkSeen.length)) < 3; i++) await new Promise((r) => setTimeout(r, 100));
   assert.equal(await page.evaluate(() => document.querySelector('#linkDlg').open), false, 'no question after don\'t ask again');
   assert.deepEqual(await app.evaluate(() => globalThis.linkSeen), Array(3).fill('https://docs.example.test/p'));
+  // Review 3 L5: "don't ask again" shows in Security settings as the switch off, and turning it on asks again; the question
+  // opens with Cancel focused, so a stray Enter opens nothing.
+  await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor();
+  await page.click('[data-set-page="General"]');
+  assert.equal(await page.locator('#setLinks').isChecked(), false, 'the switch shows don\'t ask again');
+  await page.click('#setLinks'); await page.locator('#setLinks:checked').waitFor({ timeout: 5000 });
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-link-ok')), null);
+  await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
+  await reply.locator('a[href="https://docs.example.test/p"]').click();
+  await page.locator('#linkDlg[open]').waitFor({ timeout: 5000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.value), 'no', 'Cancel is focused');
+  await page.keyboard.press('Enter'); await page.locator('#linkDlg:not([open])').waitFor({ state: 'attached', timeout: 5000 });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal((await app.evaluate(() => globalThis.linkSeen)).length, 3, 'Enter on the question opens nothing');
   await app.evaluate(() => { globalThis.linkSeen = ['https://docs.example.test/p']; });
   assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), windows);
   assert.deepEqual(await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
@@ -1421,14 +1435,15 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
     dialog.showMessageBox = async (_window, options) => { globalThis.asked.push(options.title); return { response: list.shift() ?? 0 }; };
   }, list);
   const asked = () => app.evaluate(() => globalThis.asked);
-  const boxes = () => page.$$eval('#setSecurity input[type=checkbox]', (all) => Object.fromEntries(all.map((b) => [b.id, b.checked])));
-  const settled = (want) => page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#setSecurity input[type=checkbox]')].map((b) => b.checked)) === want, JSON.stringify(want), { timeout: 5000 });
+  const boxes = () => page.$$eval('#setSecurity input[type=checkbox]:not(#setLinks)', (all) => Object.fromEntries(all.map((b) => [b.id, b.checked])));
+  const settled = (want) => page.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('#setSecurity input[type=checkbox]:not(#setLinks)')].map((b) => b.checked)) === want, JSON.stringify(want), { timeout: 5000 });
   const daemonSide = async () => [(await call(instance, '/agent-lock')).on, (await call(instance, '/file-protection')).on];
   const local = () => page.evaluate(() => ['p9-mode-ok:Full access', 'p9-mode-ok:Bypass permissions', 'p9-mode-default:codex', 'p9-mode-default:claude'].map((k) => localStorage.getItem(k)));
   await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree').waitFor();
   assert.match(await page.locator('#setSecurity legend').first().innerText(), /^Security settings/);
-  assert.deepEqual(await page.$$eval('#setSecurity strong', (s) => s.map((x) => x.textContent)), ['Agent lock', 'File protection', 'Warn before Full access and Bypass permissions', 'Unrestricted mode']);
+  assert.deepEqual(await page.$$eval('#setSecurity strong', (s) => s.map((x) => x.textContent)), ['Agent lock', 'File protection', 'Warn before Full access and Bypass permissions', 'Ask before opening agent links', 'Unrestricted mode']);
   assert.deepEqual(await boxes(), { setLock: false, setProtect: true, setWarn: true, setFree: false }, 'the defaults are unchanged');
+  assert.equal(await page.locator('#setLinks').isChecked(), true, 'agent links ask by default');
   // The warnings switch: off sets "don't show again" for both loosened modes on this computer, on clears it.
   await page.click('#setWarn'); await settled([false, true, false, false]);
   assert.deepEqual(await local(), ['1', '1', null, null]);
@@ -1454,9 +1469,11 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   assert.equal(await page.locator('#looseDlg[open]').count(), 0, 'no red warning in Unrestricted mode');
   // Off: protection back on without asking, the warnings on, new chats in the agents' own modes; the lock stays off.
   await answers([]);
+  await page.evaluate(() => localStorage.setItem('p9-link-ok', '1')); // review 3 L5: "don't ask again" was pressed meanwhile
   await page.click('#setBtn'); await page.locator('#setDlg[open] #setFree:checked').waitFor();
   await page.click('#setFree'); await settled([false, true, true, false]);
   assert.deepEqual([await asked(), await daemonSide(), await local()], [[], [false, true], [null, null, null, null]]);
+  assert.deepEqual([await page.evaluate(() => localStorage.getItem('p9-link-ok')), await page.locator('#setLinks').isChecked()], [null, true], 'off asks before agent links again');
   // Protection already off: no native warning comes, so Unrestricted asks once itself; Cancel changes nothing.
   await answers([1]); await page.click('#setProtect'); await settled([false, false, true, false]);
   // The page's confirm() is answered in the page: Playwright's dialog events in this Electron window are not reliable.

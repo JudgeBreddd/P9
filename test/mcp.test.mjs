@@ -732,6 +732,15 @@ test('Wave 3: log heading/from/lines, col6 and span, base merges a racing save, 
   assert.deepEqual([preview.section, preview.frame, /720 px/.test(preview.size)], ['ops', false, true]);
   assert.match((await tool('preview_card', { id: 'ops-card' })).document, /^<script>window\.p9data = undefined;/);
   assert.equal((await tool('preview_card', { id: 'nope' })).error, 'unknown-id');
+  // Review 3 L2: a _private card (P11) previews as it draws on the page with File protection on, not not-found.
+  await mkdir(path.join(instance.workspace, '_private'), { recursive: true });
+  await writeFile(path.join(instance.workspace, '_private/card.html'), '<p>private card</p>');
+  assert.equal((await tool('patch_section', { section: 'Ops', set: { cards: [{ id: 'ops-card', title: 'Ops card', html: 'hub/card.html', script: 'mark', frame: false },
+    { id: 'priv-card', title: 'Private card', html: '_private/card.html', script: 'mark' }] } })).isError, false);
+  await call(instance, '/file-protection', 'POST', { on: true });
+  const priv = await tool('preview_card', { id: 'priv-card' });
+  assert.ok(priv.isError === false && priv.document.endsWith('<p>private card</p>'), JSON.stringify(priv));
+  await call(instance, '/file-protection', 'POST', { on: false });
   await assert.rejects(access(path.join(instance.workspace, 'marker')), 'its script did not run');
 
   // Each new field in the schema an agent reads, and in describe_mission.

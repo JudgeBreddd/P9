@@ -1,4 +1,4 @@
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { open, realpath, unlink, rename, link, readdir, lstat, mkdir, copyFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -31,15 +31,24 @@ function partsFor(relative, root, isLocked = locked) {
 // them (home, a drive root), so no read, listing, save, new file or rename reaches inside one, whatever the root. The daemon
 // adds its own at start; the walks refuse links, so the joined path is where the file really is.
 const guarded = new Set();
-export const guardFolders = (...folders) => { for (const folder of folders) if (folder) guarded.add(path.resolve(folder)); };
+// Review 3 L3: each folder as given and as its real path (a symlinked ~/.config), the real path taken through the nearest
+// folder that exists, so one made later is guarded too.
+const realOf = (full) => { try { return realpathSync(full); } catch { const up = path.dirname(full); return up === full ? full : path.join(realOf(up), path.basename(full)); } };
+export const guardFolders = (...folders) => { for (const folder of folders) if (folder) { guarded.add(path.resolve(folder)); guarded.add(realOf(path.resolve(folder))); } };
 // Review 2 M1: the desktop app's data folder (P9's own ssh key, row 79, and its settings), packaged and from a source checkout,
 // where Electron names it after the app. Only the ssh folder of the checkout's generic Electron folder, which other apps share.
 export const desktopFolders = ({ platform = process.platform, home = os.homedir(), env = process.env } = {}) => {
   const base = platform === 'win32' ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
     : platform === 'darwin' ? path.join(home, 'Library', 'Application Support') : env.XDG_CONFIG_HOME || path.join(home, '.config');
-  return [path.join(base, 'P9 Event Horizon'), path.join(base, 'Electron', 'ssh')];
+  // Review 3 L3: a daemon started with another XDG_CONFIG_HOME (or none) than the desktop's guards both. A source run's
+  // desktop (electron start.cjs) keeps its files in the shared Electron folder: P9's own files there, not other apps'.
+  const bases = [...new Set([base, ...(platform === 'win32' || platform === 'darwin' ? [] : [path.join(home, '.config')])])];
+  return bases.flatMap((at) => [path.join(at, 'P9 Event Horizon'), ...['ssh', 'pets', 'xfer', 'p9-server.json', 'p9-trust.json', 'p9-settings.json',
+    'p9-update.log', 'p9-freeze.log', 'p9-version.txt', 'update-state.json'].map((name) => path.join(at, 'Electron', name))]);
 };
 const within = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
+// Review 3 L8: for the U4 folder picker, which lists folders by absolute path outside packages/files' reads.
+export const isGuarded = (full) => { for (const folder of guarded) if (within(folder, full)) return true; return false; };
 function notPrivate(root, parts) {
   const full = path.join(path.resolve(root), ...parts);
   for (const folder of guarded) if (within(folder, full)) throw new Error('private-folder');

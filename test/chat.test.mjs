@@ -783,6 +783,9 @@ test('U4: a chat starts in a folder outside the workspace only in Unrestricted m
   assert.equal(up.status, 200, up.text);
   assert.ok(up.body.dirs.some((e) => e.name === 'elsewhere' && e.path === path.join(up.body.path, 'elsewhere')), up.text);
   assert.ok(!up.body.dirs.some((e) => e.name === 'loose.txt'), 'folders only');
+  // Review 3 L8: P9's own folders beside the workspace (state, recovery) are not listed, and are not walked into.
+  assert.deepEqual(['workspace', 'state', 'recovery'].map((name) => up.body.dirs.some((e) => e.name === name)), [true, false, false], up.text);
+  assert.deepEqual([(await call(instance, '/files/folders?' + new URLSearchParams({ path: instance.state }))).status], [403], 'state is not walked');
   for (const [bad, status] of [['relative/x', 400], [path.join(instance.directory, 'missing'), 404]])
     assert.equal((await call(instance, '/files/folders?' + new URLSearchParams({ path: bad }))).status, status, bad);
   for (const folder of [path.join(instance.directory, 'missing'), path.join(instance.directory, 'workspace', 'note.txt'), instance.state])
