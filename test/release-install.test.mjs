@@ -206,8 +206,9 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   const ok = run();
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   // Item 15: first what P9 needs from the system (deps.mjs; this stub node reports nothing missing).
-  // D5: then Dev Focus's editor server, through the same pinned install the Dev Focus button uses.
-  assert.equal(ok.log, 'node scripts/deps.mjs --place\npnpm install --frozen-lockfile\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
+  // D5: then Dev Focus's editor server, through the same pinned install the Dev Focus button uses. 0.1.7: before the
+  // service step, so a service step that stops the install (an old unit left behind) cannot skip it.
+  assert.equal(ok.log, 'node scripts/deps.mjs --place\npnpm install --frozen-lockfile\npnpm build\nnode scripts/install-editor.mjs\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
   assert.ok(existsSync(path.join(home, 'ws')), 'workspace folder made');
 
   assert.ok(!ok.log.includes('curl'), 'no download when Node v26.10.0 is already there');
@@ -216,7 +217,7 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   // It still installs the editor server: Dev Focus in Server mode runs it on this server (c10, item 33).
   const headless = run({}, ['--headless', 'ws']);
   assert.equal(headless.status, 0, headless.stdout + headless.stderr);
-  assert.equal(headless.log, 'node scripts/deps.mjs --headless --place\npnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\nnode scripts/install-editor.mjs\n');
+  assert.equal(headless.log, 'node scripts/deps.mjs --headless --place\npnpm install --frozen-lockfile --ignore-scripts\npnpm build\nnode scripts/install-editor.mjs\nnode scripts/install-service.mjs ' + path.join(home, 'ws') + '\n');
   assert.match(headless.stdout, /P9 runs on this server/);
   assert.doesNotMatch(headless.stdout, /pnpm desktop/);
 
@@ -235,7 +236,7 @@ test('install.sh: checks tools and Node, then installs, builds and starts the se
   assert.equal(oldNode.status, 0, oldNode.stdout + oldNode.stderr);
   assert.match(oldNode.log, new RegExp('^curl -fsSL -o \\S+/node\\.tar\\.gz https://nodejs\\.org/dist/v26\\.10\\.0/node-v26\\.10\\.0-linux-x64\\.tar\\.gz\n'
     + 'sha256sum cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8  \\S+/node\\.tar\\.gz\ntar\np9node scripts/deps\\.mjs --place\npnpm install --frozen-lockfile\npnpm build\n'
-    + 'p9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\np9node scripts/install-editor\\.mjs\n$'));
+    + 'p9node scripts/install-editor\\.mjs\np9node scripts/install-service\\.mjs ' + path.join(home, 'ws') + '\n$'));
   assert.deepEqual(left(), ['node-v26.10.0-linux-x64'], 'temp folder removed');
   assert.ok(oldNode.stdout.includes('export PATH="' + path.join(ownNode, 'bin') + ':$PATH"'), 'PATH line printed');
   const cached = run({ FAKE_NODE: 'v24.19.0' });
