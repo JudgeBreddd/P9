@@ -146,7 +146,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   const editor = transport === 'unix' && state ? daemonEditor({ socket: path.join(state, 'editor.sock'), unit: 'p9-editor-server-' + instance }) : null;
   // File protection (threat model row 4; Builder, 2026-10-18): on unless the desktop turned it off; createChat made the prefs table.
   // v0.1.6 U5: no read or write reaches inside P9's own folders, whatever root a request names.
-  guardFolders(state, recovery, ownership && (() => { try { return realpathSync(ownership); } catch { return ownership; } })());
+  guardFolders(state, recovery, ownership && (() => { try { return realpathSync.native(ownership); } catch { return ownership; } })());
   setProtection(ledger.db.prepare("SELECT value FROM prefs WHERE key = 'file-protection'").get()?.value !== 'off');
   const json = async (c) => {
     if (c.req.header('content-type') !== 'application/json') throw new Error('json-required');

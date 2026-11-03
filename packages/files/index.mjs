@@ -32,8 +32,9 @@ function partsFor(relative, root, isLocked = locked) {
 // adds its own at start; the walks refuse links, so the joined path is where the file really is.
 const guarded = new Set();
 // Review 3 L3: each folder as given and as its real path (a symlinked ~/.config), the real path taken through the nearest
-// folder that exists, so one made later is guarded too.
-const realOf = (full) => { try { return realpathSync(full); } catch { const up = path.dirname(full); return up === full ? full : path.join(realOf(up), path.basename(full)); } };
+// folder that exists, so one made later is guarded too. Native, as fs.promises.realpath is: on Windows the JS realpathSync
+// keeps an 8.3 short name (C:\Users\RUNNER~1) that a root's real path spells out, and the guard missed (Installers run 41586323003).
+const realOf = (full) => { try { return realpathSync.native(full); } catch { const up = path.dirname(full); return up === full ? full : path.join(realOf(up), path.basename(full)); } };
 export const guardFolders = (...folders) => { for (const folder of folders) if (folder) { guarded.add(path.resolve(folder)); guarded.add(realOf(path.resolve(folder))); } };
 // Review 2 M1: the desktop app's data folder (P9's own ssh key, row 79, and its settings), packaged and from a source checkout,
 // where Electron names it after the app. Only the ssh folder of the checkout's generic Electron folder, which other apps share.
