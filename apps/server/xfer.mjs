@@ -47,7 +47,7 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
   const root = ownership && path.join(ownership, 'xfer');
   // No resume across daemon runs, so staging left by an earlier run is dropped at start.
   const swept = root ? rm(root, { recursive: true, force: true }).catch(() => {}) : Promise.resolve();
-  const uploads = new Map(), busy = new Set(), hashes = new Map();
+  const uploads = new Map(), busy = new Set(), hashes = new Map(), HASH_CACHE = 50_000;
   const staging = (id, n) => path.join(root, 'in-' + id, String(n));
 
   // Files under `base` (absolute), relative to it. Git folders: git's list, nested repos by their own list; others: a
@@ -78,6 +78,8 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
     const key = [stat.size, stat.mtimeMs, stat.ino].join(':'), known = hashes.get(full);
     if (known?.key === key) return known.sha256;
     const sha256 = await sha256File(full);
+    // Keyed by absolute path for the daemon's life; a few manifests of large trees would otherwise hold tens of MB (review 2026-11-03).
+    if (hashes.size >= HASH_CACHE) hashes.clear();
     hashes.set(full, { key, sha256 });
     return sha256;
   }

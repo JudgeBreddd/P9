@@ -9,7 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { childEnv } from '../server/child-env.mjs';
-import { windowsJobCommand } from '../server/process-tree.mjs';
+import { SLICE, windowsJobCommand } from '../server/process-tree.mjs';
 
 // os.homedir(), not a named import: the server's test daemon swaps os.homedir for its fixture home (test/home-fixture.mjs).
 const home = os.homedir(), win = process.platform === 'win32';
@@ -53,14 +53,14 @@ export function stopEditorHost(unit) {
   if (stopped.status === 0) return true;
   spawnSync('systemctl', ['--user', 'kill', '--signal=SIGKILL', unit + '.scope'], { stdio: 'ignore', timeout: 5000 });
   // Last resort without systemd: the kernel kills everything in the scope's cgroup, then the cgroup itself says whether it emptied.
-  // The path is known because the host is started with --slice=app.slice. ponytail: if this fails too, nothing a user process
+  // The path is known because the host is started with --slice=SLICE (process-tree.mjs). ponytail: if this fails too, nothing a user process
   // can do is left; the quit goes on and the host may run until logout (logged, SECURITY.md). Not done: refusing the quit
   // (event.preventDefault in will-quit) would trap the user in an app that cannot close.
   // A process started outside the user manager (over SSH, or GitHub's runner service) has no user@ in its own cgroup;
   // systemd's standard path for this user's manager is the fallback.
   const slice = readFileSync('/proc/self/cgroup', 'utf8').match(/^0::(.*\/user@\d+\.service)\//m)?.[1]
     ?? '/user.slice/user-' + process.getuid() + '.slice/user@' + process.getuid() + '.service';
-  const scope = slice && path.join('/sys/fs/cgroup', slice, 'app.slice', unit + '.scope');
+  const scope = slice && path.join('/sys/fs/cgroup', slice, SLICE, unit + '.scope');
   if (scope && existsSync(path.dirname(scope))) {
     try { writeFileSync(path.join(scope, 'cgroup.kill'), '1'); } catch {}
     for (let tries = 0; tries < 20; tries++) {
@@ -108,7 +108,7 @@ export async function startEditorHost({ host = process.env.P9_EDITOR_HOST ?? pat
   // so stopping it leaves nothing behind. Windows runs the REH's node.exe directly: its bin\codium-server.cmd only does that,
   // and a .cmd would need a shell.
   const server = win ? [path.join(host, 'node.exe'), path.join(host, 'out', 'server-main.js')]
-    : ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=p9.slice', '--unit=' + unit, path.join(host, 'bin', 'codium-server')];
+    : ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=' + SLICE, '--unit=' + unit, path.join(host, 'bin', 'codium-server')];
   const argv = [...server,
     ...(socket ? ['--socket-path', socket] : ['--host', LOOPBACK, '--port', '0']), '--connection-token-file', tokenFile, '--user-data-dir', path.join(data, 'data'),
     // Server state (workspaceStorage, which the Python extension writes on activation) defaults to ~/.vscodium-server, outside

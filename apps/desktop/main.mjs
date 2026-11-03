@@ -857,7 +857,7 @@ export async function createDesktop({ state, open } = {}) {
             archive: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null });
         if (e.phase === 'full-there' && serverHost === host) return void runInstall(admin, { full: true, keep });
         // 30 s for the new P9 to answer, as a start gets; then Try again, never "Connecting…" forever.
-        if (e.phase === 'done' && serverHost === host) { remoteInstall = { ...remoteInstall, until: Date.now() + 30000 }; useServer(host); }
+        if (e.phase === 'done' && serverHost === host) { remoteInstall = { ...remoteInstall, until: Date.now() + 30000 }; await useServer(host); }
       } finally {
         if (slim?.built) await rm(slim.folder, { recursive: true, force: true }).catch(() => {});
       }
@@ -877,8 +877,8 @@ export async function createDesktop({ state, open } = {}) {
         if (serverHost !== host || remoteInstall?.started !== started) return;
         if (r !== 'ok') return void (answers ? (remoteInstall = { phase: 'failed', error: 'not-answering', started }) : runInstall());
         remoteInstall = { phase: 'starting', started, until: Date.now() + 30000 };
-        useServer(host);
-      });
+        return useServer(host);
+      }).catch(error => { remoteInstall = { phase: 'failed', error: error.message, started }; });
     } else if (!answers && remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
   };
   // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's

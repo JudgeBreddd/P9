@@ -85,7 +85,11 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   const db = new DatabaseSync(file);
   const version = db.prepare('PRAGMA user_version').get().user_version;
   if (version > steps.length) { db.close(); throw new Error(`state-schema-newer: ${file} is schema ${version}; this build reads up to ${steps.length}. Install the newer P9, or roll back its state (scripts/rollback.mjs).`); }
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
+  // WAL with synchronous = NORMAL: every commit survives a process crash or SIGKILL (the WAL is appended before the commit
+  // returns; session-durability.test checks it); only a power cut or OS crash can lose the last transactions, which SECURITY.md
+  // puts out of scope. FULL fsynced the WAL on every commit, and chat.mjs commits once per streamed chunk on the event-loop
+  // thread, so a streaming reply stalled every request and terminal once per chunk (review 2026-11-03).
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
   if (version < steps.length) {
     // A new, empty file has nothing to lose; any file that already holds the tables is copied first.
     if (file !== ':memory:' && db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'").get().n) {
