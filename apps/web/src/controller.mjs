@@ -655,7 +655,9 @@ const folderRefused = (r, to) => r?.body?.error === 'unrestricted-only' ? FOLDER
   : r?.status === 404 ? `There is no folder at ${to} on the server.`
   : r?.status === 403 ? `P9 cannot open ${to}: it is a file, or the server does not let P9 read it.`
   : r?.status === 400 ? 'Type a full path, starting with /.' : 'The server did not answer. Try again.';
-const pickRemoteFolder = () => new Promise(done => {
+// Send to remote from a chat outside the workspace (U4) opens it too: ask lists the remote through main (the window's daemon
+// may be this computer's), note says why it opened, verb names the foot ('Lands in:').
+const pickRemoteFolder = ({ ask = (kind, path) => window.p9.mission(kind, { path }), title = 'Choose a folder on the server', note = '', verb = 'Start in' } = {}) => new Promise(done => {
   const d = $('#folderDlg'), list = $('#folderList'), bar = $('#folderPath'), why = $('#folderWhy');
   // whole: null until the first answer, true for the whole server (full paths), false for the workspace walk (paths
   // relative to it, '' its top). at: the folder shown; up: its parent (null at the top); picked: the row clicked once.
@@ -665,7 +667,7 @@ const pickRemoteFolder = () => new Promise(done => {
   // A relative path typed in whole-server mode is taken from the folder shown.
   const typed = () => { const t = bar.value.trim().replace(/(.)\/+$/, '$1'); return whole && t && !t.startsWith('/') ? (at === '/' ? '' : at) + '/' + t : t.replace(/^\.\/?/, ''); };
   const chosen = () => { const t = typed(), f = picked ?? (t && t !== at ? t : at); return whole && f === ws ? '' : f; }; // the workspace stays ''
-  const foot = () => { const f = chosen(); $('#folderAt').textContent = 'Start in: ' + (f === '' ? 'Workspace' : f); };
+  const foot = () => { const f = chosen(); $('#folderAt').textContent = verb + ': ' + (f === '' ? 'Workspace' : f); };
   const draw = (to, parent, dirs) => {
     at = to; up = parent; picked = null; drawn = true; bar.value = at; bar.placeholder = whole ? '' : 'Workspace';
     $('#folderUp').disabled = up === null;
@@ -674,13 +676,13 @@ const pickRemoteFolder = () => new Promise(done => {
     const crumbs = [...base, ...parts.map((p, i) => [(whole ? '/' : '') + parts.slice(0, i + 1).join('/'), p])];
     $('#folderCrumbs').innerHTML = crumbs.map(([key, name], i) => `${i > 1 || (i && !whole) ? '<i>›</i>' : ''}<button type="button" data-fcrumb="${esc(key)}"${i === crumbs.length - 1 ? ' aria-current="location"' : ''}>${esc(name)}</button>`).join('');
     list.innerHTML = dirs ? dirs.map(([key, name]) => `<button type="button" role="option" aria-selected="false" data-fdir="${esc(key)}">${FOLDER_ICON}<span class="truncate">${esc(name)}</span></button>`).join('') || '<p class="sm muted">No folders here.</p>' : '';
-    say(whole ? '' : limit);
+    say(note || (whole ? '' : limit));
     foot();
   };
   const go = async to => {
     const mine = ++shown;
     if (whole !== false) {
-      const r = await window.p9.mission('folders', { path: to }).catch(() => null);
+      const r = await ask('folders', to).catch(() => null);
       if (mine !== shown) return;
       if (r?.status === 200) { whole = true; ws = r.body.workspace; draw(r.body.path, r.body.parent, r.body.dirs.map(e => [e.path, e.name])); return; }
       if (whole) { say(folderRefused(r, to)); return; } // stays where it was, and says why
@@ -689,7 +691,7 @@ const pickRemoteFolder = () => new Promise(done => {
     }
     // A full path cannot be listed in the workspace walk: say why; Select still sends it and the daemon decides.
     if (to.startsWith('/')) { say(limit); foot(); return; }
-    const r = await window.p9.mission('list', { path: to }).catch(() => null);
+    const r = await ask('list', to).catch(() => null);
     if (mine !== shown) return;
     if (r?.status === 200) draw(to, to ? to.split('/').slice(0, -1).join('/') : null, r.body.entries.filter(e => e.dir).map(e => e.name).sort().map(n => [(to ? to + '/' : '') + n, n]));
     else { if (!drawn) draw(to, null, null); say(r?.status === 404 ? `There is no folder at ${label(to)}.` : folderRefused(r, label(to))); }
@@ -703,7 +705,7 @@ const pickRemoteFolder = () => new Promise(done => {
   bar.oninput = () => { picked = null; list.querySelectorAll('[aria-selected="true"]').forEach(b => b.setAttribute('aria-selected', 'false')); foot(); };
   // Enter goes to the typed folder; the form never submits from the bar.
   bar.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); go(typed()); } };
-  d.returnValue = ''; bar.value = ''; drawn = false; list.innerHTML = '<p class="sm muted">Loading…</p>'; $('#folderCrumbs').innerHTML = ''; say(''); $('#folderAt').textContent = '';
+  $('#folderT').textContent = title; d.returnValue = ''; bar.value = ''; drawn = false; list.innerHTML = '<p class="sm muted">Loading…</p>'; $('#folderCrumbs').innerHTML = ''; say(note); $('#folderAt').textContent = '';
   d.onclose = () => done(d.returnValue === 'yes' ? chosen() : undefined);
   d.showModal(); go('');
 });
@@ -3509,7 +3511,14 @@ let fxFiles = null; // the chat whose move sends its folder first, for the uploa
 async function sendAway(s) {
   let files = [];
   if (window.p9.xferPlan) {
-    const p = await window.p9.xferPlan(s.folder || '').catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
+    const failed = () => ({ error: 'no-answer', message: 'P9 did not answer.' });
+    let p = await window.p9.xferPlan(s.folder || '').catch(failed);
+    // U4: a chat outside the workspace whose folder the remote does not have (or may not use): pick where it lands there.
+    if (p.error === 'pick-folder') {
+      const to = await pickRemoteFolder({ ask: window.p9.xferFolders, title: 'Choose where the chat goes on the remote', note: p.message, verb: 'Lands in' });
+      if (to === undefined) return; // Cancel: the chat stays here, nothing frozen, nothing sent
+      p = await window.p9.xferPlan(s.folder, to).catch(failed);
+    }
     if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (p.message || p.error) }); return renderChats(); }
     if (!p.syncthing.laptop.length && !p.syncthing.server.length) {
       const answer = !p.asked && !p.deletes ? [null, false] : await new Promise(done => {
@@ -3520,7 +3529,7 @@ async function sendAway(s) {
       xfer.id = null;
       if (!answer) return; // Cancel: nothing frozen, nothing sent
       files = [p.id, ...answer];
-    }
+    } else if (p.to !== undefined) files = [p.id, null, false]; // synced: the files wait for Syncthing; the plan carries where it lands
   }
   fxFiles = files.length ? s.id : null;
   const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));

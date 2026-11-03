@@ -147,6 +147,7 @@ export async function planFolder({ local, host, folder, to, userData, ssh = 'ssh
       const same = await link.serverCall('GET', '/files/folders?' + new URLSearchParams({ path: folder }));
       if (same.status !== 200) return { error: 'pick-folder', locked: same.body?.error === 'unrestricted-only', message: same.body?.error === 'unrestricted-only' ? LOCKED_THERE + ' Pick one there, or turn both off on the remote.'
         : same.status === 404 ? 'The remote has no folder ' + folder + '. Pick where the chat goes there.'
+        : same.body?.error === 'private-folder' ? 'On the remote, ' + folder + ' holds P9\'s own files. Pick where the chat goes there.'
         : 'The remote cannot use ' + folder + ' (' + (same.body?.error ?? same.status) + '). Pick where the chat goes there.' };
       to = same.body.path;
     }

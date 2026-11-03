@@ -935,6 +935,90 @@ test('xfer window move: the prompt comes before the freeze, the folder goes firs
   console.log('PASS xfer window move: a Syncthing folder moved with no prompt and no files');
 });
 
+// U4 (Builder, 2026-11-02): a chat started outside the workspace. Its folder there: no question. Not there: the remote folder
+// picker opens before anything freezes; Cancel keeps the chat here, a picked folder gets the files and the chat.
+test('Send to remote from outside the workspace in the window: the same folder needs no question, else the picker; Cancel keeps it here', { skip, timeout: 90000 }, async (t) => {
+  const fill = async ({ workspace, directory }) => {
+    const files = { 'hub/registry.json': JSON.stringify({ scripts: [], apps: [], pages: [] }), 'projects/AGENTS.md': '# Projects\n', 'uuid-sessions': '', 'claude-home': '' };
+    for (const [name, text] of Object.entries(files)) { await mkdir(path.dirname(path.join(workspace, name)), { recursive: true }); await writeFile(path.join(workspace, name), text); }
+    await mkdir(path.join(workspace, 'waiting'));
+    await writeFile(path.join(directory, 'settings.json'), JSON.stringify({ registry: 'hub/registry.json', primary: 'projects/AGENTS.md', waiting: 'waiting' }));
+    return { args: ['--settings', path.join(directory, 'settings.json'), '--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] };
+  };
+  const laptop = await daemon(t, undefined, false, fill), server = await daemon(t, undefined, false, fill);
+  const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
+    headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => ({ status: result.status, ...(result.status === 404 ? {} : JSON.parse(result.text)) }));
+  const until = async (check, what, ms = 20000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 100))) if (await check()) return;
+    assert.fail('timed out: ' + what);
+  };
+  const listed = async (instance, id) => (await call(instance, '/chat')).conversations.find((c) => c.id === id);
+  for (const d of [laptop, server]) assert.equal((await call(d, '/file-protection', 'POST', { on: false })).status, 200);
+  const chat = async (folder) => {
+    await mkdir(folder, { recursive: true });
+    const id = (await call(laptop, '/chat', 'POST', { provider: 'claude', folder })).conversation;
+    assert.equal((await call(laptop, '/chat/' + id + '/prompt', 'POST', { text: 'edit notes.md' })).status, 202);
+    await until(async () => (await call(laptop, '/chat/events?after=0&only=' + id)).events.some((e) => e.type === 'turn-end'), 'the edit answered');
+    return id;
+  };
+  const s = await stage(server), profile = path.join(s.directory, 'profile');
+  await mkdir(profile);
+  await writeFile(path.join(profile, 'p9-server.json'), JSON.stringify({ host: null, last: 'test-host' }));
+  const env = { ...process.env, P9_SSH: s.ssh, XDG_RUNTIME_DIR: s.local, TZ: 'UTC' }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', laptop.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
+  const picker = page.locator('#folderDlg');
+  const press = async (id) => {
+    await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: 20000 });
+    await page.locator('.pane[data-id="' + id + '"] [data-send-away]').click({ timeout: 20000 });
+  };
+  const moved = async (id) => {
+    await until(async () => (await listed(laptop, id))?.state === 'moved', 'the chat moved');
+    await page.locator('#moveDlg[open]').waitFor({ timeout: 20000 });
+    await page.click('#moveNo');
+  };
+
+  // The same folder is on the remote (one computer plays both): it goes there, no picker.
+  const same = path.join(laptop.directory, 'experiments'), first = await chat(same);
+  await press(first);
+  await moved(first);
+  assert.equal(await picker.isVisible(), false, 'no picker when the folder is there');
+  assert.equal((await listed(server, first)).folder, same);
+  console.log('PASS outside window: the same folder on the remote took the chat with no question');
+
+  // Not usable there (inside the remote's own recovery folder): the picker, saying why, before anything freezes.
+  const outside = path.join(server.recovery, 'experiments'), id = await chat(outside);
+  await press(id);
+  await picker.waitFor({ timeout: 20000 });
+  assert.equal(await page.locator('#folderT').innerText(), 'Choose where the chat goes on the remote');
+  assert.match(await page.locator('#folderWhy').innerText(), /Pick where the chat goes there\./);
+  await shot('outside-picker');
+  await picker.getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(800);
+  assert.notEqual((await listed(laptop, id)).state, 'moving', 'Cancel froze it');
+  assert.notEqual((await listed(laptop, id)).state, 'moved');
+  assert.ok(!(await call(laptop, '/chat/events?after=0&only=' + id)).events.some((e) => e.type === 'moving'), 'Cancel froze it for a moment');
+  assert.equal(await listed(server, id), undefined);
+  console.log('PASS outside window: Cancel in the picker kept the chat here');
+  const landing = path.join(server.directory, 'landing');
+  await mkdir(landing);
+  await press(id);
+  await picker.waitFor({ timeout: 20000 });
+  await page.fill('#folderPath', landing);
+  await page.press('#folderPath', 'Enter');
+  await until(async () => (await page.locator('#folderAt').innerText()) === 'Lands in: ' + landing, 'the picker went to ' + landing);
+  await picker.getByRole('button', { name: 'Select' }).click();
+  await moved(id);
+  assert.equal((await listed(server, id)).folder, landing);
+  assert.equal(await readFile(path.join(landing, 'notes.md'), 'utf8'), await readFile(path.join(outside, 'notes.md'), 'utf8'));
+  console.log('PASS outside window: the picked folder got the files and the chat');
+});
+
 // ---- Item 33: Dev Focus in Server mode (threat model row 50). The server's daemon starts its editor server on editor.sock;
 // the tunnel's second forward carries it, and a loopback relay on the laptop hands it to the same Dev Focus page as Local's.
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

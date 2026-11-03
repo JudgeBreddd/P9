@@ -1059,6 +1059,8 @@ export async function createDesktop({ state, open } = {}) {
     catch (error) { if (pickLink === mine) pickLink = null; mine.link.then(l => l.tunnel.close()).catch(() => {}); return { status: 503, body: { error: 'no-answer', message: noAnswer(error, serverLast) } }; }
     finally { pickTimer = setTimeout(() => { const gone = pickLink; pickLink = null; gone?.link.then(l => l.tunnel.close()).catch(() => {}); }, 60_000); pickTimer.unref?.(); }
   };
+  // The picker's tunnel goes with P9: an ssh left behind would hold the connection open after quit.
+  app.once('will-quit', () => { clearTimeout(pickTimer); const gone = pickLink; pickLink = null; gone?.link.then(l => l.tunnel.close()).catch(() => {}); });
   ipcMain.handle('p9:xfer', async (event, ...args) => {
     const [action, a, b, c] = args;
     // 'plan' with a chat's full path (U4, a chat started outside the workspace) and maybe to, where it goes on the remote.
