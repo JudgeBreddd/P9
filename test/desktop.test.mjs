@@ -824,6 +824,66 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   await shot('move-reduced', page);
 });
 
+// Builder's test, 2026-11-02: the first press showed nothing for half a minute, and a second press said "A send is running
+// already". From the press the chat says what is happening, and its button and message box stay off until it lands or fails.
+test('Send to remote: a notice from the first press, the button and message box off until it lands or fails', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async ({ workspace }) => {
+    for (const marker of ['uuid-sessions', 'claude-home']) await writeFile(path.join(workspace, marker), '');
+    return { args: ['--acp-override', fake] };
+  });
+  const { app, page } = await openFirst(t, instance);
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' });
+  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  const pane = page.locator(`.pane[data-id="${id}"]`), button = pane.locator('[data-send-away]'), box = pane.locator('.composer textarea');
+  await button.waitFor({ timeout: 20000 });
+  await page.waitForFunction((i) => !document.querySelector(`.pane[data-id="${i}"] [data-send-away]`).disabled, id, { timeout: 20000 });
+  // main's two steps wait until the test lets them go: the plan, then the move (the half minute Builder saw).
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.calls = []; globalThis.answer = null;
+    const held = () => new Promise((done) => { globalThis.release = done; });
+    for (const name of ['p9:xfer', 'p9:send-to-server']) ipcMain.removeHandler(name);
+    ipcMain.handle('p9:xfer', async (_event, ...args) => { globalThis.calls.push(args[0]); await held(); return { id: '00000000-0000-4000-8000-000000000001', asked: 0, deletes: 0, syncthing: { laptop: ['x'], server: [] } }; });
+    ipcMain.handle('p9:send-to-server', async () => { globalThis.calls.push('send'); await held(); return globalThis.answer; });
+  });
+  const release = (answer) => app.evaluate((_e, a) => { globalThis.answer = a; globalThis.release(); }, answer);
+  const notice = pane.locator('.hist', { hasText: /Moving this chat to .+\. This takes about 30 seconds; don't type in this chat or close P9 until it finishes\./ });
+  const calls = () => app.evaluate(() => globalThis.calls);
+  const step = async (n) => { for (let i = 0; i < 100 && (await calls()).length < n; i++) await page.waitForTimeout(100); };
+  const during = async () => {
+    await notice.waitFor({ timeout: 2000 });
+    assert.equal(await button.isDisabled(), true, 'Send to remote is off while it runs');
+    assert.equal(await box.isDisabled(), true, 'the message box is off while it runs');
+    await button.click({ force: true });
+  };
+
+  // It lands: the notice is there from the press, through the plan and the move, and gone after.
+  await button.click();
+  await step(1);
+  await during();
+  await release(null);
+  await step(2);
+  await during();
+  assert.deepEqual(await calls(), ['plan', 'send'], 'a second press started nothing');
+  await release({ status: 200, body: { moved: true, host: 'test-host' } });
+  await page.waitForFunction((i) => !document.querySelector(`.pane[data-id="${i}"]`).textContent.includes('This takes about 30 seconds'), id, { timeout: 5000 });
+  assert.equal(await button.isDisabled(), false);
+  assert.equal(await box.isDisabled(), false);
+
+  // It fails: the notice goes, the reason stays, and the button and box work again.
+  await app.evaluate(() => { globalThis.calls = []; });
+  await button.click();
+  await step(1);
+  await during();
+  await release(null);
+  await step(2);
+  await release({ status: 409, body: { error: 'unreachable', message: 'Could not reach the remote (test).' } });
+  await pane.getByText('Not sent to the remote: Could not reach the remote (test).').waitFor({ timeout: 5000 });
+  assert.equal(await notice.count(), 0);
+  assert.equal(await button.isDisabled(), false);
+  assert.equal(await box.isDisabled(), false);
+});
+
 test('Send to remote from a chat outside the workspace: main plans it as it is; no remote yet is said in words', { timeout: 60000 }, async (t) => {
   const { page } = await openFirst(t, await daemon(t));
   // U4 (Unrestricted mode) stores such a chat's folder as a full path; main plans it (the same folder, or one picked there).
