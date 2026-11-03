@@ -47,6 +47,8 @@ export const desktopFolders = ({ platform = process.platform, home = os.homedir(
     'p9-update.log', 'p9-freeze.log', 'p9-version.txt', 'update-state.json'].map((name) => path.join(at, 'Electron', name))]);
 };
 const within = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
+// Review 3 L8: for the U4 folder picker, which lists folders by absolute path outside packages/files' reads.
+export const isGuarded = (full) => { for (const folder of guarded) if (within(folder, full)) return true; return false; };
 function notPrivate(root, parts) {
   const full = path.join(path.resolve(root), ...parts);
   for (const folder of guarded) if (within(folder, full)) throw new Error('private-folder');

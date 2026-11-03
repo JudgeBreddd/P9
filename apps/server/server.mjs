@@ -11,7 +11,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { getRequestListener } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { ORIGIN, MAX_BYTES, PUBLIC_ROUTES, FRAME_CSP, parseSave, SIGN_IN_ORIGINS, DEVICE_CODE, signInUrl } from '../../packages/protocol/index.mjs';
-import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
+import { readFile as readWorkspaceFile, readImage as readWorkspaceImage, listDirectory, guardedSave, createFile, createDirectory, setProtection, protection, guardFolders, isGuarded, HEAVY, WALK_SKIP } from '../../packages/files/index.mjs';
 import { createXfer } from './xfer.mjs';
 import { createUpdate, toolPath } from './update.mjs';
 import { createMission, parseSettings, rootRefused, inside, draftAt, draftNames } from './mission.mjs';
@@ -257,11 +257,13 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const asked = c.req.query('path') || workspace;
     if (!path.isAbsolute(asked) || asked.length > 4096 || asked.includes('\0')) return c.json({ error: 'request-refused' }, 400);
     let at; try { at = await realpath(asked); } catch { return c.json({ error: 'not-found' }, 404); }
+    // Review 3 L8: P9's own folders (U5) are neither walked nor listed; a chat cannot start in one either (folderCheck).
+    if (isGuarded(at)) return c.json({ error: 'private-folder' }, 403);
     const entries = await readdir(at, { withFileTypes: true }).catch(() => null);
     if (!entries) return c.json({ error: 'not-readable' }, 403);
     const parent = path.dirname(at);
     return c.json({ path: at, workspace: await realpath(workspace), parent: parent === at ? null : parent,
-      dirs: entries.filter((e) => e.isDirectory()).map((e) => e.name).sort().map((name) => ({ name, path: path.join(at, name) })) });
+      dirs: entries.filter((e) => e.isDirectory() && !isGuarded(path.join(at, e.name))).map((e) => e.name).sort().map((name) => ({ name, path: path.join(at, name) })) });
   });
   api.get('/files/root', (c) => (c.get('device') ? c.json({ root: phoneRoot }) : c.json({ error: 'not-found' }, 404)));
   api.post('/files/root', async (c) => {
