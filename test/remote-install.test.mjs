@@ -150,7 +150,7 @@ test('full install source: this checkout sends no tests, docs, contracts or agen
     for (const bad of ['test/', 'docs/', '.cursor/', '.github/', '.githooks/', 'contracts.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/', 'apps/server/AGENTS.md'])
       assert.ok(!files.some((f) => f === bad || f.startsWith(bad)), how + ' sent ' + bad);
     for (const good of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/install.sh', 'scripts/background.sh', 'apps/server/main.mjs',
-      'apps/web/package.json', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md'])
+      'apps/web/astro.config.mjs', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md'])
       assert.ok(files.includes(good), how + ' is missing ' + good);
   };
   // A synced copy: the files beside the source, with no .git (the dev space copies the checkout without one).
@@ -159,7 +159,7 @@ test('full install source: this checkout sends no tests, docs, contracts or agen
   const run = (cmd, args, cwd) => new Promise((resolve) => { const c = spawn(cmd, args, { cwd, stdio: 'ignore' }); c.once('close', resolve); });
   await mkdir(copy);
   for (const f of ['.gitignore', '.gitattributes', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/install.sh', 'scripts/background.sh', 'apps/server/main.mjs',
-    'apps/web/package.json', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md', 'test/helpers.mjs', 'docs/guide.md',
+    'apps/web/astro.config.mjs', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md', 'test/helpers.mjs', 'docs/guide.md',
     'contracts.md', 'CONTRIBUTING.md', '.github/workflows/x.yml', '.githooks/pre-commit', '.cursor/skills/x.md']) {
     await mkdir(path.dirname(path.join(copy, f)), { recursive: true });
     await writeFile(path.join(copy, f), await readFile(path.join(root, f)).catch(() => 'stand-in\n'));
