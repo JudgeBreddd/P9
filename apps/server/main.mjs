@@ -226,5 +226,8 @@ function stop() {
 }
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
+// A rejection nobody awaited (a listener's chain, a sweep) is logged, not fatal: Node's default would end the daemon and every
+// chat and terminal it owns (review 2026-11-03). Thrown exceptions still end it: their state is unknown.
+process.on('unhandledRejection', (reason) => console.error('P9_UNHANDLED_REJECTION ' + String(reason?.stack ?? reason).slice(0, 1000)));
 if (idleSeconds) watchIdle({ seconds: idleSeconds, servers: [server, server.remote].filter(Boolean), turns: () => server.chat.list().some((c) => c.state === 'turn'), stop });
 console.log('P9_READY');

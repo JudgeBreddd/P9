@@ -9,7 +9,7 @@ import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
-import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
+import { connectServer, forwardPath, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
@@ -857,7 +857,7 @@ export async function createDesktop({ state, open } = {}) {
             archive: !app.isPackaged && process.env.P9_PACKAGED !== '1' ? sourceArchive(fileURLToPath(new URL('../../', import.meta.url))) : null });
         if (e.phase === 'full-there' && serverHost === host) return void runInstall(admin, { full: true, keep });
         // 30 s for the new P9 to answer, as a start gets; then Try again, never "Connecting…" forever.
-        if (e.phase === 'done' && serverHost === host) { remoteInstall = { ...remoteInstall, until: Date.now() + 30000 }; useServer(host); }
+        if (e.phase === 'done' && serverHost === host) { remoteInstall = { ...remoteInstall, until: Date.now() + 30000 }; await useServer(host); }
       } finally {
         if (slim?.built) await rm(slim.folder, { recursive: true, force: true }).catch(() => {});
       }
@@ -877,8 +877,8 @@ export async function createDesktop({ state, open } = {}) {
         if (serverHost !== host || remoteInstall?.started !== started) return;
         if (r !== 'ok') return void (answers ? (remoteInstall = { phase: 'failed', error: 'not-answering', started }) : runInstall());
         remoteInstall = { phase: 'starting', started, until: Date.now() + 30000 };
-        useServer(host);
-      });
+        return useServer(host);
+      }).catch(error => { remoteInstall = { phase: 'failed', error: error.message, started }; });
     } else if (!answers && remoteInstall?.phase === 'starting' && remoteInstall.until < Date.now()) runInstall();
   };
   // Row I2: the admin password typed into the window, for the one admin step this remote is waiting on: the install's
@@ -1154,7 +1154,7 @@ export async function createDesktop({ state, open } = {}) {
     if (asked instanceof Error || asked.status === 404) throw new Error(asked.message === 'bad-response' || asked.status === 404 ? 'server-old' : 'daemon-unavailable');
     const { body } = asked;
     if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: serverHost });
-    const socket = path.join(state, 'editor.sock');
+    const socket = forwardPath(state, 'editor');
     if (relay?.socket !== socket) {
       relay?.server.close();
       const listener = net.createServer(client => {

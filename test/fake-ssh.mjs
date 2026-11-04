@@ -65,13 +65,15 @@ if (!tunnel) {
 }
 process.umask(0o177);
 for (const forward of forwards) {
-  const [local, remote] = forward.split(':');
-  rmSync(local, { force: true }); // StreamLocalBindUnlink=yes
-  net.createServer(socket => {
+  // 127.0.0.1:<port>:<remote> is a loopback port (P9 on Windows); <local>:<remote> a Unix socket.
+  const parts = forward.split(':'), tcp = parts.length === 3, remote = parts.at(-1), local = tcp ? Number(parts[1]) : parts[0];
+  if (!tcp) rmSync(local, { force: true }); // StreamLocalBindUnlink=yes
+  const listener = net.createServer(socket => {
     const far = net.connect(remote);
     socket.pipe(far).pipe(socket);
     far.on('error', () => socket.destroy());
     socket.on('error', () => far.destroy());
-  }).listen(local);
+  });
+  if (tcp) listener.listen(local, '127.0.0.1'); else listener.listen(local);
 }
 process.on('SIGTERM', () => process.exit(0));

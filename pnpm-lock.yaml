@@ -33,12 +33,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.8.0
         version: 1.8.0(zod@4.6.7)
-      '@codingame/monaco-vscode-explorer-service-override':
-        specifier: 33.0.9
-        version: 33.0.9
-      '@codingame/monaco-vscode-markdown-basics-default-extension':
-        specifier: 33.0.9
-        version: 33.0.9
       '@hono/node-server':
         specifier: 2.1.4
         version: 2.1.4(hono@4.13.13)
@@ -76,7 +70,7 @@ importers:
       '@codingame/monaco-vscode-editor-api':
         specifier: 33.0.9
         version: 33.0.9
-      '@codingame/monaco-vscode-environment-service-override':
+      '@codingame/monaco-vscode-explorer-service-override':
         specifier: 33.0.9
         version: 33.0.9
       '@codingame/monaco-vscode-extension-gallery-service-override':
@@ -92,6 +86,9 @@ importers:
         specifier: 33.0.9
         version: 33.0.9
       '@codingame/monaco-vscode-languages-service-override':
+        specifier: 33.0.9
+        version: 33.0.9
+      '@codingame/monaco-vscode-markdown-basics-default-extension':
         specifier: 33.0.9
         version: 33.0.9
       '@codingame/monaco-vscode-model-service-override':

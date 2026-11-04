@@ -501,8 +501,15 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Status and known gaps
 
-**Version 0.1.6, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.7, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
+
+**New in 0.1.7** (a fix release): a failed chat-history write or an unawaited error is logged instead of
+stopping the background service; streaming replies no longer stall the daemon once per chunk (the history database
+commits without a disk flush per write); the Dev Focus editor server is stopped properly again on Linux; pets animate
+only while one is on screen; a reinstall over an old P9 service no longer skips the editor server; a remote install
+stops the running P9 there before replacing its files; the "see journalctl" hint also names the command for machines
+that keep their journal in memory.
 
 **New in 0.1.6:** the phone shell and Chats screens, and phone parity with the desktop chat; Send to remote
 and Send files to remote over your own ssh; the remote updating itself on connect; artifacts; the Security settings

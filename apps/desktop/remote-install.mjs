@@ -81,6 +81,10 @@ export function script(version, keep = false, admin = false, { stdin = version =
     // Only sh, cat, tar and grep: a remote missing tools gets here before an admin installs them (row I2), so no sed, sort, comm or cp.
     // Review 2 L1: the listing first, on its own: a bad or cut-short archive stops here, before the sweep removes anything.
     'tar -tzf "$t/p9.tar.gz" > "$t/list" || exit 1',
+    // A running full P9 there is stopped before its files are replaced: its enabled unit otherwise restarts it from a half-built
+    // ~/p9 (no node, no node_modules) and it can start before the build ends, on old code (fixed in 0.1.7). install.sh's
+    // service step starts it again.
+    'if command -v systemctl >/dev/null && systemctl --user is-active --quiet p9-foundation.service 2>/dev/null; then systemctl --user stop p9-foundation.service || { echo "P9_INSTALL busy"; exit 1; }; fi',
     'while IFS= read -r x; do x=${x#*/}; case $x in "" | */) ;; *) printf "%s\\n" "$x" ;; esac; done < "$t/list" > "$t/files"',
     'if [ -f "$d/.p9-files" ]; then grep -vxF -f "$t/files" -- "$d/.p9-files" | while IFS= read -r x; do case "/$x/" in */../* | //*) ;; *) rm -f -- "$d/$x" ;; esac; done; fi',
     'tar -xzf "$t/p9.tar.gz" -C "$d" --strip-components=1; cat "$t/files" > "$d/.p9-files"; echo "P9_INSTALL unpacked"',

@@ -253,7 +253,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }
     return { hash, type: mimeType };
   });
-  const emit = (conversation, type, data = {}) => { ledger.append(conversation, type, data); for (const wake of listeners) wake(); };
+  // A failed append (disk full, a busy database) is logged, not thrown: emit runs inside child exit listeners and un-awaited
+  // chains, where a throw would end the daemon and every chat with it (review 2026-11-03). The chat goes on; the event is lost.
+  const emit = (conversation, type, data = {}) => {
+    try { ledger.append(conversation, type, data); }
+    catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
+    for (const wake of listeners) wake();
+  };
   const row = (id) => db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
   const setState = (id, state) => db.prepare('UPDATE conversations SET state = ? WHERE id = ?').run(state, id);
   // Agent lock (threat model row 15): kept in the ledger so a restart keeps it. While on, sessions run in the provider's

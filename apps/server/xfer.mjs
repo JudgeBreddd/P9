@@ -47,7 +47,7 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
   const root = ownership && path.join(ownership, 'xfer');
   // No resume across daemon runs, so staging left by an earlier run is dropped at start.
   const swept = root ? rm(root, { recursive: true, force: true }).catch(() => {}) : Promise.resolve();
-  const uploads = new Map(), busy = new Set(), hashes = new Map();
+  const uploads = new Map(), busy = new Set(), hashes = new Map(), HASH_CACHE = 50_000;
   const staging = (id, n) => path.join(root, 'in-' + id, String(n));
 
   // Files under `base` (absolute), relative to it. Git folders: git's list, nested repos by their own list; others: a
@@ -57,8 +57,11 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
     if (tracked) {
       skipped.ignored += (await gitList(base, ['--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory']))?.length ?? 0;
       for (const entry of tracked) {
-        const name = entry.replace(/\/$/, ''), stat = await lstat(path.join(base, name)).catch(() => null);
-        if (stat?.isDirectory()) await list(path.join(base, name), prefix + name + '/', skipped, out); // a nested repo
+        const name = entry.replace(/\/$/, ''), full = path.join(base, name);
+        // An empty submodule folder (never checked out) lists itself as './': walking it again would never end.
+        if (full === base) { skipped.ignored += 1; continue; }
+        const stat = await lstat(full).catch(() => null);
+        if (stat?.isDirectory()) await list(full, prefix + name + '/', skipped, out); // a nested repo
         else if (stat) out.push(prefix + name);
       }
       return;
@@ -78,6 +81,8 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
     const key = [stat.size, stat.mtimeMs, stat.ino].join(':'), known = hashes.get(full);
     if (known?.key === key) return known.sha256;
     const sha256 = await sha256File(full);
+    // Keyed by absolute path for the daemon's life; a few manifests of large trees would otherwise hold tens of MB (review 2026-11-03).
+    if (hashes.size >= HASH_CACHE) hashes.clear();
     hashes.set(full, { key, sha256 });
     return sha256;
   }

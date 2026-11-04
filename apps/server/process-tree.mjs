@@ -13,6 +13,10 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const hostScript = (url) => fileURLToPath(new URL('../../scripts/windows-host.ps1', url)).replace(/app\.asar(?=[\\/])/, 'daemon');
 const host = hostScript(import.meta.url);
 
+// The systemd slice every P9 scope runs in: chats and button runs here, the Dev Focus editor host (apps/desktop/editor-host.mjs).
+// One name, so the host's last-resort cgroup kill looks where the host was started (v0.1.6 moved the start to p9.slice and
+// left the kill path on app.slice, so it never found the scope).
+export const SLICE = 'p9.slice';
 export const hasUserBus = () => process.platform === 'linux' && !!process.env.XDG_RUNTIME_DIR
   && existsSync(path.join(process.env.XDG_RUNTIME_DIR, 'bus'));
 
@@ -66,7 +70,7 @@ export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', sc
   } else if (scope && hasUserBus()) {
     unit = `${prefix}-${instance}-${randomUUID()}`;
     // ponytail: each chat is capped at 4 GiB; raise MemoryMax if a real session ever needs more.
-    full = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=p9.slice', '--unit', unit, '-p', 'MemoryMax=4G',
+    full = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=' + SLICE, '--unit', unit, '-p', 'MemoryMax=4G',
       '-p', 'TimeoutStopSec=2', '--', ...argv];
   }
   const child = spawn(full[0], full.slice(1), { cwd, env: childEnv(), shell: false, detached, stdio });

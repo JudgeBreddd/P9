@@ -388,8 +388,21 @@ function tickPets() {
     cv.style.left = Math.min(r.width, Math.max(0, b.left - r.left + x)) + 'px'; cv.style.top = Math.min(r.height, Math.max(0, b.top - r.top + y)) + 'px';
   });
   document.querySelectorAll('canvas.pet').forEach(drawPet);
+  petTicker();
 }
-setInterval(() => { if (!document.hidden) { IND.frame++; tickPets(); } }, 125);
+// The 125 ms tick runs only while something on screen moves: a top-bar pet or spinner, a chat's spinner or a chat's pet. With
+// no pet installed and no agent working it stops (review 2026-11-03: it ran forever, three sweeps and two rects per pane, eight
+// times a second). Every path that puts a pet or spinner on screen ends in tickPets, which starts it again.
+let petTimer = 0;
+const petsMoving = () => !!(IND.top.length || !$('#agentInd').hidden || document.querySelector('canvas.pet, .working .glyph'));
+function petTicker() {
+  if (petTimer || !petsMoving()) return;
+  petTimer = window.setInterval(() => {
+    if (!petsMoving()) { window.clearInterval(petTimer); petTimer = 0; return; }
+    if (!document.hidden) { IND.frame++; tickPets(); }
+  }, 125);
+}
+lifetime.signal.addEventListener('abort', () => { window.clearInterval(petTimer); petTimer = 0; });
 // Each chat keeps its own pet spot, apart in Chat Focus and in its chat window (Builder, 2026-10-19: moving one pet moved
 // both, and moving the robot head window's pet moved the chat's). Settings' per-focus pane spot is no longer read.
 // ponytail: localStorage (petSpots, top of this section), last 200 dragged chats; move it into the settings file if spots should follow a profile copy.
@@ -3610,7 +3623,7 @@ function onServerUpdate(u) {
     'waiting-turns': [on + ' will update to ' + u.version + ': waiting for ' + u.turns + ' chat' + (u.turns === 1 ? '' : 's') + ' to finish ' + (u.turns === 1 ? 'its' : 'their') + ' turn.', 'ok'],
     restarting: [on + ' is restarting on ' + u.version + '.', 'ok'],
     done: [on + ' is now ' + u.version + '.', 'ok', true],
-    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote.'), 'bad', true],
+    'rolled-back': [on + (u.rolledBack ? ' did not start on ' + u.version + ' and went back to its old copy (' + u.reason + ').' : ' did not start on ' + u.version + ' and could not go back by itself (' + u.reason + '): see journalctl --user -u p9-foundation on the remote (or journalctl _SYSTEMD_USER_UNIT=p9-foundation.service where the journal is kept in memory).'), 'bad', true],
     failed: [on + ' was not updated to ' + u.version + ' (' + why + '). It runs on as before.', 'bad', true],
     'timed-out': [on + ' did not finish updating to ' + u.version + ' within ' + u.minutes + ' minutes. Connect again to see where it stands.', 'bad', true],
     'too-old': [on + ' runs ' + u.server + ', too old to update itself. Update it once by hand, in a terminal on ' + u.host + ' (from the folder P9 was cloned into):', 'bad', true],

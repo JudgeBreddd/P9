@@ -9,6 +9,7 @@ import { _electron } from '@playwright/test';
 import { root, daemon } from './helpers.mjs';
 import { editorFor } from './editor-fixture.mjs';
 import { startEditorHost, stopEditorHost, hostWritable, openInCode, EDITOR_DIR, EDITOR_COMMIT } from '../apps/desktop/editor-host.mjs';
+import { SLICE } from '../apps/server/process-tree.mjs';
 
 const host = process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
 const win = process.platform === 'win32';
@@ -142,7 +143,8 @@ test('Phase 8: unguarded host-folder writes take only plain files inside it', as
 
 test('Phase 8: the host stops on quit even when systemctl fails', { skip: process.platform !== 'linux' }, async () => {
   const unit = 'p9-editor-host-nosystemctl-' + process.pid, bin = await mkdtemp(path.join(os.tmpdir(), 'p9-no-systemctl-'));
-  const host = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit=' + unit, 'sleep', '60'], { stdio: 'ignore' });
+  // In the slice the real host starts in: the last-resort cgroup kill looks there, and only there.
+  const host = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--slice=' + SLICE, '--unit=' + unit, 'sleep', '60'], { stdio: 'ignore' });
   await new Promise(resolve => setTimeout(resolve, 1000));
   const state = () => spawnSync('systemctl', ['--user', 'is-active', unit + '.scope'], { encoding: 'utf8' }).stdout.trim();
   assert.equal(state(), 'active');

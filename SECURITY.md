@@ -420,7 +420,7 @@ every start). Requests without the token get 403; the token also appears in the 
 resource URLs (?tkn=), so it is visible to the dev view's own devtools. The quit handler
 is registered before the host starts. A normal quit stops the host's scope; if systemd cannot stop it in 10 s, P9 asks systemd to kill everything in it and
 then, without waiting on systemd's answer, kills the scope's cgroup itself (the
-kernel's cgroup.kill; the host is started in app.slice, so the path is known) and
+kernel's cgroup.kill; the host is started in P9's own p9.slice, so the path is known) and
 counts it stopped only when the kernel reports that cgroup and every cgroup under it
 empty (cgroup.events: populated 0), or the cgroup is gone. If even that fails, P9 logs an error and quits; the host may keep running
 until logout (known gap, same as an Electron crash). A quit

@@ -1,5 +1,16 @@
 # Upgrading P9
 
+## To 0.1.7 (beta)
+
+A fix release. The Windows app and the AppImage update themselves from 0.1.6 (Settings > Maintenance > Updates). A
+source checkout updates as `README.md` § Update, roll back, uninstall says, then reopen the window (the desktop main
+process changed). Installing restarts the background service, which ends a chat turn in progress.
+
+**What you will notice:** nothing on screen. Long streaming replies keep the rest of P9 responsive, and a disk or
+database error during a chat is written to the log instead of stopping P9.
+
+**Nothing to do by hand.** Settings, chats and the workspace carry over unchanged.
+
 ## To 0.1.6 (beta)
 
 The Windows app and the AppImage update themselves from 0.1.5 (Settings > Maintenance > Updates). A source checkout

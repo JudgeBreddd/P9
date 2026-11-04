@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { createServer, request } from 'node:http';
-import { connectServer, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
+import { connectServer, forwardPath, restartServer, sshHosts, READ } from '../apps/desktop/remote.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
 import { EDITOR_COMMIT, EDITOR_DOWNLOADS } from '../apps/desktop/editor-host.mjs';
 import { editorFor } from './editor-fixture.mjs';
@@ -71,6 +71,26 @@ test('Server mode: the forward, its files and the ssh it runs', { skip }, async 
   t.after(() => move.close());
   const moved = (await s.calls()).filter(c => c.argv.includes('-L')).at(-1);
   assert.deepEqual(moved.argv.filter(arg => arg === '-L').length, 1, JSON.stringify(moved.argv));
+});
+
+test('Server mode, Windows forward: loopback ports to the server sockets, a relay at socketPath, ended on close', { skip }, async (t) => {
+  const instance = await daemon(t), s = await stage(instance);
+  const server = await connectServer({ host: 'test-host', ssh: s.ssh, runtime: s.local, tcp: true });
+  t.after(() => server.close());
+  const saved = JSON.parse(await readFile(path.join(server.state, 'desktop.json'), 'utf8'));
+  assert.equal((await server.check()).status, 'ok');
+  assert.equal((await http({ socketPath: saved.socketPath, headers: authenticated(saved) })).status, 200);
+  assert.equal((await http({ socketPath: saved.socketPath, headers: authenticated({ ...saved, cookie: 'x'.repeat(saved.cookie.length) }) })).status, 401);
+  // Windows OpenSSH cannot listen on a Unix socket: every -L is 127.0.0.1:<port>:<the server's socket>.
+  const tunnel = (await s.calls()).find(c => c.argv.includes('-L'));
+  const ls = tunnel.argv.flatMap((arg, i) => arg === '-L' ? [tunnel.argv[i + 1]] : []);
+  assert.deepEqual(ls.map(l => l.replace(/:\d+:/, ':P:')), ['127.0.0.1:P:' + path.join(s.server, 'p9-foundation', 'daemon.sock'),
+    '127.0.0.1:P:' + path.join(s.server, 'p9-foundation', 'editor.sock')]);
+  assert.equal(forwardPath('C:\\Users\\a\\p9-server\\h', 'daemon', true), forwardPath('c:\\users\\a\\p9-server\\h', 'daemon', true));
+  assert.match(forwardPath('C:\\x', 'editor', true), /^\\\\\.\\pipe\\p9-remote-[0-9a-f]{20}-editor$/);
+  await server.close();
+  assert.ok(await gone(server.state));
+  await assert.rejects(http({ socketPath: saved.socketPath, headers: authenticated(saved) }), 'the relay ends with the tunnel');
 });
 
 test('Server mode: host names ssh would read as options are refused before ssh runs', { skip }, async () => {

@@ -8,3 +8,6 @@ AGENTS.md
 CLAUDE.md
 CONTEXT.md
 .publish
+# The Cortana pet (added 2026-10-29) stays local: never shipped in 0.1.6, and a game character is not ours to publish
+# (2026-11-03; the owner decides whether it ever ships).
+/apps/desktop/pets/cortana/

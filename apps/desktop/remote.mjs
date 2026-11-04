@@ -10,6 +10,8 @@ import { mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
 import { existsSync, mkdirSync, lstatSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
+import { createHash } from 'node:crypto';
 import { health, RESTART_UNIT, RESTART_GRACE } from '../../scripts/teh.mjs';
 // The admin password's shape (row I2): one line, at most 1024 characters. Also remote-install.mjs's.
 export const PASSWORD = (value) => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\0\r\n]/.test(value);
@@ -19,6 +21,15 @@ export const HOST = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/;
 // The owner-only folder for that login's control socket (and its askpass helper while it asks); %C: ssh's hash of the host.
 export const CONTROL_DIR = path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'p9-ssh-' + (process.getuid?.() ?? 0));
 const WINDOWS = process.platform === 'win32';
+// Where a forward ends here: daemon.sock and editor.sock in the state folder, or on Windows a named pipe per state folder
+// (its OpenSSH cannot listen on a Unix socket, and node there reaches only pipes by path).
+export const forwardPath = (state, name, windows = WINDOWS) => windows
+  ? '\\\\.\\pipe\\p9-remote-' + createHash('sha256').update(state.toLowerCase()).digest('hex').slice(0, 20) + '-' + name
+  : path.join(state, name + '.sock');
+// A free loopback port; the ssh after it refuses a taken one (ExitOnForwardFailure) and the connect is retried.
+const freePort = () => new Promise((resolve, reject) => {
+  const probe = net.createServer().once('error', reject).listen(0, '127.0.0.1', () => { const { port } = probe.address(); probe.close(() => resolve(port)); });
+});
 // Review 2 M2: only our own real folder, as sshLogin checks; one another user made first (os.tmpdir() when XDG_RUNTIME_DIR
 // is unset) could hold a socket that answers as the server, so then no sharing at all.
 const ownControl = () => {
@@ -167,13 +178,16 @@ export function restartServer(host, ssh = 'ssh') {
 // editor: false leaves the editor forward off (the move's tunnel has no use for it).
 // onDrop runs when the tunnel ends without close() (lid closed, network gone, server restarted); the caller reconnects.
 // signal: aborted when P9 quits, so a forward still waiting for /health is ended too, never left running on its own.
-export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {}, signal }) {
+// tcp (Windows): ssh forwards a loopback port to each server socket (Windows OpenSSH has no local Unix socket forward, so
+// VS Code Remote-SSH uses ports there too) and a relay here carries socketPath's connections to it. Any local process can
+// reach the port; the server daemon's cookie still guards every route (threat model row 50, Windows).
+export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {}, signal, tcp = WINDOWS }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');
   const { remoteSocket, remoteEditor, credentials, background, slim } = await readServer(host, ssh);
   const state = serverFolder(host, runtime), parent = path.dirname(state);
   await mkdir(state, { recursive: true, mode: 0o700 });
   await chmod(parent, 0o700); await chmod(state, 0o700);
-  const socketPath = path.join(state, 'daemon.sock'), editorSocket = path.join(state, 'editor.sock');
+  const socketPath = forwardPath(state, 'daemon', tcp && WINDOWS), editorSocket = forwardPath(state, 'editor', tcp && WINDOWS);
   await rm(socketPath, { force: true });
   await rm(editorSocket, { force: true });
   const save = c => writeFile(path.join(state, 'desktop.json'), JSON.stringify({ ...c, socketPath }), { mode: 0o600 });
@@ -189,18 +203,33 @@ export async function connectServer({ host, ssh = 'ssh', runtime = process.env.X
   // Not -N: over a password login's control master (row 78) an ssh -N hands its forwards to the master and exits at once, so
   // the tunnel looked dead and P9 never connected. A session waiting on stdin keeps this ssh alive for as long as the
   // connection (its exit is still the drop), and the remote cat ends when it closes.
-  const forwards = ['-L', socketPath + ':' + remoteSocket, ...(editor ? ['-L', editorSocket + ':' + remoteEditor] : [])];
+  const ends = [[socketPath, remoteSocket], ...(editor ? [[editorSocket, remoteEditor]] : [])];
+  const relays = [], forwards = [];
+  for (const [local, remote] of ends) {
+    if (!tcp) { forwards.push('-L', local + ':' + remote); continue; }
+    const port = await freePort();
+    forwards.push('-L', '127.0.0.1:' + port + ':' + remote);
+    const relay = net.createServer(client => {
+      const far = net.connect(port, '127.0.0.1');
+      client.pipe(far).pipe(client);
+      far.on('error', () => client.destroy());
+      client.on('error', () => far.destroy());
+    });
+    await new Promise((resolve, reject) => relay.once('error', reject).listen(local, resolve));
+    relays.push(relay);
+  }
+  const unrelay = () => { for (const relay of relays.splice(0)) relay.close(); };
   // The master keeps a forward it was handed until cancelled, and takes the same one again as already there: one a
   // tunnel before this left (a crash, an older P9) would hold the path with its socket file gone. Cancelled first, then.
-  const cancel = () => WINDOWS ? null : new Promise(resolve => execFile(ssh, [...sshOptions(), '-O', 'cancel', ...forwards, host], { timeout: 10000 }, () => resolve()));
+  const cancel = () => WINDOWS || tcp ? null : new Promise(resolve => execFile(ssh, [...sshOptions(), '-O', 'cancel', ...forwards, host], { timeout: 10000 }, () => resolve()));
   await cancel();
   const child = spawn(ssh, [...sshOptions(), '-o', 'ExitOnForwardFailure=yes', '-o', 'StreamLocalBindUnlink=yes', '-o', 'StreamLocalBindMask=0177',
     ...forwards, host, 'exec cat >/dev/null'], { stdio: ['pipe', 'ignore', 'ignore'], signal });
   child.on('error', () => {}); // the abort's AbortError; exit follows
   child.stdin.on('error', () => {});
   let closed = false, exited = false, ready = false;
-  const close = async () => { closed = true; if (!exited) child.kill(); await cancel(); await rm(state, { recursive: true, force: true }); };
-  child.on('exit', () => { exited = true; if (!closed) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); if (ready) onDrop(); } });
+  const close = async () => { closed = true; if (!exited) child.kill(); unrelay(); await cancel(); await rm(state, { recursive: true, force: true }); };
+  child.on('exit', () => { exited = true; unrelay(); if (!closed) { closed = true; rm(state, { recursive: true, force: true }).catch(() => {}); if (ready) onDrop(); } });
   // Ready when the server daemon answers /health through the forward; 15 s, the same wait the installer gives a fresh daemon.
   for (let i = 0; i < 60; i++) {
     if (exited) break;
