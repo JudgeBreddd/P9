@@ -9,7 +9,7 @@ import os from 'node:os';
 import net from 'node:net';
 import { health, daemonRequest, windowsTask, repairWindowsTask, restartWindowsTask, restartLinuxService, repairLinuxService, unitFor, appImageService, answered, AGENT_START_MS, failedReply } from '../../scripts/teh.mjs';
 import { sshLogin, makeKey, installKey } from './ssh-login.mjs';
-import { connectServer, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
+import { connectServer, forwardPath, restartServer, startServer, sshHosts, serverFolder, probeServer, remoteMode, remoteDeps, HOST, PASSWORD, useKey } from './remote.mjs';
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
@@ -1154,7 +1154,7 @@ export async function createDesktop({ state, open } = {}) {
     if (asked instanceof Error || asked.status === 404) throw new Error(asked.message === 'bad-response' || asked.status === 404 ? 'server-old' : 'daemon-unavailable');
     const { body } = asked;
     if (asked.status !== 200) throw Object.assign(new Error(String(body?.message ?? body?.error)), { problem: body?.error, download: body?.download === true, place: String(body?.place ?? ''), server: serverHost });
-    const socket = path.join(state, 'editor.sock');
+    const socket = forwardPath(state, 'editor');
     if (relay?.socket !== socket) {
       relay?.server.close();
       const listener = net.createServer(client => {
