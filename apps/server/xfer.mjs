@@ -57,8 +57,11 @@ export function createXfer({ workspace, ownership, recovery, loose = () => false
     if (tracked) {
       skipped.ignored += (await gitList(base, ['--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory']))?.length ?? 0;
       for (const entry of tracked) {
-        const name = entry.replace(/\/$/, ''), stat = await lstat(path.join(base, name)).catch(() => null);
-        if (stat?.isDirectory()) await list(path.join(base, name), prefix + name + '/', skipped, out); // a nested repo
+        const name = entry.replace(/\/$/, ''), full = path.join(base, name);
+        // An empty submodule folder (never checked out) lists itself as './': walking it again would never end.
+        if (full === base) { skipped.ignored += 1; continue; }
+        const stat = await lstat(full).catch(() => null);
+        if (stat?.isDirectory()) await list(full, prefix + name + '/', skipped, out); // a nested repo
         else if (stat) out.push(prefix + name);
       }
       return;

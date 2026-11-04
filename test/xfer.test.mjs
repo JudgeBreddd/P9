@@ -55,6 +55,12 @@ test('xfer checks 2-5: manifest skips, pieces resume at the size, commit refuses
     await writeFile(path.join(repo, 'hard'), 'hard');
     await link(path.join(repo, 'hard'), path.join(repo, 'hard2'));
     execFileSync('git', ['init', '-q', repo]);
+    // A submodule never checked out: git lists its empty folder as './' from inside it (the server's ~/.nvm hung on one).
+    const sub = path.join(workspace, 'withsub');
+    await mkdir(path.join(sub, 'mod'), { recursive: true });
+    await writeFile(path.join(sub, 'top.txt'), 'top');
+    execFileSync('git', ['init', '-q', sub]);
+    execFileSync('git', ['-C', sub, 'update-index', '--add', '--cacheinfo', '160000,' + '0'.repeat(39) + '1,mod']);
     // Not a git folder: node_modules and __pycache__ are left out.
     const plain = path.join(workspace, 'plain');
     await mkdir(path.join(plain, 'node_modules', 'x'), { recursive: true });
@@ -73,6 +79,9 @@ test('xfer checks 2-5: manifest skips, pieces resume at the size, commit refuses
   const plain = await call(box, '/xfer/manifest', 'POST', { folder: 'plain' });
   assert.deepEqual(plain.files.map((f) => f.path), ['plain/keep.py']);
   assert.equal(plain.skipped.ignored, 2);
+  const withsub = await call(box, '/xfer/manifest', 'POST', { folder: 'withsub' });
+  assert.equal(withsub.status, 200, JSON.stringify(withsub));
+  assert.deepEqual(withsub.files.map((f) => f.path), ['withsub/top.txt'], 'the empty submodule folder ends the walk');
   assert.equal((await call(box, '/xfer/manifest', 'POST', { folder: '../x' })).status, 400);
   assert.equal((await call(box, '/xfer/manifest', 'POST', { folder: 'nope' })).status, 409);
   console.log('PASS xfer check 2: a .gitignored file, a symlink and a hardlink are not listed and are counted; node_modules is skipped');
