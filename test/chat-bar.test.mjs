@@ -126,7 +126,9 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   // The narrowest pane P9 allows (the split bar's 280 px) in a small window: the row stays one line, the send arrow in view, nothing overflows.
   const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await page.locator('#tabs .tab[data-id="' + second + '"]').waitFor({ timeout: 10000 });
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(720, 600); });
+  // Under 721 px the split folds to one pane (shell.css), so 760 is the smallest window with two; the split bar's floor is 280 px.
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(760, 600); });
+  await page.waitForFunction(() => innerWidth <= 800, null, { timeout: 5000 });
   await page.click('#rSplit');
   await page.locator('#chats[data-split="true"] .pane').nth(1).waitFor({ timeout: 10000 });
   await page.evaluate(() => document.querySelector('#chats').style.setProperty('--split-l', '280px'));
