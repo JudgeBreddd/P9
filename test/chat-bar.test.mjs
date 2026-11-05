@@ -28,8 +28,10 @@ const menuItem = (page, label) => page.locator('#pillMenu .item, #pillSub .item'
 const listed = (page, where = '#pillMenu') => page.locator(where + ' .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent + (b.getAttribute('aria-checked') === 'true' ? ' ✓' : '')));
 const pillItems = async (page, pane, kind) => { await pillOf(pane, kind).click(); await page.locator('#pillMenu:not([hidden])').waitFor(); const items = await listed(page); await page.keyboard.press('Escape'); return items; };
 const choose = async (page, pane, kind, ...labels) => { await pillOf(pane, kind).click(); for (const label of labels) await menuItem(page, label).click(); };
-const focused = (page) => page.evaluate(() => document.activeElement?.firstElementChild?.textContent ?? document.activeElement?.getAttribute('aria-label'));
-const menuState = (page) => page.evaluate(() => [document.querySelector('#pillMenu').hidden, document.querySelector('#pillSub').hidden, document.activeElement?.firstElementChild?.textContent ?? document.activeElement?.getAttribute('aria-label')]);
+// The focused element: a pill by its aria-label, a menu item by its text.
+const focused = (page) => page.evaluate(() => { const a = document.activeElement; return a?.hasAttribute('data-pill') ? a.getAttribute('aria-label') : a?.firstElementChild?.textContent ?? a?.tagName; });
+const menuState = async (page) => [...await page.evaluate(() => [document.querySelector('#pillMenu').hidden, document.querySelector('#pillSub').hidden]), await focused(page)];
+const heading = (page) => page.locator('#pillMenu .hd').evaluate((h) => h.textContent); // textContent: the eyebrow style may upper-case it
 
 async function launch(t, instance, profile) {
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -87,7 +89,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   await send('mode'); await said('mode:default'); await idle();
   // The Model menu: the agent's name as heading, its models, the "More" group as a submenu (ArrowRight in, ArrowLeft out).
   await pillOf(pane, 'Model').click(); await menu.waitFor();
-  assert.equal(await menu.locator('.hd').innerText(), 'Claude');
+  assert.equal(await heading(page), 'Claude');
   assert.deepEqual(await listed(page), ['Default (recommended) ✓', 'More', 'Fast mode']);
   await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'More');
   await page.keyboard.press('ArrowRight');
@@ -159,7 +161,7 @@ test('Codex: Plan in the Mode menu is the plan collaboration mode, on top of the
   await send('config'); await said('collaboration_mode=default'); await idle();
   await send('mode'); await said('mode:read-only'); await idle();
   // The Model menu is Codex's own list under its name.
-  await pillOf(pane, 'Model').click(); assert.equal(await page.locator('#pillMenu .hd').innerText(), 'Codex'); await page.keyboard.press('Escape');
+  await pillOf(pane, 'Model').click(); assert.equal(await heading(page), 'Codex'); await page.keyboard.press('Escape');
   assert.deepEqual(errors, []);
   console.log('PASS Codex Plan: plan collaboration mode on with the sandbox kept, off again with Read-only, no separate picker');
 });
@@ -207,9 +209,14 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   assert.deepEqual(await page.evaluate(() => [localStorage.getItem('p9-model-default:claude'), localStorage.getItem('p9-effort-default:claude')]), ['haiku', 'high']);
   // A chat made elsewhere (the phone, a card) keeps the agent's own: only chats started here get the defaults.
   const other = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, '/chat/' + other + '/prompt', 'POST', { text: 'hello' });
+  await until(async () => (await events(instance, other)).some((e) => e.type === 'turn-end'), 'the other chat answered');
   await page.locator('#tabs .tab[data-id="' + other + '"]').click();
-  const otherPane = page.locator('.pane[data-id="' + other + '"]'); await otherPane.locator('[data-pill="Model"]').waitFor();
-  assert.deepEqual([await pillValue(otherPane, 'Model'), await pillValue(otherPane, 'Effort')], ['Default (recommended)', 'Medium']);
+  const otherPane = page.locator('.pane[data-id="' + other + '"]');
+  await otherPane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
+  assert.equal(await pillValue(otherPane, 'Effort'), 'Medium');
+  await otherPane.locator('.composer textarea').fill('config'); await otherPane.locator('.composer textarea').press('Enter');
+  await otherPane.locator('.hist', { hasText: 'config:model=default,effort=medium,fast=off,sandbox=on' }).waitFor({ timeout: 20000 });
   // After a restart: Settings still lists and shows them, and a new chat starts with them.
   await app.close(); ({ app, page } = await launch(t, instance, profile));
   await settings();

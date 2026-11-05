@@ -1180,7 +1180,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   // 0.1.8: the Model pill in the message bar lists the agent's models under its name; the "More" group and Fast mode are submenus.
   await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended) ✓', 'More', 'Fast mode']);
-  assert.equal(await page.locator('#pillMenu .hd').innerText(), 'Claude');
+  assert.equal(await page.locator('#pillMenu .hd').evaluate((h) => h.textContent), 'Claude');
   await choose(page, pane, 'Model', 'More'); assert.deepEqual(await page.locator('#pillSub .item .truncate').allInnerTexts(), ['Opus', 'Haiku']); await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
   const ta = pane.locator('.composer textarea'), menu = pane.locator('[data-slash]');
   await ta.click(); await page.keyboard.type('/');
