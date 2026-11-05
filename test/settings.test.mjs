@@ -1163,7 +1163,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   console.log('PASS cards: old item quiet in the bell, chat-made item carded at turn end, card kept across events, Skip clears it, chat is a robot head, x stops it');
 });
 
-test('Models and slash commands: the Model select lists the agent\'s own models, typing / lists its commands, a picked model reaches the agent', { timeout: 120000 }, async (t) => {
+test('Models and slash commands: the Model pill lists the agent\'s own models, typing / lists its commands, a picked model reaches the agent', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-models-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
