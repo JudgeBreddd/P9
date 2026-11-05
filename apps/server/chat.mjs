@@ -284,9 +284,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // Threat model row 22: beside the model, only effort, fast mode and Codex's plan switch (Builder, 2026-10-18: "wire all of
   // them"). Mode stays P9's own picker with the lock; any other or future category never reaches the window.
   const PICKERS = ['thought_level', 'model_config', 'collaboration_mode'];
-  const select = (o) => ({ id: o.id, name: String(o.name ?? o.id).slice(0, 60), current: String(o.currentValue ?? ''),
+  // category: the window tells Effort (thought_level), Fast mode (model_config) and Codex's plan switch (collaboration_mode) apart by it.
+  const select = (o) => ({ id: o.id, name: String(o.name ?? o.id).slice(0, 60), current: String(o.currentValue ?? ''), category: typeof o.category === 'string' ? o.category.slice(0, 40) : '',
     options: o.options.flatMap((x) => Array.isArray(x?.options) ? x.options : [x]).filter((x) => typeof x?.value === 'string' && x.value.length <= 200)
       .slice(0, 50).map((x) => ({ value: x.value, name: String(x.name ?? x.value).slice(0, 200) })) });
+  const configOf = (session) => ({ model: session.models, pickers: session.pickers });
   const models = (session, id, options) => {
     const all = (Array.isArray(options) ? options : []).filter((x) => x?.type === 'select' && typeof x.id === 'string' && x.id.length <= 60 && Array.isArray(x.options));
     const o = all.find((x) => x.id === 'model');
@@ -294,7 +296,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const { current, options: list } = select(o);
     session.models = { current, options: list };
     session.pickers = all.filter((x) => x.id !== 'model' && PICKERS.includes(x.category)).map(select).filter((x) => x.options.length > 1).slice(0, 6);
-    emit(id, 'config', { model: session.models, pickers: session.pickers });
+    emit(id, 'config', configOf(session));
     return true;
   };
   const reject = (request) => {
@@ -779,7 +781,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         try {
           const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'model', value: body.model }), wait(5000).then(() => { throw new Error('timeout'); })]);
-          if (!models(session, id, result?.configOptions)) { session.models.current = body.model; emit(id, 'config', { model: session.models, pickers: session.pickers }); }
+          if (!models(session, id, result?.configOptions)) { session.models.current = body.model; emit(id, 'config', configOf(session)); }
         } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: 'The model could not be set; nothing was sent.' }); return refused(500, 'model-failed'); }
       }
       // After the model: a model switch can change the effort list. A refused or failed setting stops the turn, like Model.
@@ -791,7 +793,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         }
         try {
           const result = await Promise.race([session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }), wait(5000).then(() => { throw new Error('timeout'); })]);
-          if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', { model: session.models, pickers: session.pickers }); }
+          if (!models(session, id, result?.configOptions)) { o.current = value; emit(id, 'config', configOf(session)); }
         } catch { if (live.get(id) === session) setState(id, 'running'); emit(id, 'error', { message: o.name + ' could not be set; nothing was sent.' }); return refused(500, 'config-failed'); }
       }
       if (images.length && !session.capabilities.promptCapabilities?.image) {

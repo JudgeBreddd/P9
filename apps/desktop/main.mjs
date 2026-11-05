@@ -191,7 +191,10 @@ export async function createDesktop({ state, open } = {}) {
   const saved = await readFile(serverFile, 'utf8').then(text => JSON.parse(text), () => ({})), named = h => typeof h === 'string' && HOST.test(h) ? h : null;
   // Aborted on quit: ends a forward connectServer is still waiting on (a quit mid-connect left its ssh running).
   const leaving = new AbortController();
-  let serverHost = named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
+  // 0.1.8 Settings > Open P9 on (openOn): null, where it was last (host, as before); '', this computer; a host, that remote,
+  // which connects like Connect does and shows the connecting screen while it cannot be reached.
+  let openOn = saved?.openOn === '' ? '' : named(saved?.openOn);
+  let serverHost = openOn === '' ? null : openOn ?? named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
   // Row 79: P9's own ssh key, in its data folder; noKey: the remotes whose key offer got Don't ask again.
@@ -210,7 +213,7 @@ export async function createDesktop({ state, open } = {}) {
   // U8: Keep on the slim Temporary P9 there (P9_KEEP full) is the full install, with keep and this password if any.
   const keeper = createKeeper({ saved: saved?.keep, named, save: () => keepServer(), run: (h, action, password) => remoteMode(h, action, sshCommand, password)
     .then(r => { if (r.phase === 'full' && h === serverHost) runInstall(password, { full: true, keep: true }); return r; }) });
-  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor }), { mode: 0o600 });
+  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, ...(openOn !== null && { openOn }) }), { mode: 0o600 });
   // The download runs on the remote (POST /setup/agents-fetch); the page shows its phase from p9:get-status.
   const fetchAgents = (host, names) => {
     if (!names.length || !server?.slim || (agentsJob?.host === host && agentsJob.phase === 'running')) return;
@@ -752,7 +755,7 @@ export async function createDesktop({ state, open } = {}) {
   // the window reloads onto that daemon. Neither daemon is stopped.
   ipcMain.handle('p9:server', async (event, ...args) => {
     if (!fromApp(event) || args.length > 1 || (args.length && args[0] !== null && (typeof args[0] !== 'string' || !HOST.test(args[0])))) throw new Error('ipc-sender-refused');
-    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, slim: !!server?.slim, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey };
+    if (!args.length) return { host: serverHost, last: serverLast, connected: !!server, slim: !!server?.slim, error: server ? null : serverError, hosts: await sshHosts(), remotes, keep: keeper.keep, noKey, openOn };
     endDock();
     await useServer(args[0]);
     // Dev Focus follows: the next show asks the new daemon (its own editor, or the server's). Open Folder's choice was this computer's.
@@ -921,7 +924,10 @@ export async function createDesktop({ state, open } = {}) {
   // D3: Settings > Remote's Add remote and Remove. A name ssh would read as an option never gets in (HOST, threat model row 50).
   ipcMain.handle('p9:remotes', async (event, ...args) => {
     const [action, host] = args;
-    if (!fromApp(event) || args.length !== 2 || !['add', 'remove'].includes(action) || typeof host !== 'string' || !HOST.test(host)) throw new Error('ipc-sender-refused');
+    // 0.1.8: 'open-on' keeps Settings > Open P9 on: null (where it was last), '' (this computer) or a host.
+    const okHost = typeof host === 'string' && HOST.test(host), ok = action === 'open-on' ? host === null || host === '' || okHost : ['add', 'remove'].includes(action) && okHost;
+    if (!fromApp(event) || args.length !== 2 || !ok) throw new Error('ipc-sender-refused');
+    if (action === 'open-on') { openOn = host; await keepServer(); return { remotes, openOn }; }
     remotes = action === 'add' ? [...new Set([...remotes, host])].slice(-50) : remotes.filter(h => h !== host); // ponytail: 50 kept, the oldest go
     if (action === 'remove') noKey = noKey.filter(h => h !== host); // row 79: a removed remote's Don't ask again goes with it
     await keepServer();

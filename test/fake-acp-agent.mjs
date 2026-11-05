@@ -80,7 +80,8 @@ const transcript = (sessionId) => {
   for (const dir of root && existsSync(root) ? readdirSync(root) : []) if (existsSync(path.join(root, dir, sessionId + '.jsonl'))) return path.join(root, dir, sessionId + '.jsonl');
   return null;
 };
-const picked = { effort: 'medium', fast: 'off', sandbox: 'on' };
+// As codex, the plan collaboration switch too (codex-acp's collaboration_mode; P9's Codex Plan mode, 0.1.8).
+const picked = { effort: 'medium', fast: 'off', ...(process.argv[2] === 'codex' && { collaboration_mode: 'default' }), sandbox: 'on' };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
   { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
@@ -88,6 +89,7 @@ const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', current
   // Like the real adapters: effort and fast mode; sandbox is a mode-category switch P9 must never offer (threat model row 22).
   { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: picked.effort, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value[0].toUpperCase() + value.slice(1) })) },
   { id: 'fast', name: 'Fast mode', category: 'model_config', type: 'select', currentValue: picked.fast, options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] },
+  ...(process.argv[2] === 'codex' ? [{ id: 'collaboration_mode', name: 'Collaboration mode', category: 'collaboration_mode', type: 'select', currentValue: picked.collaboration_mode, options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] }] : []),
   { id: 'sandbox', name: 'Sandbox', category: 'mode', type: 'select', currentValue: picked.sandbox, options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] }];
 // Like both real adapters: the slash command list arrives as an update just after the session starts.
 const commands = (sessionId) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'available_commands_update',

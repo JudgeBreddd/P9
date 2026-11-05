@@ -297,6 +297,111 @@ function shown(s) {
   return (from || s.more !== undefined ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier${from ? ` (${from.toLocaleString()} more)` : ''}</button>` : '')
     + list.slice(from).map(e => event(e, s)).join('');
 }
+/* ---------- the message bar's pills (0.1.8): Mode, Model and Effort, one menu kept outside the panes ----------
+   Panes are rebuilt from S on every change (every 18 ms while a reply streams); morph keeps each pill button by position and
+   only its attributes change, and the menu is never part of a pane, so it stays open with its focus while a chat streams,
+   and refreshPill brings its checked item up to date. Each pill is a button with aria-haspopup; the menu is role=menu with
+   menuitemradio choices; Escape closes it and focuses its pill; arrows move; Enter picks. The Model menu lists the agent's
+   models directly, then Fast mode under its own heading (Builder, 2026-11-05: no "More" submenu). Live chats list the agent's
+   own models; the sample data keeps its two names. */
+const modelList = s => s.live ? s.models || outer.lastModels[s.agent] || null : { current: s.model, options: [s.model, s.agent === 'codex' ? 'gpt-5.1-codex-mini' : 'Sonnet 5.5'].map(v => ({ value: v, name: v })) };
+const modelName = s => { const m = modelList(s), v = s.modelPick || m?.current; return m?.options.find(o => o.value === v)?.name || s.model; };
+// The sample data, and a live chat before its config, keep Effort as a local choice.
+const pickers = s => s.live && (s.pickers || outer.lastPickers[s.agent]) || [];
+const pickerOf = (s, kind) => pickers(s).find(p => outer.pickerKind(p) === kind);
+const pickVal = (s, p) => s.pick?.[p.id] ?? p.current;
+const setPick = (s, p, v) => { s.pick ||= {}; if (v === p.current) delete s.pick[p.id]; else s.pick[p.id] = v; };
+const effortList = s => pickerOf(s, 'effort')?.options || [...new Set([s.effort, 'High', 'Low'])].map(v => ({ value: v, name: v }));
+const effortName = s => { const p = pickerOf(s, 'effort'); if (!p) return s.effort; const v = pickVal(s, p); return p.options.find(o => o.value === v)?.name || v; };
+const planOpt = p => p.options.find(o => /plan/i.test(o.value)) || p.options.find(o => /plan/i.test(o.name));
+const planOn = s => { const p = pickerOf(s, 'collab'); return !!p && pickVal(s, p) === planOpt(p)?.value; };
+// The Mode menu's order per agent. Codex's Plan is its plan collaboration mode on top of the sandbox mode picked before
+// (s.mode stays that mode; choosing any other mode turns plan off); Claude's is its own plan mode.
+const MODE_ORDER = { claude: ['Manual', 'Auto', 'Accept edits', 'Plan', 'Bypass permissions'], codex: ['Read-only', 'Workspace access', 'Auto review', 'Full access', 'Plan'] };
+const modeNow = s => planOn(s) ? 'Plan' : s.mode;
+const modeShown = s => s.modeNext || modeNow(s);
+function setMode(s, m) {
+  const p = s.agent === 'codex' ? pickerOf(s, 'collab') : null, plan = p && planOpt(p);
+  if (plan && m === 'Plan') return setPick(s, p, plan.value);
+  if (s.live && s.agent === 'codex' && m === 'Plan') return; // not offered yet: the menu shows it disabled
+  if (plan && planOn(s)) setPick(s, p, p.options.find(o => o !== plan).value);
+  s.mode = m;
+}
+const PM = { sid: null, kind: null, btn: null, html: '', ac: null }; // the open menu: chat id, Mode | Model | Effort, its pill, its markup, its window listeners
+const pill = (s, kind, label, extra = '') => `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(label)}" title="${kind}: ${esc(label)}"><span class="truncate">${esc(label)}</span>${extra}</button>`;
+const pills = s => pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
+document.body.insertAdjacentHTML('beforeend', '<div class="pop" id="pillMenu" role="menu" hidden></div>');
+const pmRoot = () => outer.$('#pillMenu');
+const mi = (label, checked, data, disabled) => `<button type="button" class="item" role="menuitemradio" aria-checked="${checked}" ${data}${disabled ? ` aria-disabled="true" title="${esc(disabled)}"` : ''}><span class="truncate">${esc(label)}</span></button>`;
+const radio = (list, now, data) => list.map(o => mi(o.name, o.value === now, `${data} data-val="${esc(o.value)}"`)).join('');
+function pillMenuHtml(s, kind) {
+  if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + MODE_ORDER[s.agent].map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
+  if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`); }
+  const m = modelList(s);
+  return `<div class="hd eyebrow">${outer.names[s.agent]}</div>` + radio(m?.options || [], s.modelPick || m?.current, 'data-model')
+    + pickers(s).filter(p => outer.pickerKind(p) === 'model').map(p => `<hr data-slot="separator"><div class="hd eyebrow">${esc(p.name)}</div>` + radio(p.options, pickVal(s, p), `data-pick="${esc(p.id)}"`)).join('');
+}
+// Above the pill (below when there is no room); fixed, kept inside the window.
+function placePop(pop, rect) {
+  pop.hidden = false; const w = pop.offsetWidth, h = pop.offsetHeight, top = rect.top - h - 6 >= 8 ? rect.top - h - 6 : rect.bottom + 6;
+  pop.style.left = Math.max(8, Math.min(rect.left, innerWidth - w - 8)) + 'px'; pop.style.top = Math.max(8, Math.min(top, innerHeight - h - 8)) + 'px';
+}
+const pmItems = () => [...pmRoot().querySelectorAll('[role="menuitemradio"]')];
+const pillBtn = () => PM.btn?.isConnected ? PM.btn : document.querySelector(`.pane[data-id="${CSS.escape(PM.sid)}"] [data-pill="${PM.kind}"]`);
+function openPill(btn, s, kind) {
+  closePill(false); document.querySelectorAll('.pop').forEach(p => { p.hidden = true; });
+  const ac = new AbortController(), signal = AbortSignal.any([ac.signal, outer.lifetime.signal]), pop = pmRoot();
+  Object.assign(PM, { sid: s.id, kind, btn, ac });
+  const home = btn.closest('dialog') || document.body; // a chat modal is in the top layer: the menu must be inside it to be reached
+  if (pop.parentElement !== home) home.append(pop);
+  pop.innerHTML = PM.html = pillMenuHtml(s, kind); pop.setAttribute('aria-label', kind);
+  placePop(pop, btn.getBoundingClientRect()); btn.setAttribute('aria-expanded', 'true');
+  (pop.querySelector('[aria-checked="true"]') || pmItems()[0])?.focus();
+  // Review minor (2026-11-05): the window hears a click outside and a resize only while a menu is open; closePill removes both.
+  // The click that opened this menu reaches the window too, so its own pill is let through.
+  window.addEventListener('click', e => { if (!pop.contains(e.target) && e.target.closest?.('[data-pill]') !== PM.btn) closePill(false); }, { signal });
+  window.addEventListener('resize', () => closePill(false), { signal });
+}
+function closePill(back = true) {
+  if (!PM.sid) return;
+  PM.ac.abort(); pmRoot().hidden = true;
+  const btn = pillBtn();
+  Object.assign(PM, { sid: null, kind: null, btn: null, html: '', ac: null });
+  if (btn) { btn.setAttribute('aria-expanded', 'false'); if (back) btn.focus(); }
+}
+// Review minor (2026-11-05): an open menu follows its chat while it re-renders (a queued mode applied, the agent's new model or
+// effort list): morph keeps the items by position, so the focused one keeps its focus. A chat no longer shown closes it.
+function refreshPill() {
+  if (!PM.sid) return;
+  const s = outer.S.sessions.find(x => x.id === PM.sid), btn = s && pillBtn();
+  if (!btn) return closePill(false);
+  PM.btn = btn;
+  const html = pillMenuHtml(s, PM.kind); if (html !== PM.html) { PM.html = html; outer.morph(pmRoot(), html); }
+}
+// note 7: a mode picked mid-turn shows at once (queued) but applies when the turn ends (turnEnd). The loosened modes ask first
+// (looseOk, red); the last pick is kept per agent for new chats (startMode), Codex's Plan is not a sandbox mode so it is not.
+async function pickMode(s, m) {
+  if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(s.agent, m)) return;
+  if (modes[s.agent].includes(m)) localStorage.setItem('p9-mode:' + s.agent, m);
+  if (busy(s)) s.modeNext = m === modeNow(s) ? null : m; else { setMode(s, m); s.modeNext = null; }
+  renderChats();
+}
+function pillPick(item) {
+  const s = outer.S.sessions.find(x => x.id === PM.sid); if (!s || item.getAttribute('aria-disabled') === 'true') return;
+  const v = item.dataset.val;
+  if (item.dataset.mode) { closePill(); return pickMode(s, item.dataset.mode); }
+  if (item.hasAttribute('data-model')) { if (s.live) s.modelPick = v === modelList(s)?.current ? null : v; else s.model = v; }
+  else if (item.dataset.pick !== undefined) { const p = pickers(s).find(x => x.id === item.dataset.pick); if (p) setPick(s, p, v); else s.effort = v; }
+  closePill(); renderChats();
+}
+pmRoot().onclick = e => { const item = e.target.closest('.item'); if (item) pillPick(item); };
+pmRoot().onkeydown = e => {
+  const items = pmItems(), i = items.indexOf(document.activeElement), n = items.length, go = j => { e.preventDefault(); items[(j + n) % n]?.focus(); };
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePill(); }
+  else if (e.key === 'ArrowDown') go(i + 1); else if (e.key === 'ArrowUp') go(i - 1); else if (e.key === 'Home') go(0); else if (e.key === 'End') go(n - 1);
+  else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); items[i]?.click(); }
+  else if (e.key === 'Tab') closePill(false);
+};
 function pane(s, i, bare) {
   const working = busy(s);
   // D14: a chat on its way to the server, or gone there, takes no messages here.
@@ -304,12 +409,8 @@ function pane(s, i, bare) {
   const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to the remote…', moved: 'Moved to ' + (s.movedTo || 'the remote') }[s.state];
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${outer.names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
-  const pick = s.modeNext || s.mode;
   return `<section class="pane${i === 0 && outer.S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${outer.hideSteps ? ' data-quiet' : ''}${outer.FX.pull === s.id ? ' data-pulled' : ''} aria-label="${outer.names[s.agent]} chat">
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span><span class="name">${outer.names[s.agent]}</span>
-      <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
-      <select data-slot="select" aria-label="Model" data-model>${outer.modelOpts(s)}</select>
-      ${outer.pickerSelects(s)}
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${outer.hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${outer.hideSteps ? 'Show steps' : 'Hide steps'}</button>
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       ${(n => n && !bare ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-chat-files aria-pressed="${outer.side.current()?.slot === 'chat-files' && CF.sid === s.id}" title="Artifacts and files this chat made" aria-label="Artifacts and files (${n})">${svg.files}<span>${n}</span></button>` : '')(s.stub ? 0 : chatItems(s).length)}
@@ -322,7 +423,7 @@ function pane(s, i, bare) {
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
+      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
@@ -336,6 +437,7 @@ function renderChats(only) {
   outer.bottoms.disconnect(); outer.$('#chats').querySelectorAll(':scope > .pane > .bottom').forEach(b => outer.bottoms.observe(b));
   if (outer.mdl.open && outer.S.modal?.kind === 'chat') paint(outer.$('#mdlBody'), [outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(Boolean), only);
   outer.renderSideChat(only);
+  refreshPill();
   if (outer.side.current()?.slot === 'artifact' && ART.mode === 'panel' && outer.S.focus === 'chat' && ![...ids, outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id].includes(ART.state?.sid)) outer.side.close('artifact', 'hidden'); // item 19: a panel artifact goes with its chat; a pinned one stays
   chatFilesFollow(ids);
   outer.tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
@@ -411,14 +513,8 @@ function paint(root, ss, only) {
     p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => outer.liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
     p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
     p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
-    // note 7: a mode picked mid-turn shows at once but applies when the turn ends
-    p.querySelector('[data-mode]').onchange = async e => {
-      const m = e.target.value;
-      if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(s.agent, m)) { e.target.value = s.modeNext || s.mode; return; }
-      localStorage.setItem('p9-mode:' + s.agent, m);
-      if (busy(s)) s.modeNext = m === s.mode ? null : m; else { s.mode = m; s.modeNext = null; } renderChats(); };
-    p.querySelector('[data-model]').onchange = e => { if (s.live) s.modelPick = e.target.value; };
-    p.querySelectorAll('[data-pick]').forEach(el => el.onchange = () => { (s.pick ||= {})[el.dataset.pick] = el.value; });
+    // The Mode, Model and Effort pills each open their menu (#pillMenu, outside the panes; the pill menu code above pane).
+    p.querySelectorAll('[data-pill]').forEach(b => b.onclick = () => PM.btn === b ? closePill() : openPill(b, s, b.dataset.pill));
     p.querySelector('[data-attach]').onclick = () => pickImages(s);
     // A pasted screenshot or files dropped anywhere on the chat attach like the paperclip; pasted text pastes as before.
     ta.onpaste = e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
@@ -493,7 +589,7 @@ function finished(s) {
 }
 function turnEnd(s) {
   autoArtifact(s);
-  if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
+  if (s.modeNext) { setMode(s, s.modeNext); s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + modeNow(s) + '.'}); }
   if (s.queue.length) { const t = s.queue.shift(); keepQueue(s); outer.startTurn(s, t); } else { outer.renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
 }
 function reply(s, text) {
@@ -578,7 +674,7 @@ async function earlier(s) {
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) outer.S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
+  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at); if (outer.fresh.delete(s.id)) outer.startDefaults(s); outer.S.sessions.push(s); } return null; }
   const s = into ?? outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
@@ -600,7 +696,8 @@ function applyChat(ev, into) {
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
     case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
     case 'config': if (Array.isArray(d.model?.options)) { s.models = outer.lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
-      if (Array.isArray(d.pickers)) { s.pickers = outer.lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; } break;
+      if (Array.isArray(d.pickers)) { s.pickers = outer.lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; }
+      if (!into) outer.keepLists(s.agent); break;
     case 'update':
       // Claude Code also runs turns nobody prompted (the continuation after a compaction, a background task's report): no
       // 'user' starts them and no 'turn-end' closes them. Agent output marks the chat working; that turn's closing

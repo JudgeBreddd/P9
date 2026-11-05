@@ -118,6 +118,7 @@ function serverRow() {
     + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
   return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. If ssh needs a password, P9 asks for it in its own window and can add its own key so it stops asking. Folder pickers, Open in VS Code and Repair stay on this computer.', 'remote-connect-send-to-remote-and-send-files') + '</legend>'
     + '<p class="muted sm">' + esc(note) + '</p>' + (rows ? '<ul class="remote-list">' + rows + '</ul>' : '')
+    + openOnRow(all)
     + '<form class="set-row" id="setRemoteAdd"><input data-slot="input" id="setRemoteName" placeholder="Host name or user@address" aria-label="Remote to add" maxlength="253" autocomplete="off" spellcheck="false"><button data-slot="button" data-variant="default">Add remote</button></form>'
     + '<p class="warn sm" id="setRemoteErr" role="alert" hidden></p>'
     + (host ? '<div class="set-row"><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setServerLocal">Use this computer</button></div>' : '') + '</fieldset>';
@@ -175,6 +176,23 @@ function settingsPages() {
   }
   show(); outer.$('#setDlg .dlg-head').after(nav);
 }
+// 0.1.8: where P9 opens next time: where it was last (main's p9-server.json host, as before), this computer, or one remote.
+// A remote that does not answer shows the connecting screen, as Connect does. Only with a main that keeps the choice.
+function openOnRow(all) {
+  if (!window.p9?.remotes || !('openOn' in outer.serverInfo)) return '';
+  const openOn = outer.serverInfo.openOn ?? null, places = [...new Set([...all, ...(openOn ? [openOn] : [])])];
+  return '<label class="set-row"><span><strong>Open P9 on</strong><span class="muted sm">Applies the next time P9 starts.</span></span><span class="spacer"></span><select data-slot="select" id="setOpenOn" aria-label="Open P9 on"><option value="last">Where it was last</option><option value="local"' + (openOn === '' ? ' selected' : '') + '>This computer</option>'
+    + places.map(h => '<option value="' + esc(h) + '"' + (h === openOn ? ' selected' : '') + '>' + esc(h) + '</option>').join('') + '</select></label>';
+}
+// 0.1.8: beside each agent's starting mode, Default model and Default effort: Agent's default (no override), or the agent's
+// own list as P9 last received it (keepLists); before any chat with that agent, only Agent's default and a word to start one.
+function defaultsRow(a) {
+  const ml = outer.lastModels[a]?.options || [], el = outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || [];
+  const sel = (attr, label, list, now) => `<label class="set-pick">${label}<select data-slot="input" ${attr}="${a}" aria-label="${label} for ${outer.names[a]}"><option value="">Agent's default</option>${list.map(o => `<option value="${esc(o.value)}"${o.value === now ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
+  return `<div class="set-row set-defaults"><span><strong>${outer.names[a]}</strong>${ml.length || el.length ? '' : `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>`}</span><span class="spacer"></span>`
+    + `<label class="set-pick">Mode<select data-slot="input" data-default-mode="${a}" aria-label="Default mode for ${outer.names[a]}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === outer.defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`
+    + sel('data-default-model', 'Default model', ml, outer.defaultModel(a)) + sel('data-default-effort', 'Default effort', el, outer.defaultEffort(a)) + '</div>';
+}
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -185,7 +203,7 @@ function renderSettings() {
     + box('setCloseSend', 'Close the chat window on send', outer.settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
     // The daemon keeps this one (it starts the shells, the phone's too); null: it did not answer, so the box is disabled.
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
-    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${outer.names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === outer.defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
+    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (outer.pets ? petSettings() : '')
     + securityGroup(box)
@@ -209,6 +227,12 @@ function renderSettings() {
     if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(a, m)) { el.value = outer.defaultMode(a); return; }
     m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
   }; });
+  outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = () => {
+    const k = el.dataset.defaultModel ? `p9-model-default:${el.dataset.defaultModel}` : `p9-effort-default:${el.dataset.defaultEffort}`;
+    el.value ? localStorage.setItem(k, el.value) : localStorage.removeItem(k);
+  }; });
+  // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
+  if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn; };
   if (outer.pets) wirePetSettings();
   if (outer.missionFiles?.settings) wireMission();
   // Main reloads the window onto the chosen daemon, so nothing here re-renders.
