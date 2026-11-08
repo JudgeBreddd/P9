@@ -853,8 +853,9 @@ jobs:
           # K7: the pinned static tmux rides along (deps.mjs TMUX_SHA256.x64).
           sha=$(node --input-type=module -e "import('./apps/server/deps.mjs').then(m => console.log(m.TMUX_SHA256.x64))")
           echo "$sha  $root/tmux/tmux" | sha256sum -c
-      # Item 15: what this AppImage's runtime needs to mount it on a bare Ubuntu 24.04, round by round, each package checked
-      # against Ubuntu Desktop's manifest (scripts/bare-machine.sh appimage).
+      # Item 15 / O1: on a bare Ubuntu 24.04 with a desktop's user session, what this AppImage needs to mount and then to
+      # start as a user starts it (the window opens, the daemon's /health answers, the user unit is active), round by
+      # round, each package checked against Ubuntu Desktop's manifest (scripts/bare-machine.sh appimage).
       - name: The AppImage on a bare Ubuntu 24.04
         run: set -o pipefail; bash scripts/bare-machine.sh appimage dist/linux/*.AppImage 2>&1 | tee "$RUNNER_TEMP/appimage-bare.log"
       # Item 16: a first start on a computer with no P9 installs the editor server from that copy, with no network asked of
