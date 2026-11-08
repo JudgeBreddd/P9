@@ -5,6 +5,7 @@ import { dragBar } from './helpers.mjs';
 // Width is one number per focus in localStorage['eh-side:<focus>']; min 280; the pane beside it keeps 480 (Builder, 2026-10-27).
 // The panel sits on the right or the left (the Dev Focus swap), kept in localStorage['eh-side-edge:<focus>'].
 // A slot that lists focuses shows only in them: leaving one hides it without onClose, coming back shows it again.
+// when(), if given, hides it the same way while it returns false; side.refresh() reads it again (the artifact's chat, O28).
 // mode: 'panel' | 'pinned' | 'full'. In a window under 720 px panel and pinned behave as full.
 export const SIDE_MIN = 280, SIDE_KEEP = 480;
 const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -13,7 +14,7 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
   const listeners = new Set(), last = {}, mq = matchMedia(narrow);
   let cur = null; // { slot, opts, mode, prev }
   const key = () => 'eh-side:' + focus(), edgeKey = () => 'eh-side-edge:' + focus();
-  const shown = () => !!cur && (!cur.opts.focuses || cur.opts.focuses.includes(focus()));
+  const shown = () => !!cur && (!cur.opts.focuses || cur.opts.focuses.includes(focus())) && (!cur.opts.when || cur.opts.when());
   const edge = () => store.get(edgeKey()) === 'left' ? 'left' : 'right';
   const mode = () => !cur ? null : mq.matches && cur.mode !== 'full' ? 'full' : cur.mode;
   const space = () => stage.clientWidth;
@@ -22,8 +23,9 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
   const stored = () => { const v = store.get(key()); return v === null ? NaN : Number(v); };
   let live = null; // the width while dragging or after a key step, before the next focus change
   const width = () => clamp(live ?? (Number.isFinite(stored()) ? stored() : cur?.opts.defaultWidth?.(space()) ?? 420));
+  let was = false;
   const apply = () => {
-    const on = shown();
+    const on = was = shown();
     el.hidden = !on;
     stage.dataset.side = on ? edge() : '';
     stage.dataset.sideMode = on ? mode() : '';
@@ -53,6 +55,7 @@ export function createSide({ el, stage, focus, signal, narrow = '(max-width: 719
     onResize(fn) { listeners.add(fn); signal?.addEventListener('abort', () => listeners.delete(fn)); },
     // Dev Focus: the focus changed; width and edge are per focus.
     focus() { live = null; apply(); },
+    refresh() { if (shown() !== was) apply(); }, // called on every chat render: the layout is touched only when it shows or hides
     mode(next) { if (!cur) return; cur.prev = cur.mode; cur.mode = next; apply(); },
     back() { if (!cur) return; if (cur.mode === 'full' && cur.prev && cur.prev !== 'full') api.mode(cur.prev); else api.close(cur.slot); },
     edge, width: () => (shown() ? width() : 0), body,

@@ -456,3 +456,90 @@ test('artifacts: a chat\'s artifact is still listed after it compacts and the wi
   await items.nth(0).click();
   assert.equal(await (await frame()).locator('h1').textContent(), 'Shipped');
 });
+
+// O26-O28 (0.1.9): the chat's artifact list and the panel artifact's life. Sample data; two chats in tabs.
+const tabIds = page => page.locator('#tabs .tab').evaluateAll(els => els.map(e => e.dataset.id));
+const showChat = async (page, id) => { await page.click(`#tabs .tab[data-id="${id}"]`); await page.waitForFunction(id => document.querySelector(`#chats .pane[data-id="${id}"]`), id, { timeout: 5000 }); };
+
+test('artifacts (O26): the list shows one row per title, opening the newest version; the older ones are reachable from it', { timeout: 90000 }, async (t) => {
+  const { page, shot, reply, rendered } = await launch(t);
+  // The same artifact re-sent (identical) and then changed: the case of a chat that re-sent its checklist 30 times.
+  await reply(`${F}markdown artifact P9 checklist\n# One\n${F}`);
+  await page.evaluate(text => window.__artifact.reply(text), `${F}markdown artifact P9 checklist\n# One\n${F}`);
+  await reply(`${F}markdown artifact P9 checklist\n# Two\n${F}`);
+  await reply(`${F}markdown artifact Other notes\n# Other\n${F}`);
+  await page.evaluate(() => window.__side.close('artifact'));
+  const [id] = await tabIds(page);
+  await page.locator(`#chats .pane[data-id="${id}"] [data-chat-files]`).click();
+  const items = page.locator('#side .cf-item');
+  await items.first().waitFor({ timeout: 8000 });
+  const rows = (await items.allTextContents()).filter(r => /P9 checklist/.test(r));
+  assert.deepEqual(rows, ['MarkdownP9 checklistArtifact · 2 versions'], 'one row for the title, with its two different versions');
+  await shot('o26-artifact-list');
+  await items.filter({ hasText: 'P9 checklist' }).click();
+  const head = () => (rendered().then(f => f.locator('h1').textContent()));
+  assert.equal(await head(), 'Two', 'opens the newest version');
+  assert.match(await page.locator('#side .stitle').textContent(), /P9 checklist · version 2 of 2/);
+  await page.locator('#side [data-art-mode]', { hasText: 'Older version' }).click();
+  await page.waitForFunction(() => /version 1 of 2/.test(document.querySelector('#side .stitle').textContent), null, { timeout: 5000 });
+  assert.equal(await head(), 'One', 'the older version is reachable from it');
+  await page.locator('#side [data-art-mode]', { hasText: 'Newer version' }).click();
+  await page.waitForFunction(() => /version 2 of 2/.test(document.querySelector('#side .stitle').textContent), null, { timeout: 5000 });
+  assert.equal(await head(), 'Two');
+  await shot('o26-artifact-versions');
+  // The first version sent again, last: still one row with two versions, and it opens that one (the newest send).
+  await page.evaluate(text => window.__artifact.reply(text), `${F}markdown artifact P9 checklist\n# One\n${F}`);
+  await page.locator(`#chats .pane[data-id="${id}"] [data-chat-files]`).click();
+  await page.locator('#side .cf-tabs').waitFor({ timeout: 8000 });
+  assert.deepEqual((await items.allTextContents()).filter(r => /P9 checklist/.test(r)), ['MarkdownP9 checklistArtifact · 2 versions'], 'a re-sent older version: still one row');
+  await items.filter({ hasText: 'P9 checklist' }).click();
+  assert.equal(await head(), 'One');
+  assert.match(await page.locator('#side .stitle').textContent(), /version 2 of 2/);
+});
+
+test('artifacts (O27): a panel artifact stays open while its chat is in view; the user\'s Pin button pins it', { timeout: 90000 }, async (t) => {
+  const { page, shot, reply } = await launch(t);
+  const mode = () => page.evaluate(() => window.__side.current());
+  const [a, b] = await tabIds(page);
+  assert.ok(b, 'two sample chats');
+  await showChat(page, a);
+  await reply(`${F}html artifact Panel stays\n<h1>Panel</h1>\n${F}`);
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'panel' });
+  // Its chat stays in view while chats re-render: replies without an artifact in it and in the other chat, a re-render.
+  for (const [text, id] of [['more words', a], ['other chat words', b], ['still here', a]]) {
+    await page.evaluate(([text, id]) => window.__artifact.reply(text, id), [text, id]);
+    await page.evaluate(() => window.__artifact.render());
+    assert.deepEqual(await mode(), { slot: 'artifact', mode: 'panel' }, `still open after "${text}"`);
+  }
+  await page.waitForTimeout(1500);
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'panel' }, 'still open a while later');
+  // The user pins it: it is pinned, and it survives the next turn's end and a trip to the other chat and back.
+  await page.locator('#side [data-art-mode]', { hasText: 'Pin' }).click();
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' }, 'the Pin button pins it');
+  assert.equal(await page.locator('#side [data-art-mode]', { hasText: 'Pin' }).getAttribute('aria-pressed'), 'true');
+  await page.evaluate(([id]) => window.__artifact.reply('a turn without an artifact', id), [a]);
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' }, 'still pinned after a turn ends');
+  // The agent re-sends it (unpinned in its fence, as a chat that re-sends its checklist every turn does): the user's Pin wins.
+  await page.evaluate(([id, text]) => window.__artifact.reply(text, id), [a, `${F}html artifact Panel stays\n<h1>Panel, again</h1>\n${F}`]);
+  await page.waitForFunction(() => window.__artifact.state()?.art.src.includes('again'), null, { timeout: 5000 });
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' }, 'still pinned after the agent re-sends it');
+  await showChat(page, b); await showChat(page, a);
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' }, 'back in its chat: still open, still pinned');
+  await shot('o27-pinned-by-user');
+});
+
+test('artifacts (O28): a pinned artifact shows only in its own chat: hidden in another, back on return', { timeout: 90000 }, async (t) => {
+  const { page, shot, reply } = await launch(t);
+  const mode = () => page.evaluate(() => window.__side.current());
+  const [a, b] = await tabIds(page);
+  await showChat(page, a);
+  await reply(`${F}html artifact pinned Mine only\n<h1>Mine</h1>\n${F}`);
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' });
+  await showChat(page, b);
+  assert.equal(await mode(), null, 'another chat: the artifact is not shown');
+  assert.equal(await page.locator('#side').isHidden(), true);
+  await shot('o28-other-chat');
+  await showChat(page, a);
+  assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' }, 'back in its chat: shown, still pinned');
+  assert.equal(await page.locator('#side .stitle').textContent(), 'Mine only');
+});
