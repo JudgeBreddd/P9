@@ -152,13 +152,8 @@ jobs:
           node-version: 26.10.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # BL9: Windows PowerShell 5.1 started from a pwsh 7 step inherits its module folders and fails to load Get-Acl's
-      # module (run 40139947301): keep only its own, as install-windows.ps1 does, for every step after this one.
-      - name: Windows PowerShell module path
-        run: |
-          $kept = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
-          "PSModulePath=$kept" >> $env:GITHUB_ENV
-          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\evidence" | Out-Null
+      - name: Test output folder
+        run: New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\evidence" | Out-Null
       - name: Windows host and process-tree tests
         if: ${{ !cancelled() && !inputs.files }}
         run: node --test test/windows-process-tree.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
@@ -170,10 +165,20 @@ jobs:
         run: node --test test/mission-notes.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
       - name: Windows file guard test
         if: ${{ !cancelled() && !inputs.files }}
-        run: node --test test/files-windows.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+        # BL9: Windows PowerShell 5.1 started from this pwsh 7 step inherits its module folders and fails to load Get-Acl's
+        # module (run 40139947301): keep only its own, as install-windows.ps1 does. Inside the step: pwsh adds its own back
+        # at each start, so a GITHUB_ENV value does not hold (run 42431371413).
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          node --test test/files-windows.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
       - name: Windows editor host test
         if: ${{ !cancelled() && !inputs.files }}
-        run: node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+        # BL9: Windows PowerShell 5.1 started from this pwsh 7 step inherits its module folders and fails to load Get-Acl's
+        # module (run 40139947301): keep only its own, as install-windows.ps1 does. Inside the step: pwsh adds its own back
+        # at each start, so a GITHUB_ENV value does not hold (run 42431371413).
+        run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
       - name: Windows Dev folder test
         if: ${{ !cancelled() && !inputs.files }}
         run: node --test test/dev-root.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
@@ -183,6 +188,7 @@ jobs:
         env:
           P9_FILES: ${{ inputs.files }}
         run: |
+          $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
           $files = @($env:P9_FILES -split '\s+' | Where-Object { $_ })
           foreach ($f in $files) {
             if ($f -notmatch '^test/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.test\.mjs$' -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "files: not a test file here: $f" }

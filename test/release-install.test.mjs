@@ -61,6 +61,42 @@ test('Phase 13: a unit that starts but whose daemon never answers is removed too
   assert.ok(!existsSync(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service')));
 });
 
+// 0.1.8 H5: the three install fixes of the 0.1.7 hotfix (release-audit-0.1.7.md), one test each; the third is in
+// remote-install.test.mjs. A stand-in systemctl logs its calls; nothing answers /health, so each run ends in the cleanup.
+async function leftoverHome() {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-home-')), bin = path.join(home, 'bin'), workspace = path.join(home, 'ws');
+  await mkdir(bin); await mkdir(workspace); await mkdir(path.join(home, 'run')); await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
+  await writeFile(path.join(bin, 'systemctl'), '#!/bin/sh\necho "$*" >> "$HOME/systemctl.txt"\n'
+    + 'case "$*" in *restart*) cp "$HOME/.config/systemd/user/p9-foundation.service" "$HOME/unit.copy";; esac\nexit 0\n');
+  await chmod(path.join(bin, 'systemctl'), 0o755);
+  const env = { ...process.env, HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), PATH: bin + ':' + process.env.PATH };
+  return { home, workspace, env, run: () => spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace], { env, encoding: 'utf8' }) };
+}
+
+test('0.1.7 hotfix: a reinstall over a leftover unit rewrites it and restarts the daemon, so the old code does not keep running', { skip: process.platform !== 'linux', timeout: 60000 }, async () => {
+  const h = await leftoverHome();
+  // The unit a moved-aside ~/p9 left behind (cortanabot, 2026-11-03), its daemon still running.
+  await writeFile(path.join(h.home, '.config', 'systemd', 'user', 'p9-foundation.service'), '[Service]\nExecStart=/old/p9/node /old/p9/apps/server/main.mjs\n');
+  const result = h.run();
+  assert.doesNotMatch(result.stderr, /EEXIST/, 'the leftover unit stopped the install');
+  const unit = readFileSync(path.join(h.home, 'unit.copy'), 'utf8');
+  assert.ok(!unit.includes('/old/p9/') && unit.includes(path.join(root, 'apps', 'server', 'main.mjs')) && unit.includes(h.workspace), unit);
+  // restart, never enable --now: --now leaves a daemon already running from the old unit on its old code.
+  const calls = readFileSync(path.join(h.home, 'systemctl.txt'), 'utf8');
+  assert.match(calls, /^--user restart p9-foundation\.service$/m, calls);
+  assert.doesNotMatch(calls, /^--user enable --now/m, calls);
+});
+
+test('0.1.7 hotfix: a daemon that never answers names both journal commands, the one that works where the journal is in memory too', { skip: process.platform !== 'linux', timeout: 60000 }, async () => {
+  const h = await leftoverHome();
+  const result = h.run();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /journalctl --user -u p9-foundation/);
+  assert.match(result.stderr, /journalctl _SYSTEMD_USER_UNIT=p9-foundation\.service/);
+  // The same hint in the window's notice for a remote that could not roll back (read as text: that notice needs a remote).
+  assert.match(readFileSync(path.join(root, 'apps', 'web', 'src', 'controller.mjs'), 'utf8'), /could not go back by itself[^\n]*journalctl _SYSTEMD_USER_UNIT=p9-foundation\.service/);
+});
+
 // Release r2 R2-1: every module the desktop app loads ships in app.asar, and the Job script it hands PowerShell
 // is the daemon's unpacked copy, which extraResources ships.
 test('release r2 R2-1: build.files covers every module the desktop imports; the host script resolves outside app.asar', async () => {
