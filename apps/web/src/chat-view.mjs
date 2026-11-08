@@ -331,7 +331,7 @@ const PM = { sid: null, kind: null, btn: null, html: '', ac: null }; // the open
 const pill = (s, kind, label, extra = '') => `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(label)}" title="${kind}: ${esc(label)}"><span class="truncate">${esc(label)}</span>${extra}</button>`;
 const pills = s => pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
 document.body.insertAdjacentHTML('beforeend', '<div class="pop" id="pillMenu" role="menu" hidden></div>');
-const pmRoot = () => outer.$('#pillMenu');
+const pmRoot = () => document.getElementById('pillMenu'); // not outer.$: installChat runs before controller.mjs defines $
 const mi = (label, checked, data, disabled) => `<button type="button" class="item" role="menuitemradio" aria-checked="${checked}" ${data}${disabled ? ` aria-disabled="true" title="${esc(disabled)}"` : ''}><span class="truncate">${esc(label)}</span></button>`;
 const radio = (list, now, data) => list.map(o => mi(o.name, o.value === now, `${data} data-val="${esc(o.value)}"`)).join('');
 function pillMenuHtml(s, kind) {

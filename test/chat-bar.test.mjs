@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp } from 'node:fs/promises';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -21,17 +22,19 @@ const until = async (check, what, ms = 15000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 200))) if (await check()) return;
   assert.fail('timed out: ' + what);
 };
-// The pills (controller.mjs pillMenu): a pill's value is in its aria-label; its menu is #pillMenu, a submenu #pillSub.
+// The pills (chat-view.mjs pillMenu): a pill's value is in its aria-label; its menu is #pillMenu (no submenus, Builder, 2026-11-05).
 const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
 const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
-const menuItem = (page, label) => page.locator('#pillMenu .item, #pillSub .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
+const menuItem = (page, label) => page.locator('#pillMenu .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
 const listed = (page, where = '#pillMenu') => page.locator(where + ' .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent + (b.getAttribute('aria-checked') === 'true' ? ' ✓' : '')));
 const pillItems = async (page, pane, kind) => { await pillOf(pane, kind).click(); await page.locator('#pillMenu:not([hidden])').waitFor(); const items = await listed(page); await page.keyboard.press('Escape'); return items; };
 const choose = async (page, pane, kind, ...labels) => { await pillOf(pane, kind).click(); for (const label of labels) await menuItem(page, label).click(); };
 // The focused element: a pill by its aria-label, a menu item by its text.
 const focused = (page) => page.evaluate(() => { const a = document.activeElement; return a?.hasAttribute('data-pill') ? a.getAttribute('aria-label') : a?.firstElementChild?.textContent ?? a?.tagName; });
-const menuState = async (page) => [...await page.evaluate(() => [document.querySelector('#pillMenu').hidden, document.querySelector('#pillSub').hidden]), await focused(page)];
-const heading = (page) => page.locator('#pillMenu .hd').evaluate((h) => h.textContent); // textContent: the eyebrow style may upper-case it
+const menuState = async (page) => [await page.evaluate(() => document.querySelector('#pillMenu').hidden), await focused(page)];
+// The bar with a menu open: a file under P9_EVIDENCE, else (the dev space keeps no files) a "P9_SHOT <name> <base64>" log line; none in CI.
+const shot = async (page, name) => { await page.evaluate(() => Promise.all(document.getElementById('pillMenu').getAnimations({ subtree: true }).map((x) => x.finished))); const png = await page.screenshot({ type: 'png' }); if (process.env.P9_EVIDENCE) fs.writeFileSync(path.join(process.env.P9_EVIDENCE, name + '.png'), png); else if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
+const heading = (page) => page.locator('#pillMenu .hd').first().evaluate((h) => h.textContent); // textContent: the eyebrow style may upper-case it
 
 async function launch(t, instance, profile) {
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -63,7 +66,7 @@ async function setup(t, name, provider = 'claude') {
 }
 
 test('pills: Mode, Model and Effort are menus in the message bar; keyboard and roles; an open menu survives streaming; a mode picked mid-turn queues; the narrowest pane keeps one line', { timeout: 180000 }, async (t) => {
-  const { app, instance, pane, page, send, said, idle, errors } = await setup(t, 'pills');
+  const { app, instance, id, pane, page, send, said, idle, errors } = await setup(t, 'pills');
   // The toolbar's selects are gone; the bar has one pill each in place of the hint text.
   await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
   assert.equal(await pane.locator('select').count(), 0, 'no selects left in the pane');
@@ -78,29 +81,48 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   assert.deepEqual(await menu.evaluate((m) => [m.getAttribute('role'), [...m.querySelectorAll('.item')].map((b) => b.getAttribute('role') + ':' + b.firstElementChild.textContent + ':' + b.getAttribute('aria-checked'))]),
     ['menu', ['menuitemradio:Manual:false', 'menuitemradio:Auto:true', 'menuitemradio:Accept edits:false', 'menuitemradio:Plan:false', 'menuitemradio:Bypass permissions:false']]);
   assert.equal(await focused(page), 'Auto', 'the current choice has the focus');
+  await shot(page, 'menu-mode');
   await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'Accept edits');
   await page.keyboard.press('ArrowUp'); await page.keyboard.press('ArrowUp'); assert.equal(await focused(page), 'Manual');
   await page.keyboard.press('Enter');
   await pane.locator('[data-pill="Mode"][aria-label="Mode: Manual"]').waitFor();
-  assert.deepEqual(await menuState(page), [true, true, 'Mode: Manual'], 'picked: the menu closed and the pill has the focus');
+  assert.deepEqual(await menuState(page), [true, 'Mode: Manual'], 'picked: the menu closed and the pill has the focus');
   await page.keyboard.press('Enter'); await menu.waitFor(); await page.keyboard.press('Escape');
-  assert.deepEqual(await menuState(page), [true, true, 'Mode: Manual'], 'Escape: closed, focus back on the pill');
+  assert.deepEqual(await menuState(page), [true, 'Mode: Manual'], 'Escape: closed, focus back on the pill');
   assert.equal(await pillOf(pane, 'Mode').getAttribute('aria-expanded'), 'false');
   await send('mode'); await said('mode:default'); await idle();
-  // The Model menu: the agent's name as heading, its models, the "More" group as a submenu (ArrowRight in, ArrowLeft out).
+  // The Model menu: the agent's name as heading, its models listed directly (Builder, 2026-11-05: no "More" submenu), then Fast
+  // mode's choices under their own heading.
   await pillOf(pane, 'Model').click(); await menu.waitFor();
   assert.equal(await heading(page), 'Claude');
-  assert.deepEqual(await listed(page), ['Default (recommended) ✓', 'More', 'Fast mode']);
-  await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'More');
-  await page.keyboard.press('ArrowRight');
-  const sub = page.locator('#pillSub'); await sub.waitFor();
-  assert.deepEqual([await sub.getAttribute('role'), await sub.locator('.item').evaluateAll((l) => l.map((b) => b.getAttribute('role') + ':' + b.firstElementChild.textContent)), await focused(page)], ['menu', ['menuitemradio:Opus', 'menuitemradio:Haiku'], 'Opus']);
-  await page.keyboard.press('ArrowLeft');
-  assert.deepEqual(await menuState(page), [false, true, 'More'], 'ArrowLeft: the submenu closed, its item has the focus');
-  await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  assert.deepEqual(await listed(page), ['Default (recommended) ✓', 'Opus', 'Haiku', 'On', 'Off ✓']);
+  assert.deepEqual(await page.locator('#pillMenu .hd').evaluateAll((l) => l.map((h) => h.textContent)), ['Claude', 'Fast mode']);
+  assert.equal(await page.locator('#pillMenu [aria-haspopup], #pillSub').count(), 0, 'no submenu');
+  await shot(page, 'menu-model');
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); assert.equal(await focused(page), 'Haiku');
+  await page.keyboard.press('Enter');
   await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor();
-  assert.deepEqual(await menuState(page), [true, true, 'Model: Haiku']);
+  assert.deepEqual(await menuState(page), [true, 'Model: Haiku']);
   await send('model'); await said('model:haiku'); await idle();
+  // Review minor (2026-11-05): an open menu follows its chat. With the Model menu open, a prompt from elsewhere (the phone,
+  // with its own model pick) changes the model: the check moves to Opus while the menu stays open with its focus.
+  await pillOf(pane, 'Model').click(); await menu.waitFor();
+  assert.deepEqual(await listed(page), ['Default (recommended)', 'Opus', 'Haiku ✓', 'On', 'Off ✓']);
+  await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'model', model: 'opus' });
+  await until(async () => (await listed(page)).includes('Opus ✓'), 'the open menu checks the model now in use', 10000);
+  assert.deepEqual(await menuState(page), [false, 'Haiku'], 'still open, the focus kept');
+  await page.keyboard.press('Escape'); await said('model:opus'); await idle();
+  // Review minor (2026-11-05): the menu's window listeners (click outside, resize) exist only while it is open; DevTools counts them.
+  const cdp = await page.context().newCDPSession(page);
+  const winListeners = async () => { const { result } = await cdp.send('Runtime.evaluate', { expression: 'window' }); const { listeners } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId });
+    await cdp.send('Runtime.releaseObject', { objectId: result.objectId }); return listeners.filter((l) => l.type === 'click' || l.type === 'resize').length; };
+  const base = await winListeners();
+  await pillOf(pane, 'Effort').click(); await menu.waitFor();
+  assert.equal(await winListeners(), base + 2, 'open: a click and a resize listener on the window');
+  await page.keyboard.press('Escape');
+  assert.equal(await winListeners(), base, 'closed: both removed');
+  await pillOf(pane, 'Effort').click(); await menu.waitFor(); await pane.locator('.hist').click({ position: { x: 10, y: 10 } });
+  assert.deepEqual([await menu.isHidden(), await winListeners()], [true, base], 'a click outside closes it and removes them too');
   // While the agent works the Steer / Queue / Cancel chip shows beside the pills, which stay.
   await send('long work');
   await pane.locator('.bar [data-when="steer"]').waitFor({ timeout: 10000 });
@@ -111,7 +133,8 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   const before = await steps();
   await page.waitForTimeout(1500);
   assert.ok(await steps() > before, 'the chat streamed meanwhile: ' + before + ' -> ' + await steps());
-  assert.deepEqual(await menuState(page), [false, true, 'Medium'], 'the menu is open and focused through the streaming');
+  await shot(page, 'menu-effort-streaming');
+  assert.deepEqual(await menuState(page), [false, 'Medium'], 'the menu is open and focused through the streaming');
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
   await pane.locator('[data-pill="Effort"][aria-label="Effort: High"]').waitFor();
   // A mode picked mid-turn shows at once, labelled queued; it applies when the turn ends.
@@ -141,7 +164,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   }));
   assert.ok(fit.some((f) => f.width <= 300), 'one pane is at the narrowest: ' + JSON.stringify(fit));
   for (const f of fit) assert.deepEqual([f.oneLine, f.noOverflow, f.sendIn, f.pillsShow], [true, true, true, true], JSON.stringify(fit));
-  if (process.env.P9_EVIDENCE) await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'pills-narrow.png') });
+  await shot(page, 'pills-narrow');
   assert.deepEqual(errors, []);
   console.log('PASS pills: three menu pills in the bar, keyboard and roles as specified, open through streaming, queued mid-turn, one line at 280 px');
 });

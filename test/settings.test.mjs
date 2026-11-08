@@ -18,10 +18,10 @@ const DOCS_URL = 'https://github.com/' + REPO + '#readme'; // main.mjs loads onl
 const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 const PETDEX_URL = 'https://petdex.dev';
 // 0.1.8: Mode, Model and Effort are pills in the message bar (controller.mjs pillMenu); each opens a menu of menuitemradio choices.
-// pillValue reads a pill's value from its aria-label; pillItems lists a menu (the checked one marked); choose picks, through submenus.
+// pillValue reads a pill's value from its aria-label; pillItems lists a menu (the checked ones marked); choose picks (no submenus, Builder, 2026-11-05).
 const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
 const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
-const menuItem = (page, label) => page.locator('#pillMenu .item, #pillSub .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
+const menuItem = (page, label) => page.locator('#pillMenu .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
 const pillItems = async (page, pane, kind) => { await pillOf(pane, kind).click(); await page.locator('#pillMenu:not([hidden])').waitFor(); const items = await page.locator('#pillMenu .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent + (b.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))); await page.keyboard.press('Escape'); return items; };
 const choose = async (page, pane, kind, ...labels) => { await pillOf(pane, kind).click(); for (const label of labels) await menuItem(page, label).click(); };
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -1177,11 +1177,10 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
   await page.locator('#tabs .tab[data-id="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
-  // 0.1.8: the Model pill in the message bar lists the agent's models under its name; the "More" group and Fast mode are submenus.
+  // 0.1.8: the Model pill in the message bar lists the agent's models under its name, then Fast mode under its own (no submenus).
   await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
-  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended) ✓', 'More', 'Fast mode']);
-  assert.equal(await page.locator('#pillMenu .hd').evaluate((h) => h.textContent), 'Claude');
-  await choose(page, pane, 'Model', 'More'); assert.deepEqual(await page.locator('#pillSub .item .truncate').allInnerTexts(), ['Opus', 'Haiku']); await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended) ✓', 'Opus', 'Haiku', 'On', 'Off ✓']);
+  assert.deepEqual(await page.locator('#pillMenu .hd').evaluateAll((l) => l.map((h) => h.textContent)), ['Claude', 'Fast mode']);
   const ta = pane.locator('.composer textarea'), menu = pane.locator('[data-slash]');
   await ta.click(); await page.keyboard.type('/');
   assert.deepEqual(await menu.locator('[data-cmd]').evaluateAll((b) => b.map((x) => x.dataset.cmd)), ['compact', 'context', 'review']);
@@ -1202,7 +1201,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   await ta.fill('');
   // Flashing (Builder, 2026-10-18): a turn updates the pane and its tab in place; rebuilt ones restart every animation.
   await pane.evaluate((el) => { el.kept = 'yes'; }); await page.locator('#tabs .tab[data-id="' + id + '"]').evaluate((el) => { el.kept = 'yes'; });
-  await choose(page, pane, 'Model', 'More', 'Opus');
+  await choose(page, pane, 'Model', 'Opus');
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the pick at once');
   await ta.click(); await page.keyboard.type('model'); await page.keyboard.press('Enter');
   await pane.getByText('model:opus').waitFor({ timeout: 15000 });
@@ -1212,13 +1211,13 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   // Effort and the other agent settings (Builder, 2026-10-18: "wire all of them"; threat model row 22): the agent's own lists, picked values reach it.
   assert.equal(await pillValue(pane, 'Effort'), 'Medium');
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium ✓', 'High']);
-  await choose(page, pane, 'Model', 'Fast mode'); assert.deepEqual(await page.locator('#pillSub .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent + (b.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))), ['On', 'Off ✓']); await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
-  await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'Fast mode', 'On');
+  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On', 'Off ✓']);
+  await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
   await ta.click(); await page.keyboard.type('config'); await page.keyboard.press('Enter');
   await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 });
   await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
   assert.equal(await pillValue(pane, 'Effort'), 'High', 'the pill shows the effort now in use');
-  await choose(page, pane, 'Model', 'Fast mode'); assert.equal(await page.locator('#pillSub .item[aria-checked="true"] .truncate').innerText(), 'On', 'the menu shows the fast mode now in use'); await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On ✓', 'Off'], 'the menu shows the fast mode now in use');
   if (process.env.P9_EVIDENCE) await pane.locator('.composer .bar').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'pickers.png') });
   // Split shows the last two chats opened (Builder, 2026-10-19: one chat open, then a new one, and Split showed one pane).
   await page.click('#rSplit');
