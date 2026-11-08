@@ -22,10 +22,73 @@ import { pinned, applyCard } from './pinned.mjs';
 import { createSide } from './side.mjs';
 import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
+import { installMission } from './mission-view.mjs';
+import { installChat } from './chat-view.mjs';
+import { installSettings } from './settings-view.mjs';
+import { installCards } from './cards-modal.mjs';
+import { installFiles } from './files-view.mjs';
+import { installLanding } from './landing-move.mjs';
 
 // The admin password window (Shell.tsx, row I2), for row 61 on a remote.
 let adminAsk = null;
 export function mountShell({ askAdmin } = {}) {
+  // outer: mountShell's names that the modules split out of it (F9) read and set; getters and setters keep them live.
+  const outer = { get $() { return $; }, get CTP() { return CTP; }, get FRAME() { return FRAME; }, get FX() { return FX; }, get IND() { return IND; },
+    get LAND() { return LAND; }, get LAND_BG() { return LAND_BG; }, get M() { return M; }, get PET_ROLES() { return PET_ROLES; }, get S() { return S; },
+    get SKY_MAIN() { return SKY_MAIN; }, get SP() { return SP; }, get WIZ_ERR() { return WIZ_ERR; }, get XFER_SETTINGS() { return XFER_SETTINGS; },
+    get addHalos() { return addHalos; }, get agentLock() { return agentLock; }, set agentLock(v) { agentLock = v; }, get attrs() { return attrs; },
+    get bottoms() { return bottoms; }, get busy() { return busy; }, get cardList() { return cardList; }, get chatImgs() { return chatImgs; },
+    get chatOn() { return chatOn; }, get closeModal() { return closeModal; }, get closedChats() { return closedChats; },
+    get danChat() { return danChat; }, get dataNote() { return dataNote; }, get defaultMode() { return defaultMode; }, get dirty() { return dirty; },
+    get edSave() { return edSave; }, set edSave(v) { edSave = v; }, get editorHtml() { return editorHtml; },
+    get fileProtect() { return fileProtect; }, set fileProtect(v) { fileProtect = v; }, get files() { return files; }, get focus() { return focus; },
+    get focusNames() { return focusNames; }, get focusOn() { return focusOn; }, get fx() { return fx; },
+    get fxFiles() { return fxFiles; }, set fxFiles(v) { fxFiles = v; }, get fxSky() { return fxSky; },
+    get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
+    get land() { return land; }, get landOn() { return landOn; }, get landVideo() { return landVideo; },
+    get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
+    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; },
+    get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
+    get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
+    get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
+    get looseOk() { return looseOk; }, get maintain() { return maintain; }, get mdOf() { return mdOf; }, get mdl() { return mdl; },
+    get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; },
+    get missionLive() { return missionLive; }, get modals() { return modals; }, get modelOpts() { return modelOpts; }, get morph() { return morph; },
+    get moveDlg() { return moveDlg; }, get moveReloaded() { return moveReloaded; }, get names() { return names; },
+    get needsLabel() { return needsLabel; }, get newFolder() { return newFolder; }, get noteModal() { return noteModal; },
+    get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; }, get petCanvas() { return petCanvas; },
+    get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
+    get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
+    get pickRemoteFolder() { return pickRemoteFolder; }, get pickerSelects() { return pickerSelects; }, get popover() { return popover; },
+    get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
+    get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get renderMission() { return renderMission; },
+    get renderModal() { return renderModal; }, get renderSideChat() { return renderSideChat; }, get renderTabs() { return renderTabs; },
+    get renderTree() { return renderTree; }, get restartP9() { return restartP9; }, get reviewSort() { return reviewSort; },
+    get sampleView() { return sampleView; }, get saveBtn() { return saveBtn; }, get saveWhy() { return saveWhy; },
+    get serverInfo() { return serverInfo; }, get serverMenu() { return serverMenu; }, get setFocus() { return setFocus; },
+    get setHTML() { return setHTML; }, get setPage() { return setPage; }, set setPage(v) { setPage = v; }, get setSideChat() { return setSideChat; },
+    get setTimeout() { return setTimeout; }, get settings() { return settings; }, set settings(v) { settings = v; },
+    get settingsAt() { return settingsAt; }, get setupMode() { return setupMode; }, set setupMode(v) { setupMode = v; },
+    get showTerminal() { return showTerminal; }, get side() { return side; }, get sideSession() { return sideSession; },
+    get skipWelcome() { return skipWelcome; }, get sky() { return sky; }, get spaceForm() { return spaceForm; }, set spaceForm(v) { spaceForm = v; },
+    get spaceMenuHtml() { return spaceMenuHtml; }, set spaceMenuHtml(v) { spaceMenuHtml = v; },
+    get spacePop() { return spacePop; }, set spacePop(v) { spacePop = v; }, get startMode() { return startMode; },
+    get startTurn() { return startTurn; }, get still() { return still; }, get sync() { return sync; },
+    get termGreeting() { return termGreeting; }, set termGreeting(v) { termGreeting = v; }, get tickPets() { return tickPets; },
+    get toast() { return toast; }, get topAt() { return topAt; }, set topAt(v) { topAt = v; }, get tree() { return tree; },
+    get updates() { return updates; }, set updates(v) { updates = v; },
+    get updatesTimer() { return updatesTimer; }, set updatesTimer(v) { updatesTimer = v; }, get usage() { return usage; },
+    get usageNow() { return usageNow; }, get usageRings() { return usageRings; },
+    get usageSoon() { return usageSoon; }, set usageSoon(v) { usageSoon = v; }, get view() { return view; }, get walkthrough() { return walkthrough; },
+    get welcome() { return welcome; }, get winTop() { return winTop; }, get wins() { return wins; }, get wireEditor() { return wireEditor; },
+    get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
+    get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
+  const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
+  const { ART, keepBox, focus, show, closeTab, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
+  const { saveSettings, applySettings, settingsAt, renderSettings, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
+  const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
+  const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
+  const { NO_SKY, lastFocus, landingStart, openLanding, landMain, leaveLanding, leave, onMove, moveReloaded, SERVER_STATE } = installLanding(outer);
   adminAsk = askAdmin ?? null;
 // The sample data lives in the test folder and never ships (the owner, 2026-10-20: "sample data should not be in the app at all").
 // Only the UI tests hand it in, through the desktop bridge (P9_SAMPLE_DATA, unpackaged only). Everywhere else the lists start
@@ -141,143 +204,7 @@ if (sampleView) window.__side = side; // ponytail: the UI test's door to the pan
 // editor it shows on top of that chat, above its text box, which stays usable. Comments go to the chat it came from,
 // through the composer's own send (sendText); the composer's draft and attached images stay where they are.
 const FRAME = { page: 'p9://frame/', base: new URL('frame/', location.href).href };
-const ART = { state: null, mode: 'panel' };
-const artSession = () => S.sessions.find(s => s.id === ART.state?.sid);
-function artSend(text) {
-  const s = artSession();
-  if (!canSend(s, text, false)) { toast({ kind: 'comments not sent', txt: 'That chat takes no messages now.', level: 'warn' }, true); return false; }
-  const images = s.images; s.images = []; sendText(s, text, false); s.images = images;
-  return true;
-}
-const artOverlay = () => side.body.querySelector(':scope > .art-over');
-function keepBox() { // the overlay ends where the side chat's text box starts
-  const over = artOverlay(), b = side.body.querySelector('#sideChats .pane .bottom');
-  if (over) over.style.bottom = b ? Math.max(0, side.body.getBoundingClientRect().bottom - b.getBoundingClientRect().top) + 'px' : '0px';
-}
-function openArtifact(art) {
-  if (!ART.state || ['kind', 'src', 'sid'].some(k => ART.state.art[k] !== art[k])) ART.state = { art, sid: art.sid };
-  ART.mode = art.mode ?? 'panel';
-  const full = { label: 'Full screen', on: () => side.current()?.mode === 'full', go: () => side.current()?.mode === 'full' ? side.back() : side.mode('full') };
-  if (S.focus === 'dev' && side.current()?.slot === 'dan-chat') {
-    let over = artOverlay(); if (!over) { over = document.createElement('div'); over.className = 'art-over'; side.body.append(over); } over.replaceChildren();
-    artifactView(over.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [full, { label: 'Close', go: () => over.remove() }] });
-    if (ART.mode === 'full') side.mode('full');
-    return keepBox();
-  }
-  side.open('artifact', { title: art.title, mode: ART.mode, focuses: [S.focus], defaultWidth: w => w / 2, // it goes with its chat's focus: hidden in another, back (still pinned) on return
-    render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...FRAME, send: artSend, modes: [
-      ...(art.list ? [{ label: 'Back to list', go: () => openChatFiles(art.sid) }] : []), // opened from the chat's list: back to it
-      { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; side.mode(ART.mode); } }, full] }),
-    onClose: why => { if (why === 'close' && art.list) localStorage.removeItem(cfKey(art.sid)); // its x closes the chat's list too
-      if (why !== 'replaced' && chatOn()) side.open('dan-chat', danChat); } }); // Dev Focus gets its chat back (it shows only there)
-}
-// Plan view: Claude's plan-mode plan (an "Approve Plan" call or approval), or the agent's plan entries, as Markdown.
-function openPlan(s, which) {
-  const e = s.events[+which], entries = s.events.find(x => x.t === 'plan')?.entries ?? [];
-  const src = e?.plan ?? entries.map(([st, t]) => `- [${st === 'completed' ? 'x' : ' '}] ${t}${st === 'in_progress' ? ' *(in progress)*' : ''}`).join('\n');
-  openArtifact({ kind: 'markdown', lang: 'md', mode: 'panel', title: 'Plan', src, sid: s.id });
-}
-// A turn ended: the newest artifact of its reply opens by itself when that chat is on screen (else its chip waits).
-function autoArtifact(s) {
-  const from = s.events.findLastIndex(e => e.t === 'user') + 1, found = [];
-  for (const e of s.events.slice(from)) if (e.t === 'agent' && !e.artSeen) { e.artSeen = true; found.push(...artifactsIn(e.text)); }
-  const onScreen = S.focus === 'chat' ? (S.split ? S.open.slice(0, 2) : S.open.slice(0, 1)).includes(s.id) : S.focus === 'dev' && sideSession()?.id === s.id;
-  if (found.length && onScreen) openArtifact({ ...found.at(-1), sid: s.id });
-}
 side.onResize(() => { ART.state?.refresh?.(); keepBox(); });
-// Chat files (the request, 2026-10-30: "a button just to the left of the running indicator that will open a side pannel and show me
-// the artifacts and files and such? just like anthropic does"). The button sits left of the chat's own Running label (pane());
-// its panel, the side panel's 'chat-files' slot, has two tabs (Builder, 2026-11-02: "separate the artifacts from the diffs into
-// their own tabs"), each newest first. Artifacts: every artifact the chat's replies posted (a click opens it as its chip does).
-// Changes: every file its finished edit calls wrote (editFiles), created or edited; a click shows that file's diffs, read-only
-// ("let me at lease read only the diff"), from the edit calls themselves, so nothing is read from the disk and nothing can be
-// applied. The open list and its tab are remembered per chat (localStorage 'p9-chat-files:<id>'): that chat shown again in
-// Chat Focus opens it again.
-// ponytail: only the chat's loaded events are read (its latest TAIL steps until Show earlier), as the chat itself shows them;
-// artifacts are the exception (keptArts, below).
-const CF = { sid: null, ws: null, asked: false, html: null, tab: 'artifacts' };
-const cfKey = id => 'p9-chat-files:' + id;
-// Artifacts outlive the loaded events (Builder, 2026-11-02: "the artifacts are lost on compact"): a chat long enough to compact
-// loads only its newest TAIL steps after a reload, and its older artifacts fell out of the list. Every artifact a chat's loaded
-// replies hold is kept for that chat (localStorage 'p9-artifacts:<id>') and listed after the loaded ones.
-// ponytail: this window's storage only, the newest 30 per chat; an artifact this window never loaded shows once Show earlier reaches it.
-const artKey = id => 'p9-artifacts:' + id;
-const artSig = a => a.sig ??= JSON.stringify([a.kind, a.lang, a.title, a.src]);
-const keptArts = s => s.keptArts ??= (() => { try { const a = JSON.parse(localStorage.getItem(artKey(s.id))); return Array.isArray(a) ? a.filter(x => typeof x?.src === 'string' && KIND_NAMES[x.kind]) : []; } catch { return []; } })();
-function chatItems(s) {
-  const out = [], seen = new Map(), loaded = new Set();
-  s.events.forEach((e, i) => {
-    if (e.t === 'agent' && e.text?.includes('artifact')) { if (e.artText !== e.text) { e.artText = e.text; e.arts = artifactsIn(e.text); } for (const art of e.arts) { out.push({ type: 'artifact', at: i, art }); loaded.add(artSig(art)); } }
-    else if (e.t === 'tool' && e.files && e.status === 'completed') for (const f of e.files) {
-      const was = seen.get(f.path), item = { type: 'file', at: i, path: f.path, created: f.created || !!was?.created };
-      if (was) out.splice(out.indexOf(was), 1); // one row per file, at its newest write
-      seen.set(f.path, item); out.push(item);
-    }
-  });
-  const kept = keptArts(s), known = new Set(kept.map(artSig)), fresh = out.filter(it => it.type === 'artifact' && !known.has(artSig(it.art)));
-  if (fresh.length) {
-    kept.push(...fresh.map(({ art: { kind, lang, mode, title, src } }) => ({ kind, lang, mode, title, src })));
-    kept.splice(0, Math.max(0, kept.length - 30));
-    try { localStorage.setItem(artKey(s.id), JSON.stringify(kept)); } catch {} // full storage: listed while loaded, as before
-  }
-  out.unshift(...kept.filter(a => !loaded.has(artSig(a))).map(art => ({ type: 'artifact', at: -1, art })));
-  return out.reverse();
-}
-const fwd = p => String(p).replace(/\\/g, '/');
-// An agent's file path as a workspace path ('proj/notes.md'), or null outside the workspace (or while its path is not known
-// yet). A relative path is from the chat's folder.
-function wsPath(p, folder) {
-  p = fwd(p); const ws = CF.ws && fwd(CF.ws).replace(/\/$/, '');
-  const rel = /^(\/|[A-Za-z]:\/)/.test(p) ? (ws && p.startsWith(ws + '/') ? p.slice(ws.length + 1) : null) : (folder ? folder + '/' : '') + p;
-  const parts = rel?.split('/').filter(x => x && x !== '.');
-  return !parts?.length || parts.includes('..') ? null : parts.join('/');
-}
-// The daemon's workspace folder, once, from the setup read the welcome screen uses (the agents' paths are absolute under it).
-const loadWs = () => { if (CF.asked) return; CF.asked = true; loadSetup().then(b => { CF.ws = b?.workspace ?? null; if (!CF.ws) CF.asked = false; renderChatFiles(); }, () => { CF.asked = false; }); };
-function openChatFiles(sid) {
-  if (CF.sid !== sid && side.current()?.slot === 'chat-files') localStorage.removeItem(cfKey(CF.sid)); // one list open at a time
-  if (CF.sid !== sid) CF.tab = localStorage.getItem(cfKey(sid)) === 'changes' ? 'changes' : 'artifacts';
-  CF.sid = sid; localStorage.setItem(cfKey(sid), CF.tab); loadWs();
-  side.open('chat-files', { title: 'Artifacts and changes', focuses: ['chat'], defaultWidth: w => w / 3, render: () => { CF.html = null; renderChatFiles(); },
-    onClose: why => { if (why === 'close') localStorage.removeItem(cfKey(sid)); queueMicrotask(() => renderChats()); } }); // 'hidden' and 'replaced' keep it remembered
-  renderChats();
-}
-function renderChatFiles() {
-  const b = side.body; if (side.current()?.slot !== 'chat-files') return;
-  const s = S.sessions.find(x => x.id === CF.sid), all = s ? chatItems(s) : [], changes = CF.tab === 'changes';
-  const arts = all.filter(it => it.type === 'artifact'), files = all.filter(it => it.type === 'file'), items = changes ? files : arts;
-  const row = (it, i) => {
-    if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact</span></button></li>`;
-    const rel = wsPath(it.path, s.folder), shown = rel ?? fwd(it.path), cut = shown.lastIndexOf('/');
-    const where = rel === null ? (CF.ws ? 'outside the workspace, ' : '') + (shown.slice(0, cut) || '/') : cut < 0 ? 'workspace' : shown.slice(0, cut);
-    return `<li><button type="button" data-cf="${i}" title="Show the changes to ${esc(shown)} (read-only)" class="cf-item" data-cf-file><span class="art-kind">Diff</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></button>`
-      + `<button type="button" data-slot="button" data-variant="ghost" data-size="sm" data-cf-copy="${i}" title="Copy ${esc(fwd(it.path))}">Copy path</button></li>`;
-  };
-  const tab = (id, label, n) => `<button type="button" role="tab" data-slot="button" data-variant="ghost" data-size="sm" data-cf-tab="${id}" aria-selected="${CF.tab === id}">${label} <span class="cf-n">${n}</span></button>`;
-  const html = `<div class="cf-tabs" role="tablist">${tab('artifacts', 'Artifacts', arts.length)}${tab('changes', 'Changes', files.length)}</div>`
-    + (items.length ? `<ul class="cf-list" role="tabpanel">${items.map(row).join('')}</ul>` : `<p class="empty" role="tabpanel">${changes ? 'No changes yet. The files this chat edits show here; click one to read its diff.' : 'No artifacts yet. The artifacts this chat posts show here.'}</p>`);
-  if (CF.html === html) return; // called on every chat change: the DOM is left alone when nothing in it changed
-  CF.html = html; b.innerHTML = html;
-  b.querySelectorAll('[data-cf-tab]').forEach(el => el.onclick = () => { CF.tab = el.dataset.cfTab; localStorage.setItem(cfKey(CF.sid), CF.tab); renderChatFiles(); });
-  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true }); else openChange(s, it); });
-  b.querySelectorAll('[data-cf-copy]').forEach(el => el.onclick = () => copy(fwd(items[+el.dataset.cfCopy].path), el));
-}
-// A changed file's diffs, read-only, in the artifact view as plain text (artifact.mjs frameDoc 'diff'): every finished edit call
-// of the loaded chat that wrote it, oldest first, each as the line diff the chat shows (editFiles keeps one per file).
-function openChange(s, it) {
-  const edits = s.events.filter(e => e.t === 'tool' && e.status === 'completed' && e.files?.some(f => f.path === it.path)).map(e => e.files.find(f => f.path === it.path).diff);
-  const src = edits.map((rows, i) => (edits.length > 1 ? `@@ Edit ${i + 1} of ${edits.length} @@\n` : '')
-    + (rows?.length ? rows.map(([k, l]) => (k === 'add' ? '+ ' : k === 'del' ? '- ' : '  ') + l).join('\n') : 'No diff was recorded for this edit.')).join('\n\n');
-  openArtifact({ kind: 'diff', lang: 'diff', mode: 'panel', title: wsPath(it.path, s.folder) ?? fwd(it.path), src, sid: s.id, list: true });
-}
-// From renderChats, in Chat Focus: the open list follows its chat (another chat shown hides it, still remembered), and a
-// remembered one comes back when its chat is shown and the panel is free.
-function chatFilesFollow(ids) {
-  if (S.focus !== 'chat') return;
-  if (side.current()?.slot === 'chat-files' && !ids.includes(CF.sid)) side.close('chat-files', 'hidden');
-  const want = !side.current() && ids.find(id => localStorage.getItem(cfKey(id)) && S.sessions.some(s => s.id === id && !s.stub && chatItems(s).length));
-  if (want) openChatFiles(want); else renderChatFiles();
-}
 if (sampleView) { // the test door: an agent reply arrives whole and its turn ends (reply() streams 3 characters per 18 ms)
   const at = id => S.sessions.find(s => s.id === (id ?? (S.focus === 'dev' ? sideSession()?.id : S.open[0])));
   window.__artifact = { reply: (text, id) => { const s = at(id); s.events.push({ t: 'agent', text }); renderChats(); turnEnd(s); }, render: () => renderChats(), state: () => ART.state, events: id => at(id).events };
@@ -320,103 +247,18 @@ function cardList(all) {
   if (S.setup) { const d = setupDone(S.setup), rows = Object.keys(d).filter(k => k !== 'pick' && k !== 'mission' && (k !== 'terminal' || S.setup.tmux !== null)), left = rows.filter(k => !d[k]); cards.push({ key: 'welcome', quiet: welSkipped(), n: left.length, title: `Set up · ${rows.length - left.length} of ${rows.length} done`, sub: [...left.map(k => STEP_NAMES[k]), ...(d.mission ? [] : ['Mission Control'])].join(' · ') }); }
   return all ? cards : cards.filter(c => !c.quiet && !S.snoozed.has(c.key));
 }
-const centerCount = () => cardList(true).filter(c => c.quiet || S.snoozed.has(c.key)).length + S.alerts.length;
 /* ---------- agent-working indicator and pets (phase 18; Builder's pet requests, 2026-10-17) ---------- */
 // The top bar says when agents work or wait on you, in every focus, with Claude Code's spinner. Where a focus shows pets
 // (Settings, one set per focus), each active agent's pet takes that text's place (see renderIndicator) and every chat on
 // screen holds its agent's pet (petRows). A chat's pet drags anywhere in it; the spot is kept per focus. A sheet is 8 x 9 frames of
 // 192 x 208: row 0 idle, 3 wave, 4 jump, 6 waiting, 7 running; each row's frame count is read from the sheet.
 const IND = { glyphs: '·✢✳✶✻✽✻✶✳✢', looks: new Map(), frame: 0, top: [], drag: null };
-const PET_ROLES = ['system', 'claude', 'codex'];
 const petSpots = JSON.parse(localStorage.getItem('p9-pet-spots') || '{}'); // 'chats:<id>' or 'mdlBody:<id>' -> { box: [x, y] }, see petHome
-const DEFAULT_PET ={ on: true, size: 48, claude: null, codex: null, system: null, top: null, pane: null };
-async function petLook(name) {
-  const pet = await window.p9.loadPet(name).catch(() => null), img = new Image();
-  if (pet) { img.src = pet.sprite; await img.decode().catch(() => {}); }
-  if (img.naturalWidth < 1536) return null;
-  const cv = new OffscreenCanvas(img.naturalWidth, img.naturalHeight), g = cv.getContext('2d'); g.drawImage(img, 0, 0);
-  const frames = row => { let n = 0; while (n < 8 && g.getImageData(n * 192, row * 208, 192, 208).data.some((v, i) => i % 4 === 3 && v)) n++; return n || 1; };
-  return { img, displayName: pet.displayName, rows: Array.from({ length: 9 }, (_, row) => frames(row)) };
-}
-async function loadPetLook() {
-  if (!window.p9?.loadPet) return;
-  for (const name of new Set(Object.values(settings.pet).flatMap(f => [f.claude, f.codex, f.system]).filter(Boolean))) if (!IND.looks.has(name)) IND.looks.set(name, await petLook(name));
-  renderIndicator();
-}
-// The top-bar pet ignores the on switch (Builder, 2026-10-18: "No. Keep it on. I like it."); the switch is for chat pets.
-const petOf = (f, agent, always) => { const name = (always || f.on) && (f[agent] || f.system); return name && IND.looks.get(name) ? name : null; };
-function renderIndicator() {
-  const active = S.sessions.filter(s => s.state === 'running' && s.pending || busy(s)), waiting = active.filter(s => s.pending).length, working = active.length - waiting;
-  const state = waiting ? 'waiting' : working ? 'working' : null, el = $('#agentInd'), f = settings.pet[S.focus];
-  // One pet per active agent, in the top bar where the text was, always 52 px (Builder, 2026-10-17): waving and jumping while
-  // it waits on you, running while it works. With no pet the spinner and text show there; each chat's line sits above its box.
-  IND.top = [...new Set(active.map(s => s.agent))].map(agent => ({ name: petOf(f, agent, true), rows: active.some(s => s.agent === agent && s.pending) ? '3,4' : '7' })).filter(p => p.name);
-  // With no agent active the system pet stands idle there: the top pet is always on (Builder, 2026-10-18: "Keep it on. I like it.").
-  if (!state) IND.top = [{ name: petOf(f, 'system', true), rows: '0' }].filter(p => p.name);
-  el.hidden = !state && !IND.top.length; el.dataset.state = state || '';
-  $('#indText').textContent = state === 'waiting' ? (waiting > 1 ? waiting + ' agents wait on you' : 'An agent waits on you') : state ? (working > 1 ? working + ' agents working…' : 'Working…') : '';
-  $('#indGlyph').hidden = !!IND.top.length;
-  el.title = IND.top.map(p => IND.looks.get(p.name).displayName).join(', ');
-  el.toggleAttribute('data-pet', !!IND.top.length);
-  tickPets();
-}
-const petCanvas = (name, rows, size, drag = true) => `<canvas class="pet" data-pet-name="${esc(name)}" data-rows="${rows}" width="192" height="208" style="height:${size}px;width:${Math.round(size * 192 / 208)}px"${drag ? ' title="Drag to move"' : ''}></canvas>`;
-// A chat's pet acts out its state: waiting on you, thinking (review row), working (running), failed after an error,
-// a jump for 4 s when a turn ends, else idle. Rows: 0 idle, 3 wave, 4 jump, 5 failed, 6 waiting, 7 running, 8 review.
-const petRows = s => { const last = s.events.at(-1); return s.pending ? '6' : busy(s) ? (last?.t === 'thought' ? '8' : '7') : last?.t === 'error' ? '5' : Date.now() - (s.lastEnd || 0) < 4000 ? '4' : '0'; };
-function drawPet(cv) {
-  const look = IND.looks.get(cv.dataset.petName); if (!look) return;
-  const seq = cv.dataset.rows.split(',').flatMap(row => Array.from({ length: look.rows[row] }, (_, i) => [+row, i])), [row, i] = seq[(IND.frame + (+cv.dataset.phase || 0)) % seq.length];
-  const g = cv.getContext('2d'); g.clearRect(0, 0, 192, 208); g.drawImage(look.img, i * 192, row * 208, 192, 208, 0, 0, 192, 208);
-}
-// ponytail: one 125 ms timer redraws every pet and re-finds the chat panes (they are re-rendered often); fine for a few pets.
-function tickPets() {
-  const f = settings.pet[S.focus], top = $('#indPets'), key = IND.top.map(p => p.name + ':' + p.rows).join(), glyph = IND.glyphs[IND.frame % IND.glyphs.length];
-  if (!$('#agentInd').hidden) $('#indGlyph').textContent = glyph;
-  document.querySelectorAll('.working .glyph').forEach(g => { g.textContent = glyph; });
-  if (top.dataset.key !== key) { top.dataset.key = key; top.innerHTML = IND.top.map(p => petCanvas(p.name, p.rows, 52, false)).join(''); }
-  document.querySelectorAll('#chats .pane, #mdlBody .pane').forEach(p => {
-    const s = S.sessions.find(x => x.id === p.dataset.id), name = s && petOf(f, s.agent), rows = s ? petRows(s) : '';
-    let cv = p.querySelector(':scope > canvas.pet');
-    if (!name) return cv?.remove();
-    if (!cv || cv.dataset.petName !== name || cv.dataset.rows !== rows || cv.style.height !== f.size + 'px') { cv?.remove(); p.insertAdjacentHTML('beforeend', petCanvas(name, rows, f.size)); cv = p.lastElementChild; }
-    const key = p.parentElement.id + ':' + s.id, r = p.getBoundingClientRect(), b = petBox(p);
-    if (!r.width || !b) { cv.style.left = '10%'; cv.style.top = '70%'; return; }
-    // A spot saved before D2 was a share of the pane: kept where it is now, from the box.
-    if (Array.isArray(petSpots[key])) { petSpots[key] = { box: [r.left + petSpots[key][0] * r.width - b.left, r.top + petSpots[key][1] * r.height - b.top].map(Math.round) }; localStorage.setItem('p9-pet-spots', JSON.stringify(petSpots)); }
-    const [x, y] = (IND.drag?.key === key && IND.drag.at || petSpots[key])?.box || petHome(p, cv, r, b);
-    cv.style.left = Math.min(r.width, Math.max(0, b.left - r.left + x)) + 'px'; cv.style.top = Math.min(r.height, Math.max(0, b.top - r.top + y)) + 'px';
-  });
-  document.querySelectorAll('canvas.pet').forEach(drawPet);
-  petTicker();
-}
 // The 125 ms tick runs only while something on screen moves: a top-bar pet or spinner, a chat's spinner or a chat's pet. With
 // no pet installed and no agent working it stops (review 2026-11-03: it ran forever, three sweeps and two rects per pane, eight
 // times a second). Every path that puts a pet or spinner on screen ends in tickPets, which starts it again.
 let petTimer = 0;
-const petsMoving = () => !!(IND.top.length || !$('#agentInd').hidden || document.querySelector('canvas.pet, .working .glyph'));
-function petTicker() {
-  if (petTimer || !petsMoving()) return;
-  petTimer = window.setInterval(() => {
-    if (!petsMoving()) { window.clearInterval(petTimer); petTimer = 0; return; }
-    if (!document.hidden) { IND.frame++; tickPets(); }
-  }, 125);
-}
 lifetime.signal.addEventListener('abort', () => { window.clearInterval(petTimer); petTimer = 0; });
-// Each chat keeps its own pet spot, apart in Chat Focus and in its chat window (Builder, 2026-10-19: moving one pet moved
-// both, and moving the robot head window's pet moved the chat's). Settings' per-focus pane spot is no longer read.
-// ponytail: localStorage (petSpots, top of this section), last 200 dragged chats; move it into the settings file if spots should follow a profile copy.
-// Until dragged, a chat's pet stands left of its message box, standing on the box's top edge (Builder, 2026-10-20: moved from
-// the right side to where the owner dragged his); with no room there, just above the box's left end.
-// D2 (Builder, 2026-10-28: "Make the pets position reletive to the chat box"): a spot is px from the message box's top-left
-// corner, not a share of the pane, so a side panel, split view or the editor that moves the box moves the pet with it.
-function petHome(p, cv, r, b) {
-  const c = p.querySelector('.bottom .col')?.getBoundingClientRect(), w = cv.offsetWidth, h = cv.offsetHeight;
-  if (!c) return [-w, -h / 2];
-  const beside = c.left - r.left >= w + 16;
-  return [(beside ? c.left - 8 - w / 2 : c.left + w / 2) - b.left, (beside ? b.top - h / 2 : c.top - h / 2 - 4) - b.top];
-}
-const petBox = p => p.querySelector('.composer')?.getBoundingClientRect();
 // Drag a chat's pet within its chat; the spot is saved for that chat on release. The top bar's pets stay put.
 document.addEventListener('pointerdown', e => {
   const cv = e.target.closest?.('.pane canvas.pet'); if (!cv || e.button) return;
@@ -439,65 +281,17 @@ document.addEventListener('pointerdown', e => {
   };
   addEventListener('pointermove', move); addEventListener('pointerup', up);
 });
-// Running chats not waiting on you, as robot heads in the rail (Builder, 2026-10-17); a click opens the chat. Waiting ones stay cards.
-function renderBots() {
-  // D10: each head carries its chat's number (its place among the tabs) and the title, so several look different.
-  const bots = S.sessions.filter(s => s.state === 'running' && !s.pending), say = s => names[s.agent] + ' · ' + (busy(s) ? 'working' : 'idle');
-  const num = s => S.sessions.filter(x => !x.hidden).findIndex(x => x.id === s.id) + 1, label = s => (num(s) ? '#' + num(s) + ' ' : '') + s.title + ' · ' + say(s);
-  setHTML($('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${num(s) ? ` data-n="${num(s)}"` : ''}${busy(s) ? ' data-busy' : ''} title="${esc(label(s))}" aria-label="${esc(label(s))}">${svg.bot}</button>`).join(''));
-  $('#rBots').querySelectorAll('[data-bot]').forEach(b => b.onclick = () => { const k = 'run' + b.dataset.bot; openModal(S.resume[k] || { kind: 'chat', id: b.dataset.bot }, k); });
-}
-// The x and the body of a card: from the card itself, or from the Dev Focus overlay (main passes the clicked card's key).
-function cardAct(c, what) {
-  if (!c) return;
-  if (c.key === 'welcome') return what === 'x' ? skipWelcome() : welcome();
-  if (what === 'x') { S.snoozed.add(c.key); renderCards(); return; }
-  // D10-6: a card reopens where you left it, unless that item is already handled
-  const k = c.key.split(':')[0] + (c.id || ''), r = S.resume[k]; openModal(r && !(k === 'asks' && !S.sessions.find(s => s.id === r.id)?.pending) ? r : c.open, k);
-}
-// Dev Focus: the editor is a native view above this page, so the cards are drawn by their own overlay view (apps/desktop/cards-page.mjs).
-// This page's own stack stays in the layout, hidden, so the overlay lands where the stack would be.
-function cardsOverlay() {
-  if (!window.p9?.cards) return;
-  const cards = cardList(), r = $('#cards').getBoundingClientRect(), on = S.focus === 'dev' && cards.length > 0 && !document.querySelector('dialog[open]') && r.width > 0;
-  const items = cards.slice(0, 8).map(c => ({ key: c.key.slice(0, 300), title: String(c.title).slice(0, 200), sub: String(c.sub ?? '').slice(0, 300), ...(c.n ? { n: Math.min(Number(c.n) || 0, 99999) } : {}) }));
-  const next = on ? { visible: true, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), items } : { visible: false }, json = JSON.stringify(next);
-  if (json === lastCards) return; // renderCards runs on every event; main hears only a change
-  lastCards = json; window.p9.cards(next).catch(() => { lastCards = ''; });
-}
 let lastCards = '';
 window.p9?.onCardAct?.(({ key, action }) => cardAct(cardList().find(c => c.key === key), action));
-function renderCards() {
-  renderIndicator(); renderBots();
-  const cards = cardList();
-  morph($('#cards'), cards.map(c => `<article class="card${c.halo ? ' fx-halo' : ''}" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
-  $('#cards').querySelectorAll('.card').forEach((el, i) => {
-    el.querySelector('.x').onclick = () => cardAct(cards[i], 'x');
-    el.querySelector('.open').onclick = () => cardAct(cards[i], 'open');
-  });
-  cardsOverlay();
-  const n = centerCount();
-  $('#rBell').innerHTML = svg.bell + `<b>${n || ''}</b>`;
-  $('#rBell').title = 'Notification Center' + (n ? ` (${n})` : '') + ' · Ctrl Shift N';
-  if (mdl.open && S.modal?.kind === 'center') renderModal();
-  missionLive();
-}
 
 /* ---------- modals ---------- */
 // One resizable dialog for every item. Its content is rebuilt from S on each open, so closing loses
 // nothing: drafts live on the session or item, S.resume remembers the card view, and list scroll is kept.
 // Closing puts the caret back in the field you were typing in before the card took you away.
 const mdl = $('#mdl');
-const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560], sprint: [760, 560] }; // defaults; your resize wins, per type
-const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script', sprint: 'sprint' })[k] || 'list';
 let lastEdit = null;
 addEventListener('focusout', e => { const t = e.target; if (t.matches?.('textarea, input[type=text]') && !t.closest('dialog')) lastEdit = { pane: t.closest('.pane')?.dataset.id, id: t.id, sel: [t.selectionStart, t.selectionEnd] }; });
 addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .rail') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
-// A chat opens at its newest message (Builder, 2026-10-17: it opened at the first); paint ran while the dialog was closed.
-function openModal(m, card) { const seen = m.kind === 'chat' && S.sessions.find(s => s.id === m.id && s.done); if (seen) seen.done = false; m.card = card || m.card || m.back?.card; if (m.card) S.resume[m.card] = m; S.modal = m; if (m.kind === 'chat') delete view['mdlBody:' + m.id]; renderModal();
-  if (!mdl.open && S.modal) { mdl.showModal(); raiseToasts(); if (m.kind === 'win') $('#mdlBody').scrollTop = winTop[m.id] || 0; } // a closed dialog ignores scrollTop
-  if (m.kind === 'chat') $('#mdlBody .hist')?.scrollTo({ top: 1e6, behavior: 'instant' });
-  if (seen) renderCards(); }
 function renderModal() {
   const m = S.modal, body = $('#mdlBody'), g = groupOf(m.kind);
   if (mdl.dataset.group !== g) {
@@ -565,12 +359,9 @@ function renderModal() {
   } else missionModal(m, body, row);
   body.scrollTop = top;
 }
-function closeModal() { S.modal = null; if (mdl.open) mdl.close(); }
 observe(() => { if (mdl.open && mdl.dataset.group) try { localStorage.setItem('eh-modal:' + mdl.dataset.group, JSON.stringify([mdl.offsetWidth, mdl.offsetHeight])); } catch {} }).observe(mdl);
 $('#mdlX').onclick = closeModal;
 $('#mdlBack').onclick = () => openModal(S.modal.back);
-// a click on the backdrop closes; a resize drag or text selection that ends outside the box does not
-const outside = e => { const r = mdl.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
 let downOutside = false;
 mdl.addEventListener('pointerdown', e => { downOutside = outside(e); });
 mdl.addEventListener('click', e => { if (e.target === mdl && downOutside && outside(e)) closeModal(); });
@@ -588,42 +379,14 @@ $('#rBell').onclick = () => openModal({ kind: 'center' });
 // action buttons answer a click: green for 5 s (Builder, 2026-10-14)
 // ponytail: a button whose footer re-renders on click (Run) is replaced, so only buttons that stay put show it
 addEventListener('click', e => { const b = e.target.closest('#mdlFoot [data-slot="button"], .acts [data-slot="button"], .ebar [data-slot="button"]'); if (!b) return; b.classList.add('done'); clearTimeout(b._done); b._done = setTimeout(() => b.classList.remove('done'), 5000); });
-// mock: a running session stops to ask you something (palette: Simulate an agent question)
-function askNow(id = 's-codex-1') {
-  const s = S.sessions.find(x => x.id === id); if (!s || s.pending) return;
-  s.pending = 'question'; s.events.push({ t: 'question', title: 'Which test runner?', fields: [{ kind: 'radio', label: 'Runner', options: ['node --test', 'vitest'] }] });
-  renderTabs(); renderChats();
-}
 
-/* ---------- popups ---------- */
-// System events pop up bottom right and fade after --toast-life; hovering holds them. The item
-// stays in the Notification Center until it is dismissed there (a toast only for things already done).
-// Copy buttons (Builder, 2026-10-17: Copy on doctor's output did nothing). The button says how it went: toasts sit under an open dialog.
-function toast(a, done) {
-  if (!done) S.alerts.push(a);
-  const el = document.createElement('button');
-  el.className = 'toast' + (a.level === 'bad' ? ' bad fx-halo' : ''); el.innerHTML = `<span class="lvl" data-l="${esc(a.level)}"></span><span class="truncate">${esc(a.txt)}</span><span class="sub">${esc(a.kind)}${done ? '' : ' · open'}</span>`; addHalos(el);
-  // D1 (Builder, 2026-10-28: "if i click it, it goes away"): every toast opens its whole message, and where to start, in the panel.
-  el.onclick = () => openModal({ kind: 'alert', a, done });
-  el.addEventListener('animationend', e => { if (e.animationName === 'toast-out') el.remove(); });
-  $('#toasts').append(el); raiseToasts(); renderCards();
-}
 // D7: a modal sits in the top layer over any z-index and makes the page outside it inert, so the toast list (a popover) lives
 // in the topmost open modal, or the page when none is open, and is put back on top after each toast and each modal opened or
 // closed anywhere (Settings, the connecting screen, a confirm): above it and clickable.
 if (sampleView) window.__toast = toast; // ponytail: the UI test's door, as window.__side
-const raiseToasts = () => {
-  const box = $('#toasts'), into = modals.filter(d => d.matches(':modal')).pop() ?? document.body;
-  if (box.parentElement !== into) into.append(box);
-  if (box.children.length && box.showPopover) { box.hidePopover(); box.showPopover(); }
-};
 const showModal = HTMLDialogElement.prototype.showModal, modals = []; // in the order opened: the top layer's, not the page's
 HTMLDialogElement.prototype.showModal = function () { showModal.call(this); modals.splice(modals.indexOf(this) >>> 0, 1); modals.push(this); raiseToasts(); };
 document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElement) raiseToasts(); }, true);
-function focus(id) { const s = S.sessions.find(x => x.id === id); if (s?.hidden) s.hidden = false; show(id); renderTabs(); renderChats(); }
-// The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
-// the first kept a one-tab start at one open chat, and Split showed one pane).
-const show = id => { S.open = [id, ...S.open.filter(x => x !== id)].slice(0, 2); if (S.files) renderTree(); }; // Current project files follow the chat shown
 // Tabs (Builder, 2026-10-17: 30 sessions opened on every load): a live chat gets a tab while it is not stopped; the rest
 // wait in History. The x stops it on the daemon, so every window and the phone agree (owner, 2026-10-25: a new window
 // reopened 9 chats closed in another). Before that, closed IDs lived in this window's localStorage: loadChat stops the
@@ -631,104 +394,12 @@ const show = id => { S.open = [id, ...S.open.filter(x => x !== id)].slice(0, 2);
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
-function closeTab(id) {
-  const s = S.sessions.find(x => x.id === id);
-  if (s) s.done = false; // closing it is seeing it
-  // The x stops the chat, running or idle, like closing a VS Code terminal tab (Builder, 2026-10-18; owner, 2026-10-25:
-  // "hitting the x is going to make them think they closed it. like stopped it"); History reopens it.
-  if (s?.live) { liveChat.stop(s, true); s.hidden = true; } else S.sessions = S.sessions.filter(x => x.id !== id);
-  untab(id);
-}
-const untab = id => { S.open = S.open.map(o => o === id ? (S.sessions.find(x => !x.hidden && !S.open.includes(x.id)) || {}).id : o).filter(Boolean); renderTabs(); renderChats(); };
-function newSession(agent, model) {
-  // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
-  if (S.focus === 'dev') { S.sideId = null; setSideChat(true); }
-  if (liveChat.on) return liveChat.create(agent, newFolder);
-  const s = { id: 's-' + Date.now(), agent, title: `${names[agent]} ${S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [] };
-  S.sessions.push(s); show(s.id); renderTabs(); renderChats();
-}
 $('#newPop').innerHTML = `<div class="hd eyebrow">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Claude</div><button class="item" data-new="claude" data-model="Opus 5.5">Claude <span class="muted">default model</span></button><button class="item" data-new="claude" data-model="Sonnet 5.5">Claude · Sonnet 5.5</button><button class="item" data-new="claude" data-model="Haiku 5.5">Claude · Haiku 5.5</button><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Codex</div><button class="item" data-new="codex" data-model="gpt-5.1-codex">Codex <span class="muted">default model</span></button><button class="item" data-new="codex" data-model="gpt-5.1-codex-mini">Codex · mini</button>`;
 // New chat's folder (Builder, 2026-10-19: "a dropdown with what folder i want to open the chat in"; threat model row 24): the workspace,
 // the main project, the last 5 folders used, or the system folder dialog (main sends back only a folder inside the workspace;
 // ':pick' cannot be a folder, the daemon refuses ':' in paths).
 // The daemon checks it again. The choice stays picked until changed.
 let newFolder = '';
-// U4 on a remote (Builder, 2026-11-02: "no window at all"; "just a normal file picker would be better than clicking the .."):
-// a folder dialog like the system's. A path bar (type or paste, Enter goes there), Up, clickable breadcrumbs, the folder
-// list (a click selects, a double click or Enter opens), Select and Cancel. In Unrestricted mode it walks the whole server
-// (/files/folders); with either switch on, or a server P9 older than that route, it walks the workspace (/files/list) and
-// says why it stops at the workspace's top instead of silently not going up. The daemon checks the folder again at start.
-const FOLDER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>';
-const FOLDER_WHY = {
-  locked: 'Only the workspace is shown because the agent lock or File protection is on. Turn both off in Settings (Unrestricted mode) to choose any folder on the server.',
-  old: 'Only the workspace is shown because the P9 on this server is older than this app and cannot list other folders. Update P9 on the server to browse all of it; a full path typed above still works in Unrestricted mode.',
-};
-const folderRefused = (r, to) => r?.body?.error === 'unrestricted-only' ? FOLDER_WHY.locked
-  : r?.body?.error === 'private-folder' ? `${to} holds P9's own files, so a chat cannot start there.`
-  : r?.status === 404 ? `There is no folder at ${to} on the server.`
-  : r?.status === 403 ? `P9 cannot open ${to}: it is a file, or the server does not let P9 read it.`
-  : r?.status === 400 ? 'Type a full path, starting with /.' : 'The server did not answer. Try again.';
-// Send to remote from a chat outside the workspace (U4) opens it too: ask lists the remote through main (the window's daemon
-// may be this computer's), note says why it opened, verb names the foot ('Lands in:').
-const pickRemoteFolder = ({ ask = (kind, path) => window.p9.mission(kind, { path }), title = 'Choose a folder on the server', note = '', verb = 'Start in' } = {}) => new Promise(done => {
-  const d = $('#folderDlg'), list = $('#folderList'), bar = $('#folderPath'), why = $('#folderWhy');
-  // whole: null until the first answer, true for the whole server (full paths), false for the workspace walk (paths
-  // relative to it, '' its top). at: the folder shown; up: its parent (null at the top); picked: the row clicked once.
-  let whole = null, ws = '', limit = '', at = '', up = null, picked = null, shown = 0, drawn = false;
-  const say = text => { why.textContent = text; why.hidden = !text; };
-  const label = f => whole ? f : f ? 'Workspace/' + f : 'Workspace';
-  // A relative path typed in whole-server mode is taken from the folder shown.
-  const typed = () => { const t = bar.value.trim().replace(/(.)\/+$/, '$1'); return whole && t && !t.startsWith('/') ? (at === '/' ? '' : at) + '/' + t : t.replace(/^\.\/?/, ''); };
-  const chosen = () => { const t = typed(), f = picked ?? (t && t !== at ? t : at); return whole && f === ws ? '' : f; }; // the workspace stays ''
-  const foot = () => { const f = chosen(); $('#folderAt').textContent = verb + ': ' + (f === '' ? 'Workspace' : f); };
-  const draw = (to, parent, dirs) => {
-    at = to; up = parent; picked = null; drawn = true; bar.value = at; bar.placeholder = whole ? '' : 'Workspace';
-    $('#folderUp').disabled = up === null;
-    // ponytail: breadcrumbs split on '/', so a Windows server gets one crumb; the bar and Up still work there.
-    const parts = at.split('/').filter(Boolean), base = whole ? [['/', '/']] : [['', 'Workspace']];
-    const crumbs = [...base, ...parts.map((p, i) => [(whole ? '/' : '') + parts.slice(0, i + 1).join('/'), p])];
-    $('#folderCrumbs').innerHTML = crumbs.map(([key, name], i) => `${i > 1 || (i && !whole) ? '<i>›</i>' : ''}<button type="button" data-fcrumb="${esc(key)}"${i === crumbs.length - 1 ? ' aria-current="location"' : ''}>${esc(name)}</button>`).join('');
-    list.innerHTML = dirs ? dirs.map(([key, name]) => `<button type="button" role="option" aria-selected="false" data-fdir="${esc(key)}">${FOLDER_ICON}<span class="truncate">${esc(name)}</span></button>`).join('') || '<p class="sm muted">No folders here.</p>' : '';
-    say(note || (whole ? '' : limit));
-    foot();
-  };
-  const go = async to => {
-    const mine = ++shown;
-    if (whole !== false) {
-      const r = await ask('folders', to).catch(() => null);
-      if (mine !== shown) return;
-      if (r?.status === 200) { whole = true; ws = r.body.workspace; draw(r.body.path, r.body.parent, r.body.dirs.map(e => [e.path, e.name])); return; }
-      if (whole) { say(folderRefused(r, to)); return; } // stays where it was, and says why
-      // The first ask is the workspace itself: 403 means a switch is on; any other refusal, a server P9 without the route.
-      whole = false; limit = r?.body?.error === 'unrestricted-only' ? FOLDER_WHY.locked : FOLDER_WHY.old; to = '';
-    }
-    // A full path cannot be listed in the workspace walk: say why; Select still sends it and the daemon decides.
-    if (to.startsWith('/')) { say(limit); foot(); return; }
-    const r = await ask('list', to).catch(() => null);
-    if (mine !== shown) return;
-    if (r?.status === 200) draw(to, to ? to.split('/').slice(0, -1).join('/') : null, r.body.entries.filter(e => e.dir).map(e => e.name).sort().map(n => [(to ? to + '/' : '') + n, n]));
-    else { if (!drawn) draw(to, null, null); say(r?.status === 404 ? `There is no folder at ${label(to)}.` : folderRefused(r, label(to))); }
-  };
-  const pick = key => { picked = key; list.querySelectorAll('[data-fdir]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.fdir === key))); foot(); };
-  list.onclick = e => { const b = e.target.closest('[data-fdir]'); if (b) pick(b.dataset.fdir); };
-  list.ondblclick = e => { const b = e.target.closest('[data-fdir]'); if (b) go(b.dataset.fdir); };
-  list.onkeydown = e => { const b = e.target.closest('[data-fdir]'); if (b && e.key === 'Enter') { e.preventDefault(); go(b.dataset.fdir); } };
-  $('#folderCrumbs').onclick = e => { const b = e.target.closest('[data-fcrumb]'); if (b) go(b.dataset.fcrumb); };
-  $('#folderUp').onclick = () => { if (up !== null) go(up); };
-  bar.oninput = () => { picked = null; list.querySelectorAll('[aria-selected="true"]').forEach(b => b.setAttribute('aria-selected', 'false')); foot(); };
-  // Enter goes to the typed folder; the form never submits from the bar.
-  bar.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); go(typed()); } };
-  $('#folderT').textContent = title; d.returnValue = ''; bar.value = ''; drawn = false; list.innerHTML = '<p class="sm muted">Loading…</p>'; $('#folderCrumbs').innerHTML = ''; say(note); $('#folderAt').textContent = '';
-  d.onclose = () => done(d.returnValue === 'yes' ? chosen() : undefined);
-  d.showModal(); go('');
-});
-const recentFolders = () => { try { const r = JSON.parse(localStorage.getItem('eh-chat-folders')); return Array.isArray(r) ? r.filter(f => typeof f === 'string').slice(0, 5) : []; } catch { return []; } };
-function renderNewFolder() {
-  const seen = new Set(), opts = [['', 'Workspace'], ...(live.primary ? [[live.primary.path, 'Main project · ' + live.primary.name]] : []), ...[newFolder, ...recentFolders()].map(f => [f, f])]
-    .filter(([v]) => !seen.has(v) && seen.add(v));
-  $('#newFolder').innerHTML = opts.map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join('') + (window.p9?.pickFolder ? '<option value=":pick">Choose folder…</option>' : '');
-  $('#newFolder').value = newFolder;
-}
 $('#newFolder').onchange = async e => {
   if (e.target.value !== ':pick') { newFolder = e.target.value; return; }
   let picked = await window.p9.pickFolder();
@@ -751,241 +422,13 @@ DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 /* ---------- chats ---------- */
 // CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
 const mdOf = e => { if (e.mdFor !== e.text) { e.md = copyCode(mdReply.parse(e.text)); e.mdFor = e.text; } return e.md; };
-// Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
-// an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
-// One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
-// Amber from 75% on every bar (MR1).
-const HOT = 75;
-const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
-// The same reading as a ring (Mission's Usage card and dialog); the label comes first in the markup and is drawn under the ring.
-const ringMeter = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="uring" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><span class="lbl">${label}</span><div class="ring" role="img" aria-label="${esc(label)} ${p == null ? 'no reading' : p + '%'}" style="--p:${Math.min(p || 0, 100)}" ${p >= HOT ? 'data-hot' : ''}><b>${p == null ? '—' : p + '%'}</b></div></div>`; };
-const usageRings = () => { const now = Date.now(); return Object.keys(names).filter(a => usage.limits?.[a]).map(a => { const lim = usage.limits[a], line = limitLine(names[a], lim, now); return `<div class="uagent"><b>${names[a]}</b>${ringMeter('5 h', lim.fiveHour, line, now)}${ringMeter('Week', lim.sevenDay, line, now)}</div>`; }).join(''); };
-// The cache clock: text and state, so the 15 s tick can move it without rebuilding the pane.
-const cacheOf = s => {
-  const cacheMin = !s.live ? s.cacheMin : s.agent === 'claude' && s.lastEnd ? Math.floor((Date.now() - s.lastEnd) / 60000) : null;
-  const left = cacheMin == null ? null : 60 - cacheMin;
-  return left == null ? ['—', ''] : left <= 0 ? ['cold', 'cold'] : [left + ' min', left < 20 ? 'cooling' : 'warm'];
-};
-function meters(s) {
-  const ctx = s.context ? Math.round(s.context.used / s.context.size * 100) : null;
-  const lim = s.live ? usage.limits?.[s.agent] : { fiveHour: { usedPercent: s.limits.h5 * 100 }, sevenDay: { usedPercent: s.limits.d7 * 100 }, asOf: Date.now() };
-  const line = limitLine(names[s.agent], lim), now = Date.now();
-  const bar = (label, w) => meterBar(label, w, line, now);
-  const cache = cacheOf(s);
-  return `<div class="meters">
-    <div class="meter" title="${esc(ctx == null ? 'No context size reported by this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
-    ${bar('5 h', lim?.fiveHour)}
-    ${bar('7 d', lim?.sevenDay)}
-    <div class="cache" data-s="${cache[1]}" title="How long the agent still has this chat saved for a cheaper next message (the 1-hour prompt cache, counted from its last output)">${svg.clock}${cache[0]}</div>
-  </div>`;
-}
 // CP3: a sent photo comes back from the daemon by hash, once; until then (or once pruned) its tile stays blank.
 const chatImgs = new Map();
-const loadImg = (s, hash) => { if (chatImgs.has(hash) || !s.live) return; chatImgs.set(hash, '');
-  window.p9.chat('image', { id: s.id, hash }).then(r => { if (r.status === 200) { chatImgs.set(hash, `data:${esc(r.body.mimeType)};base64,${esc(r.body.data)}`); renderChats(new Set([s.id])); } else if (r.status !== 404) chatImgs.delete(hash); }); };
-function event(e, s) {
-  switch (e.t) {
-    case 'user': return `${Array.isArray(e.images) ? `<div class="user-imgs">${e.images.map(i => `<img data-chat-img="${esc(i.hash)}"${chatImgs.get(i.hash) ? ` src="${chatImgs.get(i.hash)}"` : ''} alt="Sent image">`).join('')}</div>` : ''}<div class="msg user"><div class="who">You${e.when ? ' · ' + esc(e.when) : ''}</div>${esc(e.text)}${e.images ? `<div class="xs muted" style="margin-top:6px">📎 ${esc(e.images.length ?? e.images)} image${(e.images.length ?? e.images) > 1 ? 's' : ''}</div>` : ''}</div>`;
-    case 'agent': return `<div class="msg agent"><div class="who">${names[s.agent]}</div>${mdOf(e)}${agentImgs(e.images, names[s.agent])}</div>`;
-    case 'warn': return warnHtml(e.text, ' data-ev="' + s.events.lastIndexOf(e) + '"' + (e.open ? ' open' : ''));
-    case 'thought': return `<details class="thought" data-ev="${s.events.lastIndexOf(e)}"${e.open ? ' open' : ''}><summary>Thinking</summary><p>${esc(e.text)}</p></details>`;
-    case 'tool': return `<details class="tool" data-ev="${s.events.lastIndexOf(e)}"${(e.open ?? e.status === 'in_progress') ? ' open' : ''}><summary><span class="chev">${svg.chev}</span><span data-slot="badge" data-variant="${e.status === 'completed' ? 'ok' : e.status === 'failed' ? 'bad' : 'primary'}">${esc(e.status.replace('_',' '))}</span><span class="ttl truncate">${esc(e.title)}</span></summary>${e.diff ? diff(e.diff) : ''}${e.output ? `<pre>${esc(e.output)}</pre>` : e.status === 'in_progress' ? '<pre class="caret"></pre>' : ''}</details>${e.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" class="open-plan" data-open-plan="${s.events.lastIndexOf(e)}">Open plan</button>` : ''}${agentImgs(e.images, names[s.agent])}`;
-    case 'notice': return `<div class="notice">${esc(e.text)}${e.restart && window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-restart-p9>Restart P9</button>' : ''}</div>`;
-    case 'error': return `<div class="notice" style="color:var(--destructive)">${esc(e.text)}${/^(Claude Code|Codex) is not signed in on this computer\./.test(e.text) && window.p9?.agentLogin ? ' <button data-slot="button" data-variant="outline" data-size="sm" data-signin>Sign in</button>' : ''}</div>`;
-  }
-  return '';
-}
-const diff = rows => `<div class="diff">${rows.map(([k, l]) => `<div class="${esc(k)}">${k === 'add' ? '+' : k === 'del' ? '−' : ' '} ${esc(l)}</div>`).join('')}</div>`;
-function pending(s) {
-  if (s.pending === 'approval') { const a = s.events.find(e => e.t === 'approval'); return `<div class="pending fx-halo" role="group" aria-label="Approval"><div class="eyebrow">Approval needed</div><h4>${esc(a.title)}</h4>${diff(a.diff)}${a.plan ? `<button data-slot="button" data-variant="outline" data-size="sm" data-open-plan="${s.events.indexOf(a)}">Open plan</button>` : ''}${s.live ? '<p class="hint">Sending a message declines this and sends the message instead.</p>' : ''}<div class="acts">${a.options.map(([k, l, kind]) => `<button data-slot="button" data-variant="${(kind || k).startsWith('reject') ? 'outline' : 'default'}" data-size="sm" class="fx-lift" data-approve="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`; }
-  if (s.pending === 'question') { const q = s.events.find(e => e.t === 'question'); return `<form class="pending fx-halo" data-question><div class="eyebrow">${names[s.agent]} asks</div><h4>${esc(q.title)}</h4>${q.unsupported ? '<p class="hint">P9 cannot show this form faithfully. Decline, or answer in a message.</p>' : ''}${s.live ? '<p class="hint">Sending a message declines this question and sends the message instead.</p>' : ''}${q.fields.map((f, i) => { const head = `<span>${esc(f.label)}${f.required ? ' *' : ''}</span>${f.hint ? `<small>${esc(f.hint)}</small>` : ''}`; return f.kind === 'radio' ? `<div class="field">${head}${f.options.map(opt).map(([v, l]) => `<label><input type="radio" name="f${i}" value="${esc(v)}" ${(q.vals?.['f' + i] ?? ('def' in f ? f.def : opt(f.options[0])[0])) === v ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>`
-    : f.kind === 'multi' ? `<div class="field">${head}${f.options.map(opt).map(([v, l], j) => `<label><input type="checkbox" name="f${i}~${j}" value="${esc(v)}" ${q.vals?.[`f${i}~${j}`] !== undefined ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>` : `<div class="field">${head}<input data-slot="input" name="f${i}" value="${esc(q.vals?.['f' + i] || '')}"></div>`; }).join('')}<div class="acts">${q.unsupported ? '' : '<button data-slot="button" data-variant="default" data-size="sm" type="submit">Submit answer</button>'}<button data-slot="button" data-variant="outline" data-size="sm" type="button" data-decline>Decline</button></div></form>`; }
-  return '';
-}
-// A turn is in flight while a tool runs or a reply streams; messages and mode changes queue behind it.
-const busy = s => s.live ? s.state === 'running' && !s.pending && !!s.working : s.state === 'running' && !s.pending && (!!s.streaming || s.events.some(e => e.t === 'tool' && e.status === 'in_progress'));
-// Only a chat's latest TAIL steps are drawn (Builder, 2026-10-20: the window lagged and froze; one redraw of a 25,000-event
-// chat built 31 MB of HTML in about 170 ms, and live chats redraw on every batch). "Show earlier" adds TAIL more.
-const TAIL = 200;
-function shown(s) {
-  const list = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'), from = Math.max(0, list.length - (s.tail || TAIL));
-  return (from || s.more !== undefined ? `<button data-slot="button" data-variant="ghost" data-size="sm" class="earlier" data-earlier>Show earlier${from ? ` (${from.toLocaleString()} more)` : ''}</button>` : '')
-    + list.slice(from).map(e => event(e, s)).join('');
-}
-function pane(s, i, bare) {
-  const working = busy(s);
-  // D14: a chat on its way to the server, or gone there, takes no messages here.
-  const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away || !!s.leaving;
-  const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to the remote…', moved: 'Moved to ' + (s.movedTo || 'the remote') }[s.state];
-  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${names[s.agent]} chat</button>`}</div>`
-    : `<div class="col">${shown(s)}${pending(s)}</div>`;
-  const pick = s.modeNext || s.mode;
-  return `<section class="pane${i === 0 && S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${hideSteps ? ' data-quiet' : ''}${FX.pull === s.id ? ' data-pulled' : ''} aria-label="${names[s.agent]} chat">
-    <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span><span class="name">${names[s.agent]}</span>
-      <select data-slot="select" aria-label="Mode" data-mode>${modes[s.agent].map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>${s.modeNext ? `<span class="mode-q" title="Applies when this turn ends">queued</span>` : ''}
-      <select data-slot="select" aria-label="Model" data-model>${modelOpts(s)}</select>
-      ${pickerSelects(s)}
-      <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${hideSteps ? 'Show steps' : 'Hide steps'}</button>
-      ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
-      ${(n => n && !bare ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-chat-files aria-pressed="${side.current()?.slot === 'chat-files' && CF.sid === s.id}" title="Artifacts and files this chat made" aria-label="Artifacts and files (${n})">${svg.files}<span>${n}</span></button>` : '')(s.stub ? 0 : chatItems(s).length)}
-      <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
-      ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
-      ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
-      ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !serverInfo?.host
-        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.leaving ? 'disabled ' : s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.leaving ? 'Moving this chat to the remote' : s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
-      ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
-    <div class="hist">${body}</div>
-    <div class="bottom"><div class="col">${pinned(s, mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${IND.glyphs[IND.frame % IND.glyphs.length]}</span>${working ? names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
-      ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
-      <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar">${working && !frozen ? chip() : '<span class="hint">Shift Enter · new line / for commands</span>'}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
-  </section>`;
-}
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the
 // state a person owns lives in S or is carried across: draft in s.draft, images in s.images,
 // tool/thinking open state in the event, scroll + caret captured here. A pane at the bottom stays pinned to it.
 const bottoms = observe(() => $('.stage').style.setProperty('--chat-bottom', Math.max(0, ...[...$('#chats').querySelectorAll(':scope > .pane > .bottom')].map(b => b.offsetHeight)) + 'px')); // Chat Focus full: the artifact ends above the text box
 const wiredBars = new WeakSet(), view = {}; // 'container:session id' -> { top, pinned, selection }
-// only: the chat ids a daemon batch touched; the other panes shown are left as they are.
-function renderChats(only) {
-  const ids = S.split ? S.open.slice(0, 2) : S.open.slice(0, 1);
-  const ss = ids.map(id => S.sessions.find(s => s.id === id)).filter(Boolean);
-  if (document.hasFocus()) { const seen = [...(S.focus === 'chat' ? ss : []), mdl.open && S.modal?.kind === 'chat' && S.sessions.find(s => s.id === S.modal.id)].filter(s => s?.done); seen.forEach(s => { s.done = false; }); if (seen.length) renderCards(); }
-  $('#chats').dataset.split = String(S.split && ss.length > 1);
-  for (const s of [...ss, mdl.open && S.modal?.kind === 'chat' && S.sessions.find(x => x.id === S.modal.id)]) if (s?.stub) history(s);
-  paint($('#chats'), ss, only);
-  bottoms.disconnect(); $('#chats').querySelectorAll(':scope > .pane > .bottom').forEach(b => bottoms.observe(b));
-  if (mdl.open && S.modal?.kind === 'chat') paint($('#mdlBody'), [S.sessions.find(s => s.id === S.modal.id)].filter(Boolean), only);
-  renderSideChat(only);
-  if (side.current()?.slot === 'artifact' && ART.mode === 'panel' && S.focus === 'chat' && ![...ids, mdl.open && S.modal?.kind === 'chat' && S.modal.id].includes(ART.state?.sid)) side.close('artifact', 'hidden'); // item 19: a panel artifact goes with its chat; a pinned one stays
-  chatFilesFollow(ids);
-  tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
-}
-// The same pane renders in Chat Focus and inside a chat modal; root says which.
-// E2: with only, and the same panes still shown in the same order, just those panes are rebuilt and re-wired. Before,
-// each daemon batch rebuilt every pane shown, so a quiet 200-step chat beside a streaming one cost the same each time.
-function paint(root, ss, only) {
-  const bare = root.id === 'mdlBody', old = [...root.querySelectorAll(':scope > .pane')];
-  const part = only && old.length === ss.length && old.every((p, i) => p.dataset.id === ss[i].id);
-  const panes = part ? old.filter(p => only.has(p.dataset.id)) : old;
-  if (part && !panes.length) return;
-  panes.forEach(p => { const h = p.querySelector('.hist'), ta = p.querySelector('textarea'); view[root.id + ':' + p.dataset.id] = { top: h.scrollTop, pinned: h.scrollHeight - h.scrollTop - h.clientHeight < 24, selection: [ta.selectionStart, ta.selectionEnd] }; });
-  const a = document.activeElement, caret = a?.matches('textarea, [data-question] input[data-slot]') && root.contains(a) ? { id: a.closest('.pane').dataset.id, n: a.name, s: a.selectionStart, e: a.selectionEnd } : null;
-  if (part) panes.forEach(p => { const i = old.indexOf(p), t = document.createElement('template'); t.innerHTML = pane(ss[i], i, bare); addHalos(t.content); attrs(p, t.content.firstElementChild); sync(p, t.content.firstElementChild); });
-  else morph(root, ss.map((s, i) => pane(s, i, bare)).join('<div class="handle-v" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize the two chats (arrow keys)"></div>'));
-  const split = root.id === 'chats' && root.querySelector(':scope > .handle-v'); // morph keeps the bar by position; wire it once
-  if (split && !wiredBars.has(split)) { wiredBars.add(split); dragBar(split, { axis: 'x', get: () => root.querySelector('.pane').offsetWidth, set: px => root.style.setProperty('--split-l', px + 'px'), min: 280, max: () => root.clientWidth - 281, signal: lifetime.signal }); }
-  (part ? panes : root.querySelectorAll('.pane')).forEach(p => {
-    const s = S.sessions.find(x => x.id === p.dataset.id), h = p.querySelector('.hist'), v = view[root.id + ':' + s.id];
-    const place = () => h.scrollTo({ top: !v || v.pinned ? 1e6 : v.top, behavior: 'instant' });
-    place(); if (!v) document.fonts.ready.then(() => requestAnimationFrame(place)); // first paint: late font swap leaves it short of the bottom
-    p.querySelectorAll('details[data-ev]').forEach(d => d.ontoggle = () => { s.events[d.dataset.ev].open = d.open; });
-    p.querySelectorAll('img[data-chat-img]:not([src])').forEach(img => loadImg(s, img.dataset.chatImg));
-    p.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => { if (s.live) return liveChat.approve(s, b.dataset.approve); const a = s.events.find(e => e.t === 'approval'); s.events = s.events.filter(e => e !== a); s.pending = null; if (b.dataset.approve === 'reject') { s.events.push({t:'notice', text:'Denied: ' + a.title + '. ' + names[s.agent] + ' will take another approach.'}); reply(s, 'Understood, I will not touch server.ts. I can expose the grace through the existing /api/conversations payload instead; say so and I will do that.'); } else { s.events.push({t:'tool', status:'completed', title:a.title, diff:a.diff}); const plan = s.events.find(e => e.t === 'plan'); if (plan) { plan.entries[2][0] = 'completed'; plan.entries[3][0] = 'in_progress'; } reply(s, 'Bootstrap now carries leaseGraceMs. Next I will read it in the chat-pane footer so the 60 s copy stops being hardcoded.'); } answered(s); });
-    const q = p.querySelector('[data-question]'); if (q) { q.oninput = e => { const qe = s.events.find(e => e.t === 'question'); qe.vals = Object.fromEntries(new FormData(q)); (qe.touched ??= new Set()).add(e.target.name.split('~')[0]); }; q.onsubmit = e => { e.preventDefault(); if (s.live) return liveChat.answer(s, Object.fromEntries(new FormData(q))); const v = new FormData(q).get('f0'), qe = s.events.find(e => e.t === 'question'); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'tool', status:'completed', title:qe.title, output:'answer: ' + v}); reply(s, v); answered(s); }; q.querySelector('[data-decline]').onclick = () => { if (s.live) return liveChat.decline(s); s.events = s.events.filter(e => e.t !== 'question'); s.pending = null; s.events.push({t:'notice', text:'Question declined.'}); answered(s); }; }
-    const ta = p.querySelector('textarea');
-    if (v?.selection) ta.setSelectionRange(...v.selection);
-    // Slash commands: the agent's own list (available_commands_update) while the box holds only "/name"; Tab, Enter or a click fills one in, the agent runs it.
-    const slash = p.querySelector('[data-slash]');
-    const showSlash = () => {
-      const m = /^\/(\S*)$/.exec(ta.value), all = m ? s.commands || lastCommands[s.agent] || [] : [], list = [...all.filter(c => c.name.startsWith(m[1])), ...all.filter(c => !c.name.startsWith(m[1]) && c.name.includes(m[1]))].slice(0, 60); // prefix first, then anywhere; the menu scrolls
-      slash.hidden = !list.length;
-      slash.innerHTML = list.map(c => `<button type="button" data-cmd="${esc(c.name)}"><b>/${esc(c.name)}</b> <span class="muted">${esc(c.desc)}</span></button>`).join('');
-      slash.querySelectorAll('[data-cmd]').forEach(b => b.onmousedown = e => { e.preventDefault(); ta.value = s.draft = '/' + b.dataset.cmd + ' '; showSlash(); ta.focus(); });
-    };
-    showSlash();
-    ta.oninput = () => { s.draft = ta.value; showSlash(); };
-    if (caret && caret.id === s.id) { const c = caret.n ? p.querySelector(`[data-question] [name="${caret.n}"]`) : ta; if (c) { c.focus(); c.setSelectionRange(caret.s, caret.e); } else ta.focus(); } // CP9: the answered question's field is gone
-    // note 8: while a turn runs, Enter queues the message; Ctrl Enter (or Ctrl click) interrupts and sends it now.
-    // 2026-10-24: a live chat sends at once, and the daemon puts it into the running turn; it queues only behind messages
-    // already queued, or when the daemon refuses it mid-turn (liveChat.prompt).
-    // CP1: mid-turn, when says how (composer.mjs): Enter or Steer steers it in after the current step, Tab or Queue sends it after the turn.
-    const go = (now, when) => { const t = ta.value.trim(); if (!canSend(s, t, now)) return; s.draft = ''; sendText(s, t, now, when); if (bare && settings.closeOnSend) closeModal(); };
-    const stopTurn = () => { cancelTurn(s); renderTabs(); renderChats(); };
-    ta.onkeydown = e => {
-      if ((e.key === 'Tab' || e.key === 'Enter' && ta.value !== '/' + slash.querySelector('[data-cmd]')?.dataset.cmd) && !e.shiftKey && !slash.hidden) { e.preventDefault(); slash.querySelector('[data-cmd]').onmousedown(e); return; }
-      // Tab with an empty box still moves focus on.
-      const key = busy(s) && !s.readonly && turnKey(e);
-      if (key === 'cancel') { e.preventDefault(); e.stopPropagation(); return stopTurn(); }
-      if (key === 'steer' || key === 'queue' && ta.value.trim()) { e.preventDefault(); return go(false, key); }
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(e.ctrlKey || e.metaKey); }
-    };
-    p.querySelector('[data-send]').onclick = e => go(e.ctrlKey || e.metaKey);
-    p.querySelectorAll('[data-when]').forEach(b => b.onclick = () => go(false, b.dataset.when));
-    p.querySelectorAll('[data-cancel]').forEach(b => b.onclick = stopTurn);
-    p.querySelectorAll('[data-restart-p9]').forEach(b => b.onclick = () => restartP9(b));
-    // PH5: the daemon stops the chat and opens a terminal with the command typed in; the dock shows that terminal.
-    p.querySelectorAll('[data-handoff]').forEach(b => b.onclick = async () => {
-      b.disabled = true;
-      const r = await liveChat.call('handoff', { id: s.id });
-      if (!r.body?.terminal) { if (r.body?.command) { s.events.push({ t: 'notice', text: 'The terminal did not open. Run this in a terminal in the chat folder to continue: ' + r.body.command }); renderChats(); } b.disabled = false; return; }
-      showTerminal(r.body.terminal);
-    });
-    // D14: main moves the chat over its own tunnel (desktop/move.mjs); the moving, moved and move-failed events say how it went.
-    p.querySelectorAll('[data-send-away]').forEach(b => b.onclick = () => leave(s));
-    // D7: "not signed in" opens the setup wizard at its agents step (browser sign-in, or sign-in in a P9 terminal).
-    // Item 15: by name (the pick step now comes first), with the chat's own agent on the step even when it was not picked.
-    p.querySelectorAll('[data-signin]').forEach(b => b.onclick = () => welcome('agents', /^Codex/.test(b.parentElement.textContent) ? 'codex' : 'claude', true));
-    p.querySelectorAll('[data-copycode]').forEach(b => b.onclick = () => copy(b.nextElementSibling.textContent, b));
-    p.querySelectorAll('[data-artifact]').forEach(b => b.onclick = () => openArtifact({ ...chipArtifact(b), sid: s.id }));
-    p.querySelectorAll('[data-open-plan]').forEach(b => b.onclick = () => openPlan(s, b.dataset.openPlan));
-    p.querySelectorAll('[data-unhold]').forEach(b => b.onclick = () => liveChat.call('unhold', { id: s.id, held: b.dataset.unhold }));
-    p.querySelectorAll('[data-qdel]').forEach(b => b.onclick = () => { s.queue.splice(+b.dataset.qdel, 1); keepQueue(s); renderChats(); });
-    p.querySelectorAll('[data-qnow]').forEach(b => b.onclick = () => { const [t] = s.queue.splice(+b.dataset.qnow, 1); keepQueue(s); interrupt(s, t); });
-    // note 7: a mode picked mid-turn shows at once but applies when the turn ends
-    p.querySelector('[data-mode]').onchange = async e => {
-      const m = e.target.value;
-      if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await looseOk(s.agent, m)) { e.target.value = s.modeNext || s.mode; return; }
-      localStorage.setItem('p9-mode:' + s.agent, m);
-      if (busy(s)) s.modeNext = m === s.mode ? null : m; else { s.mode = m; s.modeNext = null; } renderChats(); };
-    p.querySelector('[data-model]').onchange = e => { if (s.live) s.modelPick = e.target.value; };
-    p.querySelectorAll('[data-pick]').forEach(el => el.onchange = () => { (s.pick ||= {})[el.dataset.pick] = el.value; });
-    p.querySelector('[data-attach]').onclick = () => pickImages(s);
-    // A pasted screenshot or files dropped anywhere on the chat attach like the paperclip; pasted text pastes as before.
-    ta.onpaste = e => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
-    p.ondragover = e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); };
-    p.ondrop = e => { const files = [...e.dataTransfer.files]; if (files.length) { e.preventDefault(); addImages(s, files); } };
-    p.querySelectorAll('[data-unattach]').forEach(b => b.onclick = () => { s.images.splice(+b.dataset.unattach, 1); renderChats(); });
-    const more = p.querySelector('[data-earlier]'); if (more) more.onclick = async () => {
-      if (s.fetching) return;
-      const h = p.querySelector('.hist'), below = h.scrollHeight - h.scrollTop;
-      if (s.more !== undefined && s.events.filter(e => e.t !== 'approval' && e.t !== 'question').length < (s.tail || TAIL) + TAIL) { s.fetching = true; try { await earlier(s); } finally { s.fetching = false; } }
-      s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
-    };
-    const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); renderTabs(); renderChats(); };
-    const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => { if (s.live) return liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); renderTabs(); renderChats(); };
-    const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); renderTabs(); renderChats(); };
-    const cf = p.querySelector('[data-chat-files]'); if (cf) cf.onclick = () => side.current()?.slot === 'chat-files' && CF.sid === s.id ? side.close('chat-files') : openChatFiles(s.id);
-    p.querySelector('[data-steps]').onclick = () => { hideSteps = !hideSteps; localStorage.setItem('p9-hide-steps', hideSteps ? '1' : '0'); renderChats(); };
-    const cl = p.querySelector('[data-close]'); if (cl) cl.onclick = () => closeTab(s.id);
-    const ph = p.querySelector('[data-phone]'); if (ph) ph.onclick = () => continueOnPhone(s);
-  });
-}
-function answered(s) {
-  if (mdl.open && S.modal?.kind === 'chat' && S.modal.id === s.id) closeModal();
-  renderTabs(); renderChats(new Set([s.id]));
-}
-// Paperclip (Builder, 2026-10-17: it only drew a blue square). Threat model row 20; the daemon checks the same limits.
-function pickImages(s) {
-  const input = Object.assign(document.createElement('input'), { type: 'file', accept: IMG_OK.join(','), multiple: true });
-  input.onchange = () => addImages(s, input.files);
-  input.click();
-}
-// The paperclip, a pasted screenshot and dropped files all come through here (Builder, 2026-10-18: "not paste the screenshots").
-async function addImages(s, files) {
-  for (const file of files) {
-    if ((s.images ||= []).length >= MAX_IMAGES) { toast({ kind: 'not attached', txt: 'Four images a message at most.', level: 'warn' }, true); break; }
-    try { s.images.push(await readImage(file)); }
-    catch (e) { toast({ kind: 'not attached', txt: file.name + ': ' + (e?.message || e) + '.', level: 'warn' }, true); }
-  }
-  renderChats();
-}
-// The composer's send (go) and an artifact's Send comments (item 19) share it: queued behind a running turn, or sent.
-const canSend = (s, t, now) => !!s && !((!t && !(s.images?.length && (!busy(s) || now))) || s.readonly || s.state === 'moving' || s.state === 'moved');
-function sendText(s, t, now, when) {
-  const mid = !now && busy(s);
-  if (!now && (s.live ? s.queue.length : busy(s))) { s.queue.push(t); keepQueue(s); renderChats(); return; }
-  (now ? interrupt : startTurn)(s, t, mid ? when || 'steer' : undefined);
-}
 function startTurn(s, t, when) {
   const images = s.images || []; s.images = [];
   if (s.live) return liveChat.prompt(s, t, images, when);
@@ -995,41 +438,6 @@ function startTurn(s, t, when) {
   const turn = s.turn = (s.turn || 0) + 1;
   renderTabs(); renderChats();
   setTimeout(() => { if (s.turn !== turn) return; s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress' && e.title.startsWith('Thinking'))); reply(s, s.agent === 'claude' ? 'On it. I will check the record before changing anything, then show you the diff before it lands.' : 'Acknowledged. I will stop at the first write that needs you.'); }, 1200);
-}
-// Builder, 2026-10-21 (an interrupt-and-send message was lost): the daemon refuses a prompt while the cancelled turn is
-// still ending (409 turn-running), so a live chat puts the message first in the queue and turn-end sends it.
-function interrupt(s, t) {
-  if (!busy(s)) return startTurn(s, t);
-  if (s.live) { s.queue.unshift(t); keepQueue(s); cancelTurn(s); renderChats(); return; }
-  cancelTurn(s); startTurn(s, t);
-}
-function cancelTurn(s, quiet) {
-  // CP7: no turn to cancel (it ended, or its end never came) means idle: the chat stops showing working and an
-  // interrupt's message, queued first, goes now.
-  if (s.live) { if (!quiet) liveChat.call('cancel', { id: s.id }).then(r => { if (r.status === 409 && r.body?.error === 'no-turn') { s.working = s.prompted = false; turnEnd(s); } }); return; }
-  s.turn = (s.turn || 0) + 1; s.streaming = false; // stale timers see a new turn number and stop
-  s.events = s.events.filter(e => !(e.t === 'tool' && e.status === 'in_progress'));
-  if (!quiet) s.events.push({t:'notice', text:'Turn cancelled.'});
-}
-// The end of a turn applies a queued mode, then sends the next queued message.
-// Threat model row 21 (Builder, 2026-10-18: no notice when a turn ended): a live turn-end nobody is watching leaves an
-// "<agent> finished" card, and a desktop notice while the window is in the background. Only P9's words, never reply text.
-function finished(s) {
-  if (s.queue.length) return;
-  const onScreen = document.hasFocus() && (S.focus === 'chat' && (S.split ? S.open.slice(0, 2) : S.open.slice(0, 1)).includes(s.id) || mdl.open && S.modal?.kind === 'chat' && S.modal.id === s.id);
-  if (onScreen) return;
-  s.done = true;
-  if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
-}
-function turnEnd(s) {
-  autoArtifact(s);
-  if (s.modeNext) { s.mode = s.modeNext; s.modeNext = null; s.events.push({t:'notice', text:'Mode is now ' + s.mode + '.'}); }
-  if (s.queue.length) { const t = s.queue.shift(); keepQueue(s); startTurn(s, t); } else { renderTabs(); renderChats(new Set([s.id])); } // an interrupt may queue '' (images only)
-}
-function reply(s, text) {
-  const turn = s.turn = (s.turn || 0) + 1; s.streaming = true;
-  setTimeout(() => { if (s.turn !== turn) return; s.events.push({t:'agent', text:''}); const ev = s.events[s.events.length - 1]; let i = 0;
-    const tick = () => { if (s.turn !== turn) return; i += 3; ev.text = text.slice(0, i); if (i < text.length) { renderChats(); setTimeout(tick, 18); } else { s.streaming = false; turnEnd(s); } }; tick(); }, 500);
 }
 
 /* ---------- files ---------- */
@@ -1043,146 +451,13 @@ function tree(nodes, depth, q, cur) {
 const fileScopes = { project: 'Current project', workspace: 'Workspace', needs: 'Needs you', ideas: 'Ideas' };
 const files = { scope: 'project', dirs: {}, open: new Set() };
 try { const sc = localStorage.getItem('eh-file-scope'); if (Object.hasOwn(fileScopes, sc ?? '')) files.scope = sc; } catch {}
-const fileRoot = () => ({ project: () => S.sessions.find(x => x.id === S.open[0])?.folder || live.primary?.path || '', workspace: () => '',
-  needs: () => live.waitDir, ideas: () => '_ideas' })[files.scope]();
-async function loadDir(dir) {
-  files.dirs[dir] = 'loading';
-  const r = await window.p9.mission('list', { path: dir });
-  files.dirs[dir] = r.status === 200 ? r.body.entries.slice().sort((a, b) => (b.dir ? 1 : 0) - (a.dir ? 1 : 0)) : { error: r.body?.error || String(r.status) };
-  renderTree();
-}
-function liveTree(dir, depth, q, cur) {
-  const got = files.dirs[dir], pad = `style="padding-left:${6 + depth * 12}px"`;
-  if (!got || got === 'loading') { if (!got) loadDir(dir); return `<p class="sm muted" ${pad}>Loading…</p>`; }
-  if (got.error) return `<p class="sm muted" ${pad}>Not readable: ${esc(got.error)}</p>`;
-  if (!got.length) return `<p class="sm muted" ${pad}>Empty</p>`;
-  return got.filter(e => e.dir || !q || e.name.toLowerCase().includes(q)).map(e => { const p = dir ? dir + '/' + e.name : e.name;
-    return e.dir ? `<button data-ldir="${esc(p)}" ${pad}><span class="k">${files.open.has(p) ? '▾' : '▸'}</span><span class="truncate">${esc(e.name)}</span></button>${files.open.has(p) ? liveTree(p, depth + 1, q, cur) : ''}`
-      : `<button data-lfile="${esc(p)}" ${pad}${p === cur ? ' aria-current="true"' : ''}><span class="k"></span><span class="truncate">${esc(e.name)}</span></button>`; }).join('');
-}
 $('#fileScope').innerHTML = Object.entries(fileScopes).map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
 $('#fileScope').onchange = e => { files.scope = e.target.value; files.dirs = {}; try { localStorage.setItem('eh-file-scope', files.scope); } catch {} renderTree(); };
-function renderTree() {
-  const q = $('#fileSearch').value.trim().toLowerCase();
-  if (live.on) {
-    const root = fileRoot(), cur = S.modal?.kind === 'file' && mdl.open ? S.modal.name : null;
-    $('#fileScope').hidden = false; $('#fileScope').value = files.scope;
-    $('#tree').innerHTML = `<p class="where muted mono truncate" title="${esc(root || 'Workspace')}">${esc(root || 'Workspace')}</p>${liveTree(root, 0, q, cur)}`;
-    $('#tree').querySelectorAll('[data-ldir]').forEach(b => b.onclick = () => { const p = b.dataset.ldir; files.open.has(p) ? files.open.delete(p) : files.open.add(p); renderTree(); });
-    $('#tree').querySelectorAll('[data-lfile]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.lfile, live: true }));
-    $('#xferBtn').hidden = !window.p9?.xferPlan || !!serverInfo?.host;
-    $('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
-    return;
-  }
-  $('#tree').innerHTML = tree(M.files, 0, q, S.modal?.kind === 'file' && mdl.open ? S.modal.name : null);
-  $('#tree').querySelectorAll('[data-file]').forEach(b => b.onclick = () => openModal({ kind: 'file', name: b.dataset.file }));
-}
-// Send files (item 23; main's p9:xfer, desktop/xfer.mjs): the files panel's folder goes to the same folder on the server.
-// Main plans and keeps the plan; this asks what the plan cannot settle alone (Builder, 2026-10-27: one choice for the whole
-// list; a delete is asked; a Syncthing folder warns; a limit names its Setting), then shows the send. A plan with nothing
-// to ask sends at once: one button press.
-const XFER_SETTINGS = { fileMiB: ['Largest file to send', 'MiB', 65536], files: ['Most files in one send', 'files', 200000], sendGiB: ['Most data in one send', 'GiB', 1024] }; // desktop/xfer.mjs XFER_LIMITS
-const bytes = n => n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1) + ' GiB' : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(1) + ' MiB' : Math.ceil(n / 1024) + ' KiB';
-const xfer = { id: null };
 window.p9?.onXfer?.(p => { if (p.id !== xfer.id || !$('#xferDlg').open) return; const bar = $('#xferBar'); if (bar) { bar.max = p.total || 1; bar.value = p.sent; $('#xferNum').textContent = bytes(p.sent) + ' of ' + bytes(p.total); } });
-function xferShow(title, note, body, foot) {
-  $('#xferT').textContent = title; $('#xferP').textContent = note; $('#xferBody').innerHTML = body; $('#xferFoot').innerHTML = foot;
-  if (!$('#xferDlg').open) $('#xferDlg').showModal();
-}
-const xferClose = '<button data-slot="button" data-variant="outline" data-xfer-close>Close</button>';
-function xferWire() { $('#xferDlg').querySelectorAll('[data-xfer-close]').forEach(b => b.onclick = () => { xfer.id = null; $('#xferDlg').close(); }); }
-// A refusal: a limit links its Setting.
-function xferRefused(r) {
-  xferShow('Not sent', r.message || r.error || 'No answer.', '', (r.setting ? '<button data-slot="button" data-variant="default" id="xferSetting">Open Settings</button>' : '') + xferClose);
-  xferWire();
-  if (r.setting) $('#xferSetting').onclick = async () => { $('#xferDlg').close(); await $('#setBtn').onclick(); const input = $('#setXfer-' + r.setting); settingsAt(input); input?.focus(); };
-}
-async function sendFiles() {
-  const folder = fileRoot(), b = $('#xferBtn');
-  b.disabled = true; b.textContent = 'Checking…';
-  const p = await window.p9.xferPlan(folder).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
-  b.disabled = false; b.textContent = 'Send files to remote';
-  if (p.error) return xferRefused(p);
-  xfer.id = p.id;
-  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
-  if (!p.asked && !p.deletes && !sync.length) {
-    if (!p.send) return xferShow('Nothing to send', where + ' already matches this computer (' + p.same.toLocaleString() + ' files the same).', '', xferClose), xferWire();
-    return xferGo(p, null, false);
-  }
-  xferAsk(p, (choice, deleteToo) => xferGo(p, choice, deleteToo));
-}
-// The prompt for a plan that asks: a Syncthing warning, the files that differ, the deletes. go(choice, deleteToo) runs on a choice;
-// moving: Send to server's prompt for the chat's folder, before the chat is frozen.
-function xferAsk(p, go, moving) {
-  const where = (p.folder || 'The workspace') + ' on ' + p.host, sync = [...p.syncthing.laptop.map(d => ['laptop', d]), ...p.syncthing.server.map(d => ['server', d])];
-  const list = (items, more) => '<ul class="mono sm" style="max-height:30vh;overflow:auto;margin:0;padding-left:18px">' + items.join('') + (more > 0 ? '<li class="muted">and ' + more.toLocaleString() + ' more</li>' : '') + '</ul>';
-  const warn = sync.length ? '<div class="set-row" data-xfer-syncthing><span><strong>Syncthing already syncs this folder</strong><span class="muted sm">Two copiers on one folder fight: each undoes the other. Found .stfolder at '
-    + sync.map(([side, d]) => esc(d === '..' ? 'a folder above the workspace' : d || 'the workspace') + ' (' + side + ')').join(', ') + '. Send only if Syncthing is off for it.</span></span></div>' : '';
-  const asked = p.asked ? '<div data-xfer-asked><p><strong>' + (p.kind === 'first' ? 'Nothing was sent to this folder from here before, and ' + p.asked.toLocaleString() + ' file' + (p.asked === 1 ? ' differs' : 's differ') + ' between the two.'
-    : p.asked.toLocaleString() + ' file' + (p.asked === 1 ? '' : 's') + ' changed on both sides since your last send.') + '</strong><br><span class="muted sm">'
-    + p.summary.laptopNewer.toLocaleString() + ' newer on the laptop, ' + p.summary.serverNewer.toLocaleString() + ' newer on the remote.</span></p>'
-    + list(p.list.map(i => '<li><span>' + esc(i.path) + '</span> <span class="muted">' + esc(i.text) + '</span></li>'), p.asked - p.list.length) + '</div>' : '';
-  const gone = p.deletes ? '<label class="set-row" data-xfer-deletes><input type="checkbox" id="xferDel"><span><strong>Delete on the remote too</strong><span class="muted sm">' + p.deletes.toLocaleString() + ' file'
-    + (p.deletes === 1 ? ' was' : 's were') + ' deleted on the laptop since your last send. Unticked, the remote keeps ' + (p.deletes === 1 ? 'it' : 'them') + '.</span></span></label>' + list(p.deleteList.map(d => '<li>' + esc(d) + '</li>'), p.deletes - p.deleteList.length) : '';
-  const choices = !p.asked ? [['go', 'default', 'Send']] : p.kind === 'first' ? [['laptop', 'default', 'Laptop wins'], ['newer', 'outline', 'Keep the newer of each']]
-    : [['laptop', 'default', 'Keep the laptop\'s'], ['server', 'outline', 'Keep the remote\'s'], ['newer', 'outline', 'Keep the newer of each']];
-  xferShow(p.kind === 'first' ? 'First send to ' + p.host : p.kind === 'conflict' ? 'Files changed on both sides' : 'Send files to ' + p.host,
-    where + ': ' + p.send.toLocaleString() + ' file' + (p.send === 1 ? '' : 's') + ' to send (' + bytes(p.sendBytes) + ').' + (moving ? ' The chat moves once they are there.' : ''),
-    warn + asked + gone + '<p class="muted sm">Every file replaced or deleted, on either side, is kept in that computer\'s P9 recovery folder.</p>',
-    '<button data-slot="button" data-variant="outline" data-xfer-close autofocus>Cancel</button>' + choices.map(([v, look, label]) => '<button data-slot="button" data-variant="' + look + '" data-xfer-choice="' + v + '">' + label + '</button>').join(''));
-  xferWire();
-  $('#xferDlg').querySelectorAll('[data-xfer-choice]').forEach(c => c.onclick = () => go(c.dataset.xferChoice === 'go' ? null : c.dataset.xferChoice, !!$('#xferDel')?.checked));
-}
-async function xferGo(p, choice, deleteToo) {
-  xferShow('Sending to ' + p.host, (p.folder || 'The workspace') + '. Closing this leaves the send running.', '<progress id="xferBar" value="0" max="1" style="width:100%"></progress><p class="muted sm mono" id="xferNum"></p>', xferClose);
-  xferWire();
-  const r = await window.p9.xferRun(p.id, choice, deleteToo).catch(() => ({ error: 'no-answer', message: 'P9 did not answer.' }));
-  if (r.error === 'limit' || r.error && !r.sent && !r.received && !r.deletedOnServer && !r.deletedHere) return xferRefused(r);
-  const said = [r.sent && r.sent.toLocaleString() + ' sent', r.received && r.received.toLocaleString() + ' taken from the remote', r.deletedOnServer && r.deletedOnServer.toLocaleString() + ' deleted on the remote',
-    r.deletedHere && r.deletedHere.toLocaleString() + ' deleted here', r.kept && r.kept.toLocaleString() + ' old cop' + (r.kept === 1 ? 'y' : 'ies') + ' kept in recovery'].filter(Boolean);
-  xferShow(r.error ? 'Partly sent' : 'Sent', (said.join(', ') || 'Nothing needed sending') + '.', r.message ? '<p>' + esc(r.message) + '</p>' : '', xferClose);
-  xferWire();
-  files.dirs = {}; renderTree();
-}
 $('#xferBtn').onclick = sendFiles;
-// One doc per file, shared by the Chat file modal and Dev Focus. text is the draft, saved is what
-// is on disk; they differ until an explicit Save (D04: a draft never silently overwrites the file).
-function doc(name) {
-  if (!S.docs[name]) {
-    const body = M.fileBody[name] || (name.endsWith('.md') ? `# ${name.split('/').pop()}\n\n(mock file: the real app reads it from disk)\n` : `// ${name}\n// (no preview in this prototype)\n`);
-    S.docs[name] = { text: body, saved: body, sel: [0, 0], top: 0 };
-  }
-  return S.docs[name];
-}
-const dirty = name => S.docs[name] && S.docs[name].text !== S.docs[name].saved;
 // line numbers for wrapped text: each number, then one blank row per extra row its line wraps onto
 // ponytail: re-measures the whole file on every keystroke; fine for mock files, the real IDE engine owns this
 const mirror = document.createElement('div');
-function fitGut(ta, gut) {
-  if (!ta.clientWidth) return; // hidden focus: the ResizeObserver runs this again when it shows
-  const cs = getComputedStyle(ta), lh = parseFloat(cs.lineHeight);
-  mirror.style.cssText = `position:absolute;visibility:hidden;white-space:pre-wrap;overflow-wrap:anywhere;font:${cs.font};letter-spacing:${cs.letterSpacing};tab-size:${cs.tabSize};width:${ta.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)}px`;
-  mirror.innerHTML = ta.value.split('\n').map(l => `<div>${esc(l) || ' '}</div>`).join('');
-  document.body.append(mirror);
-  gut.textContent = [...mirror.children].map((r, i) => (i + 1) + '\n'.repeat(Math.max(1, Math.round(r.offsetHeight / lh)) - 1)).join('\n');
-  mirror.remove();
-  gut.scrollTop = ta.scrollTop;
-}
-const lines = s => Array.from({ length: s.split('\n').length }, (_, i) => i + 1).join('\n');
-function editorHtml(name, id) {
-  const d = doc(name);
-  return `<div class="ed"><pre class="gut" aria-hidden="true">${lines(d.text)}</pre><textarea id="${id}" spellcheck="false" aria-label="${esc(name)}">${esc(d.text)}</textarea></div>`;
-}
-// Keeps the doc, the gutter and the caret in step with the textarea; after() repaints dirty marks.
-function wireEditor(root, name, after, save = () => saveDoc(name)) {
-  const d = doc(name), ta = root.querySelector('.ed textarea'), gut = root.querySelector('.ed .gut');
-  ta.setSelectionRange(...d.sel); ta.scrollTop = d.top; gut.scrollTop = d.top;
-  ta.oninput = () => { const was = dirty(name); d.text = ta.value; fitGut(ta, gut); d.sel = [ta.selectionStart, ta.selectionEnd]; if (was !== dirty(name)) after(); };
-  ta.onscroll = () => { d.top = gut.scrollTop = ta.scrollTop; };
-  observe(() => fitGut(ta, gut)).observe(ta);
-  ta.onselect = ta.onkeyup = ta.onclick = () => { d.sel = [ta.selectionStart, ta.selectionEnd]; };
-  edSave = { root, save, after };
-}
 // D7: Ctrl+S saves the editor on screen wherever the focus is in its window: a Save click re-renders the modal and drops the
 // focus to the page, which used to leave Ctrl+S doing nothing at all.
 let edSave = null;
@@ -1192,243 +467,40 @@ document.addEventListener('keydown', e => {
   if (!host.checkVisibility() || (at && at !== document.body && !host.contains(at))) return; // a closed modal never saves
   e.preventDefault(); edSave.save(); edSave.after();
 });
-// D7: why a save failed, in words; the daemon's code word stays at the end for a bug report.
-function saveWhy(r) {
-  const code = r.body?.error || r.body?.code || String(r.status);
-  const words = { 'registry-read-only': 'P9 keeps this file read-only (it holds Mission Control button commands)',
-    'request-refused': 'P9 refused it: a locked or protected name, or not a text file',
-    'daemon-unavailable': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' did not answer; check the connection and try again',
-    'daemon-outdated': 'P9' + (serverInfo?.host ? ' on ' + serverInfo.host : '') + ' is older than this app; update it, then try again',
-    EACCES: 'no permission to write it', EPERM: 'no permission to write it', EROFS: 'the disk is read-only', ENOSPC: 'the disk is full',
-    EDQUOT: 'the disk quota is full', EBUSY: 'the file is busy; try again', ENOENT: 'its folder is gone' }[code];
-  return (words || 'P9 could not write it') + ' (' + code + ')';
-}
 // a _tyler item's file as read-only text: the question line and the empty A. line are already in the review
 const fileView = name => doc(name).text.split('\n').filter(l => l.trim() && !/^# |^A\.|^<!--/.test(l)).map(l => `<p>${esc(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</p>`).join('');
-function saveDoc(name) { const d = doc(name); d.saved = d.text; renderTree(); }
-const saveBtn = name => dirty(name) ? `<span data-slot="badge">draft</span><button data-slot="button" data-size="sm" data-savefile>Save</button>` : `<span class="muted sm">saved</span>`;
-function renderModalFoot() {
-  const n = S.modal.name;
-  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(n)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${saveBtn(n)}`;
-  const b = $('#mdlFoot [data-savefile]'); if (b) b.onclick = () => { saveDoc(n); renderModalFoot(); };
-}
 
 /* ---------- Mission Control ---------- */
 // workspace-hub's sections from fixtures. Only change from the hub: script buttons are grouped into
 // category tiles, each opening a modal (Builder 2026-10-14). Nothing runs; outputs are mock.
 // one Catppuccin Mocha accent per word, stable, so a project or kind keeps its colour
 const CTP = ['#cba6f7', '#89b4fa', '#94e2d5', '#fab387', '#f5c2e7', '#a6e3a1', '#89dceb', '#f9e2af', '#b4befe', '#eba0ac'];
-const tint = s => ` style="--tint:${CTP[[...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % CTP.length]}"`;
-const worst = list => ['bad', 'warn', 'ok'].find(l => list.some(s => s[3] === l)) || 'ok';
-// A space section's level: the worst of its data tiles' and cards' last answers ('' when none is warn or bad), set by sectionBody.
-const secLv = {};
 // A top-row tile knows its level before its window is opened (a tile is a light that shows red while there is an
 // issue): while Mission is on screen, each unplaced section's tiles and cards are asked every 30 s too. The tile is shown, so
 // row 70 still holds; the daemon answers a second ask within 30 s of its last run from that run, so an open window shares it.
 let topAt = 0;
-function pullTopLevels() {
-  if (S.focus !== 'mission' || document.hidden || !window.p9?.mission || Date.now() - topAt < 29000) return;
-  topAt = Date.now();
-  for (const s of M.space || []) {
-    const runs = PLACED.test(s.place) ? [] : [...(s.data || []), ...(s.cards || [])];
-    if (runs.length) Promise.all(runs.map(d => window.p9.mission('data', { id: d.id }).then(r => tileLevel(tileAnswer(r.status, r.body)), () => ''))).then(l => {
-      const lv = ['bad', 'warn'].find(x => l.includes(x)) || '';
-      if ((secLv[s.id] || '') !== lv) { secLv[s.id] = lv; renderMission(); }
-    });
-  }
-}
 setInterval(pullTopLevels, 30000);
-const secWorst = (g, l) => { const w = worst(l), v = secLv[g]; return w === 'bad' || v === 'bad' ? 'bad' : w === 'warn' || v === 'warn' ? 'warn' : w; };
-const panel = (id, title, body, extra = '') => `<section class="panel" id="${id}"><h3>${title}${extra}</h3><div class="pbody">${body}</div></section>`;
 // Live data from the daemon (window.p9.mission) fills the lists once it answers; until then the page says why it is empty.
 const live = { on: false, note: window.p9?.mission ? 'Connecting to the P9 daemon…' : 'No P9 daemon in this view', primary: null, waiting: '' };
-const usage = { state: 'unavailable', samples: 0, discarded: 0, totals: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
-async function loadUsage() {
-  if (!window.p9?.usage) return;
-  const result = await window.p9.usage().catch(() => ({ status: 503, body: { state: 'unavailable' } }));
-  Object.assign(usage, result.status === 200 ? result.body : { state: 'unavailable' });
-  renderMission();
-}
-// The chat meters read usage.limits: fetched again each minute, and at once when Claude reports its limits or any turn
-// ends (Codex writes its limits to its session log each turn). The cache clock moves on every 15 s without a re-render.
-// Not while the window is hidden: each read tells the daemon someone is looking, which keeps its Claude usage poll (and the
-// claude process behind it) going; with no reads it stops after 2 min (claude-usage.mjs). Shown again, it reads at once.
-const pollUsage = () => { if (!document.hidden) loadUsage().then(renderChats); setTimeout(pollUsage, 60000); };
 document.addEventListener('visibilitychange', () => { if (!document.hidden) loadUsage().then(renderChats); });
 let usageSoon = 0;
-// Panes are redrawn only when the figures moved, so a turn end in one chat does not rebuild the others (E2).
-const usageNow = () => { clearTimeout(usageSoon); usageSoon = setTimeout(() => { const was = JSON.stringify(usage.limits); loadUsage().then(() => { if (JSON.stringify(usage.limits) !== was) renderChats(); }); }, 300); };
 setInterval(() => { if (document.hidden) return; for (const s of S.sessions) for (const el of document.querySelectorAll('.pane[data-id="' + s.id + '"] .cache')) { const [text, state] = cacheOf(s); el.dataset.s = state; el.lastChild.textContent = text; } }, 15000);
-// Restart P9's background service (finding 6): the one way back for a service that hangs or lost a file, from the Mission
-// notes and Settings. Main asks first, and restarts a service that does not answer at all. RS1: main answers once the new
-// service answers, or says why not. repair (MT1): set the service up again first. button: none from Ctrl K.
-const restartBtn = () => (window.p9?.restartService ? ' <button data-slot="button" data-variant="outline" data-restart-btn>Restart P9</button>' : '');
-async function restartP9(button, repair) {
-  if (button) button.disabled = true;
-  const r = await (repair ? window.p9.repairService() : window.p9.restartService()).catch(() => ({ error: (repair ? 'repair' : 'restart') + '-failed' }));
-  if (button) button.disabled = false;
-  if (r.cancelled) return;
-  const done = repair ? 'repaired' : 'restarted';
-  toast({ kind: r.restarted ? done : 'not ' + done, txt: r.restarted ? 'P9 ' + done + '.' : WIZ_ERR[r.error]?.join(' ') ?? 'Could not ' + (repair ? 'repair' : 'restart') + ' P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: r.restarted ? 'ok' : 'bad' }, true);
-  if (r.restarted) loadMission();
-}
-async function loadMission() {
-  if (!window.p9?.mission) return;
-  const r = await window.p9.mission('overview');
-  if (r.status !== 200) {
-    const why = r.body?.error || r.status;
-    if (sampleView) live.note = 'Sample data: the P9 daemon did not answer (' + why + ')';
-    else if (why === 'settings-missing' || why === 'settings-invalid') live.note = 'Mission Control is not set up yet (' + why + '): see Set up P9.';
-    // A file the settings name is missing: which one, so the fix is one path in settings.json (finding 5). Retried, as the
-    // settings and the files load live.
-    else if (why === 'file-not-found') live.note = 'Mission Control cannot find its ' + r.body.setting + ' file, ' + r.body.file + '. Fix that path in P9\'s settings file or create the file; trying again every 5 seconds.';
-    else live.note = 'P9\'s background service is not answering (' + why + '). Trying again every 5 seconds.';
-    live.noteRestart = !sampleView && why !== 'settings-missing' && why !== 'settings-invalid';
-    if (live.noteRestart && !lifetime.signal.aborted) setTimeout(loadMission, 5000);
-    return renderMission();
-  }
-  applyOverview(r.body);
-  renderMission(); renderTabs(); loadArt(); loadSprint();
-}
-// Sprint tracker: the button shows while the connected machine has a sprint status file (the sprint skill writes it each
-// wake-up). 404 = no sprint; any other answer keeps the button and the window says why.
-async function loadSprint() {
-  clearTimeout(SP.timer);
-  const r = await window.p9.mission('sprint').catch(() => ({ status: 503 }));
-  if (lifetime.signal.aborted) return;
-  const on = r.status !== 404 && r.status !== 503, before = JSON.stringify([SP.on, SP.data]);
-  SP.on = on; SP.data = r.status === 200 ? r.body : null; SP.error = on && r.status !== 200 ? (r.body?.reason || r.body?.error || String(r.status)) : '';
-  if (before !== JSON.stringify([SP.on, SP.data])) renderMission(); // the tile shows merged/total
-  if (mdl.open && S.modal?.kind === 'sprint') { if (on) renderModal(); else closeModal(); }
-  SP.timer = setTimeout(loadSprint, 30000);
-}
-const SPRINT_STATE = { running: 'running', waiting: 'waiting', merged: 'merged', blocked: 'blocked', unknown: 'unknown' };
-const sprintOverall = d => Number.isFinite(d.overall) ? `<div class="spall"><div class="ring" role="img" aria-label="Whole sprint ${d.overall}%" style="--p:${d.overall}" data-overall><b>${d.overall}%</b></div><div class="spt"><b>Whole sprint</b><span class="sm muted">${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged</span></div></div>` : '';
-const sprintRings = d => `<div class="springs">${d.chunks.map(c => `<div class="spr" data-state="${esc(SPRINT_STATE[c.state] || 'unknown')}"><div class="ring" role="img" aria-label="${esc(c.id)} ${esc(c.state)} ${c.percent}%" style="--p:${c.percent}"><b>${c.percent}%</b></div><div class="spt"><b class="truncate">${esc(c.id)} · ${esc(c.title)}</b><span class="sm st">${esc(c.state)}${c.activity ? ` · <span data-activity="${esc(c.activity)}">${esc(c.activity)}</span>` : ''}${c.steps ? ` · <span data-steps>${esc(c.steps)}</span>` : ''}</span>${c.waitingOn && (c.state === 'waiting' || c.state === 'blocked') ? `<span class="sm wait">Waiting on: ${esc(c.waitingOn)}</span>` : ''}</div></div>`).join('') || '<p class="empty">No chunks in the status file yet.</p>'}</div>`;
-// The unnamed tile's buttons: each is a registry script (asks first, like any script), found by its fixed id.
-const SPRINT_SCRIPTS = [['sprint-start', 'Sprint start'], ['sprint-close', 'Sprint close'], ['sprint-heavy', 'Heavy services']];
-const scriptById = id => M.cardScripts?.[id] ?? Object.values(M.scripts).flat().find(s => s[0] === id && s[6]?.live);
-// W-M: a sprint tile a section names runs that section's buttons and script refs, and only those (none: Open tmux alone); the
-// fixed ids above are only the unnamed tile's, which no file asked for.
-const sprintScripts = sec => { const sp = spaceOf(sec);
-  return sp ? [...(M.scripts[sec] || []), ...(sp.refs || []).filter(r => r.kind === 'scripts').map(r => scriptById(r.id)).filter(Boolean)].map(r => [r[0], r[1], r])
-    : SPRINT_SCRIPTS.map(([id, label]) => [id, label, scriptById(id)]); };
 // The tiles' pictures, site icons and program icons (the daemon fetches and caches; the renderer loads no remote image). Redraws only if they changed.
 let lastArt = '';
-async function loadArt() {
-  const r = await window.p9.mission('icons').catch(() => null);
-  if (r?.status !== 200 || lifetime.signal.aborted) return;
-  const key = JSON.stringify(r.body); if (key === lastArt) return; lastArt = key;
-  M.art = r.body; renderMission();
-}
-// Everything one overview carries, so the first load, an answer, a finished turn and the poll below show the same thing.
-function applyOverview(o) {
-  live.on = true; live.note = ''; live.noteRestart = false; live.restart = o.restart; live.settingsError = o.settingsError; live.primary = o.primary; live.waitDir = o.waiting; dataNote(); live.waiting = o.waiting?.split('/').pop() ?? null; // no waiting folder on a fresh install
-  M.scripts = {}; M.cardScripts = {}; M.title = {}; // hidden: a card's feeder or title-bar button, not a row
-  // W-C: a group's key is its section's id (titles may repeat; M.title says what each key is called). A space button names its
-  // section; a registry group named like a section joins the first one with that title; any other is 'g:' + its name (an id has no ':').
-  const named = {}; for (const s of o.space || []) { named[s.title] ??= s.id; M.title[s.id] = s.title; }
-  for (const x of o.scripts) { const row = [x.id, x.title, x.desc, 'idle', 'not run here yet', '', { args: x.args, confirm: x.confirm, terminal: x.terminal, live: true }];
-    const name = x.group || 'Other', key = x.section ?? named[name] ?? 'g:' + name; M.title[key] ??= name;
-    if (x.hidden) M.cardScripts[x.id] = row; else (M.scripts[key] ||= []).push(row); }
-  M.buttons = o.scripts.map(x => ({ id: x.id, title: x.title, icon: x.icon, section: x.section })); // the editor's button rows (W-N)
-  M.apps = o.apps.map(a => [a.title, a.desc, a.terminal, a.id, a.icon]);
-  M.pages = o.pages.map(x => [x.title, x.url, x.id, x.icon]);
-  // The free-form space: each section is a tile, even one with no buttons yet; its buttons arrived in o.scripts.
-  M.space = o.space || []; M.icmFiles = !!o.icmFiles;
-  live.empty = Boolean(o.empty); live.fileProtection = o.fileProtection === true; live.spaces = o.spaces || []; live.spaceName = o.spaceName ?? null; live.mainFile = o.mainFile === true;
-  for (const s of M.space) if (!s.widget) M.scripts[s.id] ||= []; // a widget section is its panel or built-in tile, not a group tile
-  applyQueue(o);
-}
 // M3: a change to settings, the registry or the space shows within one poll. Only while Mission is in front and the window is
 // showing; renderMission writes only what changed, so an idle poll costs one local request.
 let lastOverview = '';
-async function refreshMission() {
-  if (!live.on || document.hidden || S.focus !== 'mission' || lifetime.signal.aborted) return;
-  const r = await window.p9.mission('overview').catch(() => null);
-  if (r?.status !== 200 || lifetime.signal.aborted) return;
-  loadArt(); // a site's icon can arrive or age out with no change to the overview
-  const key = JSON.stringify(r.body); if (key === lastOverview) return; lastOverview = key;
-  applyOverview(r.body); renderMission(); renderTabs();
-  if (S.modal?.kind === 'scripts' && !M.scripts[S.modal.g]) closeModal(); // its group is gone
-  else if (['scripts', 'win', 'reviews', 'center'].includes(S.modal?.kind)) renderModal();
-}
-const pollMission = () => { refreshMission(); setTimeout(pollMission, 20000); };
 // _tyler/ items a chat makes get their card when its turn ends (Builder, 2026-10-17); otherwise the queue is read at start.
 let queueTimer = 0;
-const queueSoon = () => { clearTimeout(queueTimer); queueTimer = setTimeout(async () => { const r = await window.p9?.mission?.('overview').catch(() => null); if (live.on && r?.status === 200) { lastOverview = JSON.stringify(r.body); applyOverview(r.body); renderMission(); renderTabs(); if (S.modal?.kind === 'reviews' || S.modal?.kind === 'center') renderModal(); } }, 500); };
 // D4 / #14: the chip on a waiting item says who it waits on: the owner's own name from Settings, else "needs you".
 const needsLabel = () => settings.name ? 'needs ' + settings.name : 'needs you';
-function applyQueue(o) {
-  const drafts = Object.fromEntries(S.reviews.filter(x => x.live).map(x => [x.name, x]));
-  const kept = S.reviews.filter(x => x.live && x.draft && x.draft.trim() && !o.queue.some(q => q.name === x.name));
-  S.reviews = o.queue.map(q => { const file = live.waiting + '/' + q.name; if (S.docs[file]?.saved !== q.content) S.docs[file] = { text: q.content, saved: q.content, sel: [0, 0], top: 0 };
-    return { proj: q.project, kind: needsLabel(), txt: q.title, file, age: q.age, updated: q.updated, name: q.name, hash: q.hash, live: true, draft: drafts[q.name]?.draft, sel: drafts[q.name]?.sel }; });
-  // ponytail: "already waiting" means present at the first load, so a reload also quiets items a chat made before it.
-  if (!S.queueSeen) { S.queueSeen = true; for (const r of S.reviews) S.quiet.add(r.file); }
-  // Someone else answered (or removed) an item Builder was writing: keep his text visible, marked, so nothing is lost.
-  for (const x of kept) S.reviews.push({ ...x, gone: true, txt: x.txt.replace(/^(?:\(answered elsewhere\) )?/, '(answered elsewhere) ') });
-
-  reviewSort();
-}
 // _tyler/ items newest first, or by project: the file name starts with it, <project>-<what>.md (Builder, 2026-10-19 #1).
 function reviewSort() { const by = localStorage.getItem('eh-review-sort') === 'project' ? 'project' : 'updated';
   S.reviews.sort(by === 'project' ? (a, b) => (a.name || a.proj).localeCompare(b.name || b.proj) : (a, b) => (b.updated || 0) - (a.updated || 0)); return by; }
-// P9's own notifications only (the old hub's silent jobs are a space data tile now).
-const noticeLine = () => 'No notifications.';
-// A category's rows: its scripts, plus a space section's notes, log views, folder lists and references.
-const listRow = (i, a, b, c) => `<li><button data-i="${esc(i)}">${a}<span class="truncate">${b}</span><span class="sub truncate">${c}</span></button></li>`;
-// A group's title, and its space section (none for a registry-only group); sample mode keys groups by title and has no space.
-const gTitle = g => M.title?.[g] ?? g, spaceOf = g => (M.space || []).find(x => x.id === g);
-const sectionRows = (g, l) => { const sp = spaceOf(g); return l.length + (sp ? (sp.notes ? 1 : 0) + sp.logs.length + (sp.folders?.length || 0) + (sp.refs?.length || 0) + (sp.data?.length || 0) + (sp.cards?.length || 0) + (sp.links?.length || 0) + (sp.checklists?.length || 0) : 0); };
-const ago = min => min < 60 ? min + ' min' : min < 2880 ? Math.round(min / 60) + ' h' : Math.round(min / 1440) + ' d';
-async function answerLive(r) {
-  if (r.gone) return toast({ kind: 'not saved', txt: r.file + ' was answered or removed elsewhere. Copy your text from the box; nothing was written.', level: 'warn' }, true);
-  const answer = (r.draft || '').split('\n').map(l => l.trim()).filter(Boolean).join(' ');
-  if (!answer) return toast({ kind: 'not saved', txt: 'Write an answer first.', level: 'warn' }, true);
-  const res = await window.p9.mission('answer', { name: r.name, hash: r.hash, answer });
-  if (res.status === 200) { toast({ kind: 'saved', txt: 'Answer saved to ' + r.file, level: 'ok' }, true); r.draft = ''; }
-  // Builder, 2026-10-21: an item with Q1:/Q2: lines and no A. line said "changed on disk" for days, so he kept retrying
-  else if (res.body?.error === 'no-empty-answer-line') toast({ kind: 'not saved', txt: r.file + ' has no empty A. line, so P9 cannot write your answer. Ask an agent to add one; your answer is still here.', level: 'bad' }, true);
-  else if (res.status === 409) toast({ kind: 'not saved', txt: r.file + ' changed on disk since you opened it. Reloaded it; your answer is still here.', level: 'warn' }, true);
-  else toast({ kind: 'not saved', txt: 'Could not save to ' + r.file + ': ' + saveWhy(res) + '. Your answer is still here.', level: 'bad' }, true);
-  await loadMission();
-  if (S.modal?.kind === 'review') { if (S.reviews.length) renderModal(); else closeModal(); }
-}
-async function runLive(m, id) {
-  const res = await window.p9.mission('run', { id, args: m.args, ...(m.armedRun ? { confirm: true } : {}) });
-  if (res.status === 200 && res.body.launched) { m.out = ['Opened in a terminal.']; return S.modal === m && renderModal(); }
-  if (res.status !== 202) { m.out = ['Refused: ' + (res.body?.reason || res.body?.error || res.status)]; return S.modal === m && renderModal(); }
-  let text = '', from = 0;
-  for (;;) {
-    const o = await window.p9.mission('output', { run: res.body.run, from });
-    if (o.status !== 200) { m.out = [text, '[lost the run: ' + (o.body?.error || o.status) + ']']; break; }
-    text += o.body.output; from = o.body.next; m.out = text.split('\n');
-    if (S.modal === m) renderModal();
-    if (o.body.done) break;
-    await new Promise(done => setTimeout(done, 300));
-  }
-  if (S.modal === m) renderModal();
-}
 // Mission is short: script tiles, then one small card per section (title, a number, one line) that opens the
 // section in the modal window (Builder, 2026-10-17: "hard to navigate because its so long ... group everything so
 // that its in a window i can open"). Cards are shaped like workspace-hub's Waiting on you and Last solo run boxes.
 const sample = () => (sampleView ? ' · sample' : '');
-// Fresh-install finding 3a: a panel shows where a space section names it (the ICM template adds all four). Where no section
-// names any, an existing install whose settings name a registry or waiting folder keeps all four, read only: no file is
-// written. A fresh install has neither, so it gets none.
-// A section names a panel with widget (the section is the panel) or widgets (the panel sits inside the section, W-I).
-// idea, sprint and edit are P9's built-in tiles (W-D), not panels: naming one decides the top row's tiles, not the panels.
-const TILE_WIDGETS = ['idea', 'sprint', 'edit'], panelW = w => !TILE_WIDGETS.includes(w);
-const namesPanel = s => (s.widget && panelW(s.widget)) || s.widgets?.some(panelW);
-const namesTile = () => (M.space || []).some(s => TILE_WIDGETS.includes(s.widget) || s.widgets?.some(w => !panelW(w)));
-const widgetOn = w => sampleView || M.space.some(s => s.widget === w || s.widgets?.includes(w)) || (M.icmFiles && !M.space.some(namesPanel));
-// + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
-const icmSpace = () => sampleView || M.space.some(namesPanel) || M.icmFiles && !M.space.some(namesPanel);
-const allNotes = () => S.alerts;
-const usageBody = () => (usage.limits ? usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
-  + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
-  : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`);
 // card() gives [number or name, one line, level]; body() is the window's content (the three lists fill in missionLive)
 const wins = {
   mprimary: { show: () => live.primary, title: () => 'Main project', card: () => [live.primary.name, live.primary.status.replace(/\*\*/g, ''), 'ok'],
@@ -1443,256 +515,13 @@ const wins = {
     inline: () => { const rows = usageRings();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
 };
-// Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
-// shown: {picture, auto} as data: URIs from the daemon, shown only through <img>.
-const art = (kind, key) => M.art?.[kind]?.[key] || {};
-const launchTile = (name, title, data, id, page, icon, shown = {}) => `<button class="ltile" data-launch="${esc(name)}" ${data} title="${esc(title)}">${id === 'p9' ? '<img src="/p9-icon.png" alt="">' : shown.picture || (!icon && shown.auto) ? `<img src="${esc(shown.picture || shown.auto)}" alt="">` : `<span class="mono-ico"${tint(name)}${icon ? ' data-icon' : ''}>${esc(icon || name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?')}</span>`}<span class="nm">${esc(name)}${page ? ' ↗' : ''}</span></button>`;
-const winTop = {};
-const winCard = id => { const w = wins[id], [big, line, lvl] = w.card();
-  return `<button class="win${lvl === 'bad' ? ' bad fx-halo' : ''}" data-win="${id}"><h4><span class="lvl" data-l="${lvl}"></span>${esc(w.title())}</h4><b class="big${id === 'mprimary' ? ' fx-title' : ''}">${esc(big)}</b><span class="line">${esc(line)}</span></button>`; };
-// Usage and Apps sit open on the page and scroll on their own, like Waiting on you (Builder, 2026-10-18 #3); the heading still
-// opens the full window.
-const PANELS = ['musage', 'mlaunch'];
-const winPanel = id => `<section class="mpanel" data-panel="${id}"><button class="phead" data-win="${id}"><h4>${esc(wins[id].title())}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
-const NEEDS = '<section class="needs" aria-label="Waiting on you"><div class="nhead"><h4>Waiting on you</h4><select data-slot="select" aria-label="Sort" data-sort><option value="updated">Newest</option><option value="project">Project</option></select></div><div class="bignum"><b data-n></b><span data-unit></span></div><div data-list></div></section>';
-// The page from the space file: once any section has place col1 to col6, the columns hold the sections placed in them, in file
-// order, and nothing else; every other section is a tile in the top row. With none placed, the page is the fixed layout below
-// (waiting, Main project and Logs, then Usage, Apps and the cards), each box in the file order of the section naming it (W-H).
-const PLACED = /^col[1-6]$/;
-const placed = () => (M.space || []).some(s => PLACED.test(s.place));
-// W-G: as many columns as the highest one used (three at least, as before). A column's width is the largest span of its sections;
-// while no section has span and only col1 to col3 are used, the columns keep the CSS widths they always had (no data-w).
-const placedCols = () => { const used = M.space.filter(s => PLACED.test(s.place)), n = Math.max(3, ...used.map(s => +s.place.slice(3))),
-  own = n > 3 || used.some(s => Number.isInteger(s.span));
-  return Array.from({ length: n }, (_, i) => { const mine = used.filter(s => s.place === 'col' + (i + 1));
-    return { n: i + 1, mine, w: own ? Math.max(1, ...mine.map(s => Number.isInteger(s.span) && s.span >= 1 && s.span <= 6 ? s.span : 1)) : null }; }); };
-const WIDGET_WIN = { usage: 'musage', apps: 'mlaunch', notifications: 'mnotes', primary: 'mprimary' };
-// A widget draws P9's own panel; any other section draws open: its title and Open (its window), its items under it.
-// data-sec and data-group carry the title; data-key, the section's id, is what a click and a redraw use (W-C).
-const placedHtml = s => s.widget === 'waiting' ? NEEDS : s.widget === 'usage' || s.widget === 'apps' ? winPanel(WIDGET_WIN[s.widget])
-  : TILE_WIDGETS.includes(s.widget) ? builtinTile(s.widget, s)
-  : s.widget ? `<div data-card="${WIDGET_WIN[s.widget]}"></div>`
-  : `<section class="mpanel" data-sec="${esc(s.title)}" data-key="${esc(s.id)}"><button class="phead" data-group="${esc(s.title)}" data-key="${esc(s.id)}"><h4>${esc(s.title)}</h4><span>Open</span></button><div class="pscroll"></div></section>`;
-// P9's built-in tiles (W-D). Named by a section (s), each draws there under the section's title; idea shows because the file asks for it,
-// sprint still only while there is a sprint status file. Unnamed, the three keep their own titles and today's rules.
-const BUILTIN = { idea: '+ New idea', sprint: 'Sprint status', edit: 'Edit names and icons' };
-const builtinTile = (w, s) => !live.on || (w === 'idea' && !s && !icmSpace()) || (w === 'sprint' && !SP.on) ? ''
-  : w === 'idea' ? `<button class="tile" data-idea><span></span><b>${esc(s?.title ?? BUILTIN.idea)}</b></button>`
-  : w === 'sprint' ? `<button class="tile" data-sprint="${esc(s?.id ?? '')}"><span class="lvl" data-l="${SP.data ? 'ok' : 'bad'}"></span><b>${esc(s?.title ?? BUILTIN.sprint)}</b><span class="n">${SP.data ? SP.data.chunks.filter(c => c.state === 'merged').length + '/' + SP.data.chunks.length : '!'}</span></button>`
-  : `<button class="tile" data-medit><span></span><b>${esc(s?.title ?? BUILTIN.edit)}</b></button>`;
-// What a built-in tile (or its button inside a section's widgets) opens; sec is the section naming sprint, whose buttons its window runs.
-const builtinModal = (w, sec) => w === 'idea' ? { kind: 'idea', name: '', text: '', needs: false } : w === 'sprint' ? { kind: 'sprint', sec } : { kind: 'medit', items: editItems(M) };
-// A group's top-row tile: g is its M.scripts key, l its rows.
-const groupTile = (g, l) => { const sp = spaceOf(g), a = art('sections', g);
-  return `<button class="tile${secWorst(g, l) === 'bad' ? ' bad fx-halo' : ''}" data-group="${esc(gTitle(g))}" data-key="${esc(g)}"><span class="lvl" data-l="${secWorst(g, l)}"></span><b>${a.picture ? `<img class="sec-ico" src="${esc(a.picture)}" alt=""> ` : ''}${!a.picture && sp?.icon ? `<span data-icon>${esc(sp.icon)}</span> ` : ''}${esc(gTitle(g))}</b><span class="n">${sectionRows(g, l)}</span></button>`; };
-// The top row (W-D): registry-only groups, then the sections in file order (one placed in a column is drawn there), each as its group
-// tile, its panel's tile (the placed layout) or its built-in tile. Where no section names a built-in tile, the three end the row as before.
-const topRow = lay => Object.entries(M.scripts).filter(([g]) => !spaceOf(g)).map(([g, l]) => groupTile(g, l)).join('')
-  + (M.space || []).filter(s => !lay || !PLACED.test(s.place)).map(s => (TILE_WIDGETS.includes(s.widget) ? builtinTile(s.widget, s) : s.widget && lay ? widgetTile(s) : '')
-    // A widget section's own buttons keep their tile, as before; a sprint section's are its window's buttons (W-M).
-    + (M.scripts[s.id] && s.widget !== 'sprint' ? groupTile(s.id, M.scripts[s.id]) : '')).join('')
-  + (namesTile() ? '' : TILE_WIDGETS.map(w => builtinTile(w)).join(''));
-// W-H: with nothing placed, the fixed layout's boxes keep their columns, but within one they follow the file order of the sections
-// naming them (a box none names keeps its place after those). A space naming none draws exactly the old layout.
-const fileRank = w => { const i = (M.space || []).findIndex(s => s.widget === w || s.widgets?.includes(w)); return i < 0 ? Infinity : i; };
-const byFile = boxes => boxes.map((b, i) => [b, i]).sort((x, y) => fileRank(x[0][0]) - fileRank(y[0][0]) || x[1] - y[1]).map(([b]) => b[1]).join('');
-// In the placed layout a widget section left in the top row is a tile that opens its window.
-const widgetTile = s => { const id = WIDGET_WIN[s.widget], w = wins[id];
-  if (s.widget !== 'waiting' && w.show && !w.show()) return '';
-  const [big, , lvl] = s.widget === 'waiting' ? [S.reviews.length, '', S.reviews.length ? 'warn' : 'ok'] : w.card();
-  return `<button class="tile" data-wtile="${id || 'waiting'}"><span class="lvl" data-l="${lvl}"></span><b>${esc(s.title)}</b><span class="n">${esc(big)}</span></button>`; };
-const secPanel = g => [...document.querySelectorAll('#fMission [data-sec]')].find(p => p.dataset.key === g);
-// A placed section's state (tile answers, card HTML, counts, a quick note's text), kept while its space entry is unchanged.
-const inlineSec = {};
-// On the page a redraw writes only changed markup; a field being typed in keeps its focus and caret across it.
-const writeKeep = (el, html) => {
-  if (written.get(el) === html) return false;
-  const a = document.activeElement, name = el.contains(a) && a.name, at = name && [a.selectionStart, a.selectionEnd];
-  setHTML(el, html);
-  const n = name && el.querySelector(`[name="${CSS.escape(name)}"]`);
-  if (n) { n.focus(); if (at[0] != null) n.setSelectionRange(at[0], at[1]); }
-  return true;
-};
-function secInline(g) {
-  const p = secPanel(g), sp = spaceOf(g);
-  if (!p || !sp || !M.scripts[g]) return;
-  const key = JSON.stringify(sp);
-  let m = inlineSec[g];
-  if (m?.key !== key) { if (m) clearInterval(m.pulling); m = inlineSec[g] = { key }; }
-  // ponytail: a counted folder and a checklist are read once per version of the section here, not on each look as the window does.
-  sectionBody(m, p.querySelector('.pscroll'), g, { write: writeKeep, shown: () => inlineSec[g] === m && !!secPanel(g),
-    seen: () => S.focus === 'mission' && !document.hidden, redraw: () => secInline(g) });
-  p.dataset.l = secLv[g] || '';
-}
-// D9: an empty Mission (no buttons, apps, pages or waiting items yet) says what it is and how to set it up.
-const missionEmpty = () => window.p9?.mission && !sampleView && !Object.keys(M.scripts).length && !M.apps.length && !M.pages.length && !S.reviews.length
-  && (live.on || /not set up/.test(live.note));
-const missionIntro = () => '<div class="sm" data-mission-intro role="note"><h4>What is Mission Control?</h4>'
-  + '<p>Your control room: one place for the buttons that run your scripts, shortcuts to your apps and pages, and a list of what is waiting on you.</p>'
-  + '<p class="muted">It reads three things from your workspace: a main project file, a file of buttons, apps and pages, and a folder with one .md file for each item waiting on you. Settings → Mission Control files points P9 at the ones you already have.</p>'
-  + '<div class="set-row">' + (window.p9?.openDocs ? '<button data-slot="button" data-variant="outline" data-mission-docs>How to add buttons</button>' : '') + '</div></div>';
 // M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
 let guide = null;
-async function loadGuide() {
-  const r = await window.p9.mission('guide', {});
-  if (r.status !== 200) return;
-  guide = r.body;
-  if (live.empty || live.adding) renderMission();
-  if (mdl.open && S.modal?.kind === 'guide') renderModal();
-}
 // Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Opening it reads the
 // space list again, so a space made on the phone or through the MCP tools shows at once, not at the next 20 s poll. Switching sets
 // settings.space_name through the space route and writes no space file; only Delete, after its confirm, removes one.
 let spacePop = null, spaceForm = null; // spaceForm: the Delete confirm or the Save as template form, kept through polls
-function renderSpaceBtn() {
-  const b = $('#spaceBtn'), pop = $('#spacePop');
-  b.hidden = !live.on;
-  b.dataset.spaceCurrent = live.spaceName || '';
-  b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-  b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
-  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); refreshMission(); });
-  if (!pop.hidden && !spaceForm) renderSpaceMenu(true);
-}
 let spaceMenuHtml = '';
-function renderSpaceMenu(redraw) {
-  const pop = $('#spacePop'), now = live.spaceName || '';
-  const html = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
-    + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button><button class="item" role="menuitem" data-space-save>Save as template…</button>'
-    + (now ? `<button class="item space-del" role="menuitem" data-space-del>Delete ${esc(now)}…</button>` : '');
-  // A poll's redraw of the open menu with nothing new keeps its buttons: a fresh node under the pointer eats the click (M4a in CI).
-  if (redraw && html === spaceMenuHtml && !pop.querySelector('.space-form')) return;
-  spaceMenuHtml = html;
-  pop.innerHTML = html;
-  pop.querySelector('[data-space-save]').onclick = () => spaceSave();
-  pop.querySelector('[data-space-del]')?.addEventListener('click', spaceDelete);
-  pop.querySelectorAll('[data-space]').forEach(b => b.onclick = async () => {
-    spacePop.close(); live.adding = false; live.preview = null;
-    const r = await window.p9.mission('space', { name: b.dataset.space || null });
-    if (r.status !== 200) toast({ kind: 'not saved', txt: 'Space: ' + (r.body?.error || r.status), level: 'bad' }, true);
-    refreshMission();
-  });
-  pop.querySelector('[data-space-add]').onclick = () => { spacePop.close(); live.adding = true; live.preview = null; renderMission(); };
-}
-// Finding 4 adds: Delete removes the shown space's file after a confirm that names it; the last space is kept and + Add offered.
-const formGo = (...buttons) => '<div class="space-form-go">' + buttons.join('') + '</div>';
-const formBtn = (variant, attr, label, type = 'button') => `<button type="${type}" data-slot="button" data-variant="${variant}" data-size="sm" ${attr}>${label}</button>`;
-function spaceDelete() {
-  const pop = $('#spacePop'), name = live.spaceName, last = !live.mainFile && (live.spaces || []).length <= 1;
-  spaceForm = 'delete';
-  pop.innerHTML = last
-    ? `<div class="space-form" data-space-confirm role="alertdialog" aria-labelledby="spaceDelHd"><p id="spaceDelHd"><b>${esc(name)}</b> is your only space, so P9 keeps it.</p><p class="muted">Add another space first.</p>`
-      + formGo(formBtn('default', 'data-space-add', '+ Add'), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</div>'
-    : `<div class="space-form" data-space-confirm role="alertdialog" aria-labelledby="spaceDelHd"><p id="spaceDelHd">Delete <b>${esc(name)}</b>?</p><p class="muted">This removes its file. It can't be undone.</p><p class="muted" data-space-note role="status"></p>`
-      + formGo(formBtn('destructive', 'data-space-del-go', 'Delete ' + esc(name)), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</div>';
-  bindSpaceForm(pop);
-  const go = pop.querySelector('[data-space-del-go]');
-  if (!go) return pop.querySelector('[data-space-add]').focus();
-  go.focus();
-  go.onclick = async () => {
-    go.disabled = true;
-    const r = await window.p9.mission('deleteSpace', { name, ...(go.dataset.armed ? { confirm: true } : {}) });
-    go.disabled = false;
-    if (r.status === 403 && !go.dataset.armed) { go.dataset.armed = '1'; pop.querySelector('[data-space-note]').textContent = 'File protection is on. Click Delete again to delete it.'; return; }
-    if (r.status !== 200) { pop.querySelector('[data-space-note]').textContent = 'Not deleted: ' + (r.body?.detail || r.body?.error || r.status); return; }
-    spaceForm = null; spacePop.close();
-    toast({ kind: 'saved', txt: 'Space ' + name + ' deleted.', level: 'ok' }, true);
-    refreshMission();
-  };
-}
-// Save as template: a name (the scratch-space rule) and an optional one-line about. A clash asks Replace or Rename.
-function spaceSave() {
-  const pop = $('#spacePop');
-  spaceForm = 'save';
-  pop.innerHTML = '<form class="space-form" data-space-save-form aria-labelledby="spaceSaveHd"><p id="spaceSaveHd"><b>Save as template</b></p>'
-    + `<label>Name<input data-slot="input" name="name" required maxlength="32" pattern="[a-z0-9][a-z0-9\\-]{0,31}" autocomplete="off" spellcheck="false" value="${esc(live.spaceName || 'main')}"></label>`
-    + '<span class="muted space-hint">Lowercase letters, digits and -</span>'
-    + '<label><span>About <span class="muted">(optional)</span></span><input data-slot="input" name="about" maxlength="200" autocomplete="off"></label>'
-    + '<p class="muted" data-space-note role="status"></p>'
-    + '<div class="space-form-go" data-space-clash hidden>' + formBtn('default', 'data-space-replace', 'Replace') + formBtn('outline', 'data-space-rename', 'Rename') + '</div>'
-    + formGo(formBtn('default', 'data-space-save-go', 'Save template', 'submit'), formBtn('outline', 'data-space-cancel', 'Cancel')) + '</form>';
-  bindSpaceForm(pop);
-  const form = pop.querySelector('form'), note = form.querySelector('[data-space-note]'), clash = form.querySelector('[data-space-clash]');
-  form.elements.name.select();
-  const save = async (replace) => {
-    const name = form.elements.name.value.trim(), r = await window.p9.mission('saveTemplate', { name, about: form.elements.about.value.trim(), ...(replace ? { replace: true } : {}) });
-    clash.hidden = r.body?.error !== 'template-exists';
-    if (r.status === 201) {
-      spaceForm = null; spacePop.close(); guide = null; loadGuide();
-      return toast({ kind: 'saved', txt: 'Template ' + name + ' saved. It shows under + Add.', level: 'ok' }, true);
-    }
-    note.textContent = r.body?.error === 'template-exists' ? 'A template named ' + name + ' exists. Replace it, or rename this one.'
-      : r.body?.error === 'builtin-template' ? name + ' is a built-in template. Pick another name.'
-        : 'Not saved: ' + (r.body?.detail || r.body?.error || r.status);
-  };
-  form.onsubmit = (event) => { event.preventDefault(); save(false); };
-  form.querySelector('[data-space-replace]').onclick = () => save(true);
-  form.querySelector('[data-space-rename]').onclick = () => { clash.hidden = true; note.textContent = ''; form.elements.name.select(); };
-}
-function bindSpaceForm(pop) {
-  pop.querySelectorAll('[data-space-cancel]').forEach((b) => b.onclick = () => { spaceForm = null; renderSpaceMenu(); });
-  pop.querySelector('[data-space-add]')?.addEventListener('click', () => { spaceForm = null; spacePop.close(); live.adding = true; live.preview = null; renderMission(); });
-}
-function bindOnboard(root) {
-  root.querySelectorAll('[data-build]').forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    // From + Add the build goes into a new space under a free name, never the one shown (threat model row 72).
-    const r = await window.p9.mission('build', { provider: b.dataset.build, ...(live.adding ? { space: freeName('new-space', live.spaces || []) } : {}) });
-    b.disabled = false;
-    if (r.status === 201 && r.body.space) {
-      live.adding = false; renderMission();
-      toast({ kind: 'chat', txt: (b.dataset.build === 'codex' ? 'Codex' : 'Claude') + ' builds the new space ' + r.body.space + '. It shows in the Space menu once it has a section.', level: 'ok' }, true);
-    }
-    if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation });
-    else toast({ kind: 'chat', txt: b.textContent + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
-  });
-  root.querySelectorAll('[data-yourself]').forEach(b => b.onclick = () => openModal({ kind: 'guide' }));
-  root.querySelectorAll('[data-open-protect]').forEach(b => b.onclick = async () => { await $('#setBtn').onclick(); const input = $('#setProtect'); input?.scrollIntoView({ block: 'center' }); input?.focus(); });
-  root.querySelectorAll('[data-template]').forEach(b => b.onclick = () => { live.preview = b.dataset.template; renderMission(); });
-  root.querySelectorAll('[data-preview-back]').forEach(b => b.onclick = () => { live.preview = null; renderMission(); });
-  root.querySelectorAll('[data-add-cancel]').forEach(b => b.onclick = () => { live.adding = false; renderMission(); });
-  // Choose: the template into a new scratch space under a free name (the route also refuses a space with sections), then shown.
-  // File protection answers the first click 403 and arms the button; the second click sends the user's confirmation, as the edit form does.
-  root.querySelectorAll('[data-choose]').forEach(b => b.onclick = async () => {
-    const name = b.dataset.choose, note = root.querySelector('[data-onboard-note]');
-    const space = freeName(name, live.spaces || []);
-    b.disabled = true;
-    const r = await window.p9.mission('template', { name, space, ...(b.dataset.armed ? { confirm: true } : {}) });
-    const shown = r.status === 201 && (await window.p9.mission('space', { name: space })).status === 200;
-    b.disabled = false;
-    if (r.status === 403 && !b.dataset.armed) { b.dataset.armed = '1'; note.textContent = 'File protection is on. Click Choose template again to add it.'; return; }
-    toast({ kind: r.status === 201 ? 'saved' : 'not saved', level: r.status === 201 ? 'ok' : 'bad',
-      txt: r.status !== 201 ? templateWords(r.status, r.body) : shown ? 'Space ' + space + ' added. Rename and fill its sections.' : 'Space ' + space + ' added. Pick it in the Space menu.' }, true);
-    if (r.status !== 201) return;
-    live.adding = false; live.preview = null; refreshMission();
-    // ponytail: the one template that needs a folder asks for it as it is added; a template field for this is out of scope.
-    if (name === 'obsidian' && window.p9.pickVault) await pickVault();
-  });
-}
-// The Obsidian vault folder (threat model row 73): desktop only. Main shows the native picker and a confirm, then tells the daemon.
-// On a remote the vault is the remote's folder (finding 3b, answer A): the setup chat opens with the ask typed, not sent,
-// and adds the folder with allow_folder once the user confirms there.
-async function vaultChat() {
-  const r = await window.p9.mission('build', { provider: wizPicked()[0] || 'claude' });
-  if (r.status !== 201) { toast({ kind: 'chat', level: 'bad', txt: 'Setup chat not started (' + (r.body?.error || r.status) + ').' }, true); return false; }
-  const id = r.body.conversation;
-  openModal({ kind: 'chat', id });
-  for (let i = 0; i < 50 && !S.sessions.some(s => s.id === id); i++) await new Promise(res => setTimeout(res, 100));
-  const s = S.sessions.find(x => x.id === id);
-  if (s && !s.draft) { s.draft = 'Add my Obsidian vault folder'; if (S.modal?.id === id) renderModal(); }
-  toast({ kind: 'chat', level: 'ok', txt: 'P9 runs on the remote, so the setup chat adds the folder there.' }, true);
-  return false;
-}
-async function pickVault() {
-  const r = await window.p9.pickVault();
-  if (r.body?.canceled) return false;
-  const ok = r.status === 201, e = r.body?.error;
-  if (e === 'server-mode-local-only') return vaultChat();
-  toast({ kind: ok ? 'saved' : 'not saved', level: ok ? 'ok' : 'bad', txt: ok ? 'Vault folder set: ' + r.body.vault
-      : e === 'name-taken' ? 'A vault folder is already set: ' + r.body.folder : e === 'root-refused' ? 'Mission does not use this folder: it holds the workspace, the home folder or P9\'s own files.'
-        : 'Vault folder not set (' + (e || r.status) + ').' }, true);
-  if (ok) refreshMission();
-  return ok;
-}
 function renderMission() {
   renderSpaceBtn();
   // A fresh profile shows only the onboarding card (M4): no panels, nothing else to read yet. + Add shows it too (finding 4);
@@ -1736,153 +565,6 @@ function renderMission() {
   missionLive();
   if (mdl.open && S.modal?.kind === 'win') renderModal();
 }
-async function launchLive(name, req) {
-  const res = await window.p9.mission('launch', req);
-  toast({ kind: res.status === 200 ? 'launched' : 'not launched', txt: name + (res.status === 200 ? '' : ' (' + (res.body?.reason || res.body?.error || res.status) + ')'), level: res.status === 200 ? 'ok' : 'bad' }, true);
-}
-// A section window's buttons; back returns to the window
-function bindWin(root, m) {
-  root.querySelectorAll('[data-launch]').forEach(b => b.onclick = async () => {
-    if (!live.on) return toast({ kind: 'launched', txt: b.dataset.launch + ' (mock: nothing opens)', level: 'ok' }, true);
-    // A link that is not http(s) opens another program: the full link is shown first, and only Open sends confirm (M6).
-    const page = b.dataset.page ? M.pages[+b.dataset.page] : null;
-    if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back: m });
-    launchLive(b.dataset.launch, b.dataset.page ? { kind: 'pages', id: page[2] } : { kind: 'apps', id: M.apps[+b.dataset.app][3] });
-  });
-}
-// The parts that change: the queue and notices are the same S.reviews and S.alerts the cards use. Redraws the
-// section cards, and the open window's list in place (keeping its scroll).
-function missionLive() {
-  const page = $('#fMission .mrow');
-  if (page) {
-    const box = page.querySelector('.wins'); // the fixed layout's cards
-    if (box) setHTML(box, Object.keys(wins).filter(id => id !== 'mprimary' && !PANELS.includes(id) && (!wins[id].show || wins[id].show())).map(winCard).join(''));
-    page.querySelectorAll(':scope>.mcol>[data-card]').forEach(c => { const id = c.dataset.card; setHTML(c, !wins[id].show || wins[id].show() ? winCard(id) : ''); });
-    page.querySelectorAll('[data-panel]').forEach(p => { const id = p.dataset.panel; p.hidden = !!wins[id].show && !wins[id].show(); p.querySelector('h4').textContent = wins[id].title(); bindWin(setHTML(p.querySelector('.pscroll'), (wins[id].inline || wins[id].body)()), { kind: 'win', id }); });
-    page.querySelectorAll('[data-sec]').forEach(p => secInline(p.dataset.key));
-    // With a space file the built-in layer is off, so Main project and Logs are gone: an empty column hides and the others widen.
-    page.querySelectorAll('.mcol').forEach(col => { col.hidden = ![...col.children].some(k => !k.hidden && k.innerHTML.trim()); });
-    if (page.dataset.placed !== undefined) {
-      const shown = [...page.querySelectorAll(':scope>.mcol:not([hidden])')];
-      page.dataset.cols = shown.length;
-      // W-G: the columns shown share the row by their weights (a hidden one gives its share to the others).
-      if (shown.some(col => col.dataset.w)) page.style.setProperty('--mcols', shown.map(col => `minmax(0,${col.dataset.w || 1}fr)`).join(' ')); else page.style.removeProperty('--mcols');
-    }
-    $('#fMission').querySelectorAll('[data-win]').forEach(b => b.onclick = () => openModal({ kind: 'win', id: b.dataset.win }));
-  }
-  const set = (id, html) => { const b = $(`#mdl #${id} .pbody`); if (!b) return { querySelectorAll: () => [] }; return setHTML(b, html); };
-  const needs = $('#fMission .needs [data-list]'); $('#fMission .needs [data-n]')?.replaceChildren(String(S.reviews.length)); $('#fMission .needs [data-unit]')?.replaceChildren(S.reviews.length === 1 ? ' item' : ' items');
-  (needs ? setHTML(needs, reviewList('data-i')) : { querySelectorAll: () => [] })
-    .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'review', i: +b.dataset.i }, 'reviews'));
-  const notes = allNotes();
-  set('mnotes', noteList(notes, 'data-i'))
-    .querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'alert', a: notes[+b.dataset.i], back: S.modal }));
-  fillWidgets($('#fMission'));
-  if (S.modal?.kind === 'scripts' && mdl.open) fillWidgets($('#mdlBody'), S.modal);
-}
-// Waiting on you and Notifications as lists; at is the attribute each row's button carries (a section's widgets use their own, W-I).
-const reviewList = at => S.reviews.length ? `<ul class="plist">${S.reviews.map((r, i) => `<li><button ${at}="${esc(i)}"><span class="kind"${tint(r.kind)}>${esc(r.kind)}</span><span class="sm"><span class="tint"${tint(r.proj)}>${esc(r.proj)}</span><span class="muted"> · ${esc(r.age)}</span></span><span class="txt">${esc(r.txt)}</span></button></li>`).join('')}</ul>` : '<p class="empty">Nothing waiting on you.</p>';
-const noteList = (notes, at) => notes.length ? `<ul class="plist">${notes.map((a, i) => `<li><button ${at}="${esc(i)}"${a.level === 'bad' ? ' class="bad fx-halo"' : ''}><span class="lvl" data-l="${esc(a.level)}"></span><span class="kind"${tint(a.kind)}>${esc(a.kind)}</span><span class="txt">${esc(a.txt)}</span></button></li>`).join('')}</ul>` : `<p class="empty">${esc(noticeLine())}</p>`;
-// A section's widgets (W-I): P9's own panels inside the section, on the page and in its window. sectionBody draws each empty and
-// calls this; missionLive calls it again, so a new notification or waiting item shows where the section is. back: what a row returns to.
-function fillWidgets(root, back) {
-  root?.querySelectorAll('.wdg[data-widget]').forEach(box => {
-    const w = box.dataset.widget, b = box.querySelector('.wbody'), notes = allNotes();
-    if (w === 'notifications') setHTML(b, noteList(notes, 'data-wnote')).querySelectorAll('[data-wnote]').forEach(x => x.onclick = () => openModal({ kind: 'alert', a: notes[+x.dataset.wnote], back: back ?? S.modal }));
-    else if (w === 'waiting') setHTML(b, reviewList('data-wreview')).querySelectorAll('[data-wreview]').forEach(x => x.onclick = () => openModal({ kind: 'review', i: +x.dataset.wreview }, 'reviews'));
-    else if (w === 'usage') setHTML(b, wins.musage.inline());
-    else if (w === 'apps') bindWin(setHTML(b, wins.mlaunch.body()), back ?? { kind: 'win', id: 'mlaunch' });
-    else if (w === 'primary') setHTML(b, live.primary ? wins.mprimary.body() : '<p class="empty">No main project.</p>');
-    else if (TILE_WIDGETS.includes(w)) setHTML(b, w === 'sprint' && !SP.on ? '<p class="empty">No sprint status file.</p>' : `<button data-slot="button" data-variant="outline" data-wopen>${esc(BUILTIN[w])}</button>`)
-      .querySelectorAll('[data-wopen]').forEach(x => x.onclick = () => openModal(builtinModal(w, box.dataset.wkey)));
-  });
-}
-// Notes (threat model row 34): a folder outside the workspace, named in settings.notes_roots; the daemon checks every path.
-// The preview goes through md, which shows raw HTML as text and links and images as plain text (row 18).
-const noteKey = (root, path) => 'notes:' + root + '/' + path;
-const noteError = { exists: 'A note with that name already exists; nothing was changed.', 'no-such-folder': 'That folder does not exist; make it in your notes app first.',
-  'request-refused': 'Use a .md name with no part starting with a dot.' };
-function notesModal(m, body, row) {
-  $('#mdlT').textContent = m.title + ' · notes';
-  if (m.list === undefined) { m.list = null; window.p9.mission('notes', { root: m.root }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
-  const l = m.list, now = Date.now();
-  body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error ? `<p class="sm muted">Could not list the notes (${esc(l.error)})</p>`
-    : `<div class="notes-new"><input data-slot="input" data-new value="${esc(m.draftName || '')}" placeholder="folder/new-note.md" aria-label="New note"><button data-slot="button" data-size="sm" data-create>New note</button></div>`
-      + (l.files.length ? `<ul class="mlist">${l.files.map((f, i) => row(i, '<span class="kind">md</span>', esc(f.path), esc(ago(Math.max(0, Math.round((now - f.modified) / 60000)))) + ' ago')).join('')}</ul>` : '<p class="empty">No .md notes in this folder yet.</p>');
-  $('#mdlFoot').innerHTML = l && !l.error ? `<span class="muted sm" data-notes-count>${l.total > l.files.length ? `Showing the newest ${l.files.length} of ${l.total} notes` : `${l.total} note${l.total === 1 ? '' : 's'}`}${l.partial ? ' · a very big folder: some subfolders were not read' : ''}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-reload>Reload</button>` : '';
-  $('#mdlFoot [data-reload]')?.addEventListener('click', () => { m.list = undefined; renderModal(); });
-  body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'note', root: m.root, path: l.files[+b.dataset.i].path, back: m }));
-  const input = body.querySelector('[data-new]'); if (!input) return;
-  input.oninput = () => { m.draftName = input.value; };
-  const create = async () => {
-    let p = (m.draftName || '').trim().replace(/^\/+/, '');
-    if (!p) return toast({ kind: 'not saved', txt: 'Type a name for the new note first.', level: 'warn' }, true);
-    if (!/\.md$/i.test(p)) p += '.md';
-    const r = await window.p9.mission('noteCreate', { root: m.root, path: p, content: '# ' + p.split('/').pop().replace(/\.md$/i, '') + '\n\n' });
-    if (r.status === 201) { m.draftName = ''; m.list = undefined; openModal({ kind: 'note', root: m.root, path: r.body.path, edit: true, back: m }); }
-    else toast({ kind: 'not saved', txt: p + ': ' + (noteError[r.body?.error] || 'could not create it (' + (r.body?.error || r.status) + ')'), level: 'warn' }, true);
-  };
-  body.querySelector('[data-create]').onclick = create;
-  input.onkeydown = e => { if (e.key === 'Enter') create(); };
-}
-// A real file from the Chat Focus browser (threat model rows 23, 4, 7): the same editor as Dev Focus's fallback; Save is the one "save"
-// action, the daemon's guarded PUT /files, so a changed file answers 409 and the draft stays (like a Mission note).
-const liveKey = name => 'live:' + name;
-function liveFileModal(m, body) {
-  if (FILE_IMAGE.test(m.name)) return imageModal(m, body);
-  const key = liveKey(m.name);
-  $('#mdlT').textContent = m.name;
-  if (!m.asked && !dirty(key)) {
-    m.asked = true;
-    window.p9.mission('read', { path: m.name }).then(r => {
-      if (r.status === 200 && !dirty(key)) S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
-      else if (r.status !== 200) m.error = r.body?.error || String(r.status);
-      if (S.modal === m) renderModal();
-    }).catch(() => { m.error = 'daemon-unavailable'; if (S.modal === m) renderModal(); });
-  }
-  const d = S.docs[key];
-  if (!d) { body.innerHTML = `<p class="sm muted">${m.error ? 'Not readable: ' + esc(m.error) : 'Loading…'}</p>`; $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span>`; return; }
-  const c = m.conflict;
-  body.innerHTML = (c ? `<div class="review notes-conflict" data-conflict>${c.diskHash !== undefined
-    ? `<p>Changed on disk since you opened it. Your text is still here.</p><div class="notes-row"><button data-slot="button" data-variant="outline" data-size="sm" data-disk>Load disk version</button><button data-slot="button" data-size="sm" data-mine>Save mine over it</button></div>`
-    : `<p>This file is no longer on disk (moved, renamed or deleted elsewhere). Your text is still here: copy it before you close.</p><div class="notes-row"><button data-slot="button" data-size="sm" data-copytext>Copy my text</button></div>`}</div>` : '')
-    + editorHtml(key, 'mdlEd');
-  wireEditor(body, key, () => liveFoot(m), () => saveLive(m));
-  body.querySelector('[data-disk]')?.addEventListener('click', () => { Object.assign(d, { text: c.diskContent, saved: c.diskContent, hash: c.diskHash }); m.conflict = null; renderModal(); });
-  body.querySelector('[data-mine]')?.addEventListener('click', () => saveLive(m, c.diskHash));
-  body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
-  liveFoot(m);
-}
-// An image from the Files pane (rows 23/26/27 adds): read-only; the words and the check are helpers.mjs's, shared with the phone.
-function imageModal(m, body) {
-  $('#mdlT').textContent = m.name;
-  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
-  if (m.image === undefined) {
-    m.image = null;
-    window.p9.mission('image', { path: m.name }).then(r => {
-      const src = r.status === 200 && fileImageSrc(r.body);
-      m.image = src ? { src } : { error: r.status === 200 ? 'not-an-image' : r.body?.error || String(r.status) };
-      if (S.modal === m) renderModal();
-    }).catch(() => { m.image = { error: 'daemon-unavailable' }; if (S.modal === m) renderModal(); });
-  }
-  const i = m.image;
-  body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
-    : `<div class="file-image"><img src="${i.src}" alt="${esc(m.name)}"></div>`;
-}
-function liveFoot(m) {
-  $('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${saveBtn(liveKey(m.name))}`;
-  const b = $('#mdlFoot [data-savefile]'); if (b) b.onclick = () => saveLive(m);
-}
-async function saveLive(m, hash) {
-  const key = liveKey(m.name), d = S.docs[key]; if (!d || m.saving || (!hash && !dirty(key))) return;
-  m.saving = true; const text = d.text;
-  const r = await window.p9.mission('save', { path: m.name, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
-  m.saving = false;
-  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.name, level: 'ok' }, true); }
-  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.name + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.name + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
-  if (S.modal === m) renderModal();
-}
 // One note: the rendered preview, or the editor; Save sends the hash it was read with, so a change on disk is never overwritten.
 function noteModal(m, body) {
   const key = noteKey(m.root, m.path);
@@ -1910,296 +592,6 @@ function noteModal(m, body) {
   body.querySelector('[data-mine]')?.addEventListener('click', () => saveNote(m, c.diskHash));
   body.querySelector('[data-copytext]')?.addEventListener('click', e => copy(d.text, e.currentTarget));
   noteFoot(m);
-}
-function noteFoot(m) {
-  const key = noteKey(m.root, m.path), base = m.path.split('/').pop();
-  $('#mdlFoot').innerHTML = m.readOnly
-    ? `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><span class="muted sm" data-readonly>Read-only: File protection is on</span>`
-    : m.renaming
-    ? `<input data-slot="input" data-rename value="${esc(m.newName ?? base)}" aria-label="New name"><button data-slot="button" data-size="sm" data-rename-go>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-rename-x>Cancel</button>`
-    : `<span class="muted sm mono truncate">${esc(m.path)}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-rename-open>Rename</button><button data-slot="button" data-variant="outline" data-size="sm" data-mode>${m.edit ? 'Preview' : 'Edit'}</button>${dirty(key) ? `<span data-slot="badge">draft</span><button data-slot="button" data-size="sm" data-savenote>Save</button>` : '<span class="muted sm">saved</span>'}`;
-  const on = (sel, fn) => { const b = $('#mdlFoot ' + sel); if (b) b.onclick = fn; };
-  on('[data-mode]', () => { m.edit = !m.edit; renderModal(); });
-  on('[data-savenote]', () => saveNote(m));
-  on('[data-rename-open]', () => { m.renaming = true; m.newName = base; noteFoot(m); $('#mdlFoot [data-rename]').focus(); });
-  on('[data-rename-x]', () => { m.renaming = false; noteFoot(m); });
-  const input = $('#mdlFoot [data-rename]'); if (!input) return;
-  input.oninput = () => { m.newName = input.value; };
-  const go = async () => {
-    let name = (m.newName || '').trim();
-    if (name.includes('/')) return toast({ kind: 'not renamed', txt: 'Type a new name only; moving a note to another folder is not supported.', level: 'warn' }, true);
-    if (!/\.md$/i.test(name)) name += '.md';
-    if (name === base) { m.renaming = false; return noteFoot(m); }
-    const r = await window.p9.mission('noteRename', { root: m.root, path: m.path, name });
-    if (r.status !== 200) return toast({ kind: 'not renamed', txt: name + ': ' + (noteError[r.body?.error] || 'could not rename it (' + (r.body?.error || r.status) + ')'), level: 'warn' }, true);
-    S.docs[noteKey(m.root, r.body.path)] = S.docs[key]; delete S.docs[key];
-    m.path = r.body.path; m.renaming = false; if (m.back) m.back.list = undefined;
-    toast({ kind: 'renamed', txt: base + ' → ' + name, level: 'ok' }, true);
-    if (S.modal === m) renderModal();
-  };
-  on('[data-rename-go]', go);
-  input.onkeydown = e => { if (e.key === 'Enter') go(); else if (e.key === 'Escape') { e.preventDefault(); m.renaming = false; noteFoot(m); } };
-}
-// The same reply as answerLive: on 409 the draft stays and the banner offers the disk version or a save over it.
-async function saveNote(m, hash) {
-  const d = S.docs[noteKey(m.root, m.path)]; if (!d || m.saving) return;
-  m.saving = true; const text = d.text;
-  const r = await window.p9.mission('noteSave', { root: m.root, path: m.path, hash: hash || d.hash, content: text }).catch(() => ({ status: 503 }));
-  m.saving = false;
-  if (r.status === 200) { d.saved = text; d.hash = r.body.hash; m.conflict = null; toast({ kind: 'saved', txt: 'Saved ' + m.path, level: 'ok' }, true); }
-  else if (r.status === 409) { m.conflict = { diskContent: r.body.diskContent, diskHash: r.body.diskHash }; toast({ kind: 'not saved', txt: m.path + ' changed on disk since you opened it. Your text is still here.', level: 'warn' }, true); }
-  else toast({ kind: 'not saved', txt: 'Could not save ' + m.path + ': ' + saveWhy(r) + '. Your text is still here.', level: 'bad', start: 'Your text is still in the editor, so nothing is lost. Fix the reason above (it names the file and why), then press Ctrl S again.' }, true);
-  if (S.modal === m) renderModal();
-}
-// One section's items (notes, folders, refs, logs, scripts, data tiles, cards, links, checklists, quick note): the body
-// of the section's window, and the same items drawn open in a page column (place col1 to col3). o says where they are drawn:
-// write(el, html) puts the markup in and says whether it changed; shown() is false once the window closed or the panel left
-// the page; seen() is whether it is on screen now (tiles and cards ask the daemon only then); redraw() draws it again; back is
-// what a window opened from here returns to.
-// Which box each part draws in (no box: on its own); the classes are the boxes' CSS.
-const SECTION_BOX = { notes: 'mlist', folders: 'mlist', refs: 'mlist', logs: 'mlist', buttons: 'mlist', data: 'dtiles', cards: 'dtiles', links: 'dtiles', checklists: 'cks', widgets: 'wdgs' };
-function sectionBody(m, body, g, o) {
-  const l = M.scripts[g], sp = spaceOf(g);
-  // Data tiles and links (M3, threat model row 70): a tile asks the daemon only while this section is on screen, every 30 s.
-  // Cards (M5, threat model row M5): the card's HTML in the artifact frame; its script's answer goes in as data, and
-  // anything else (Allow, a bad run, an unreadable file) shows under the frame as text.
-  m.tiles ||= {}; m.cardHtml ||= {}; m.ck ||= {}; m.counts ||= {}; m.frames ||= {}; m.sent ||= {};
-  const runs = [...(sp?.data || []), ...(sp?.cards || [])];
-  // A tile or card with frame false is the section's body: no box and no title of its own (W-K; absent draws the frame).
-  const bare = t => t.frame === false ? ' data-noframe' : '';
-  // A card file edited on disk (its v changed in the overview): read it again and make its frame again.
-  const cardsKey = (sp?.cards || []).map(c => c.id + ':' + c.v).join();
-  if (m.cardsKey !== undefined && m.cardsKey !== cardsKey) { for (const id in m.frames) m.frames[id]?.remove(); m.frames = {}; m.sent = {}; m.cardHtml = {}; m.cardsRead = false; }
-  m.cardsKey = cardsKey;
-  const cardNote = c => m.cardHtml[c.id]?.error ? `<p class="tile-note">Could not read the card: ${esc(m.cardHtml[c.id].error)}</p>` : m.tiles[c.id]?.json !== undefined ? '' : tileHtml(m.tiles[c.id], esc, 'card');
-  // Row 76: typed text lives on m, so a tile answering (a redraw) does not wipe it. It sits under the section's text, so Save
-  // shows without scrolling.
-  const qn = sp?.quick_note; if (qn) m.qn ||= {};
-  // The parts in the section's order field (PARTS when it names none). Neighbours that share a box share it, so the default order
-  // draws what it drew before order existed: one list of rows, one row of tiles, one block of checklists.
-  const part = {
-    text: sp?.text ? `<p class="sm" data-space-text>${esc(sp.text)}</p>` : '', quick_note: qn ? quickNoteHtml(esc, qn, m.qn, true) : '',
-    notes: sp?.notes ? `<li><button data-notes="${esc(sp.notes)}"><span class="kind">notes</span><span class="truncate">Notes</span><span class="sub truncate">${esc(sp.notes)}</span></button></li>` : '',
-    folders: (sp?.folders || []).map((f, i) => `<li><button data-folder="${i}"><span class="kind">folder</span><span class="truncate">${esc(f.title)}</span><span class="sub" data-count>${m.counts?.[f.id] ?? '…'}</span></button></li>`).join(''),
-    refs: (sp?.refs || []).map((r, i) => r.missing
-      ? `<li><button data-ref-missing disabled title="No script, app or page has this ID"><span class="kind">ref</span><span class="truncate">${esc(r.id)}</span><span class="sub">not found</span></button></li>`
-      : `<li><button data-ref="${i}"><span class="kind">${{ scripts: 'script', apps: 'app', pages: 'link' }[r.kind]}</span><span class="truncate">${esc(r.title)}</span></button></li>`).join(''),
-    logs: (sp?.logs || []).map(g => `<li><button data-slog="${esc(g.id)}"><span class="kind">log</span><span class="truncate">${esc(g.title)}</span></button></li>`).join(''),
-    buttons: l.map((s, i) => listRow(i, `<span class="lvl" data-l="${esc(s[3])}"></span>`, esc(s[1]), esc(s[2]) + ' · ' + esc(s[4]) + ', ' + esc(s[5]))).join(''),
-    data: (sp?.data || []).map(d => `<section class="dtile" data-tile="${esc(d.id)}" data-l="${tileLevel(m.tiles[d.id])}"${bare(d)}><h3>${esc(d.title)}</h3>${tileHtml(m.tiles[d.id], esc)}</section>`).join(''),
-    cards: (sp?.cards || []).map(c => `<section class="dtile dcard" data-tile="${esc(c.id)}" data-l="${tileLevel(m.tiles[c.id])}" data-card${bare(c)}><h3><span>${esc(c.title)}</span>${(c.buttons || []).map(id => { const s = scriptById(id); return s ? `<button class="cbtn" data-cbtn="${esc(id)}">${esc(s[1])}</button>` : `<button class="cbtn" disabled title="No script or button has this ID">${esc(id)} not found</button>`; }).join('')}</h3><div class="card-frame"></div><div class="card-note" role="status">${cardNote(c)}</div></section>`).join(''),
-    links: (sp?.links || []).map(l => linkHtml(l, esc)).join(''),
-    // Checklists (row M4-a): read when the section opens and after each press; the daemon checks every write again.
-    checklists: (sp?.checklists || []).map(c => `<section class="ck" data-ck="${esc(c.id)}"><h3>${esc(c.title)}</h3>${checklistHtml(c.id, m.ck[c.id], esc, m.armed)}</section>`).join(''),
-    // P9's own panels inside the section (W-I), filled by fillWidgets below.
-    widgets: (sp?.widgets || []).map(w => `<section class="wdg" data-widget="${esc(w)}" data-wkey="${esc(g)}"><h3>${esc(w === 'waiting' ? 'Waiting on you' : BUILTIN[w] ?? wins[WIDGET_WIN[w]].title())}</h3><div class="wbody"></div></section>`).join(''),
-  };
-  // An empty part draws nothing and does not split its neighbours; the list of rows is still drawn once, empty, when no part has a row (as before).
-  const boxes = [], rows = Object.keys(part).some(k => SECTION_BOX[k] === 'mlist' && part[k]);
-  for (const k of partOrder(sp?.order, PARTS)) {
-    const box = SECTION_BOX[k], last = boxes.at(-1);
-    if (!part[k] && (box !== 'mlist' || rows || boxes.some(b => b.box === 'mlist'))) continue;
-    if (box && last?.box === box) last.html += part[k]; else boxes.push({ box, html: part[k] });
-  }
-  const fresh = o.write(body, boxes.map(b => !b.box ? b.html : `<${b.box === 'mlist' ? 'ul' : 'div'} class="${b.box}">${b.html}</${b.box === 'mlist' ? 'ul' : 'div'}>`).join(''));
-  // ponytail: the window draws whole, so there a card's frame is made again on each draw (a tile's answer, a checklist press)
-  // and gets the last JSON again; a card keeps no state of its own across draws. On the page the frame stays while the markup
-  // is unchanged, and a newer answer is posted into it.
-  for (const c of sp?.cards || []) {
-    const box = body.querySelector(`[data-card][data-tile="${CSS.escape(c.id)}"]`), html = m.cardHtml[c.id]?.html, at = box.querySelector('.card-frame');
-    if (typeof html !== 'string') continue;
-    const json = m.tiles[c.id]?.json;
-    if (!fresh && at.firstChild) { if (box.dataset.rendered === 'rendered' && json !== undefined && m.sent[c.id] !== json) { m.sent[c.id] = json; m.frames[c.id]?.contentWindow?.postMessage({ p9: 'data', json }, '*'); } continue; }
-    // Wall 15: p9open(path) from the card opens one of its folder's files, only right after a click in this card (the click
-    // activates this window too and focuses the frame; a click elsewhere, such as the one that opened the section, does not
-    // count), so a card cannot pop windows on its own. The daemon opens only files the folder lists. The frame is another
-    // process: its message can come before this page hears the frame took focus, so focus gets 1 s to arrive (256 ms seen in the dev space).
-    const onOpen = (p, since = performance.now()) => navigator.userActivation?.isActive && document.activeElement === m.frames[c.id]
-      ? openModal({ kind: 'hubtext', title: p.split('/').pop(), req: { id: c.id, path: p }, call: 'folderFile', back: o.back })
-      : performance.now() - since < 1000 && setTimeout(() => onOpen(p, since), 25);
-    const frame = m.frames[c.id] = mountCard(at, c.title, html, { ...FRAME, onOpen, onState: (kind, text) => {
-      box.dataset.rendered = kind;
-      const now = m.tiles[c.id]?.json;
-      if (kind === 'rendered' && now !== undefined) { m.sent[c.id] = now; frame.contentWindow?.postMessage({ p9: 'data', json: now }, '*'); }
-      if (kind === 'error') box.querySelector('.card-note').textContent = 'The card stopped with an error: ' + text;
-    } });
-  }
-  body.querySelectorAll('[data-cbtn]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: scriptById(b.dataset.cbtn), back: o.back }));
-  if (sp?.cards?.length && !m.cardsRead) { m.cardsRead = true; Promise.all(sp.cards.map(c => window.p9.mission('card', { id: c.id }).then(r => {
-    m.cardHtml[c.id] = r.status === 200 ? { html: r.body.html } : { error: r.body?.detail || r.body?.error || String(r.status) }; }))).then(() => o.shown() && o.redraw()); }
-  const ckLoad = (id) => window.p9.mission('checklist', { id }).then(r => { m.ck[id] = checklistAnswer(r.status, r.body); });
-  if (sp?.checklists?.length && !m.ckRead) { m.ckRead = true; Promise.all(sp.checklists.map(c => ckLoad(c.id))).then(() => o.shown() && o.redraw()); }
-  body.querySelectorAll('[data-ck] button').forEach(b => b.onclick = async () => {
-    const id = b.closest('[data-ck]').dataset.ck, act = checklistAction(b, m.ck[id], m.armed);
-    if (!act) return;
-    m.armed = act.arm || '';
-    if (act.arm) return o.redraw();
-    b.disabled = true;
-    const r = await window.p9.mission('checklistSet', act.body);
-    await ckLoad(id);
-    if (r.status >= 300 && !m.ck[id].error) m.ck[id].note = r.body?.error || String(r.status);
-    if (o.shown()) o.redraw();
-  });
-  const lv = ['bad', 'warn'].find(l => runs.some(r => tileLevel(m.tiles[r.id]) === l)) || '';
-  if ((secLv[g] || '') !== lv) { secLv[g] = lv; setTimeout(renderMission); }
-  const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (o.shown()) o.redraw(); });
-  if (runs.length && !m.pulled && o.seen()) { m.pulled = true; runs.forEach(pull); }
-  if (runs.length && !m.pulling) m.pulling = setInterval(() => { if (!o.shown()) { clearInterval(m.pulling); m.pulling = 0; return; } if (o.seen()) { m.pulled = true; runs.forEach(pull); } }, 30000);
-  body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);
-    window.p9.mission('dataAllow', { id: d.id }).then(r => { if (r.status === 200) return pull(d); m.tiles[d.id] = tileAnswer(r.status, r.body); o.redraw(); }); });
-  body.querySelectorAll('[data-tile-link]').forEach(a => a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); });
-  const form = qn && body.querySelector('[data-quicknote]');
-  if (form) {
-    form.oninput = () => { m.qn.title = form.elements.title.value; m.qn.body = form.elements.body.value; };
-    form.onsubmit = async e => {
-      e.preventDefault();
-      const file = quickNotePath(qn.path, m.qn.title || '');
-      const r = file ? await window.p9.mission('noteCreate', { root: qn.root, path: file, content: (m.qn.body || '').replace(/\s+$/, '') + '\n' }) : null;
-      m.qn = r?.status === 201 ? { status: quickNoteWords(r, file, qn) } : { ...m.qn, status: r ? quickNoteWords(r, file, qn) : 'Type a title first.' };
-      o.redraw();
-    };
-  }
-  const back = o.back;
-  body.querySelectorAll('[data-weblink]').forEach(b => b.onclick = () => openModal({ kind: 'weblink', l: sp.links.find(x => x.id === b.dataset.weblink), back }));
-  body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: l[+b.dataset.i], back }));
-  body.querySelectorAll('[data-slog]').forEach(b => b.onclick = () => openModal({ kind: 'hubtext', title: b.textContent.replace(/^log/, ''), req: { name: b.dataset.slog }, call: 'spaceLog', back }));
-  body.querySelectorAll('[data-notes]').forEach(b => b.onclick = () => openModal({ kind: 'notes', root: b.dataset.notes, title: gTitle(g), back }));
-  // Folder lists (row 68): the count comes from the daemon's own list, once per opening of the section (on the page, once per
-  // version of the section).
-  for (const f of sp?.folders || []) if (!(f.id in m.counts)) {
-    m.counts[f.id] = null;
-    window.p9.mission('folder', { id: f.id }).then(r => { m.counts[f.id] = r.status === 200 ? r.body.total : '?'; if (o.shown()) o.redraw(); });
-  }
-  body.querySelectorAll('[data-folder]').forEach(b => b.onclick = () => openModal({ kind: 'folder', f: sp.folders[+b.dataset.folder], back }));
-  // A reference (M2) opens what it names, the way its own tile does.
-  body.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => {
-    const r = sp.refs[+b.dataset.ref];
-    if (r.kind === 'scripts') { const s = Object.values(M.scripts).flat().find(x => x[0] === r.id); return s && openModal({ kind: 'script', s, back }); }
-    if (!live.on) return toast({ kind: 'launched', txt: r.title + ' (mock: nothing opens)', level: 'ok' }, true);
-    const page = r.kind === 'pages' ? M.pages.find(x => x[2] === r.id) : null;
-    if (page && !/^https?:\/\//i.test(page[1])) return openModal({ kind: 'link', page, back });
-    launchLive(r.title, { kind: r.kind, id: r.id });
-  });
-  fillWidgets(body, back);
-}
-// Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
-function missionModal(m, body, row) {
-  if (m.kind === 'win') {
-    const w = wins[m.id]; if (!w || (w.show && !w.show())) return closeModal();
-    $('#mdlT').textContent = w.title();
-    body.innerHTML = panel(m.id, esc(w.title()), w.body()); addHalos(body);
-    bindWin(body, m); missionLive();
-    body.onscroll = () => { winTop[m.id] = body.scrollTop; };
-  } else if (m.kind === 'scripts') {
-    if (!M.scripts[m.g]) return closeModal();
-    const n = sectionRows(m.g, M.scripts[m.g]), word = n > M.scripts[m.g].length ? 'item' : 'script';
-    $('#mdlT').textContent = `${gTitle(m.g)} · ${n} ${word}${n === 1 ? '' : 's'}`;
-    sectionBody(m, body, m.g, { write: (el, html) => { el.innerHTML = html; return true; }, shown: () => S.modal === m, seen: () => !document.hidden, redraw: renderModal, back: m });
-  } else if (m.kind === 'folder') {
-    $('#mdlT').textContent = m.f.title;
-    if (m.list === undefined) { m.list = null; window.p9.mission('folder', { id: m.f.id }).then(r => { m.list = r.status === 200 ? r.body : { error: r.body?.error || String(r.status) }; if (S.modal === m) renderModal(); }); }
-    const l = m.list, now = Date.now();
-    body.innerHTML = !l ? '<p class="sm muted">Loading…</p>' : l.error === 'unknown-root' && m.f.root === 'vault' ? (window.p9.pickVault
-      ? '<div class="review"><p class="sm">Mission lists this once it knows your vault folder.</p><button data-slot="button" data-variant="outline" data-pick-vault>Pick the vault folder</button></div>'
-      : '<div class="review"><p class="sm">Pick the vault folder in the P9 desktop app.</p></div>') : l.error ? `<p class="sm muted">Could not list this folder (${esc(l.error)})</p>`
-      : l.files.length ? `<ul class="mlist">${l.files.map((f, i) => row(i, '<span class="kind">file</span>', esc(f.name), esc(ago(Math.max(0, Math.round((now - f.modified) / 60000)))) + ' ago')).join('')}</ul>` : '<p class="empty">No files match.</p>';
-    $('#mdlFoot').innerHTML = l && !l.error ? `<span class="muted sm" data-folder-count>${l.total} file${l.total === 1 ? '' : 's'}${l.files.length < l.total ? ', the newest ' + l.files.length + ' shown' : ''}${l.partial ? ' · a very big folder: not every file was looked at' : ''}</span>` : '';
-    const pv = body.querySelector('[data-pick-vault]'); if (pv) pv.onclick = async () => { if (await pickVault()) { m.list = undefined; renderModal(); } };
-    body.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const f = l.files[+b.dataset.i]; openModal({ kind: 'hubtext', title: f.name, req: { id: m.f.id, path: f.path }, call: 'folderFile', back: m }); });
-  } else if (m.kind === 'notes') notesModal(m, body, row);
-  else if (m.kind === 'note') noteModal(m, body);
-  else if (m.kind === 'link') {
-    $('#mdlT').textContent = 'Open ' + m.page[0] + '?';
-    body.innerHTML = `<div class="review"><p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(m.page[1])}</pre><p class="muted sm">It is on your allowed-schemes list in settings.json. Only open it if you recognise it.</p></div>`;
-    $('#mdlFoot').innerHTML = `<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open link</button>`;
-    $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
-    $('#mdlFoot [data-open]').onclick = () => { launchLive(m.page[0], { kind: 'pages', id: m.page[2], confirm: true }); m.back ? openModal(m.back) : closeModal(); };
-  } else if (m.kind === 'weblink') {
-    // Rows 74, 75: the typed text is URL-encoded as the daemon does it, so the link shown is the link that opens.
-    const link = () => m.l.url + (m.l.ask ? encodeURIComponent((m.text || '').trim()) : ''), scheme = m.l.url.split(':')[0];
-    $('#mdlT').textContent = m.l.title;
-    body.innerHTML = `<div class="review">${m.l.ask ? `<label>${esc(m.l.ask)}<input data-slot="input" data-weblink-text maxlength="200" value="${esc(m.text || '')}"></label>` : ''}`
-      + `<p>This opens another program on this computer with this link:</p><pre class="out" data-link>${esc(link())}</pre>`
-      + (m.error ? `<p class="sm" role="status" data-weblink-error>${esc(m.error)}</p>` : '') + '</div>';
-    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-variant="outline" data-cancel>Cancel</button><button data-slot="button" data-open>Open</button>';
-    const input = body.querySelector('[data-weblink-text]');
-    if (input) { input.oninput = () => { m.text = input.value; body.querySelector('[data-link]').textContent = link(); }; input.focus(); }
-    $('#mdlFoot [data-cancel]').onclick = () => (m.back ? openModal(m.back) : closeModal());
-    $('#mdlFoot [data-open]').onclick = async () => {
-      if (m.l.ask && !(m.text || '').trim()) { m.error = 'Type the ' + m.l.ask.toLowerCase() + ' first.'; return renderModal(); }
-      const r = await window.p9.mission('link', { id: m.l.id, ...(m.l.ask ? { text: m.text } : {}), confirm: true });
-      if (r.status === 200) return m.back ? openModal(m.back) : closeModal();
-      m.error = r.body?.error === 'scheme-not-allowed' ? `${scheme} links are not allowed yet.${scheme === 'obsidian' ? ' Picking the vault folder allows them.' : ' Add ' + scheme + ' to page_schemes in the Mission settings file.'}`
-        : 'Not opened (' + (r.body?.error || r.status) + ').';
-      renderModal();
-    };
-  } else if (m.kind === 'script') {
-    const [id, name, desc, lvl, last, dur, x = {}] = m.s;
-    m.args ||= (x.args || []).map(() => '');
-    $('#mdlT').textContent = name;
-    body.innerHTML = `<div class="review"><span class="kind"><span class="lvl" data-l="${esc(lvl)}"></span> last run ${esc(last)} · ${esc(dur)}</span><p>${esc(desc)}</p>${(x.args || []).map((a, i) => a.choices ? `<label>${esc(a.label)}<select data-slot="select" data-arg="${i}"><option value="">(none)</option>${a.choices.map(ch => `<option${m.args[i] === ch ? ' selected' : ''}>${esc(ch)}</option>`).join('')}</select></label>` : `<label>${esc(a.label ?? a)}<input data-slot="input" data-arg="${i}" value="${esc(m.args[i])}"></label>`).join('')}${m.out ? `<pre class="out">${esc(m.out.join('\n'))}</pre>` : ''}</div>`;
-    body.querySelectorAll('[data-arg]').forEach(inp => inp.oninput = inp.onchange = () => { m.args[+inp.dataset.arg] = inp.value; });
-    $('#mdlFoot').innerHTML = `<span class="muted sm">${x.confirm ? 'Changes things: asks before it runs' : x.live ? (x.terminal ? 'Opens in a terminal' : 'Runs on this computer') : 'Mock: nothing runs'}</span><span class="spacer"></span>${m.out ? '<button data-slot="button" data-variant="outline" data-copy>Copy output</button>' : ''}<button data-slot="button" data-run>${m.armed ? 'Confirm run' : 'Run'}</button>`;
-    $('#mdlFoot [data-run]').onclick = () => {
-      if (x.confirm && !m.armed) { m.armed = true; return renderModal(); }
-      m.armedRun = m.armed; m.armed = false; m.out = ['running…']; renderModal();
-      if (x.live) return runLive(m, id);
-      setTimeout(() => { m.out = M.outputs[id] || [name, '', '[ok] ' + name + ' completed']; if (S.modal === m) renderModal(); }, 600);
-    };
-    if (m.out) $('#mdlFoot [data-copy]').onclick = e => copy(m.out.join('\n'), e.currentTarget);
-  } else if (m.kind === 'hubtext') {
-    $('#mdlT').textContent = m.title;
-    if (m.text === undefined) { m.text = 'Loading…'; window.p9.mission(m.call, m.req).then(r => { m.text = r.status === 200 ? r.body.text : 'Could not read it (' + (r.body?.error || r.status) + ')'; m.canFix = r.status === 200 && !!r.body.fix; if (S.modal === m) renderModal(); }); }
-    body.innerHTML = `<div class="review"><pre class="out">${esc(m.text)}</pre></div>`;
-    const fix = m.canFix && liveChat.on; // a space folder with fix text (wall 15)
-    $('#mdlFoot').innerHTML = `<span class="spacer"></span>${fix ? '<button data-slot="button" data-fix>Fix with Claude</button>' : ''}<button data-slot="button" data-variant="outline" data-copy>Copy</button>`;
-    $('#mdlFoot [data-copy]').onclick = e => copy(m.text, e.currentTarget);
-    // The daemon starts the chat; the 'created' event adds the session, so the chat modal fills in as events arrive.
-    if (fix) $('#mdlFoot [data-fix]').onclick = async () => {
-      const r = await window.p9.mission('fix', { id: m.req.id, path: m.req.path });
-      if (r.status === 201) openModal({ kind: 'chat', id: r.body.conversation, back: m });
-      else toast({ kind: 'chat', txt: 'Fix with Claude: ' + (r.body?.error || r.status), level: 'bad' }, true);
-    };
-  } else if (m.kind === 'sprint') {
-    const d = SP.data;
-    $('#mdlT').textContent = d ? 'Sprint · ' + (d.sprint || 'unnamed') : 'Sprint';
-    body.innerHTML = `<div class="review" data-sprint-body>${d ? `${sprintOverall(d)}<p class="sm muted" data-sprint-times>${esc(sprintTimes(d))}${Number.isFinite(d.overall) ? '' : ` · ${d.chunks.filter(c => c.state === 'merged').length} of ${d.chunks.length} merged`}</p>${sprintRings(d)}`
-      : `<p class="sm" role="status">The sprint status file is there but P9 cannot read it (${esc(SP.error)}).</p>`}${m.hint ? `<p class="sm" role="status">${esc(m.hint)}</p>` : ''}</div>`;
-    const runs = sprintScripts(m.sec);
-    $('#mdlFoot').innerHTML = runs.map(([id, label, row]) => `<button data-slot="button" data-variant="outline" data-sprint-run="${esc(id)}"${row ? '' : ` disabled title="Add a ${esc(id)} button to the registry"`}>${esc(label)}</button>`).join('')
-      + '<span class="spacer"></span><button data-slot="button" data-sprint-tmux>Open tmux</button>';
-    $('#mdlFoot').querySelectorAll('[data-sprint-run]').forEach(b => b.onclick = () => openModal({ kind: 'script', s: runs.find(r => r[0] === b.dataset.sprintRun)[2], back: m }));
-    $('#mdlFoot [data-sprint-tmux]').onclick = async () => {
-      const r = await window.p9.mission('sprintTmux');
-      if (r.status === 201) { closeModal(); showTerminal(r.body.terminal); }
-      else { m.hint = 'Open tmux: ' + (r.body?.error || r.status); renderModal(); }
-    };
-  } else if (m.kind === 'idea') {
-    // New idea (the old hub's box): the daemon names the file and refuses to replace one.
-    $('#mdlT').textContent = 'New idea';
-    body.innerHTML = `<div class="review"><p class="sm muted">Saved to _ideas/, or _ideas/needs-done/ for a fix to something that already exists.</p><label>Name<input data-slot="input" data-idea-name value="${esc(m.name)}" placeholder="short-name"></label><label>Idea<textarea data-idea-text rows="8">${esc(m.text)}</textarea></label><label class="sm"><input type="checkbox" data-idea-needs${m.needs ? ' checked' : ''}> A fix for an existing project (needs-done)</label></div>`;
-    body.querySelector('[data-idea-name]').oninput = e => { m.name = e.target.value; };
-    body.querySelector('[data-idea-text]').oninput = e => { m.text = e.target.value; };
-    body.querySelector('[data-idea-needs]').onchange = e => { m.needs = e.target.checked; };
-    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-idea-save>Save idea</button>';
-    $('#mdlFoot [data-idea-save]').onclick = async () => {
-      const r = await window.p9.mission('idea', { name: m.name, text: m.text, needs_done: m.needs });
-      toast({ kind: r.status === 201 ? 'saved' : 'not saved', txt: r.status === 201 ? r.body.path : 'New idea: ' + (r.body?.error || r.status), level: r.status === 201 ? 'ok' : 'bad' }, true);
-      if (r.status === 201) closeModal();
-    };
-  } else if (m.kind === 'guide') {
-    // "Build it yourself" (M4): the shipped guide, and the way to the edit form.
-    $('#mdlT').textContent = 'Build it yourself';
-    body.innerHTML = `<div class="msg agent notes-md" data-guide>${guide ? md.parse(guide.guide) : '<p class="muted">Loading the guide…</p>'}</div>`;
-    if (!guide) loadGuide();
-    $('#mdlFoot').innerHTML = '<span class="spacer"></span><button data-slot="button" data-guide-edit>Open the edit form</button>';
-    $('#mdlFoot [data-guide-edit]').onclick = () => openModal({ kind: 'medit', items: editItems(M) });
-  } else if (m.kind === 'medit') {
-    $('#mdlT').textContent = 'Edit names and icons';
-    editorModal(m, body, $('#mdlFoot'), { mission: window.p9.mission, pick: window.p9.pickPicture, art: () => M.art, esc, toast, again: () => S.modal === m && renderModal(),
-      reload: async keep => { await refreshMission(); if (keep) S.modal === m && renderModal(); else openModal({ kind: 'medit', items: editItems(M) }); } });
-  } else return false;
-  return true;
 }
 
 /* ---------- Dev Focus ---------- */
@@ -2491,262 +883,11 @@ addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLower
 // The desktop keeps them in its profile folder (main.mjs checks the shape); a browser preview keeps them in localStorage.
 // The agent lock is the daemon's (threat model row 15): this page only shows and asks to change it.
 let settings = { name: '', startLast: false, zoom: 1, closeOnSend: false, xfer: { fileMiB: 512, files: 20000, sendGiB: 4 },focus: { chat: true, dev: true, mission: true }, pet: { chat: { ...DEFAULT_PET }, dev: { ...DEFAULT_PET, on: false }, mission: { ...DEFAULT_PET, on: false } } }, agentLock = null, fileProtect = null, termGreeting = null, serverInfo = null, pets = null, petMode = null, updates = null, updatesTimer = 0;
-async function saveSettings(next) {
-  try { settings = window.p9?.setSettings ? await window.p9.setSettings(next) : (localStorage.setItem('p9-settings', JSON.stringify(next)), next); }
-  catch { toast({ kind: 'settings', txt: 'Settings not saved', level: 'bad' }, true); }
-  applySettings();
-}
-function applySettings() {
-  document.querySelectorAll('[data-focus-btn]').forEach(b => { b.hidden = !focusOn(b.dataset.focusBtn); });
-  if (!focusOn(S.focus)) setFocus(Object.keys(settings.focus).find(focusOn), true);
-  if ($('#setDlg').open) renderSettings();
-  loadPetLook();
-}
-// Pets in Settings: the library (add from a folder picker, remove), then one focus mode's pets at a time.
-const PET_WHY = { name: 'its folder name must be lowercase letters, digits and dashes', invalid: 'it is not a petdex pet (pet.json and a sheet)', exists: 'a pet with that name is already in P9', command: 'paste the install command from petdex.dev', unknown: 'petdex.dev has no pet by that name', offline: 'petdex.dev could not be reached' };
-function petSettings() {
-  const mode = petMode ||= S.focus, f = settings.pet[mode], pick = (role, label, none) => `<label class="set-row"><span><strong>${label}</strong></span><span class="spacer"></span><select data-slot="input" id="setPet-${role}" data-pet-role="${role}"><option value="">${none}</option>${pets.pets.map(p => `<option value="${esc(p.name)}" ${f[role] === p.name ? 'selected' : ''}>${esc(p.displayName)}</option>`).join('')}</select>${info('The pet shown while ' + (role === 'system' ? 'P9 itself' : label) + ' is working.', 'pets')}</label>`;
-  return `<fieldset class="set-group"><legend>Pets ${info('A small animated character (a petdex pet) that shows while an agent works, in place of the spinner (in Chat Focus chats and the top bar).', 'pets')}</legend>`
-    + `<p class="muted sm">Find a pet at <a id="petdexLink" href="https://petdex.dev" target="_blank" rel="noopener">petdex.dev</a>, copy its install command and paste it below.</p>`
-    + (window.p9?.installPets ? `<form class="set-row" id="petInstallForm"><input data-slot="input" id="petInstall" placeholder="npx petdex@latest install boba" autocomplete="off" spellcheck="false" style="flex:1"><button data-slot="button" data-variant="default" id="petInstallGo">Install</button></form>` : '')
-    + `<div class="pet-lib">${pets.pets.map(p => `<figure><canvas data-thumb="${esc(p.name)}" width="192" height="208"></canvas><figcaption>${esc(p.displayName)}</figcaption><button data-slot="button" data-variant="ghost" data-size="icon-sm" data-pet-remove="${esc(p.name)}" title="Remove ${esc(p.displayName)}">×</button></figure>`).join('') || '<p class="muted sm">No pets yet.</p>'}</div>`
-    + (window.p9?.addPets ? `<div class="set-row">${pets.importable ? `<button data-slot="button" data-variant="default" id="petImport">Import ${pets.importable} new petdex pet${pets.importable === 1 ? '' : 's'}</button>` : ''}<button data-slot="button" data-variant="outline" id="petAdd">Add pets…</button></div>` : '')
-    + `<div class="set-row" role="group" aria-label="Focus mode">${Object.entries(focusNames).map(([m, n]) => `<button data-slot="button" data-variant="${m === mode ? 'default' : 'outline'}" data-size="sm" data-pet-mode="${m}" aria-pressed="${m === mode}">${n}</button>`).join('')}</div>`
-    + `<label class="set-row"><input type="checkbox" id="setPetOn" ${f.on ? 'checked' : ''}><span><strong>Show pets in ${focusNames[mode]}</strong><span class="muted sm">Off: chats show no pet. The top-bar pet always shows.</span></span><span class="spacer"></span>${info('Shows the pets in this focus mode\'s chats.', 'pets')}</label>`
-    + `<label class="set-row"><span><strong>Size</strong></span><span class="spacer"></span><input type="range" id="setPetSize" min="24" max="128" step="4" value="${f.size}"><span class="mono">${f.size}px</span>${info('How big the pets are in this focus mode.', 'pets')}</label>`
-    + pick('system', 'System', 'None (spinner)') + pick('claude', 'Claude', 'Same as System') + pick('codex', 'Codex', 'Same as System')
-    + `<div class="set-row"><span class="muted sm">Show, size and positions stay per focus.</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" id="petAll" ${Object.values(settings.pet).every(o => PET_ROLES.every(r => o[r] === f[r])) ? 'disabled' : ''}>Use these pets in all focus modes</button></div>`
-    + `<div class="set-row"><span class="muted sm">Drag a pet to move it.</span><span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="sm" id="petReset" ${f.top || f.pane || Object.keys(petSpots).length ? '' : 'disabled'}>Reset positions</button></div></fieldset>`;
-}
-function wirePetSettings() {
-  const mode = petMode, setPet = change => saveSettings({ ...settings, pet: { ...settings.pet, [mode]: { ...settings.pet[mode], ...change } } });
-  document.querySelectorAll('[data-pet-role]').forEach(sel => { sel.onchange = e => setPet({ [sel.dataset.petRole]: e.target.value || null }); });
-  document.querySelectorAll('[data-pet-mode]').forEach(b => { b.onclick = () => { petMode = b.dataset.petMode; renderSettings(); }; });
-  $('#setPetOn').onchange = e => setPet({ on: e.target.checked });
-  $('#setPetSize').onchange = e => setPet({ size: +e.target.value });
-  $('#setPetSize').oninput = e => { e.target.nextElementSibling.textContent = e.target.value + 'px'; };
-  $('#petReset').onclick = () => { for (const k in petSpots) delete petSpots[k]; localStorage.removeItem('p9-pet-spots'); setPet({ top: null, pane: null }); };
-  // Builder, 2026-10-19: copy this focus's three pet picks to every focus; show, size and positions stay per focus.
-  $('#petAll').onclick = () => saveSettings({ ...settings, pet: Object.fromEntries(Object.entries(settings.pet).map(([m, o]) => [m, { ...o, ...Object.fromEntries(PET_ROLES.map(r => [r, settings.pet[mode][r]])) }])) });
-  const refresh = async () => { pets = await window.p9.listPets().catch(() => pets); renderSettings(); };
-  const addWith = add => async () => {
-    const r = await add().catch(() => null);
-    if (!r) return toast({ kind: 'pets', txt: 'Pets not added', level: 'bad' }, true);
-    if (r.added.length || r.refused.length) toast({ kind: 'pets', level: r.refused.length ? 'warn' : 'ok', txt: [r.added.length && 'Added ' + r.added.map(p => p.name).join(', ') + '.', ...r.refused.map(p => `${p.name} not added: ${PET_WHY[p.why] || p.why}.`)].filter(Boolean).join(' ') }, true);
-    refresh();
-  };
-  $('#petdexLink').onclick = e => { if (window.p9?.openPetdex) { e.preventDefault(); window.p9.openPetdex(); } }; // a browser preview follows the link
-  if ($('#petAdd')) $('#petAdd').onclick = addWith(() => window.p9.addPets());
-  if ($('#petImport')) $('#petImport').onclick = addWith(() => window.p9.importPets());
-  if ($('#petInstallForm')) $('#petInstallForm').onsubmit = e => { e.preventDefault(); $('#petInstallGo').disabled = true; $('#petInstallGo').textContent = 'Installing…'; addWith(() => window.p9.installPets($('#petInstall').value))().finally(renderSettings); };
-  document.querySelectorAll('[data-pet-remove]').forEach(b => { b.onclick = async () => {
-    const name = b.dataset.petRemove, shown = pets.pets.find(p => p.name === name)?.displayName || name;
-    if (!confirm(`Remove ${shown} from P9? Any copy in ~/.codex/pets stays.`)) return;
-    if (!(await window.p9.removePet(name).catch(() => null))) return toast({ kind: 'pets', txt: shown + ' not removed', level: 'bad' }, true);
-    IND.looks.delete(name);
-    const clear = f => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, ['claude', 'codex', 'system'].includes(k) && v === name ? null : v]));
-    await saveSettings({ ...settings, pet: Object.fromEntries(Object.entries(settings.pet).map(([m, f]) => [m, clear(f)])) });
-    refresh();
-  }; });
-  document.querySelectorAll('canvas[data-thumb]').forEach(async cv => {
-    const name = cv.dataset.thumb;
-    if (!IND.looks.has(name)) IND.looks.set(name, await petLook(name));
-    const look = IND.looks.get(name); if (look) cv.getContext('2d').drawImage(look.img, 0, 0, 192, 208, 0, 0, 192, 208);
-  });
-}
 // ST1/ST2: Settings → Mission Control files, the daemon's settings.json (not this window's settings), so the paths stay
 // editable after setup. The wizard's path rows (PATH_KEYS) plus the other keys; each row saves on change through the daemon,
 // which checks it as it checks the file at start. A refused value stays in its box with the reason under it.
 let missionFiles = null;
-function missionGroup() {
-  const s = missionFiles.settings;
-  return `<fieldset class="set-group" id="setMission"><legend>Mission Control files ${info('The files and folders Mission Control reads, from its settings file (for the Mission Control focus). Each row saves when you leave it.', 'mission-control-files')}</legend>`
-    + missionKeys().map(([k, name, kind, tip]) => `<label class="set-row"><span><strong>${esc(name)}</strong></span><span class="spacer"></span>`
-      + (k === 'notes_roots' ? `<textarea data-slot="input" class="mono" data-mission="${k}" rows="2" maxlength="8000" spellcheck="false">${esc(missionShown(k, s[k]))}</textarea>`
-        : `<input data-slot="input" class="mono" data-mission="${k}" value="${esc(missionShown(k, s[k]))}" title="${esc(missionShown(k, s[k]))}" maxlength="400" autocomplete="off" spellcheck="false">`)
-      + (window.p9.pickFolder && kind ? `<button data-slot="button" data-variant="outline" data-size="sm" data-mission-pick="${k}:${kind}">Pick</button>` : '')
-      + info(tip, 'mission-control-files') + '</label>').join('')
-    + '<p class="muted sm">The old file is kept as settings.json.bak.</p></fieldset>';
-}
-async function saveMission(change) {
-  const r = await window.p9.chat('saveMissionFiles', change).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
-  const box = $('#setBody').querySelector(`[data-mission="${Object.keys(change)[0]}"]`), row = box?.closest('.set-row');
-  row?.querySelector('[data-mission-err]')?.remove(); box?.removeAttribute('aria-invalid');
-  if (r.status === 200) { missionFiles = { ...missionFiles, settings: r.body.settings }; loadMission(); return; }
-  const why = 'Not saved: ' + (r.body?.detail || WIZ_ERR[r.body?.error]?.[0] || r.body?.error || r.status);
-  if (!row) return toast({ kind: 'mission-files', txt: why, level: 'bad' }, true);
-  box.setAttribute('aria-invalid', 'true');
-  row.insertAdjacentHTML('beforeend', `<small class="field-err" data-mission-err role="alert">${esc(why)}</small>`);
-}
-// A narrow box shows the end of a long path (the file name), not the start every path shares; the full path is the hover.
-const showEnd = box => { box.title = box.value; box.scrollLeft = box.scrollWidth; };
-function wireMission() {
-  $('#setBody').querySelectorAll('input[data-mission]').forEach(box => { showEnd(box); box.onblur = () => showEnd(box); });
-  $('#setBody').querySelectorAll('[data-mission]').forEach(box => { box.onchange = () => saveMission({ [box.dataset.mission]: missionValue(box.dataset.mission, box.value) }); });
-  $('#setBody').querySelectorAll('[data-mission-pick]').forEach(b => { b.onclick = async e => {
-    e.preventDefault();
-    const [k, kind] = b.dataset.missionPick.split(':');
-    const picked = await window.p9.pickFolder(kind).catch(() => undefined);
-    if (picked === undefined) return;
-    if (picked === null || picked === '') return toast({ kind: 'mission-files', txt: WIZ_ERR[picked === '' ? 'pick-root' : 'pick-outside'].join(' '), level: 'warn' }, true); // BL6
-    $('#setBody').querySelector(`[data-mission="${k}"]`).value = picked;
-    saveMission({ [k]: picked });
-  }; });
-}
-// Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
-// lists them). Nothing is built in; Add remote takes a Host name or user@address.
-function serverRow() {
-  const { host, connected, error, hosts, remotes = [], keep = {}, noKey = [] } = serverInfo, all = [...new Set([...remotes, ...hosts])];
-  // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
-  const keepPick = h => window.p9?.remoteKeepSetting ? '<select data-slot="select" data-remote-keep="' + esc(h) + '" aria-label="P9 on ' + esc(h) + ' when you disconnect" title="What P9 on ' + esc(h) + ' does when you disconnect">'
-    + [['', 'Ask'], ['keep', 'Always on'], ['stop', 'Temporary']].map(([v, t]) => '<option value="' + v + '"' + ((keep[h] === true ? 'keep' : keep[h] === false ? 'stop' : '') === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' : '';
-  const note = host ? (connected ? 'This window works on ' + host + '. Chats there keep running when you switch or quit.' : 'Connecting to ' + host + (error ? ' (' + error + ')' : '') + '.')
-    : all.length ? 'This window works on this computer. Connect to a remote to work on its P9 over ssh.' : 'No remotes yet. Add one below.';
-  const rows = all.map(h => '<li class="set-row"><span><strong>' + esc(h) + '</strong><span class="muted sm">' + (remotes.includes(h) ? 'Added here' : 'From ~/.ssh/config') + '</span></span><span class="spacer"></span>' + keepPick(h)
-    + (noKey.includes(h) && window.p9?.sshKeySetting ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-key-again="' + esc(h) + '" title="After the next password login to ' + esc(h) + ', P9 asks again whether to add its own key">Offer a P9 key again</button>' : '')
-    + (h === host ? '<span class="muted sm">' + (connected ? 'Connected' : 'Connecting…') + '</span>' : '<button data-slot="button" data-variant="outline" data-size="sm" data-remote-go="' + esc(h) + '">Connect</button>')
-    + (remotes.includes(h) && h !== host ? '<button data-slot="button" data-variant="ghost" data-size="sm" data-remote-remove="' + esc(h) + '" aria-label="Remove ' + esc(h) + '">Remove</button>' : '') + '</li>').join('');
-  return '<fieldset class="set-group" id="setRemote"><legend>Remote ' + info('Remote mode: chat, Mission Control, the terminal and Dev Focus use the P9 on another machine, through an ssh tunnel (the way VS Code Remote-SSH works). This computer\'s P9 keeps running, and Use this computer goes back. If ssh needs a password, P9 asks for it in its own window and can add its own key so it stops asking. Folder pickers, Open in VS Code and Repair stay on this computer.', 'remote-connect-send-to-remote-and-send-files') + '</legend>'
-    + '<p class="muted sm">' + esc(note) + '</p>' + (rows ? '<ul class="remote-list">' + rows + '</ul>' : '')
-    + '<form class="set-row" id="setRemoteAdd"><input data-slot="input" id="setRemoteName" placeholder="Host name or user@address" aria-label="Remote to add" maxlength="253" autocomplete="off" spellcheck="false"><button data-slot="button" data-variant="default">Add remote</button></form>'
-    + '<p class="warn sm" id="setRemoteErr" role="alert" hidden></p>'
-    + (host ? '<div class="set-row"><span class="spacer"></span><button data-slot="button" data-variant="outline" id="setServerLocal">Use this computer</button></div>' : '') + '</fieldset>';
-}
-// c18 (threat model row 66): Settings > Security settings, the words and the device's part in security.mjs, shared with the phone.
-const START = 'p9-mode-default:'; // Unrestricted mode sets the D2 default (row 25a), so new chats here start loosened
-function securityGroup(box) {
-  const [lock, protect, warn, free] = [SECURITY.lock, SECURITY.protect, SECURITY.warn, SECURITY.unrestricted], both = window.p9?.chat && window.p9?.fileProtection;
-  return `<fieldset class="set-group" id="setSecurity"><legend>Security settings ${info('One switch per restriction, and Unrestricted mode for all of them at once. The defaults keep P9 careful; turn off what gets in your way. The phone has the same four.', 'security-settings')}</legend>`
-    + (window.p9?.chat ? box('setLock', lock[0], agentLock === true, agentLock === null ? SECURITY.unknown : lock[1], agentLock === null, lock[2], 'agent-lock') : '')
-    + (window.p9?.fileProtection ? box('setProtect', protect[0], fileProtect !== false, fileProtect === null ? SECURITY.unknown : fileProtect ? protect[1] : SECURITY.protectOff, fileProtect === null, protect[2], 'file-protection') : '')
-    + box('setWarn', warn[0], warnsLoose(), warn[1], false, warn[2], 'security-settings')
-    + (window.p9?.openLink ? box('setLinks', SECURITY.links[0], !localStorage.getItem('p9-link-ok'), SECURITY.links[1], false, SECURITY.links[2], 'security-settings') : '')
-    + (both ? box('setFree', free[0], unrestricted(agentLock, fileProtect, START), free[1], agentLock === null || fileProtect === null, free[2], 'security-settings') : '')
-    + '</fieldset>';
-}
-// On: File protection first, through main's native warning; "Keep protection on" there changes nothing else. With
-// protection already off that warning never shows, so Unrestricted asks once itself (row 25a: no silent loosened default).
-async function setUnrestricted(on) {
-  if (on && fileProtect === false && !confirm('Turn on Unrestricted mode?\n\n' + SECURITY.unrestricted[1])) return renderSettings();
-  const r = fileProtect === !on ? null : await window.p9.fileProtection(!on).catch(() => null);
-  fileProtect = r?.status === 200 ? r.body.on : fileProtect;
-  if (fileProtect !== !on) return renderSettings();
-  if (on && agentLock) { const l = await liveChat.call('setLock', { on: false }); agentLock = l.status === 200 ? l.body.on : agentLock; }
-  setWarnsLoose(!on); setStarts(on, START);
-  if (!on) localStorage.removeItem('p9-link-ok'); // review 3 L5: off asks before agent links again
-  renderSettings();
-}
-// Attempt 2 items 6 and 7 (the owner): five pages, picked on the left; every row moves, unchanged, to the page it mainly
-// affects. The wiring below finds rows by id in #setBody, so it does not care which page holds them.
-const SET_PAGES = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
-const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
 let setPage = 'General';
-// Settings opened at one row (Add a machine, a send limit): show the page that holds it, then the row.
-const settingsAt = el => { if (!el) return; $('[data-set-page="' + el.closest('.set-page').dataset.page + '"]').click(); el.scrollIntoView({ block: 'center' }); };
-function settingsPages() {
-  const body = $('#setBody'), legend = g => g.querySelector('legend')?.firstChild?.textContent.trim() || '';
-  const pages = Object.fromEntries(SET_PAGES.map(n => { const p = document.createElement('section'); p.className = 'set-page'; p.dataset.page = n; p.setAttribute('aria-label', n); return [n, p]; }));
-  const group = (page, title, tip, rows) => { const g = document.createElement('fieldset'); g.className = 'set-group'; g.innerHTML = '<legend>' + title + ' ' + tip + '</legend>'; g.append(...rows); pages[page].append(g); };
-  const loose = [...body.children].filter(c => c.tagName !== 'FIELDSET'), chatRows = loose.filter(c => c.querySelector('#setCloseSend'));
-  group('General', 'General', info('The docs, zoom, your name, and how P9 opens.', 'settings'), loose.filter(c => !chatRows.includes(c)));
-  if (chatRows.length) group('Chat Focus', 'Chat windows', info('How a chat window opened from a card or the Notification Center behaves.', 'settings'), chatRows);
-  for (const g of [...body.children]) {
-    // Focus modes: each mode's on/off row goes to that mode's page, under the same heading and tip.
-    if (legend(g) === 'Focus modes') { for (const row of [...g.querySelectorAll('.set-row')]) { const one = g.cloneNode(false); one.append(g.querySelector('legend').cloneNode(true), row); pages[focusNames[row.querySelector('input').id.slice(5)]].append(one); } continue; }
-    pages[SET_PAGE_OF[legend(g)] ?? 'General'].append(g);
-  }
-  for (const p of Object.values(pages)) if (!p.children.length) p.innerHTML = '<p class="muted sm">Nothing to set here in this window.</p>';
-  body.replaceChildren(...Object.values(pages));
-  $('#setDlg .set-pages')?.remove();
-  const nav = document.createElement('nav'); nav.className = 'set-pages'; nav.setAttribute('aria-label', 'Settings pages');
-  const show = () => { for (const p of Object.values(pages)) p.hidden = p.dataset.page !== setPage; nav.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.setPage === setPage)); };
-  for (const n of SET_PAGES) {
-    const b = document.createElement('button'); b.type = 'button'; b.textContent = n; b.dataset.setPage = n;
-    b.onclick = () => { setPage = n; show(); body.scrollTop = 0; }; nav.append(b);
-  }
-  show(); $('#setDlg .dlg-head').after(nav);
-}
-function renderSettings() {
-  const on = Object.values(settings.focus).filter(Boolean).length;
-  const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
-  $('#setBody').innerHTML = `<div class="set-row"><a data-slot="button" data-variant="outline" id="setDocs" href="https://github.com/JudgeBreddd/p9#readme" target="_blank" rel="noopener">P9 docs on GitHub</a><button data-slot="button" data-variant="outline" id="setAm">Anymouse</button>${window.p9?.chat ? '<button data-slot="button" data-variant="outline" id="setWel">Setup</button>' : ''}<span class="spacer"></span>${info('The P9 guide (opens on GitHub), Anymouse (a note to P9\'s makers: an idea, a bug or a gripe) and Setup (the first-start window again).', 'settings')}</div>`
-    + (window.p9?.setSettings ? `<div class="set-row"><span><strong>Zoom</strong><span class="muted sm">Ctrl = and Ctrl - from the shell; Ctrl 0 resets</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zOut" title="Zoom out">−</button><span class="mono" id="zVal">${Math.round(settings.zoom * 100)}%</span><button data-slot="button" data-variant="outline" data-size="icon-sm" id="zIn" title="Zoom in">+</button><button data-slot="button" data-variant="ghost" data-size="sm" id="zReset">Reset</button>${info('Makes everything in this window bigger or smaller, in every focus mode.', 'settings')}</div>` : '')
-    + `<label class="set-row"><span><strong>Your name</strong><span class="muted sm">The landing page greets you with it. Empty: no name.</span></span><span class="spacer"></span><input data-slot="input" id="setName" maxlength="40" autocomplete="off" spellcheck="false">${info('The name the landing page greets you with.', 'settings')}</label>`
-    + box('setStartLast', 'Start in my last focus mode', settings.startLast, 'Skips the landing page when P9 opens. The Event Horizon mark, top left, still opens it.', false, 'P9 opens straight into the focus mode you used last (Chat Focus, Dev Focus or Mission Control), not the landing page.')
-    + box('setCloseSend', 'Close the chat window on send', settings.closeOnSend, 'A chat opened from a card or the Notification Center closes once your message is sent.', false, 'A chat window opened from a Chat Focus card or the Notification Center closes once you send your message.')
-    // The daemon keeps this one (it starts the shells, the phone's too); null: it did not answer, so the box is disabled.
-    + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', termGreeting !== false, termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
-    + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(a => `<label class="set-row"><span><strong>${names[a]}</strong></span><span class="spacer"></span><select data-slot="input" data-default-mode="${a}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`).join('')}</fieldset>`
-    + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(focusNames).map(([f, n]) => box('setF-' + f, n, settings.focus[f], '', settings.focus[f] && on === 1)).join('')}</fieldset>`
-    + (pets ? petSettings() : '')
-    + securityGroup(box)
-    + (missionFiles?.settings ? missionGroup() : '')
-    + (serverInfo ? serverRow() : '')
-    + (window.p9?.xferPlan && settings.xfer ? `<fieldset class="set-group"><legend>Send files ${info('Limits on one Send files to remote (the files panel\'s button): a send past one is refused before anything is copied, and the refusal names the limit.', 'send-files')}</legend>${Object.entries(XFER_SETTINGS).map(([k, [label, unit, max]]) => `<label class="set-row"><span><strong>${label}</strong><span class="muted sm">${unit}, 1 to ${max.toLocaleString()}</span></span><span class="spacer"></span><input data-slot="input" type="number" min="1" max="${max}" step="1" id="setXfer-${k}" data-xfer-limit="${k}" value="${settings.xfer[k]}" style="width:9em"></label>`).join('')}</fieldset>` : '')
-    + maintenanceGroup(updates);
-  settingsPages();
-  const zoom = z => saveSettings({ ...settings, zoom: Math.round(Math.min(3, Math.max(0.5, z)) * 10) / 10 });
-  if ($('#zIn')) { $('#zIn').onclick = () => zoom(settings.zoom + 0.1); $('#zOut').onclick = () => zoom(settings.zoom - 0.1); $('#zReset').onclick = () => zoom(1); }
-  $('#setName').value = settings.name || '';
-  $('#setName').onchange = e => saveSettings({ ...settings, name: e.target.value.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 40) });
-  $('#setStartLast').onchange = e => saveSettings({ ...settings, startLast: e.target.checked });
-  $('#setBody').querySelectorAll('[data-xfer-limit]').forEach(el => { el.onchange = () => { const k = el.dataset.xferLimit, n = Math.round(Number(el.value));
-    if (!Number.isFinite(n)) { el.value = settings.xfer[k]; return; }
-    saveSettings({ ...settings, xfer: { ...settings.xfer, [k]: Math.min(XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
-  $('#setCloseSend').onchange = e => saveSettings({ ...settings, closeOnSend: e.target.checked });
-  if ($('#setGreeting')) $('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
-  $('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
-    const a = el.dataset.defaultMode, m = el.value;
-    if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await looseOk(a, m)) { el.value = defaultMode(a); return; }
-    m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
-  }; });
-  if (pets) wirePetSettings();
-  if (missionFiles?.settings) wireMission();
-  // Main reloads the window onto the chosen daemon, so nothing here re-renders.
-  $('#setBody').querySelectorAll('[data-remote-go]').forEach(b => { b.onclick = () => window.p9.server(b.dataset.remoteGo); });
-  const remotesNow = async (action, name) => { const r = await window.p9.remotes(action, name).catch(() => null); if (r) serverInfo.remotes = r.remotes; renderSettings(); serverMenu(); };
-  $('#setBody').querySelectorAll('[data-remote-remove]').forEach(b => { b.onclick = () => remotesNow('remove', b.dataset.remoteRemove); });
-  $('#setBody').querySelectorAll('[data-remote-keep]').forEach(s => { s.onchange = async () => {
-    const r = await window.p9.remoteKeepSetting(s.dataset.remoteKeep, s.value === 'keep' ? true : s.value === 'stop' ? false : null).catch(() => null);
-    if (r) serverInfo.keep = r.keep;
-  }; });
-  // Row 79: a remote's key offer said Don't ask again; this offers it again after the next password login.
-  $('#setBody').querySelectorAll('[data-key-again]').forEach(b => { b.onclick = async () => {
-    const r = await window.p9.sshKeySetting(b.dataset.keyAgain).catch(() => null);
-    if (r) { serverInfo.noKey = r.noKey; renderSettings(); }
-  }; });
-  if ($('#setRemoteAdd')) $('#setRemoteAdd').onsubmit = e => {
-    e.preventDefault();
-    const name = $('#setRemoteName').value.trim(), err = $('#setRemoteErr');
-    // The same rule as main's (desktop/remote.mjs HOST); main checks again.
-    if (!/^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,252}$/.test(name)) { err.hidden = false; err.textContent = 'A remote is a Host name from ~/.ssh/config or user@address: letters, digits and . _ - @, starting with a letter or digit.'; return; }
-    remotesNow('add', name);
-  };
-  if ($('#setServerLocal')) $('#setServerLocal').onclick = () => window.p9.server(null);
-  Object.keys(focusNames).forEach(f => { $('#setF-' + f).onchange = e => saveSettings({ ...settings, focus: { ...settings.focus, [f]: e.target.checked } }); });
-  if ($('#setLock')) $('#setLock').onchange = async e => { const r = await liveChat.call('setLock', { on: e.target.checked }); agentLock = r.status === 200 ? r.body.on : agentLock; renderSettings(); };
-  // Main shows the warning when this turns it off; the box then shows what the daemon says, so a "Keep" answer re-checks it.
-  if ($('#setProtect')) $('#setProtect').onchange = async e => { const r = await window.p9.fileProtection(e.target.checked).catch(() => null); fileProtect = r?.status === 200 ? r.body.on : fileProtect; renderSettings(); };
-  $('#setWarn').onchange = e => { setWarnsLoose(e.target.checked); renderSettings(); };
-  if ($('#setLinks')) $('#setLinks').onchange = e => { e.target.checked ? localStorage.removeItem('p9-link-ok') : localStorage.setItem('p9-link-ok', '1'); renderSettings(); };
-  if ($('#setFree')) $('#setFree').onchange = e => setUnrestricted(e.target.checked);
-  $('#setDocs').onclick = e => { if (window.p9?.openDocs) { e.preventDefault(); window.p9.openDocs(); } }; // a browser preview follows the link
-  $('#setAm').onclick = () => { $('#setDlg').close(); $('#amBtn').click(); };
-  if ($('#setWel')) $('#setWel').onclick = () => { $('#setDlg').close(); welcome(); };
-  MAINTENANCE.forEach(m => { if ($('#' + m.id)) $('#' + m.id).onclick = maintain[m.id]; });
-  const asked = async ask => { updates = await window.p9.updates(ask).catch(() => updates); renderSettings(); };
-  if ($('#mtUpdCheck')) $('#mtUpdCheck').onclick = () => asked({ check: true });
-  if ($('#mtUpdInstall')) $('#mtUpdInstall').onclick = () => asked({ install: true });
-  if ($('#mtUpdNightly')) $('#mtUpdNightly').onchange = e => asked({ nightly: e.target.checked });
-  if ($('#mtUpdOpen')) $('#mtUpdOpen').onclick = () => window.p9.openUpdates();
-  clearTimeout(updatesTimer); // a check or download in progress: show its next state while Settings is open
-  if (['checking', 'downloading'].includes(updates?.state)) updatesTimer = setTimeout(() => { if ($('#setDlg').open) asked(); }, 2000);
-  // HI1: an "i" shows its tip on hover and opens its part of the guide on click (main allows only the guide's sections).
-  $('#setBody').querySelectorAll('[data-docs]').forEach(b => { b.onclick = e => {
-    e.preventDefault(); e.stopPropagation();
-    window.p9?.openDocs?.(b.dataset.docs).catch(() => {}); // a browser preview: the tip only
-  }; });
-}
 $('#setBtn').onclick = async () => {
   if (window.p9?.listPets) pets = await window.p9.listPets().catch(() => null);
   if (window.p9?.chat) { const r = await liveChat.call('lock'); agentLock = r.status === 200 ? r.body.on : null; }
@@ -2782,7 +923,6 @@ const land = $('#land'), landOn = window.p9?.landing !== false, still = matchMed
 // brings back the WebGL sky below. P9_LANDING=original sets it for a run; the default is the video. Send-to-server keeps
 // its own createSky (#moveSky) either way. The phone has its own page and never loads this.
 const LAND_BG = window.p9?.landingBg === 'original' ? 'original' : 'video';
-const NO_SKY = { ok: false, set() {}, frame() {}, size() {} };
 let landVideo = null;
 if (LAND_BG === 'video') {
   const cosmos = land.querySelector('.p9-cosmos');
@@ -2798,63 +938,6 @@ if (LAND_BG === 'video') {
 const sky = LAND_BG === 'video' ? NO_SKY : createSky($('#landSky')), SKY_MAIN = { uDist: 34, uShift: 0.2, uIgnite: 1, uStars: 1, uDim: 0.62 };
 const LAND = { started: false, raf: 0, v: { ...SKY_MAIN }, from: null, to: null, t0: 0, ms: 0, drawn: 0, spin: 0 };
 if (!landOn) land.removeAttribute('data-pending');
-const lastFocus = () => { let f = null; try { f = localStorage.getItem('p9-last-focus'); } catch {} return focusOn(f) ? f : Object.keys(focusNames).find(focusOn); };
-function landingStart() {
-  if (LAND.started) return;
-  LAND.started = true;
-  if (!landOn) return;
-  let landed = false; try { landed = !!sessionStorage.getItem('p9-landed'); } catch {}
-  if (landed || settings.startLast) { land.removeAttribute('data-pending'); setFocus(lastFocus(), true); return; }
-  // The intro (the mark and its orbit drawn in) belongs to the WebGL sky; with the video, P9 opens on the same page the mark
-  // in the top bar opens (Builder, 2026-10-31: "the first one is wrong").
-  openLanding(LAND_BG === 'original');
-}
-function openLanding(intro) {
-  land.removeAttribute('data-pending');
-  intro &&= !still;
-  land.classList.remove('leaving');
-  land.dataset.stage = intro ? 'intro' : 'main';
-  land.toggleAttribute('data-run', intro);
-  if (!land.open) land.showModal();
-  landVideo?.refresh();
-  land.focus();
-  landGreeting(); landStatus(); landPets();
-  land.querySelectorAll('[data-land]').forEach(b => { b.hidden = !focusOn(b.dataset.land); });
-  LAND.v = intro ? { uDist: 30, uShift: 0, uIgnite: 0, uStars: 0, uDim: 1 } : { ...SKY_MAIN };
-  if (intro) { tweenSky({ uDist: 22, uIgnite: 1, uStars: 1 }, 2400); LAND.intro = setTimeout(landMain, 2600); }
-  if (!sky.ok) return;
-  if (still) { sky.size(1); sky.set({ ...LAND.v, uSpin: 4, uTime: 4 }); sky.frame(); }
-  else if (!LAND.raf) { LAND.drawn = 0; LAND.raf = requestAnimationFrame(skyFrame); }
-}
-function landMain() {
-  if (land.dataset.stage === 'main') return;
-  clearTimeout(LAND.intro);
-  land.dataset.stage = 'main';
-  tweenSky(SKY_MAIN, 900);
-}
-const tweenSky = (to, ms) => { Object.assign(LAND, { from: { ...LAND.v }, to, t0: performance.now(), ms }); };
-// The intro draws at 60 % of the window's pixels; behind the main stage, all of them at 30 frames a second (45 % looked
-// soft on a 1x screen, Builder, 2026-10-19).
-function skyFrame(now) {
-  LAND.raf = requestAnimationFrame(skyFrame);
-  const main = land.dataset.stage === 'main' && !LAND.to;
-  if (main && now - LAND.drawn < 33) return;
-  const dt = LAND.drawn ? Math.min(0.1, (now - LAND.drawn) / 1000) : 0; LAND.drawn = now;
-  if (LAND.to) {
-    const k = Math.min(1, (now - LAND.t0) / LAND.ms), e = 1 - (1 - k) ** 5;
-    for (const key in LAND.to) LAND.v[key] = LAND.from[key] + (LAND.to[key] - LAND.from[key]) * e;
-    if (k === 1) LAND.to = null;
-  }
-  LAND.spin += dt * (land.dataset.stage === 'main' ? 0.25 : 0.8);
-  sky.size(main ? 1 : 0.6);
-  sky.set({ ...LAND.v, uSpin: LAND.spin, uTime: now / 1000 });
-  sky.frame();
-}
-function leaveLanding() {
-  if (!land.open || land.classList.contains('leaving')) return;
-  land.classList.add('leaving');
-  setTimeout(() => land.close(), still ? 0 : 420);
-}
 land.addEventListener('close', () => {
   try { sessionStorage.setItem('p9-landed', '1'); } catch {}
   landVideo?.refresh();
@@ -2882,45 +965,6 @@ land.querySelectorAll('[data-land]').forEach(b => {
 $('#landSet').innerHTML = svg.gear;
 $('#landSet').onclick = () => $('#setBtn').click();
 $('#brandBtn').onclick = () => openLanding(false);
-// Half the greetings know the time of day, half do not. The name goes in as text, never as markup.
-const GREET = {
-  morning: ['Good morning, {n}', 'Morning, {n}. Coffee first?', 'Rise and build, {n}'],
-  afternoon: ['Good afternoon, {n}', 'Afternoon, {n}. Where were we?'],
-  evening: ['Good evening, {n}', 'Evening, {n}. One more thing?'],
-  night: ['Burning the midnight oil, {n}?', 'Still up, {n}?', 'Night shift, {n}?'],
-  any: ['{n} returns!', 'Welcome back, {n}', 'What are we building, {n}?', 'The agents missed you, {n}', 'Gravity pulled you back, {n}'],
-};
-function landGreeting(now = new Date()) {
-  const h = now.getHours(), name = settings.name || '';
-  let lines = Math.random() < 0.5 ? GREET[h < 5 ? 'night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 22 ? 'evening' : 'night'] : GREET.any;
-  if (!name) lines = lines.filter(l => !l.startsWith('{n}')).map(l => l.replace(', {n}', ''));
-  const [before, after = ''] = lines[Math.floor(Math.random() * lines.length)].split('{n}');
-  const em = document.createElement('em'); em.textContent = name;
-  $('#landHi').replaceChildren(before, ...(name ? [em, after] : []));
-}
-// What is going on, refreshed each second while the landing shows.
-function landStatus() {
-  const running = S.sessions.filter(s => s.state === 'running').length, need = S.sessions.filter(s => s.pending).length + S.reviews.filter(r => !S.quiet.has(r.file)).length;
-  const parts = [running && `${running} chat${running === 1 ? '' : 's'} running`, need && `${need} need${need === 1 ? 's' : ''} you`].filter(Boolean);
-  $('#landSub').textContent = parts.length ? parts.join(' · ') : 'All quiet. Where to?';
-  LAND.status = setTimeout(() => { if (land.open) landStatus(); }, 1000);
-}
-// Up to 12 installed pets, each on its own clock: idle, waving, jumping, thinking, waiting, running. A click makes one jump.
-const LAND_ROWS = ['0', '0', '3', '4', '8', '6', '7'];
-async function landPets() {
-  const box = $('#landPets'), list = window.p9?.listPets ? (await window.p9.listPets().catch(() => null))?.pets?.slice(0, 12) ?? [] : [];
-  for (const p of list) if (!IND.looks.has(p.name)) IND.looks.set(p.name, await petLook(p.name));
-  if (!land.open) return;
-  box.innerHTML = list.filter(p => IND.looks.get(p.name)).map(p => petCanvas(p.name, '0', innerHeight < 700 ? 60 : 72, false)).join('');
-  box.querySelectorAll('canvas.pet').forEach(cv => {
-    const look = IND.looks.get(cv.dataset.petName), rows = LAND_ROWS.filter(r => r === '0' || look.rows[r] > 1);
-    cv.title = look.displayName; cv.dataset.phase = Math.floor(Math.random() * 8);
-    const act = (row, ms) => { clearTimeout(cv.timer); cv.dataset.rows = row; cv.timer = setTimeout(() => { if (cv.isConnected) act(rows[Math.floor(Math.random() * rows.length)], 1800 + Math.random() * 4200); }, ms); };
-    act('0', 600 + Math.random() * 3000);
-    cv.onclick = () => act(look.rows[4] > 1 ? '4' : '3', 1500);
-  });
-  tickPets();
-}
 
 /* ---------- first-run setup wizard (v0.1.3 C1; threat model rows 17, 31, 32) ---------- */
 // Seven screens (Builder approved them, 2026-10-22). It opens itself once, after the landing intro and before the walkthrough.
@@ -2929,122 +973,6 @@ async function landPets() {
 // /setup and the sign-in state every 2 s and starts at the first step not done. A failure shows its cause, one fix and Retry.
 // The last status's mode: the wizard's in-app admin password is for this computer only (row 61).
 let setupMode = '';
-async function loadSetup(paths) {
-  if (!window.p9?.chat) return null;
-  // D15a: a remote that is not answering (no P9 there yet) has no setup to read: none is asked, and no toast.
-  const st = await window.p9.getStatus?.().catch(() => null);
-  setupMode = st?.mode ?? '';
-  if (st?.mode === 'server' && st.status !== 'ok') return null;
-  // No toast either when this computer's P9 does not answer: the wizard shows the failure, the status line the daemon.
-  const r = await liveChat.call('setup', paths || {}, { quiet: true }).catch(() => null);
-  return r?.status === 200 ? r.body : null;
-}
-// The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
-// pick (item 15): an agent installed or signed in; while it is false the wizard asks Claude, Codex or both first. The
-// card leaves it out: a missing pick is a missing sign-in too.
-function setupDone(s) { return { workspace: s.writable, pick: s.claudeCli || s.codexCli || s.claude || s.codex, agents: s.claude || s.codex, mission: (!s.settingsPresent && !s.found?.registry && !s.found?.waiting) || s.settings && s.agentsFile !== false && s.registryFile !== false && !(s.agentsFile === null && s.registryFile === null && (s.found?.registry || s.found?.waiting)), terminal: s.tmux !== false }; }
-function welSkipped() { try { return localStorage.getItem('p9-welcome-skipped') === '1'; } catch { return false; } }
-// Item 15: the agents the wizard offers, each with the one line that says what it needs.
-const AGENTS_PICK = [['claude', 'Claude', 'Claude Code, by Anthropic. Needs a Claude account (Pro, Max or Team) or an API key.'], ['codex', 'Codex', 'Codex, by OpenAI. Needs a ChatGPT account (Plus, Pro or Business) or an API key.']];
-// What the pick step shows as picked: this run's choice, else what is installed or signed in already.
-const wizPicked = () => W.picked || AGENTS_PICK.filter(([a]) => W.s?.[a + 'Cli'] || W.s?.[a]).map(([a]) => a);
-const wizReady = () => { const on = wizPicked(); return on.length > 0 && on.every(a => W.s?.[a + 'Cli']); };
-// The admin screen's name for each system item /setup can report missing (deps.mjs wizardDependencies).
-const ADMIN_NAMES = { tmux: 'tmux', ssh: 'SSH client' };
-const STEP_NAMES = { workspace: 'workspace folder', agents: 'agent sign-in', mission: 'Mission Control files', terminal: 'terminal' };
-async function checkSetup() {
-  const s = await loadSetup();
-  S.setup = s && Object.values(setupDone(s)).includes(false) ? s : null;
-  renderCards();
-}
-function skipWelcome() { try { localStorage.setItem('p9-welcome-skipped', '1'); } catch {} renderCards(); }
-function tour() { const from = S.focus; setFocus('chat', true); walkthrough(0, from); }
-// First run (the landing page closed for the first time): the wizard while a check fails, then the walkthrough.
-async function firstRun() {
-  const s = await loadSetup();
-  if (!s || welSkipped() || !Object.values(setupDone(s)).includes(false)) return tour();
-  W.then = tour; welcome(0);
-}
-const W = { i: 0, s: null, login: {}, timer: 0, note: {}, code: '', name: null, busy: '', then: null, paths: null, picked: null, have: null };
-// The paths the wizard would write: the owner's edits, else what the daemon proposed (what it found, filled in with the
-// starter paths). Empty fields are left out.
-const wizPaths = () => Object.fromEntries(Object.entries(W.paths || (W.s?.conflict ? W.s.proposed : W.s?.found) || {}).filter(([k, v]) => PATH_KEYS.some(([key]) => key === k) && v));
-const wizChoosing = s => s && ((!s.settings && !s.settingsPresent) || s.conflict || (s.settings && s.agentsFile === null && s.registryFile === null));
-// Fresh-install attempt 2, item 8: Mission Control is the last step, once everything else is set up; its button opens
-// Mission's own onboarding card.
-const wizSteps = () => ['welcome', 'workspace', 'pick', 'agents', ...(W.s?.tmux === null ? [] : ['terminal']), 'you', 'done', 'mission'];
-// D17: stale = the chat said this agent is not signed in. Its login file can outlive the login, so /setup still says
-// signed in; the step believes the chat until a sign-in started here ends well.
-async function welcome(at, agent, stale) {
-  if (!window.p9?.chat) return; // a browser preview has no daemon to set up
-  Object.assign(W, { note: {}, code: '', name: null, busy: '', paths: null, have: null, remote: false, hosts: null, picked: null, stale: stale ? agent : null, began: null });
-  W.s = await loadSetup();
-  if (agent) W.picked = [...new Set([...wizPicked(), agent])];
-  const d = W.s && setupDone(W.s);
-  W.i = typeof at === 'string' ? Math.max(0, wizSteps().indexOf(at)) : at ?? Math.max(0, d ? wizSteps().findIndex(k => d[k] === false) : 0);
-  // BL5: every 10 s (was 2 s) while a check fails or a sign-in runs; wizRefresh stops it once neither is so, and starts it again.
-  clearInterval(W.timer); W.timer = setInterval(wizRefresh, 10000);
-  await wizRefresh();
-  if (!$('#welDlg').open) $('#welDlg').showModal();
-}
-async function wizRefresh() {
-  const [s, l] = await Promise.all([loadSetup(W.paths && wizPaths()), window.p9.agentLogin('state').catch(() => null)]);
-  W.s = s; W.login = l?.status === 200 ? l.body : {};
-  const began = W.login[W.began];
-  if (began && !began.running) { if (began.exit === 0 && W.stale === W.began) W.stale = null; W.began = null; }
-  if (s) { S.setup = Object.values(setupDone(s)).includes(false) ? s : null; renderCards(); }
-  if (s && !S.setup && !Object.values(W.login).some(l => l?.running)) { clearInterval(W.timer); W.timer = 0; }
-  else if (!W.timer && $('#welDlg').open) W.timer = setInterval(wizRefresh, 10000); // a sign-in started after setup was done
-  wizRender();
-}
-// Each error a step can get back, as [cause, fix].
-const WIZ_ERR = {
-  'daemon-unavailable': ["P9's background service is not answering.", 'It restarts on its own. Retry in a few seconds.'],
-  'daemon-outdated': ["P9's background service is older than this app, so it does not have this step.", 'Update P9 where its background service runs (or restart that service after an update), then try again.'],
-  'workspace-change-unsupported': ["On this system the folder can't be changed from here.", 'P9 changes it on Linux and Windows.'],
-  'workspace-refused': ["That folder can't be the workspace.", "Pick a folder of your own: not your home folder itself, a drive's root or P9's own state folder."],
-  'service-missing': ["P9's background service is not installed.", "Run P9's installer again (the README's Install section), then Retry."],
-  'stop-all-failed': ['Something running would not stop, so the folder stayed the same.', 'Stop it in Chat or the terminal dock, then Change the folder again.'],
-  'workspace-not-started': ['P9 could not start in that folder, so it went back to the one it was on.', 'Pick another folder.'],
-  'workspace-unwritable': ['P9 cannot write to this folder.', 'Change the folder, or give your user write access to this one, then Retry.'],
-  'terminal-start-failed': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
-  'terminal-unavailable': ['The terminal did not open.', 'Retry, or open a terminal of your own and run the command shown.'],
-  'stop-all-running': ['Stop all is still running.', 'Retry when it is done.'],
-  updating: ['P9 is updating and restarts in a moment.', 'Send again in a minute.'],
-  'tmux-not-found': ['tmux is not installed.', 'P9 does not know this system\'s package manager, so someone who administers it must install tmux, then Retry. The rest of P9 works without it.'],
-  'agents-not-installed': ['P9 could not put the agent where its terminals find it.', 'Continue without it goes on: chats still work, they use the agent P9 ships.'],
-  'nothing-to-install': ['That is installed now.', 'Retry checks again.'],
-  'wrong-password': ['That password did not work.', 'Check it and press Install again.'],
-  'not-allowed': ['Your account cannot install software on this computer.', 'Someone who administers it must install it, then Retry.'],
-  'remote-deps-failed': ['P9 on this remote could not check what it needs.', 'Update P9 there, then Retry.'],
-  'remote-not-allowed': ['Your account on this remote cannot install software.', 'Someone who administers it must install it, then Retry.'],
-  'admin-failed': ['The install did not finish.', 'Retry. If it stops again, your package manager may be busy or offline.'],
-  'password-empty': ['Type your admin password first.', 'It is the one you use to sign in to this computer.'],
-  'login-running': ['A sign-in is already running.', 'Finish it in your browser, or Cancel it and sign in again.'],
-  'login-not-running': ['That sign-in has ended.', 'Sign in again.'],
-  'no-sign-in-page': ['The sign-in has not shown its page yet.', 'Wait a few seconds, then try again.'],
-  'request-refused': ['That code has characters a sign-in code never has.', 'Copy the code again from the browser and paste only the code.'],
-  'shutting-down': ["P9's background service is restarting.", 'Retry in a few seconds.'],
-  'settings-file-unknown': ['P9 does not know where its settings file goes.', 'Restart P9, then Retry.'],
-  'settings-changed': ['Something else wrote the settings file just now.', 'Retry reads it again.'],
-  'settings-invalid': ['Your settings file has an error.', 'Fix it in a text editor, or delete it, then Retry. P9 never changes a file it cannot read.'],
-  'paths-required': ['This folder already has things in it, so P9 needs the paths to use.', 'Check the paths above, then Create again.'],
-  'paths-invalid': ['A path is not one P9 can use.', 'Each is inside the workspace, written with / and without .. (for example docs/AGENTS.md).'],
-  'settings-exist': ['A settings file appeared meanwhile, so nothing was written.', 'Retry reads it.'],
-  'pick-outside': ['That is outside the workspace.', 'Pick a file or folder inside it.'],
-  'pick-root': ['That is the workspace folder itself.', 'Pick a file or folder inside it.'],
-  'server-mode-local-only': ["That changes this computer's P9, and this window is working on a remote.", 'Switch to Local (the top-bar badge or Settings > Remote Connect), then try again.'],
-  'path-is-a-file': ['That path names a file where P9 needs a folder.', 'Pick a folder for it, or move that file out of the way, then Create again.'],
-};
-// The hosts are the Host lines of ~/.ssh/config (W.hosts, read when the choice opens); connecting reloads this window onto that P9.
-// Attempt 2 items 1-2: the wizard connects itself. One field: a remote already used, a Host from ~/.ssh/config, or a new
-// user@address (kept in Settings > Remote's list too). A password, if ssh needs one, is asked in its own window (row 78).
-function wizRemote(btn) {
-  const h = W.hosts, hosts = [...new Set([...(h?.remotes || []), ...(h?.hosts || [])])], opts = hosts.map(x => '<option value="' + esc(x) + '"></option>').join('');
-  return '<div data-wiz-remote>'
-    + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || hosts[0] || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
-    + (W.note.remote?.error ? `<p class="warn sm" role="alert">${W.note.remote.error === 'host' ? 'Type a Host name or user@address, with no spaces.' : 'Could not connect (' + esc(W.note.remote.error) + ').'}</p>` : '') + '</div>';
-}
 function wizRender() {
   const s = W.s, steps = wizSteps(), key = steps[Math.min(W.i, steps.length - 1)], d = s ? setupDone(s) : {};
   W.i = steps.indexOf(key);
@@ -3266,7 +1194,6 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // load, then a long poll); the sample sessions go. Sends, answers and Stop go to window.p9.chat; what happened comes
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
-const dataNote = () => { $('#dataNote').textContent = [live.on && !serverInfo?.slim && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
 liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
@@ -3307,15 +1234,6 @@ liveChat.answer = (s, vals) => {
 };
 liveChat.decline = s => { const q = s.events.find(e => e.t === 'question'); if (q) liveChat.call('answer', { id: s.id, request: q.request, answer: { action: 'decline' } }); };
 liveChat.stop = (s, close) => { s.state = 'stopping'; renderTabs(); renderChats(); return liveChat.call('stop', { id: s.id, ...(close && { close }) }); };
-const chatModel = { claude: 'Claude Code · ACP', codex: 'Codex · ACP' };
-const textLines = t => typeof t === 'string' && t ? t.replace(/\n$/, '').split('\n') : [];
-const toolDiff = content => { const rows = (content || []).filter(c => c.type === 'diff').flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 200); return rows.length ? rows : null; };
-// PH1: the phone link for this chat, on the daemon's own remote address (its --remote-origin, none with remote logins off).
-async function continueOnPhone(s) {
-  const r = await window.p9?.chat?.('missionFiles', {}).catch(() => null);
-  $('#phoneBody').innerHTML = phoneDialogBody(r?.status === 200 ? r.body.remoteOrigin : '', s.id);
-  $('#phoneDlg').showModal();
-}
 // A chat picture opens large in its own dialog (top layer, above #mdl); a click anywhere or Esc closes it.
 const picDlg = $('#picDlg');
 addEventListener('click', e => {
@@ -3323,301 +1241,20 @@ addEventListener('click', e => {
   Object.assign(picDlg.firstElementChild, { src: i.src, alt: i.alt }); picDlg.showModal();
 });
 picDlg.onclick = () => picDlg.close();
-// A web link in a reply (made by helpers.mjs mdReply, row 18): the window never navigates, so main opens it in the browser,
-// after a question showing the whole address (Builder, 2026-11-02: the chat link confirm, "yes on 1.6"); "don't ask again"
-// is kept on this computer.
-const linkOk = href => localStorage.getItem('p9-link-ok') ? Promise.resolve(true) : new Promise(done => {
-  const d = $('#linkDlg'); $('#linkU').textContent = href; d.returnValue = '';
-  d.onclose = () => { if (d.returnValue === 'never') localStorage.setItem('p9-link-ok', '1'); done(d.returnValue === 'yes' || d.returnValue === 'never'); };
-  d.showModal();
-});
 addEventListener('click', async e => {
   const a = e.target.closest?.('a.link[href]'); if (!a || !window.p9?.openLink) return; // a browser preview follows the link
   e.preventDefault();
   if (await linkOk(a.href)) window.p9.openLink(a.href).catch(() => toast({ kind: 'link', txt: 'Link not opened', level: 'warn' }, true));
 });
-// Chat files: the files an edit call (Write, Edit, NotebookEdit; ACP kind edit, both adapters) wrote, from its rawInput, locations
-// and diffs, as the agent named them (absolute, or relative to the chat's folder). Created: a diff with no old text, else a Write.
-// ponytail: a Write over a file that was already there, with no diff, reads as created.
-// Each file keeps its own line diff for the Changes tab (an update with no content keeps the one it had).
-// ponytail: up to 2,000 rows a file, against the chat's 200.
-const editFiles = (d, tool) => {
-  if (tool.kind !== 'edit') return tool.files;
-  const diffs = (Array.isArray(d.content) ? d.content : []).filter(c => c?.type === 'diff' && typeof c.path === 'string');
-  const rows = p => { const r = diffs.filter(c => c.path === p).flatMap(c => lineDiff(textLines(c.oldText), textLines(c.newText))).slice(0, 2000); return r.length ? r : tool.files?.find(f => f.path === p)?.diff; };
-  const paths = [d.rawInput?.file_path, d.rawInput?.notebook_path, ...(Array.isArray(d.locations) ? d.locations.map(l => l?.path) : []), ...diffs.map(c => c.path), ...(tool.files ?? []).map(f => f.path)].filter(p => typeof p === 'string' && p);
-  const created = p => { const c = diffs.find(c => c.path === p); return c ? c.oldText == null || c.oldText === '' : tool.files?.find(f => f.path === p)?.created ?? /^Write\b/.test(tool.title); };
-  return paths.length ? [...new Set(paths)].slice(0, 50).map(p => ({ path: p, created: created(p), diff: rows(p) })) : tool.files;
-};
-const toolText = content => (content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(-4000);
-// Item 19, plan view: Claude's plan-mode plan (ExitPlanMode: the adapter's "Approve Plan" call, kind switch_mode), kept whole.
-const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c => c.type === 'content' && c.content?.type === 'text').map(c => c.content.text).join('\n').slice(0, 200000) || undefined;
-// A live chat's queued messages are kept per conversation, so a window restart shows them again and still sends them.
-// ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
-const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
-const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return Array.isArray(q) ? q.filter(t => typeof t === 'string') : []; } catch { return []; } };
-const liveSession = (id, provider, title, folder, created) => ({ id, agent: provider, title, model: chatModel[provider], mode: startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
-// E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
-// the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
-function history(s, until = liveChat.cursor) {
-  return s.loading ||= (async () => {
-    for (let after = 0; !lifetime.signal.aborted;) {
-      const r = await window.p9.chat('events', { after, only: [s.id], until, ...(after ? {} : { tail: TAIL }) });
-      // ponytail: refused (an ID that is not a UUID, which only a seeded test ledger has) leaves the chat empty, not stuck.
-      if (r.status === 400) break;
-      if (r.status !== 200) { await new Promise(res => setTimeout(res, 2000)); continue; }
-      for (const ev of r.body.events) try { applyChat(ev); } catch {}
-      if (r.body.more) { tailed(s, r.body); break; }
-      after = r.body.cursor;
-      if (r.body.events.length < 500) break;
-    }
-    s.stub = false; renderTabs(); renderChats();
-  })();
-}
-// P20 on the desktop: a chat loads with its newest TAIL blocks (the daemon's ledger.tail), not its whole history, which
-// over a remote's ssh link took minutes. s.more is the first cursor loaded when older events were left out; s.early, the
-// older events that came along anyway (cards, the latest mode, plan and commands), so Show earlier does not add them twice.
-// A daemon without tail sends no more, and the chat loads whole, as before.
-// ponytail: those early events show above the loaded blocks, not in their place, as on the phone.
-function tailed(s, body) {
-  const from = body.more?.[s.id];
-  s.more = from;
-  s.early = new Set([...(s.early ?? []), ...(from === undefined ? [] : body.events.filter(e => e.conversation === s.id && e.cursor < from).map(e => e.cursor))]);
-}
-async function earlier(s) {
-  const r = await window.p9.chat('events', { after: 0, only: [s.id], until: s.more - 1, tail: TAIL });
-  if (r.status !== 200) return;
-  const old = { ...liveSession(s.id, s.agent, s.title, s.folder, 0), queue: [] };
-  for (const ev of r.body.events) if (!s.early?.has(ev.cursor)) try { applyChat(ev, old); } catch {}
-  s.events = [...old.events, ...s.events];
-  tailed(s, r.body);
-}
-// Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
-function applyChat(ev, into) {
-  const d = ev.data;
-  if (ev.type === 'created') { if (!into && !S.sessions.some(x => x.id === ev.conversation)) S.sessions.push(liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at)); return null; }
-  const s = into ?? S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
-  // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
-  if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
-  const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
-  const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
-  switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
-      if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
-    // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
-    // cancel (loadChat puts the text back in the box), or not sent at all.
-    case 'held': (s.held ||= []).push({ id: d.id, text: d.text, when: d.when }); break;
-    case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
-    case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
-    case 'resumed': notice('Resumed natively (session/resume)'); s.state = 'running'; s.session = d.session; break;
-    case 'moving': settle(); s.state = 'moving'; notice('Moving to the remote: this chat is paused here.'); break;
-    case 'moved': s.state = 'moved'; s.movedTo = d.host; notice('Moved to ' + d.host + '. It carries on there: switch to Remote mode (the title-bar badge) and open it.'); break;
-    case 'move-failed': s.state = 'stopped'; notice('Not moved' + (d.message ? ': ' + d.message : '.') + ' Send a message to carry on here.'); break;
-    case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
-    case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
-    case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
-    case 'config': if (Array.isArray(d.model?.options)) { s.models = lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
-      if (Array.isArray(d.pickers)) { s.pickers = lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; } break;
-    case 'update':
-      // Claude Code also runs turns nobody prompted (the continuation after a compaction, a background task's report): no
-      // 'user' starts them and no 'turn-end' closes them. Agent output marks the chat working; that turn's closing
-      // usage_update (the one with a cost) marks it done.
-      if (s.state === 'running' && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(d.sessionUpdate)) s.working = true;
-      else if (d.sessionUpdate === 'usage_update' && d.cost && !s.prompted) s.working = false;
-      // Every agent request reads and re-warms the prompt cache, so the cache clock starts again from any agent output: a
-      // turn nobody prompted (owner, 2026-10-25: a background task's wake-up left the clock at 57 min) and a long prompted
-      // turn alike (an agent working on its own for hours inside one turn left it cold); turn-end sets it once more.
-      if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(d.sessionUpdate)) s.lastEnd = ev.at;
-      if (d.sessionUpdate === 'agent_message_chunk' || d.sessionUpdate === 'agent_thought_chunk') {
-        const t = d.sessionUpdate === 'agent_message_chunk' ? 'agent' : 'thought', text = d.content?.type === 'text' ? d.content.text : '', img = t === 'agent' && imgSrc(d.content), warn = t === 'agent' && agentWarning(text);
-        if (warn) s.events.push({ t: 'warn', text: warn }); // the adapter's warning, a notice line above the reply (helpers.mjs)
-        else if (last?.t === t) { last.text += text; if (img) (last.images ||= []).push(img); } else s.events.push({ t, text, ...(img && { images: [img] }) });
-      } else if (d.sessionUpdate === 'tool_call') { const tool = { t: 'tool', id: d.toolCallId, status: typeof d.status === 'string' ? d.status : 'pending', title: String(d.title || 'Tool call'), kind: d.kind, diff: toolDiff(d.content), output: toolText(d.content), images: toolImages(d.content), plan: planText(d) }; tool.files = editFiles(d, tool); s.events.push(tool); }
-      else if (d.sessionUpdate === 'tool_call_update') { const tool = s.events.find(e => e.t === 'tool' && e.id === d.toolCallId); if (tool) { if (typeof d.status === 'string') tool.status = d.status; if (d.title) tool.title = String(d.title); if (typeof d.kind === 'string') tool.kind = d.kind; tool.files = editFiles(d, tool); if (d.content) { tool.diff = toolDiff(d.content); tool.output = toolText(d.content); tool.images = toolImages(d.content); } } }
-      else if (d.sessionUpdate === 'available_commands_update' && Array.isArray(d.availableCommands)) s.commands = lastCommands[s.agent] = d.availableCommands.slice(0, 1000).map(c => ({ name: String(c?.name ?? ''), desc: String(c?.description ?? '') })).filter(c => c.name);
-      else if (d.sessionUpdate === 'session_info_update' && typeof d.title === 'string' && d.title.trim()) s.title = d.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-      else if (d.sessionUpdate === 'usage_update' && d.size > 0) { s.context = { used: Number(d.used) || 0, size: Number(d.size) }; if (d._meta?.['_claude/rateLimit']) usageNow(); }
-      else if (d.sessionUpdate === 'plan') { const entries = (Array.isArray(d.entries) ? d.entries : []).map(x => [String(x?.status), String(x?.content ?? '')]), plan = s.events.find(e => e.t === 'plan'); if (plan) plan.entries = entries; else s.events.push({ t: 'plan', entries }); }
-      break;
-    case 'approval': s.events.push({ t: 'approval', request: d.request, title: d.toolCall?.title || 'Tool call', diff: toolDiff(d.toolCall?.content) || [], options: d.options.map(o => [o.optionId, o.name, o.kind]), plan: planText(d.toolCall) }); s.pending = 'approval'; break;
-    case 'question': {
-      // The daemon's form (formSpec in chat.mjs) is the one P9 renders and checks; null means P9 cannot show it faithfully.
-      // A required choice starts unpicked; an optional one starts on "No answer" (left out of the reply).
-      const field = f => {
-        const radio = options => f.required ? { kind: 'radio', options, def: null } : { kind: 'radio', options: [['', 'No answer'], ...options], def: '' };
-        const shape = f.kind === 'choice' ? radio(f.options) : f.kind === 'boolean' ? radio([['true', 'Yes'], ['false', 'No']]) : f.kind === 'multi' ? { kind: 'multi', options: f.options } : { kind: 'text' };
-        return { ...shape, key: f.key, label: f.label, hint: f.hint, required: f.required, type: f.kind };
-      };
-      s.events.push({ t: 'question', request: d.request, title: d.message, unsupported: !d.form, fields: d.form ? d.form.fields.map(field) : [] }); s.pending = 'question'; break; }
-    case 'answered': s.events = s.events.filter(e => e.request !== d.request); s.pending = s.events.some(e => e.t === 'approval') ? 'approval' : s.events.some(e => e.t === 'question') ? 'question' : null;
-      notice(d.answer.outcome ? (d.answer.outcome.outcome === 'selected' ? 'You chose: ' + d.answer.outcome.optionId : 'Approval cancelled') : 'Question: ' + d.answer.action); break;
-    case 'lock-rejected': notice('Agent lock: rejected ' + (d.toolCall?.title || 'a tool call')); break;
-    case 'restart-request': s.events.push({ t: 'notice', text: 'The agent asks you to restart P9: ' + d.reason, restart: true }); break; // RS2: with a Restart button
-    case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
-    case 'turn-end': settle(); s.lastEnd = ev.at; usageNow(); queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
-    case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
-    case 'exited': settle(); s.state = 'stopped'; notice('The agent process exited' + (d.code != null ? ' (code ' + d.code + ')' : '') + '. Send again to resume.'); break;
-    case 'stopped': settle(); s.state = 'stopped'; notice(d.result === 'stopped' ? 'Stopped. Everything this session started has ended.' : 'Stop could not confirm that everything ended.'); break;
-    case 'interrupted': settle(); s.state = 'stopped'; notice('Interrupted: the P9 daemon restarted mid-turn. Send again to resume.');
-      for (const h of s.held?.splice(0) ?? []) notice('Not sent (the daemon restarted): ' + h.text); break; // held only in the daemon's memory
-  }
-  return null;
-}
-async function loadChat() {
-  if (!window.p9?.chat) return;
-  // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
-  // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
-  let replaying = true, scope = null, listed = [];
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !lifetime.signal.aborted) await new Promise(res => setTimeout(res, 2000)); return l.body?.conversations || []; };
-  while (!lifetime.signal.aborted) {
-    const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
-    // P20: the first replay reads each open chat's newest blocks only (tailed, above).
-    const tail = replaying && scope?.only && !liveChat.cursor ? { tail: TAIL } : {};
-    const r = scope ? await window.p9.chat('events', { after: liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;
-    // A refused narrowed replay (a listed ID the bridge or daemon will not take) replays everything, as before E2.
-    if (r.status === 400 && replaying && scope?.only) { scope = {}; continue; }
-    if (r.status !== 200) { if (!liveChat.on && sampleView) return; await new Promise(res => setTimeout(res, liveChat.on ? 2000 : 5000)); continue; }
-    if (!liveChat.on) { liveChat.on = true; S.sessions = []; S.open = []; dataNote(); }
-    // A tail can leave out a chat's created event, so its tab comes from the list.
-    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !S.sessions.some(s => s.id === c.id)) S.sessions.push(liveSession(c.id, c.provider, c.title, c.folder, c.created));
-    const ended = [], answered_ = [];
-    for (const ev of r.body.events) {
-      const created = ev.type === 'created' && !replaying, stub = S.sessions.find(s => s.id === ev.conversation && s.stub);
-      if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
-      // A malformed stored event is skipped, never thrown: it would fail again on every replay.
-      let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
-      if (created) show(ev.conversation);
-      if (ev.type === 'answered') answered_.push(ev.conversation);
-      // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
-      // ponytail: its images are not returned; attach them again.
-      const back = !replaying && ev.type === 'unheld' && ['removed', 'cancelled'].includes(ev.data?.why) && S.sessions.find(s => s.id === ev.conversation);
-      if (back) back.draft = ev.data.text + (back.draft ? '\n' + back.draft : '');
-      // Its x in any window takes the tab out of this one too (not on replay, which hides every stopped chat).
-      const closed = !replaying && ev.type === 'closed' && S.sessions.find(s => s.id === ev.conversation && !s.hidden);
-      if (closed) { closed.hidden = true; untab(closed.id); }
-    }
-    liveChat.cursor = r.body.cursor;
-    if (r.body.more) for (const s of S.sessions) if (scope.only.includes(s.id)) tailed(s, r.body);
-    if (replaying && (r.body.more || r.body.events.length < 500)) {
-      replaying = false;
-      // Tabs keep the order the chats were made in; History sorts by last used.
-      const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(S.sessions.map(s => [s.id, s]));
-      S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...S.sessions.filter(s => !all.some(c => c.id === s.id))];
-      // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
-      // running (the phone may have resumed it) and gets its tab back.
-      for (const s of S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; liveChat.stop(s, true); } }
-      closedChats.clear(); localStorage.removeItem('eh-closed-chats');
-      if (!S.open.length) S.open = S.sessions.filter(s => !s.hidden).slice(-2).reverse().map(s => s.id);
-      // Messages kept from before a restart go now: the daemon takes them into a running turn, or queues them back.
-      for (const s of S.sessions) if (s.queue.length && s.state === 'running') turnEnd(s);
-      moveReloaded();
-    }
-    // CP9: a throw here (a paint) used to end this loop, so the chat froze until a restart; log it and keep polling.
-    else if (!replaying) try { for (const s of ended) { finished(s); turnEnd(s); } for (const id of answered_) { const s = S.sessions.find(x => x.id === id); if (s && !s.pending) answered(s); } } catch (e) { console.error('chat batch', e); }
-    try { renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
-  }
-}
 
 /* ---------- Send to server: the black hole and the switch (items 24, 25, specs/move-progress-events.md) ---------- */
 // Drawn from main's p9:move stream only; the ledger's moving, moved and move-failed events stay the record. The overlay sits
 // over the moving chat's pane, not in it (panes are morphed on every paint), and in its dialog when the pane is in one.
 // ponytail: one move drawn at a time; another chat's events while one is drawn are not drawn (its ledger events still show).
 const fx = $('#moveFx'), fxSky = createSky($('#moveSky')), moveDlg = $('#moveDlg');
-const FX_WHAT = { stopping: () => 'Pausing the chat here…', connecting: h => 'Connecting to ' + h + '…', uploading: h => 'Sending ' + (fxFiles === FX.id ? 'the files and the chat' : 'the chat') + ' to ' + h,
-  landing: h => h + ' is setting it up…', syncing: () => 'Waiting for the files…' };
-const mb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 // The chat's folder goes first, over P9's tunnel (item 23). A folder that needs a choice shows the Send files prompt before the chat
 // is frozen (Builder, 2026-10-27: "Same prompt first"); a Syncthing folder sends none and keeps the wait ("Keep today's wait").
 let fxFiles = null; // the chat whose move sends its folder first, for the uploading words
-// From the press until it lands or fails (the plan alone can take half a minute): one notice says what is happening, and
-// the button and the message box stay off, so a second press cannot start a second send (Builder's test, 2026-11-02).
-async function leave(s) {
-  if (s.leaving) return;
-  const note = { t: 'notice', text: 'Moving this chat to ' + (serverInfo?.last || 'the remote') + '. This takes about 30 seconds; don\'t type in this chat or close P9 until it finishes.' };
-  s.leaving = true; s.events.push(note); renderChats();
-  try { await sendAway(s); } finally { s.leaving = false; s.events = s.events.filter(e => e !== note); renderChats(); }
-}
-async function sendAway(s) {
-  let files = [];
-  if (window.p9.xferPlan) {
-    const failed = () => ({ error: 'no-answer', message: 'P9 did not answer.' });
-    let p = await window.p9.xferPlan(s.folder || '').catch(failed);
-    // U4: a chat outside the workspace whose folder the remote does not have (or may not use): pick where it lands there.
-    if (p.error === 'pick-folder') {
-      const to = await pickRemoteFolder({ ask: window.p9.xferFolders, title: 'Choose where the chat goes on the remote', note: p.message, verb: 'Lands in' });
-      if (to === undefined) return; // Cancel: the chat stays here, nothing frozen, nothing sent
-      p = await window.p9.xferPlan(s.folder, to).catch(failed);
-    }
-    if (p.error) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (p.message || p.error) }); return renderChats(); }
-    if (!p.syncthing.laptop.length && !p.syncthing.server.length) {
-      const answer = !p.asked && !p.deletes ? [null, false] : await new Promise(done => {
-        xfer.id = p.id;
-        xferAsk(p, (choice, deleteToo) => { done([choice, deleteToo]); $('#xferDlg').close(); }, true);
-        $('#xferDlg').addEventListener('close', () => done(null), { once: true });
-      });
-      xfer.id = null;
-      if (!answer) return; // Cancel: nothing frozen, nothing sent
-      files = [p.id, ...answer];
-    } else if (p.to !== undefined) files = [p.id, null, false]; // synced: the files wait for Syncthing; the plan carries where it lands
-  }
-  fxFiles = files.length ? s.id : null;
-  const r = await window.p9.sendToServer(s.id, ...files).catch(() => ({ status: 503, body: { error: 'daemon-unavailable' } }));
-  if (r.body?.error === 'limit') return xferRefused(r.body);
-  // busy: main is moving it already (a window reloaded mid-move); its events draw it.
-  if (r.status !== 200 && !['move-failed', 'busy'].includes(r.body?.error)) { s.events.push({ t: 'notice', text: 'Not sent to the remote: ' + (r.body?.message || r.body?.error || 'no answer') }); renderChats(); }
-}
-function fxPlace() {
-  const pane = [...document.querySelectorAll('.pane[data-id]')].find(p => p.dataset.id === FX.id);
-  if (!pane) return;
-  // The pull scales and turns the pane about its centre: the centre stays, the size is its layout size (not the shrunk box).
-  const home = pane.closest('dialog') || document.body, r = pane.getBoundingClientRect(), w = pane.offsetWidth, h = pane.offsetHeight;
-  if (fx.parentElement !== home) home.append(fx);
-  Object.assign(fx.style, { left: r.left + r.width / 2 - w / 2 + 'px', top: r.top + r.height / 2 - h / 2 + 'px', width: w + 'px', height: h + 'px' });
-}
-function fxFrame(now) {
-  FX.raf = requestAnimationFrame(fxFrame);
-  if (now - FX.drawn < 33) return;
-  const dt = FX.drawn ? Math.min(0.1, (now - FX.drawn) / 1000) : 0, k = Math.min(1, (now - FX.t0) / 2400), e = 1 - (1 - k) ** 5;
-  FX.drawn = now;
-  // The landing intro's ignition (30 -> 22), here driven by the move's percent: the hole draws closer as the chat goes in.
-  FX.dist += (30 - 8 * FX.pct / 100 - FX.dist) * Math.min(1, dt * 2);
-  FX.spin += dt * (0.8 + FX.pct / 100);
-  fxPlace();
-  fxSky.size(0.6);
-  fxSky.set({ uDist: FX.dist, uShift: 0, uIgnite: e, uStars: e, uDim: 1 - 0.38 * e, uSpin: FX.spin, uTime: now / 1000 });
-  fxSky.frame();
-}
-function fxStart(m) {
-  Object.assign(FX, { id: m.id, pull: m.id, host: m.host, t0: performance.now(), drawn: 0, spin: 0, dist: 30, pct: 0 });
-  renderChats();
-  fx.hidden = false; fxPlace();
-  requestAnimationFrame(() => fx.toggleAttribute('data-on', true));
-  if (!still && fxSky.ok) FX.raf = requestAnimationFrame(fxFrame);
-  // Three missed heartbeats (5 s each): the move is not touched, the label says so.
-  FX.tick = setInterval(() => { fxPlace(); if (performance.now() - FX.at > 15000 && !fx.hasAttribute('data-wait')) { fx.toggleAttribute('data-wait', true); $('#moveWhat').textContent = 'Waiting for the remote…'; } }, 1000);
-}
-function fxEnd() {
-  cancelAnimationFrame(FX.raf); clearInterval(FX.tick);
-  fx.hidden = true; fx.removeAttribute('data-on'); fx.removeAttribute('data-wait');
-  Object.assign(FX, { id: null, pull: null, raf: 0, tick: 0 });
-  renderChats();
-}
-function onMove(m) {
-  if (!m?.id || (FX.id && FX.id !== m.id)) return;
-  if (!FX.id) fxStart(m);
-  FX.at = performance.now(); fx.removeAttribute('data-wait');
-  if (Number.isFinite(m.percent)) FX.pct = m.percent;
-  $('#moveWhat').textContent = FX_WHAT[m.phase]?.(m.host) || 'Moving the chat to ' + m.host;
-  $('.move-bar').style.setProperty('--p', FX.pct + '%'); $('.move-bar').setAttribute('aria-valuenow', FX.pct);
-  $('#movePct').textContent = FX.pct + '%';
-  $('#moveBytes').textContent = m.bytes?.total ? ' · ' + mb(m.bytes.sent) + ' of ' + mb(m.bytes.total) : '';
-  $('#moveCancel').hidden = !['stopping', 'connecting', 'uploading'].includes(m.phase);
-  if (m.phase === 'done') afterMove(m);
-  // failed: the ledger's move-failed notice says why. unknown: the pane's "press to finish" button stays, with main's words.
-  if (m.phase === 'failed') fxEnd();
-  if (m.phase === 'unknown') { const s = S.sessions.find(x => x.id === m.id); if (s && m.message) s.events.push({ t: 'notice', text: m.message }); fxEnd(); }
-}
 $('#moveCancel').onclick = () => { $('#moveCancel').hidden = true; $('#moveWhat').textContent = 'Cancelling…'; window.p9.cancelMove(FX.id).catch(() => {}); };
 window.p9?.onMove?.(onMove);
 // The server updates itself on connect (item 14, apps/desktop/server-update.mjs): each step as a toast; the end, and a
@@ -3652,52 +1289,11 @@ function onServerUpdate(u) {
 window.p9?.onServerUpdate?.(onServerUpdate);
 window.p9?.whatsNew?.().then(w => { if (w) openModal({ kind: 'whats-new', w }); }, () => {});
 window.p9?.serverUpdate?.().then(onServerUpdate, () => {});
-// "Open it on <host>?" and "Finish the move?": Enter takes the switch from anywhere in the box (a form's Enter would take
-// its first button, Stay); Esc is no.
-function moveAsk({ title, text, yes, no, never }) {
-  $('#moveT').textContent = title; $('#moveP').textContent = text; $('#moveYes').textContent = yes; $('#moveNo').textContent = no;
-  $('#moveNeverRow').hidden = !never; $('#moveNever').checked = false;
-  moveDlg.returnValue = '';
-  moveDlg.showModal();
-  return new Promise(done => moveDlg.addEventListener('close', () => done({ yes: moveDlg.returnValue === 'yes', never: !!never && $('#moveNever').checked }), { once: true }));
-}
 moveDlg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.matches('button')) { e.preventDefault(); moveDlg.close('yes'); } });
-// Item 24. "Don't show again" keeps the answer it was ticked with: always open on the server, or always stay.
-async function afterMove(m) {
-  let kept = null; try { kept = localStorage.getItem('p9-after-move-ask'); } catch {}
-  const pick = kept === 'open' || kept === 'stay' ? { yes: kept === 'open' } : await moveAsk({ title: 'Open it on ' + m.host + '?', yes: 'Open it', no: 'Stay here', never: true,
-    text: 'The chat is on ' + m.host + ' now. Opening it switches this window to the remote; your chats on this computer stay here for when you switch back.' });
-  if (pick.never) localStorage.setItem('p9-after-move-ask', pick.yes ? 'open' : 'stay');
-  if (!pick.yes) return fxEnd();
-  localStorage.setItem('p9-after-move', JSON.stringify({ id: m.id }));
-  const r = await window.p9.server(m.host).catch(() => null); // main reloads the window onto the remote's P9
-  if (!r?.ok) { localStorage.removeItem('p9-after-move'); fxEnd(); const s = S.sessions.find(x => x.id === m.id); s?.events.push({ t: 'notice', text: 'Could not switch to ' + m.host + '. Settings > Remote Connect switches by hand.' }); renderChats(); }
-}
-// After the first replay. The chat a move took here opens in the pane (on the server it is stopped, here it is moved).
-// A chat left moving by a reload: no stream event within 6 s means main is not moving it, so ask to finish.
-function moveReloaded() {
-  let after = null; try { after = JSON.parse(localStorage.getItem('p9-after-move'))?.id; localStorage.removeItem('p9-after-move'); } catch {}
-  const landed = after && S.sessions.find(s => s.id === after && s.state !== 'moved');
-  if (landed) focus(landed.id);
-  const left = S.sessions.find(s => s.live && s.state === 'moving');
-  if (!left || !window.p9?.sendToServer) return;
-  setTimeout(async () => {
-    if (FX.id || left.state !== 'moving' || serverInfo?.host || moveDlg.open) return;
-    const r = await moveAsk({ title: 'Finish the move?', yes: 'Finish the move', no: 'Not now',
-      text: '"' + (left.title || 'This chat') + '" was moving to ' + (serverInfo?.last || 'the remote') + ' when the window closed. It stays paused here until the move finishes; its Send to remote button finishes it later.' });
-    if (r.yes) leave(left);
-  }, 6000);
-}
 
 addEventListener('focus', () => renderChats());
 // Send to server shows only on this computer's chats, so the panes need the mode before Settings is first opened.
 if (window.p9?.server) window.p9.server().then(r => { serverInfo = r; renderChats(); renderTree(); serverMenu(); if (r?.slim) { applySettings(); dataNote(); } }, () => {});
-// The title-bar badge, Remote · host or Local, opens the machine menu: This computer and the Settings > Remote list (D3),
-// each with its state; a pick connects at once through the same IPC as Settings' Connect, and a remote without P9 lands on
-// the connecting screen's Install (D15a). The remote in use says how its tunnel is; the others saved here or used last are
-// probed over ssh as the menu opens (p9:remote-state, threat model row 50, c23 adds), Checking… until each answers.
-// ~/.ssh/config hosts never saved or used are not asked.
-const SERVER_STATE = { ok: ['ok', 'Connected'], 'server-no-p9': ['warn', 'P9 not running'], 'server-connecting': ['wait', 'Connecting…'], 'server-dropped': ['wait', 'Connecting…'] };
 const PROBE_STATE = { p9: ['ok', 'P9 running'], 'no-p9': ['warn', 'P9 not running'], unreachable: ['bad', 'Unreachable'] };
 // The remote in use and the last one used come first, even when neither list holds them (the old badge's one click went to last).
 const machines = () => { const { host = null, last = null, hosts = [], remotes = [] } = serverInfo ?? {}; return { host, last, remotes, all: [...new Set([host, last, ...remotes, ...hosts])].filter(Boolean) }; };
