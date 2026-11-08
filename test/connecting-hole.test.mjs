@@ -40,8 +40,10 @@ test('D20: the connecting screen draws the P9 black hole inline, moving, and sti
     assert.deepEqual(mark, { linked: 0, core: 'rgb(0, 0, 0)', blurs: 0, icon: 0 });
     assert.deepEqual(await names(), ['bob', 'shade', 'spin']);
     const pose = () => page.evaluate(() => getComputedStyle(document.querySelector('#connecting .bh .hole')).transform);
-    const first = await pose(); await page.waitForTimeout(250);
-    assert.notEqual(await pose(), first, 'the hole is not bobbing');
+    // Poll, not one 250 ms look: on a loaded runner the animation clock can start late, so both looks read bob's 0% frame (CI 42437815307).
+    const first = await pose(); let moved = false;
+    for (const end = Date.now() + 3000; !moved && Date.now() < end;) { await page.waitForTimeout(100); moved = await pose() !== first; }
+    assert.ok(moved, 'the hole is not bobbing');
     // The dialog's words and progress row are still there, under the mark.
     assert.deepEqual(await page.evaluate(() => ['#connT', '#connWhy', '#connProgress'].map((s) => document.querySelector(s).getBoundingClientRect().top > document.querySelector('#connecting .bh').getBoundingClientRect().bottom)), [true, true, true]);
     // An error toast over the dialog's own dark sky stays readable in a light theme: its red is mixed into the popover, not

@@ -80,7 +80,10 @@ test('File protection: refused while on, a native warning before off, kept acros
   await page.click('#setProtect');
   await page.locator('#setProtect:not(:checked)').waitFor();
   assert.equal((await asked()).length, 2);
-  assert.equal((await readFile(opened, 'utf8')).trim(), 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection');
+  // main.mjs spawns the browser without waiting for it, so its log can land after the box flips: wait for it (CI 42437815307 ENOENT).
+  let line = '';
+  for (const end = Date.now() + 5000; !line && Date.now() < end;) line = await readFile(opened, 'utf8').catch(() => '') || await new Promise((resolve) => setTimeout(() => resolve(''), 50));
+  assert.equal(line.trim(), 'https://github.com/' + REPO + '/blob/main/SECURITY.md#file-protection');
   assert.deepEqual((await call(instance, '/file-protection')).body, { on: false });
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'file-protection-off.png') }); }
 

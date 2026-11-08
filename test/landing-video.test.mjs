@@ -21,7 +21,8 @@ test('Landing v5: the video plays in #land, the old sky loop is off, send-to-ser
     const proc = app.process();
     t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
     const page = await app.firstWindow();
-    await page.waitForFunction(() => document.querySelector('#land').open, null, { timeout: 20000 });
+    // ?.: firstWindow() can return before the document has parsed, and a throwing predicate ends the wait at once (CI 42508960941).
+    await page.waitForFunction(() => document.querySelector('#land')?.open, null, { timeout: 20000 });
     // Which canvases asked for WebGL (createSky's first call), whether or not this machine has a GPU. A reload before the
     // landing closes shows it again.
     await app.context().addInitScript(() => {
@@ -29,7 +30,7 @@ test('Landing v5: the video plays in #land, the old sky loop is off, send-to-ser
       HTMLCanvasElement.prototype.getContext = function (kind, ...rest) { if (kind === 'webgl' && this.id) window.__gl.push(this.id); return get.call(this, kind, ...rest); };
     });
     await page.reload();
-    await page.waitForFunction(() => document.querySelector('#land').open && Array.isArray(window.__gl), null, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('#land')?.open && Array.isArray(window.__gl), null, { timeout: 20000 });
     return { app, page };
   };
   const look = (page) => page.evaluate(() => {

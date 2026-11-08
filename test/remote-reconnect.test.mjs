@@ -10,7 +10,11 @@ import path from 'node:path';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 
-const skip = process.platform === 'win32' ? 'Unix sockets and sh' : false;
+// Quarantined on CI (0.1.9 O4b): GitHub run 42433821869 lost the X display mid-test ("Missing X server or $DISPLAY") once
+// in about 12 runs, and it never failed in the dev space. Repro off CI: bash test/repro/remote-reconnect.sh 20. On CI, set
+// P9_UNQUARANTINE=1 to run it anyway.
+const skip = process.platform === 'win32' ? 'Unix sockets and sh'
+  : process.env.CI === 'true' && !process.env.P9_UNQUARANTINE ? 'quarantined on CI: test/repro/remote-reconnect.sh' : false;
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
   body: body === undefined ? undefined : JSON.stringify(body) }).then((result) => ({ status: result.status, ...JSON.parse(result.text) }));

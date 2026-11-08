@@ -149,8 +149,9 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(prompts.length, 2);
     assert.equal(prompts[0], prompts[1]);
     assert.equal(await youCount(page, 'typed offline'), 1);
-    assert.deepEqual(await stored(), []);
-    assert.equal(await page.locator('#queued').isHidden(), true);
+    // The echo comes from the first send (the daemon took it), so it can show before the retry's 202 empties the queue and
+    // drain() redraws #queued after its fetchEvents: wait for both (CI 42431676626, 42455268765).
+    await until(async () => (await stored()).length === 0 && await page.locator('#queued').isHidden(), 'the queue empties after the retry');
     await page.unroute('**/chat/*/prompt');
 
     // An approval is pending: a message now would decline it, so it waits in the queue and goes after the answer.
