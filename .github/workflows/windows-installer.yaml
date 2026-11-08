@@ -583,20 +583,27 @@ jobs:
           }
           # O24: a button of one of P9's native boxes, found by the box's title through UI Automation, as a user clicks it.
           function Press-Button([string]$Title, [string]$Button, [int]$Minutes, [string]$ShotName) {
-            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
             $A = [System.Windows.Automation.AutomationElement]
+            $all = [System.Windows.Automation.TreeScope]::Descendants
             $named = { param($n) New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $n) }
+            # The Button control itself: by name alone, Installers 42520930688 found a 'Later' element without Invoke.
+            $isButton = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+            $want = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@((& $named $Button), $isButton))
             $end = (Get-Date).AddMinutes($Minutes)
             while ((Get-Date) -lt $end) {
-              $box = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (& $named $Title))
-              $press = if ($box) { $box.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (& $named $Button)) }
+              $box = $A::RootElement.FindFirst($all, (& $named $Title))
+              $press = if ($box) { $box.FindFirst($all, $want) }
               if ($press) {
                 if ($ShotName) { Start-Sleep 1; Shot $ShotName }
-                $press.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                $invoke = $null
+                if ($press.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { $invoke.Invoke() }
+                else { Write-Output "uia: '$Button' has no Invoke, so focus and Space"; $press.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait(' ') }
                 return
               }
               Start-Sleep 2
             }
+            if ($box) { foreach ($e in $box.FindAll($all, [System.Windows.Automation.Condition]::TrueCondition)) { Write-Output ("uia: {0} '{1}'" -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name) } }
             throw "no '$Title' box with a '$Button' button in $Minutes min"
           }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -708,20 +715,27 @@ jobs:
           }
           # O24: a button of one of P9's native boxes, found by the box's title through UI Automation, as a user clicks it.
           function Press-Button([string]$Title, [string]$Button, [int]$Minutes, [string]$ShotName) {
-            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
             $A = [System.Windows.Automation.AutomationElement]
+            $all = [System.Windows.Automation.TreeScope]::Descendants
             $named = { param($n) New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $n) }
+            # The Button control itself: by name alone, Installers 42520930688 found a 'Later' element without Invoke.
+            $isButton = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+            $want = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@((& $named $Button), $isButton))
             $end = (Get-Date).AddMinutes($Minutes)
             while ((Get-Date) -lt $end) {
-              $box = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (& $named $Title))
-              $press = if ($box) { $box.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (& $named $Button)) }
+              $box = $A::RootElement.FindFirst($all, (& $named $Title))
+              $press = if ($box) { $box.FindFirst($all, $want) }
               if ($press) {
                 if ($ShotName) { Start-Sleep 1; Shot $ShotName }
-                $press.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                $invoke = $null
+                if ($press.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { $invoke.Invoke() }
+                else { Write-Output "uia: '$Button' has no Invoke, so focus and Space"; $press.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait(' ') }
                 return
               }
               Start-Sleep 2
             }
+            if ($box) { foreach ($e in $box.FindAll($all, [System.Windows.Automation.Condition]::TrueCondition)) { Write-Output ("uia: {0} '{1}'" -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name) } }
             throw "no '$Title' box with a '$Button' button in $Minutes min"
           }
           # The app's profile folder, the one with p9-update.log in it.
