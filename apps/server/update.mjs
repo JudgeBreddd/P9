@@ -43,9 +43,13 @@ export function newer(a, b) {
   return false;
 }
 
+// O6: a unit's state folder is its RuntimeDirectory (install-service.mjs), so the folder's name is the unit's: p9-foundation,
+// or a dev daemon's p9-dev beside it. Any other folder (a hand-started daemon, a test's) is the daily unit.
+export const unitOf = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation');
+
 // root: the checkout this daemon runs from. version: its package.json version (what /health says). archive: where a
-// packaged app's version is downloaded from. unit: the service the swap restarts.
-export function createUpdate({ ownership, state, chat, lifecycle, version, root, archive = ARCHIVE, unit = 'p9-foundation', turnLimit = TURN_LIMIT_MS }) {
+// packaged app's version is downloaded from. unit: the service the swap restarts, this daemon's own.
+export function createUpdate({ ownership, state, chat, lifecycle, version, root, archive = ARCHIVE, unit = unitOf(state), turnLimit = TURN_LIMIT_MS }) {
   const folder = ownership && path.join(ownership, 'update'), busy = new Set();
   const parent = path.dirname(root), base = path.basename(root);
   let job = null;

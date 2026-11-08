@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollDevice } from './helpers.mjs';
-import { newer } from '../apps/server/update.mjs';
+import { newer, unitOf } from '../apps/server/update.mjs';
 import { PIECE } from '../apps/server/pieces.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
 import { updateServer, names } from '../apps/desktop/server-update.mjs';
@@ -158,6 +158,10 @@ test('update: a newer version builds beside the checkout, waits for the turn, th
   const swap = await swapCall(instance);
   assert.match(swap, new RegExp('^--user --unit p9-update-' + pushed.id.slice(0, 8) + ' --collect --quiet -- \\S+ \\S+/scripts/update-swap\\.mjs --root ' + instance.source
     + ' --next ' + next + ' --version ' + NEXT + ' --from ' + VERSION + ' --id ' + pushed.id + ' '));
+  // O6: the swap restarts this daemon's own unit, named from its state folder; a dev daemon's (p9-dev) never the daily one.
+  assert.match(swap, / --service p9-foundation --wait /);
+  assert.deepEqual(['/run/user/1000/p9-dev', '/run/user/1000/p9-foundation', '/tmp/x/state', '/run/p9-Dev'].map(unitOf),
+    ['p9-dev', 'p9-foundation', 'p9-foundation', 'p9-foundation']);
   // Held: a message now would start a turn the restart cuts off.
   const refused = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   assert.deepEqual([refused.status, refused.error], [503, 'updating']);

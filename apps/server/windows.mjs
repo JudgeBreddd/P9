@@ -5,7 +5,9 @@ import path from 'node:path';
 
 export function internalEndpoint(state, platform = process.platform, identity = { home: os.homedir(), user: os.userInfo().username }) {
   if (platform !== 'win32') return path.join(state, 'daemon.sock');
-  const owner = createHash('sha256').update(identity.home.toLowerCase() + '\0' + identity.user.toLowerCase()).digest('hex').slice(0, 20);
+  // W3: the state folder is in the name too, so a dev daemon with its own state runs beside the daily one. Clients
+  // read the name from the credentials the daemon writes into its state folder (socketPath).
+  const owner = createHash('sha256').update(identity.home.toLowerCase() + '\0' + identity.user.toLowerCase() + '\0' + state.toLowerCase()).digest('hex').slice(0, 20);
   return `\\\\.\\pipe\\p9-foundation-${owner}`;
 }
 

@@ -73,10 +73,10 @@ const socketPath = internalEndpoint(state);
 if (!windows && Buffer.byteLength(socketPath) > 107) throw new Error('socket-path-too-long: ' + socketPath);
 const idleSeconds = values['idle-exit'] === undefined ? null : Number(values['idle-exit']);
 if (idleSeconds !== null && !(Number.isInteger(idleSeconds) && idleSeconds >= 1 && idleSeconds <= 86400)) throw new Error('invalid-idle-exit');
-// ponytail: --ownership gives a second Linux daemon (the dev build's p9-dev unit) its own ledger, lock and tmux socket;
+// ponytail: --ownership gives a second daemon (the dev build's p9-dev unit, or a second Windows task) its own ledger, lock and tmux socket;
 // only a unit's ExecStart passes it. Without it, the one folder every install uses.
 if (values.ownership !== undefined && !path.isAbsolute(values.ownership)) throw new Error('absolute-ownership-required');
-const ownershipDirectory = windows ? windowsStateRoot() : values.ownership ?? path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+const ownershipDirectory = values.ownership ?? (windows ? windowsStateRoot() : path.join(os.homedir(), '.local', 'state', 'p9-foundation'));
 if (inside(workspace, await canonicalDestination(ownershipDirectory))) throw new Error('private-directory-inside-workspace');
 await mkdir(ownershipDirectory, { recursive: true, mode: 0o700 });
 const ownershipStat = await lstat(ownershipDirectory);

@@ -61,6 +61,33 @@ test('Phase 13: a unit that starts but whose daemon never answers is removed too
   assert.ok(!existsSync(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service')));
 });
 
+// 0.1.8 O6: --unit p9-dev writes a second unit beside the daily one: its own name, runtime (state) folder, ownership folder
+// (ledger, lock, tmux socket) and phone port; the daily unit file is never written. A bad name is refused before anything.
+test('O6: a dev unit has its own name, state, ownership and port, and leaves p9-foundation alone', { skip: process.platform !== 'linux' }, async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-home-')), bin = path.join(home, 'bin'), workspace = path.join(home, 'ws');
+  await mkdir(bin); await mkdir(workspace); await mkdir(path.join(home, 'run'));
+  await writeFile(path.join(bin, 'systemctl'), '#!/bin/sh\necho "$*" >> "$HOME/systemctl.txt"\n'
+    + 'case "$*" in *daemon-reload*) cp "$HOME/.config/systemd/user/p9-dev.service" "$HOME/unit.copy" 2>/dev/null;; esac\nexit 0\n');
+  await chmod(path.join(bin, 'systemctl'), 0o755);
+  const env = { ...process.env, HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), PATH: bin + ':' + process.env.PATH };
+  const install = (...args) => spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace, ...args], { env, encoding: 'utf8' });
+  for (const bad of [['--unit', 'p9-foundation\nExecStart=/bin/sh'], ['--unit', 'other'], ['--unit', 'p9-dev', '--remote-port', '8744']]) {
+    const refused = install(...bad);
+    assert.match(refused.stderr, /p9-unit-required|remote-port-and-origin-together/, bad.join(' '));
+    assert.ok(!existsSync(path.join(home, 'systemctl.txt')), bad.join(' ') + ' reached systemctl');
+  }
+  const result = install('--unit', 'p9-dev', '--remote-port', '8744', '--remote-origin', 'https://host.example:8446');
+  assert.match(result.stderr, /daemon-not-answering: see journalctl --user -u p9-dev /);
+  const unit = readFileSync(path.join(home, 'unit.copy'), 'utf8'), owned = path.join(home, '.local', 'state', 'p9-dev');
+  assert.match(unit, /\nRuntimeDirectory=p9-dev\n/);
+  assert.ok(unit.includes(' --state %t/p9-dev --recovery "' + path.join(owned, 'conflicts') + '" --ownership "' + owned
+    + '" --remote-port "8744" --remote-origin "https://host.example:8446"\n'), unit);
+  const calls = readFileSync(path.join(home, 'systemctl.txt'), 'utf8');
+  assert.match(calls, /--user enable p9-dev\.service\n--user restart p9-dev\.service\n/);
+  assert.doesNotMatch(calls, /p9-foundation/);
+  assert.ok(!existsSync(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service')));
+});
+
 // 0.1.8 H5: the three install fixes of the 0.1.7 hotfix (release-audit-0.1.7.md), one test each; the third is in
 // remote-install.test.mjs. A stand-in systemctl logs its calls; nothing answers /health, so each run ends in the cleanup.
 async function leftoverHome() {

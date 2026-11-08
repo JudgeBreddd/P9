@@ -39,5 +39,5 @@ if (values.unit === 'p9-foundation.service' && !values['keep-menu'] && existsSyn
   rmSync(path.join(data, 'applications', 'p9-event-horizon.desktop'), { force: true });
   rmSync(path.dirname(open), { recursive: true, force: true });
 }
-const state = path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+const state = path.join(os.homedir(), '.local', 'state', values.unit.slice(0, -'.service'.length));
 console.log('P9_SERVICE_REMOVED ' + values.unit + (existsSync(state) ? '; state kept at ' + state : ''));

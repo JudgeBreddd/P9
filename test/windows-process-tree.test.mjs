@@ -19,6 +19,9 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
   const second = internalEndpoint('ignored', 'win32', { home: 'C:\\Users\\two', user: 'two' });
   assert.match(first, /^\\\\\.\\pipe\\p9-foundation-[a-f0-9]{20}$/);
   assert.notEqual(first, second);
+  // W3: one user, two state folders (the daily daemon and a dev one), two pipes.
+  assert.notEqual(internalEndpoint('C:\\P9\\runtime', 'win32', { home: 'C:\\Users\\one', user: 'one' }),
+    internalEndpoint('C:\\P9-dev\\runtime', 'win32', { home: 'C:\\Users\\one', user: 'one' }));
   const environment = { Path: 'C:\\Program Files\\nodejs;C:\\Windows\\System32', ComSpec: 'C:\\Windows\\System32\\cmd.exe' };
   const command = windowsJobCommand(['C:\\Program Files\\nodejs\\node.exe', '-e', '--mode', '-Debug'], environment);
   const payload = JSON.parse(Buffer.from(command.at(-1), 'base64').toString());

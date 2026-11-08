@@ -4,10 +4,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { parseArgs } from 'node:util';
 import { daemonRequest } from './teh.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
 
-const workspace = process.argv[2];
+// O6: --unit p9-dev installs a dev daemon beside the daily p9-foundation, with its own state, ledger and tmux socket
+// (main.mjs --ownership); --remote-port and --remote-origin give it its own phone port. The name must be one teh.mjs's
+// unitFor and update.mjs's unitOf read back from the state folder.
+const { values: options, positionals } = parseArgs({ allowPositionals: true, options: {
+  unit: { type: 'string', default: 'p9-foundation' }, 'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' } } });
+const unit = options.unit, workspace = positionals[0];
+if (!/^p9-[a-z-]+$/.test(unit)) throw new Error('p9-unit-required');
+if ((options['remote-port'] === undefined) !== (options['remote-origin'] === undefined)) throw new Error('remote-port-and-origin-together');
 if (!workspace || !path.isAbsolute(workspace)) throw new Error('absolute-workspace-required');
 if (!(await stat(workspace)).isDirectory()) throw new Error('workspace-must-be-a-directory');
 if (!process.env.XDG_RUNTIME_DIR) throw new Error('XDG_RUNTIME_DIR-unset: run this from your own login session');
@@ -24,7 +32,10 @@ function quote(value) {
 const share = path.join(os.homedir(), '.local', 'share', 'p9');
 const launcher = main.startsWith(path.join(share, 'daemon') + path.sep) ? quote(path.join(share, 'launcher', 'p9-launch.sh')) + ' ' : '';
 const directory = path.join(os.homedir(), '.config', 'systemd', 'user');
-const recovery = path.join(os.homedir(), '.local', 'state', 'p9-foundation', 'conflicts');
+const owned = path.join(os.homedir(), '.local', 'state', unit), recovery = path.join(owned, 'conflicts');
+// The daily unit keeps main.mjs's default folder (the same one); main.mjs checks the phone flags' values.
+const extra = (unit === 'p9-foundation' ? '' : ' --ownership ' + quote(owned))
+  + (options['remote-port'] === undefined ? '' : ' --remote-port ' + quote(options['remote-port']) + ' --remote-origin ' + quote(options['remote-origin']));
 await mkdir(directory, { recursive: true });
 // p9.slice holds the daemon, its tmux server, every chat and the editor host, so P9 running out of memory kills only
 // P9, never the rest of the machine. P9_MEMORY_HIGH / P9_MEMORY_MAX set it (systemd sizes: 8G, 33%); rewritten each install.
@@ -41,17 +52,17 @@ MemoryMax=${limit('P9_MEMORY_MAX', '33%')}
 `, { mode: 0o600 });
 // Rewritten each install too: a reinstall over a machine whose old unit is still there (a moved-aside ~/p9) used to stop on
 // EEXIST before the editor step and kept the old unit's paths (fixed in 0.1.7).
-await writeFile(path.join(directory, 'p9-foundation.service'), `[Unit]
-Description=P9 foundation daemon
+await writeFile(path.join(directory, unit + '.service'), `[Unit]
+Description=P9 ${unit === 'p9-foundation' ? 'foundation' : unit} daemon
 [Service]
 Type=simple
 Slice=p9.slice
-RuntimeDirectory=p9-foundation
+RuntimeDirectory=${unit}
 RuntimeDirectoryMode=0700
 UMask=0077
 # The installer's PATH, so the service finds the same tmux and agent CLIs it did (release r1 R1-10).
 Environment=${quote('PATH=' + process.env.PATH)}
-ExecStart=${launcher}${quote(process.execPath)} ${quote(main)} --workspace ${quote(workspace)} --state %t/p9-foundation --recovery ${quote(recovery)}
+ExecStart=${launcher}${quote(process.execPath)} ${quote(main)} --workspace ${quote(workspace)} --state %t/${unit} --recovery ${quote(recovery)}${extra}
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
@@ -62,20 +73,20 @@ WantedBy=default.target
 async function answers() {
   // Up to 15 s for the first start (sqlite, tmux); a daemon that crashes keeps restarting and never answers.
   for (let tries = 0; tries < 30; tries += 1) {
-    const health = await daemonRequest(path.join(process.env.XDG_RUNTIME_DIR, 'p9-foundation'), 'GET', '/health').catch(() => null);
+    const health = await daemonRequest(path.join(process.env.XDG_RUNTIME_DIR, unit), 'GET', '/health').catch(() => null);
     if (health?.status === 200) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('daemon-not-answering: see journalctl --user -u p9-foundation (where the journal is kept in memory: journalctl _SYSTEMD_USER_UNIT=p9-foundation.service)');
+  throw new Error(`daemon-not-answering: see journalctl --user -u ${unit} (where the journal is kept in memory: journalctl _SYSTEMD_USER_UNIT=${unit}.service)`);
 }
 // daemon-reload is inside the cleanup too: a failed one must not leave the unit behind (release r2 R2-10).
-try { execFileSync('systemctl', ['--user', 'daemon-reload']); execFileSync('systemctl', ['--user', 'enable', 'p9-foundation.service']);
+try { execFileSync('systemctl', ['--user', 'daemon-reload']); execFileSync('systemctl', ['--user', 'enable', unit + '.service']);
   // restart, not enable --now: a daemon already running from the old unit would otherwise keep running the old code.
-  execFileSync('systemctl', ['--user', 'restart', 'p9-foundation.service']); await answers(); }
+  execFileSync('systemctl', ['--user', 'restart', unit + '.service']); await answers(); }
 catch (error) {
   // Leave nothing behind, so fixing the cause and running this again works.
-  try { execFileSync('systemctl', ['--user', 'disable', '--now', 'p9-foundation.service'], { stdio: 'ignore' }); } catch {}
-  rmSync(path.join(directory, 'p9-foundation.service'), { force: true });
+  try { execFileSync('systemctl', ['--user', 'disable', '--now', unit + '.service'], { stdio: 'ignore' }); } catch {}
+  rmSync(path.join(directory, unit + '.service'), { force: true });
   try { execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' }); } catch {}
   throw error;
 }
