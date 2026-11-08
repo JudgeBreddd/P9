@@ -1,7 +1,8 @@
 // A file's security descriptor as SDDL text, read in this process (advapi32 through node:ffi) instead of from a
 // powershell.exe Get-Acl: on GitHub's windows-11-arm runner each powershell.exe start took 16-20 s, which made the file
-// guard tests 12 minutes there against 16 s on x64 (0.1.8 F1). Same text as (Get-Acl).Sddl: owner, group and DACL
-// (Get-Acl's .NET form calls this same Win32 conversion). files-windows.test.mjs checks the two agree once.
+// guard tests 12 minutes there against 16 s on x64 (0.1.8 F1). Same text as (Get-Acl).Sddl: owner, group and DACL, read
+// with GetNamedSecurityInfoW as .NET does (GetFileSecurityW leaves out the inherited flag, ID: CI run 42431676626).
+// files-windows.test.mjs checks the two agree once.
 import { execFileSync } from 'node:child_process';
 
 let api;
@@ -9,7 +10,7 @@ function load() {
   if (api) return api;
   const ffi = process.getBuiltinModule('node:ffi');
   const advapi32 = ffi.dlopen('advapi32.dll', {
-    GetFileSecurityW: { return: 'int32', arguments: ['buffer', 'uint32', 'buffer', 'uint32', 'buffer'] },
+    GetNamedSecurityInfoW: { return: 'uint32', arguments: ['buffer', 'uint32', 'uint32', 'buffer', 'buffer', 'buffer', 'buffer', 'buffer'] },
     ConvertSecurityDescriptorToStringSecurityDescriptorW: { return: 'int32', arguments: ['pointer', 'uint32', 'uint32', 'buffer', 'buffer'] },
     ConvertStringSecurityDescriptorToSecurityDescriptorW: { return: 'int32', arguments: ['buffer', 'uint32', 'buffer', 'buffer'] },
   }).functions;
@@ -35,13 +36,15 @@ function toSddl(descriptor, what) {
   return copy.toString('utf16le').split('\0')[0];
 }
 
+const SE_FILE_OBJECT = 1;
 export function sddl(file) {
-  const { ffi, advapi32, kernel32 } = load();
-  const descriptor = Buffer.alloc(65536), needed = Buffer.alloc(4);
-  if (!advapi32.GetFileSecurityW(wide(file), OWNER_GROUP_DACL, descriptor, descriptor.length, needed)) {
-    throw new Error(`GetFileSecurityW ${file} (Win32 ${kernel32.GetLastError()})`);
-  }
-  return toSddl(ffi.getRawPointer(descriptor), OWNER_GROUP_DACL);
+  const { advapi32, kernel32 } = load();
+  // The owner, group, DACL and SACL pointers point into the descriptor; only the descriptor is freed.
+  const parts = Array.from({ length: 4 }, () => Buffer.alloc(8)), out = Buffer.alloc(8);
+  const error = advapi32.GetNamedSecurityInfoW(wide(file), SE_FILE_OBJECT, OWNER_GROUP_DACL, ...parts, out);
+  if (error !== 0) throw new Error(`GetNamedSecurityInfoW ${file} (Win32 ${error})`);
+  const descriptor = out.readBigUInt64LE(0);
+  try { return toSddl(descriptor, OWNER_GROUP_DACL); } finally { kernel32.LocalFree(descriptor); }
 }
 
 // The token user as SDDL text writes it: the SID, or an alias such as LA for the built-in Administrator (RID 500, the

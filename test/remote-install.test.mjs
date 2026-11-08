@@ -61,7 +61,7 @@ test('0.1.7 hotfix: a remote install stops a running p9-foundation before replac
     + '[ -e "$HOME/stop-fails" ] && exit 1; exit 0;; esac\nexit 0\n');
   await chmod(path.join(path.dirname(s.ssh), 'systemctl'), 0o755);
   assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' })).phase, 'done');
-  assert.equal(await readFile(path.join(s.home, 'systemctl.txt'), 'utf8'), 'stop old\n', 'stopped once, before the new files');
+  assert.equal(await readFile(path.join(s.home, 'systemctl.txt'), 'utf8').catch(() => 'never stopped'), 'stop old\n', 'stopped once, before the new files');
   assert.equal(await readFile(readme, 'utf8'), 'p9\n');
   await writeFile(readme, 'old\n'); await writeFile(path.join(s.home, 'stop-fails'), ''); await rm(path.join(s.home, 'args.txt'));
   const busy = await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' });

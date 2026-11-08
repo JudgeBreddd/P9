@@ -67,7 +67,7 @@ async function leftoverHome() {
   const home = await mkdtemp(path.join(os.tmpdir(), 'p9-install-home-')), bin = path.join(home, 'bin'), workspace = path.join(home, 'ws');
   await mkdir(bin); await mkdir(workspace); await mkdir(path.join(home, 'run')); await mkdir(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
   await writeFile(path.join(bin, 'systemctl'), '#!/bin/sh\necho "$*" >> "$HOME/systemctl.txt"\n'
-    + 'case "$*" in *restart*) cp "$HOME/.config/systemd/user/p9-foundation.service" "$HOME/unit.copy";; esac\nexit 0\n');
+    + 'case "$*" in *daemon-reload*) cp "$HOME/.config/systemd/user/p9-foundation.service" "$HOME/unit.copy" 2>/dev/null;; esac\nexit 0\n');
   await chmod(path.join(bin, 'systemctl'), 0o755);
   const env = { ...process.env, HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), PATH: bin + ':' + process.env.PATH };
   return { home, workspace, env, run: () => spawnSync(process.execPath, [path.join(root, 'scripts', 'install-service.mjs'), workspace], { env, encoding: 'utf8' }) };
