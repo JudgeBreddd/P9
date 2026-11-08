@@ -29,7 +29,7 @@ test('updates are off for a source checkout, a build with no feed, another syste
   // Off means electron-updater is never loaded.
   let loaded = false;
   const off = await startUpdater({ app: { isPackaged: false }, version: '1.0.0', log() {}, resources, platform: 'win32', env: {}, load: () => { loaded = true; } });
-  assert.deepEqual(off.check(), { state: 'off', current: '1.0.0', available: null, reason: 'source checkout' });
+  assert.deepEqual(off.check(), { state: 'off', current: '1.0.0', available: null, reason: 'source checkout', nightly: false });
   assert.equal(loaded, false);
 });
 
@@ -37,8 +37,10 @@ test('the page may only read, check or install', () => {
   assert.equal(updateAction([]), 'read');
   assert.equal(updateAction([{ check: true }]), 'check');
   assert.equal(updateAction([{ install: true }]), 'install');
+  assert.equal(updateAction([{ nightly: true }]), 'nightly');
+  assert.equal(updateAction([{ nightly: false }]), 'nightly');
   for (const args of [[undefined], [null], ['check'], [[]], [{}], [{ check: 'true' }], [{ check: true, install: true }],
-    [{ install: true, url: 'https://evil.example/' }], [{ check: true }, {}]]) assert.equal(updateAction(args), null, JSON.stringify(args));
+    [{ install: true, url: 'https://evil.example/' }], [{ check: true }, {}], [{ nightly: 'true' }], [{ nightly: 1 }], [{ nightly: true, check: true }]]) assert.equal(updateAction(args), null, JSON.stringify(args));
 });
 
 test('states follow electron-updater; install runs only once a download is ready; a check never interrupts a download', async () => {
@@ -56,7 +58,7 @@ test('states follow electron-updater; install runs only once a download is ready
   assert.deepEqual(calls, [], 'install before a download is ready');
   assert.equal(updates.check().state, 'checking');
   fake.emit('update-available', { version: '1.0.1' });
-  assert.deepEqual(updates.read(), { state: 'downloading', current: '1.0.0', available: '1.0.1', reason: null });
+  assert.deepEqual(updates.read(), { state: 'downloading', current: '1.0.0', available: '1.0.1', reason: null, nightly: false });
   updates.check();
   fake.emit('update-downloaded', { version: '1.0.1' });
   updates.check();
@@ -65,8 +67,32 @@ test('states follow electron-updater; install runs only once a download is ready
   await new Promise(setImmediate);
   assert.deepEqual(calls, ['check', 'download', 'install true,true']);
   fake.emit('error', new Error('net::ERR_INTERNET_DISCONNECTED\n<html>...'));
-  assert.deepEqual(updates.read(), { state: 'error', current: '1.0.0', available: '1.0.1', reason: 'net::ERR_INTERNET_DISCONNECTED' });
+  assert.deepEqual(updates.read(), { state: 'error', current: '1.0.0', available: '1.0.1', reason: 'net::ERR_INTERNET_DISCONNECTED', nightly: false });
   assert.ok(lines.includes('state ready 1.0.1'));
+});
+
+// O2 (0.1.8): the Nightly switch is read at start, kept through channel.set, and turns electron-updater's pre-releases
+// on and off with a new check; a download under way is kept. Downgrades stay off either way.
+test('the Nightly switch: read at start, kept, and it turns pre-releases on and off without a downgrade', async () => {
+  const fake = new EventEmitter(), calls = [];
+  fake.checkForUpdates = async () => { calls.push('check ' + fake.allowPrerelease); };
+  fake.downloadUpdate = async () => { calls.push('download'); };
+  let saved = true;
+  const channel = { get: () => saved, set: on => { saved = on; } };
+  const updates = await startUpdater({ app: { isPackaged: true }, version: '1.0.0', log() {}, resources: await feed(), platform: 'win32',
+    env: {}, load: async () => fake, channel });
+  assert.deepEqual([fake.allowPrerelease, fake.allowDowngrade, updates.read().nightly], [true, false, true]);
+  assert.equal(updates.nightly({ nightly: false }).state, 'checking');
+  assert.deepEqual([fake.allowPrerelease, saved, updates.read().nightly, calls], [false, false, false, ['check false']]);
+  updates.nightly({ nightly: true });
+  fake.emit('update-available', { version: '1.0.1-nightly.1' });
+  updates.nightly({ nightly: false });
+  assert.deepEqual([updates.read().state, updates.read().available, fake.allowDowngrade, calls], ['downloading', '1.0.1-nightly.1', false, ['check false', 'check true', 'download']]);
+  // Off (a source checkout): the switch is still kept for when updates are on, and nothing loads.
+  let loaded = false;
+  const off = await startUpdater({ app: { isPackaged: false }, version: '1.0.0', log() {}, resources: await feed(), platform: 'win32', env: {},
+    load: () => { loaded = true; }, channel });
+  assert.deepEqual([off.nightly({ nightly: true }).nightly, saved, loaded], [true, true, false]);
 });
 
 // AU5: the version a rollback came back from is never downloaded again; the next different release is, and clears it.

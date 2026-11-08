@@ -1,6 +1,8 @@
-# Runs P9's tests on GitHub's Linux machine: every push to a branch other than main, or by hand from
-# Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
-# Linux minutes count once against the private repo's monthly allowance.
+# Runs P9's tests on GitHub's machines: every push to a branch other than main that changes more than docs, or by hand
+# from Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
+# The repo is public, so the runs cost nothing. 0.1.8 F1: the Linux tests run as 6 shards at once (test/shard.mjs) and the
+# Windows-only tests in their own job here, so a push answers in under 10 minutes; the installers build on tags only
+# (windows-installer.yaml). Every run keeps each shard's test output as an artifact, pass or fail (0.1.8 O2).
 # The machine gets what the tests need and a laptop has: Chromium's sandbox and unshare (user namespaces),
 # a systemd user manager, tmux, ss, GTK 3, a display (Xvfb) and gitleaks 8.19 or newer.
 name: Tests
@@ -8,6 +10,13 @@ name: Tests
 on:
   push:
     branches-ignore: [main]
+    # A push of only Markdown runs nothing, except the files tests read (README's editor pin, the licence notices).
+    paths:
+      - '**'
+      - '!**.md'
+      - 'README.md'
+      - 'LICENSES.md'
+      - 'third-party/**'
   workflow_dispatch:
     inputs:
       files:
@@ -16,6 +25,11 @@ on:
         default: ''
       evidence:
         description: Install the editor host and keep the tests' screenshots as an artifact
+        type: boolean
+        required: false
+        default: false
+      windows:
+        description: Run the named files on Windows (x64 and arm64) instead of Linux
         type: boolean
         required: false
         default: false
@@ -37,9 +51,15 @@ concurrency:
 jobs:
   linux:
     # On a push the inputs are empty: !inputs.bare is !null, true, so the tests run as before.
-    if: ${{ !inputs.bare }}
+    if: ${{ !inputs.bare && !inputs.windows }}
+    strategy:
+      # One shard failing still finishes the others, so a red run names every failing file.
+      fail-fast: false
+      matrix:
+        # files (dispatch) runs just those files, on one runner.
+        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5]') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       GITLEAKS: 8.30.1
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -82,16 +102,100 @@ jobs:
       - name: Tests
         env:
           FILES: ${{ inputs.files }}
+          SHARD: ${{ matrix.shard }}
         run: |
+          set -o pipefail
           systemctl --user is-system-running || true
-          if [ -n "$FILES" ]; then xvfb-run -a node scripts/with-tmp.mjs node --test $FILES; else xvfb-run -a pnpm test; fi
+          if [ -z "$FILES" ]; then FILES=$(node test/shard.mjs "$SHARD" 6); fi
+          echo "shard $SHARD: $FILES"
+          xvfb-run -a node scripts/with-tmp.mjs node --test $FILES 2>&1 | tee "$RUNNER_TEMP/tests.log"
+      # The output the result rests on, kept on every run (a failure too), not only in the job log.
+      - name: Test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-log-${{ matrix.shard }}
+          path: ${{ runner.temp }}/tests.log
+          retention-days: 14
+          if-no-files-found: warn
       - name: Screenshots (evidence runs)
         if: always() && inputs.evidence
         uses: actions/upload-artifact@v4
         with:
-          name: evidence
+          name: evidence-${{ matrix.shard }}
           path: ${{ runner.temp }}/evidence
           retention-days: 7
+          if-no-files-found: warn
+
+  # The Windows-only tests on a real Windows machine of each architecture, no installer build (0.1.8 F1: they ran inside
+  # windows-installer.yaml's installer job until installers moved to tags). The host (.cmd through cmd.exe, a new console,
+  # the folder ACL check, the prebuilt DLL) and Job Object stop; the dock's terminal on ConPTY (GitHub issue #11); Mission
+  # notes outside the workspace (v0.1.5 N1); the file guard and the editor host's owner-only checks; Dev Focus's folder
+  # outside the workspace (v0.1.5 DV2). Each step runs even when one before it failed, so one red test hides no other.
+  # A flaky test is quarantined only with a local repro file that shows it failing without a code change; never retried.
+  windows:
+    if: ${{ !inputs.bare && (!inputs.files || inputs.windows) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26.10.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # BL9: Windows PowerShell 5.1 started from a pwsh 7 step inherits its module folders and fails to load Get-Acl's
+      # module (run 40139947301): keep only its own, as install-windows.ps1 does, for every step after this one.
+      - name: Windows PowerShell module path
+        run: |
+          $kept = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';'
+          "PSModulePath=$kept" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\evidence" | Out-Null
+      - name: Windows host and process-tree tests
+        if: ${{ !cancelled() && !inputs.files }}
+        run: node --test test/windows-process-tree.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      - name: Windows terminal test
+        if: ${{ !cancelled() && !inputs.files }}
+        run: node --test test/windows-terminal.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      - name: Windows notes test
+        if: ${{ !cancelled() && !inputs.files }}
+        run: node --test test/mission-notes.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      - name: Windows file guard test
+        if: ${{ !cancelled() && !inputs.files }}
+        run: node --test test/files-windows.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      - name: Windows editor host test
+        if: ${{ !cancelled() && !inputs.files }}
+        run: node --test --test-name-pattern="Phase 8 \(Windows\)" test/dev.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      - name: Windows Dev folder test
+        if: ${{ !cancelled() && !inputs.files }}
+        run: node --test test/dev-root.test.mjs *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"; exit $LASTEXITCODE
+      # files (dispatch): just these test files on each architecture.
+      - name: The chosen Windows tests
+        if: ${{ inputs.files }}
+        env:
+          P9_FILES: ${{ inputs.files }}
+        run: |
+          $files = @($env:P9_FILES -split '\s+' | Where-Object { $_ })
+          foreach ($f in $files) {
+            if ($f -notmatch '^test/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.test\.mjs$' -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "files: not a test file here: $f" }
+          }
+          node --test @files *>&1 | Tee-Object -Append "$env:RUNNER_TEMP\evidence\tests.log"
+          exit $LASTEXITCODE
+      - name: Test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-log-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/evidence/tests.log
+          retention-days: 14
           if-no-files-found: warn
 
   # Item 15 (v0.1.6 c13): what a bare Ubuntu 24.04 lacks for P9, found by installing on one, and the static tmux build

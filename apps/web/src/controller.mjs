@@ -2731,6 +2731,7 @@ function renderSettings() {
   const asked = async ask => { updates = await window.p9.updates(ask).catch(() => updates); renderSettings(); };
   if ($('#mtUpdCheck')) $('#mtUpdCheck').onclick = () => asked({ check: true });
   if ($('#mtUpdInstall')) $('#mtUpdInstall').onclick = () => asked({ install: true });
+  if ($('#mtUpdNightly')) $('#mtUpdNightly').onchange = e => asked({ nightly: e.target.checked });
   if ($('#mtUpdOpen')) $('#mtUpdOpen').onclick = () => window.p9.openUpdates();
   clearTimeout(updatesTimer); // a check or download in progress: show its next state while Settings is open
   if (['checking', 'downloading'].includes(updates?.state)) updatesTimer = setTimeout(() => { if ($('#setDlg').open) asked(); }, 2000);

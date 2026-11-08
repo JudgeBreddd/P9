@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { appendFileSync, constants, openSync, watch } from 'node:fs';
+import { appendFileSync, constants, openSync, readFileSync, watch } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -1711,13 +1711,17 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Auto-update (threat model row 39): off unless this is an installed build with a feed (updater.mjs); its lines go to
   // p9-update.log. skip: the version a rollback came back from (row 40).
+  // channel: the Nightly switch (O2), its own file beside update-state.json; anything but { nightly: true } is Stable.
+  const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
   const updater = startUpdater({ app, version, log: updateLog, skip: {
     get: () => readState(startFile).skip,
-    clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } } });
+    clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } }, channel: {
+    get: () => { try { return JSON.parse(readFileSync(channelFile, 'utf8'))?.nightly === true; } catch { return false; } },
+    set: on => writeState(channelFile, { nightly: on }) } });
   ipcMain.handle('p9:updates', async (event, ...args) => {
     const action = updateAction(args);
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');
-    return (await updater)[action]();
+    return (await updater)[action](args[0]);
   });
   // A link in an agent reply (threat model row 18): one plain http(s) address, checked again here, opens in the browser.
   ipcMain.handle('p9:open-link', async (event, ...args) => {

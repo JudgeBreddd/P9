@@ -187,6 +187,10 @@ test('Updates row: one line and one button per updater state; no updater, no row
   assert.deepEqual(row({ state: 'ready', current: '0.1.5', available: '0.1.6' }), ['You have P9 0.1.5. P9 0.1.6 is downloaded. Restart P9 to update.', 'mtUpdInstall']);
   assert.deepEqual(row({ state: 'error', current: '0.1.5', reason: 'offline' }), ['You have P9 0.1.5. The last check failed: offline.', 'mtUpdCheck']);
   assert.match(maintenanceGroup({ state: 'idle', current: '<b>' }), /You have P9 &lt;b&gt;\./, 'escaped');
+  // O2: the Nightly switch shows its saved state where updates are on, and is not offered where they are off.
+  assert.match(maintenanceGroup({ state: 'idle', current: '0.1.5', nightly: true }), /<input type="checkbox" id="mtUpdNightly" checked>/);
+  assert.match(maintenanceGroup({ state: 'ready', current: '0.1.5', nightly: false }), /<input type="checkbox" id="mtUpdNightly" >/);
+  assert.doesNotMatch(maintenanceGroup({ state: 'off', current: '0.1.5', reason: 'source checkout' }), /mtUpdNightly/);
   delete globalThis.window;
 });
 

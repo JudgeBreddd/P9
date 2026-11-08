@@ -11,20 +11,32 @@ import { readFile, listDirectory, guardedSave, hash, replaceFile, removeFile } f
 import { createXfer } from '../apps/server/xfer.mjs';
 import { fixture, externalEdit } from './helpers.mjs';
 import { MAX_BYTES } from '../packages/protocol/index.mjs';
+import { sddl as fullSddl, userSid } from './win-acl.mjs';
 
 const skip = process.platform !== 'win32' && 'Windows only';
 async function canonicalFixture() {
   const { workspace, recovery } = await fixture();
   return { workspace: await realpath(workspace), recovery: await realpath(recovery) };
 }
-// The token user as SDDL text writes it: the SID, or an alias such as LA for the built-in Administrator (RID 500, the
-// GitHub Windows runner's account), which a whoami SID never matched.
-const userSid = () => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-  "(New-Object Security.AccessControl.RawSecurityDescriptor('O:' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)).GetSddlForm('Owner').Substring(2)"], { encoding: 'utf8' }).trim();
-const fullSddl = (file) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-  `(Get-Acl -LiteralPath '${file}').Sddl`], { encoding: 'utf8' }).trim();
 const refused = (promise, check) => assert.rejects(promise, (error) =>
   (typeof check === 'string' ? error.message === check || error.code === check : check.includes(error.code ?? error.message)) || assert.fail(`${error.code} ${error.message}`));
+
+// win-acl.mjs replaced powershell.exe Get-Acl in these tests (0.1.8 F1): its text must be exactly what Get-Acl gave,
+// for an inherited DACL, a protected one with an Everyone grant, and the user alias.
+test('Windows ACL text from win-acl.mjs equals Get-Acl and the RawSecurityDescriptor user form', { skip }, async () => {
+  const { workspace } = await canonicalFixture();
+  const plain = path.join(workspace, 'plain.txt'), tight = path.join(workspace, 'tight.txt');
+  await writeFile(plain, 'x');
+  await writeFile(tight, 'x');
+  execFileSync('icacls', [tight, '/inheritance:r', '/grant:r', `${process.env.USERNAME}:F`, '/grant', '*S-1-1-0:R'], { stdio: 'ignore' });
+  const ps = (command) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8' }).trim();
+  const [plainText, tightText, user] = ps(`(Get-Acl -LiteralPath '${plain}').Sddl; (Get-Acl -LiteralPath '${tight}').Sddl; `
+    + "(New-Object Security.AccessControl.RawSecurityDescriptor('O:' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)).GetSddlForm('Owner').Substring(2)").split(/\r?\n/);
+  assert.equal(fullSddl(plain), plainText);
+  assert.equal(fullSddl(tight), tightText);
+  assert.match(tightText, /;WD\)/);
+  assert.equal(userSid(), user);
+});
 
 test('Windows file boundary: reads, traversal, locked names, junctions, hardlinks, case and short names, size', { skip }, async (t) => {
   const { workspace } = await canonicalFixture();
@@ -146,8 +158,7 @@ test('Windows guarded save replaces unchanged files, keeps drafts on competing e
 test('Windows save keeps a restricted file restricted, and staged temp files cannot be written or moved by others', { skip }, async () => {
   const win = await import('../packages/files/win32.mjs');
   const { workspace, recovery } = await canonicalFixture();
-  const sddl = (file) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    `(Get-Acl -LiteralPath '${file}').Sddl`], { encoding: 'utf8' }).trim().replace(/^O:.*?(?=D:)/, '');
+  const sddl = (file) => fullSddl(file).replace(/^O:.*?(?=D:)/, '');
   // The folder lets Everyone (WD) read what it inherits; the file has a protected owner-only DACL.
   const shared = path.join(workspace, 'shared'), note = path.join(shared, 'note.txt');
   await mkdir(shared);
@@ -177,8 +188,7 @@ test('Windows save keeps a restricted file restricted, and staged temp files can
 test('Sol round 3 H1 and M1: a save takes the DACL the target has at publish, and a draft record stays held until removed', { skip }, async () => {
   const win = await import('../packages/files/win32.mjs');
   const { workspace, recovery } = await canonicalFixture();
-  const sddl = (file) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    `(Get-Acl -LiteralPath '${file}').Sddl`], { encoding: 'utf8' }).trim().replace(/^O:.*?(?=D:)/, '');
+  const sddl = (file) => fullSddl(file).replace(/^O:.*?(?=D:)/, '');
   const shared = path.join(workspace, 'shared');
   await mkdir(shared);
   execFileSync('icacls', [shared, '/grant', '*S-1-1-0:(OI)(CI)R'], { stdio: 'ignore' });

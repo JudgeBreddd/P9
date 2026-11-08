@@ -28,7 +28,12 @@ const updatesRow = u => `<div class="set-row"><span><strong>Updates</strong><spa
   + (u.state === 'ready' ? '<button data-slot="button" data-variant="default" id="mtUpdInstall">Restart to update</button>'
     : opens(u) ? '<button data-slot="button" data-variant="outline" id="mtUpdOpen">Check now</button>'
     : `<button data-slot="button" data-variant="outline" id="mtUpdCheck" ${['off', 'checking', 'downloading'].includes(u.state) ? 'disabled' : ''}>Check now</button>`)
-  + info(opens(u) ? 'Opens the newest P9 release page on GitHub in your browser.' : 'Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>';
+  + info(opens(u) ? 'Opens the newest P9 release page on GitHub in your browser.' : 'Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>'
+  + nightlyRow(u);
+// O2 (0.1.8): the Nightly switch, only where updates are on. Off goes back to stable releases from the next one newer than
+// the nightly installed; it never installs an older version.
+const nightlyRow = u => u.state === 'off' ? '' : `<label class="set-row"><input type="checkbox" id="mtUpdNightly" ${u.nightly ? 'checked' : ''}><span><strong>Nightly builds</strong><span class="muted sm">Also installs P9's test builds between releases. They can break.</span></span><span class="spacer"></span>`
+  + info("Updates take GitHub pre-releases (P9's nightlies) as well as stable releases. Turning this off keeps the nightly you have until a newer stable release is out.", 'updates') + '</label>';
 
 // updates: the last answer from window.p9.updates(), or null when this build has no updater (then the off row, if this
 // window can open the releases page).
