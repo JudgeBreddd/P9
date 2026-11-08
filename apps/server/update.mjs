@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendPiece, checkStaged, validPiece } from './pieces.mjs';
+import { unitOf } from './windows.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, HASH = /^[0-9a-f]{64}$/, COMMIT = /^[0-9a-f]{40}$/;
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
@@ -42,10 +43,6 @@ export function newer(a, b) {
   }
   return false;
 }
-
-// O6: a unit's state folder is its RuntimeDirectory (install-service.mjs), so the folder's name is the unit's: p9-foundation,
-// or a dev daemon's p9-dev beside it. Any other folder (a hand-started daemon, a test's) is the daily unit.
-export const unitOf = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation');
 
 // root: the checkout this daemon runs from. version: its package.json version (what /health says). archive: where a
 // packaged app's version is downloaded from. unit: the service the swap restarts, this daemon's own.

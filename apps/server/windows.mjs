@@ -11,6 +11,11 @@ export function internalEndpoint(state, platform = process.platform, identity = 
   return `\\\\.\\pipe\\p9-foundation-${owner}`;
 }
 
+// O6 (here, not in update.mjs: teh.mjs needs it, and the bundled daemon ships this file but not update.mjs):
+// a unit's state folder is its RuntimeDirectory (install-service.mjs), so the folder's name is the unit's: p9-foundation,
+// or a dev daemon's p9-dev beside it. Any other folder (a hand-started daemon, a test's) is the daily unit.
+export const unitOf = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation');
+
 export function windowsStateRoot(environment = process.env, home = os.homedir()) {
   return path.join(environment.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'P9');
 }

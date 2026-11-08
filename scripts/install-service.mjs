@@ -10,7 +10,7 @@ import { childEnv } from '../apps/server/child-env.mjs';
 
 // O6: --unit p9-dev installs a dev daemon beside the daily p9-foundation, with its own state, ledger and tmux socket
 // (main.mjs --ownership); --remote-port and --remote-origin give it its own phone port. The name must be one teh.mjs's
-// unitFor and update.mjs's unitOf read back from the state folder.
+// unitFor and windows.mjs's unitOf read back from the state folder.
 const { values: options, positionals } = parseArgs({ allowPositionals: true, options: {
   unit: { type: 'string', default: 'p9-foundation' }, 'remote-port': { type: 'string' }, 'remote-origin': { type: 'string' } } });
 const unit = options.unit, workspace = positionals[0];

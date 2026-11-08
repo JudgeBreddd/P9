@@ -8,10 +8,9 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
-import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
+import { unitOf, windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
 import { found, placeTmux } from '../apps/server/deps.mjs';
-import { unitOf } from '../apps/server/update.mjs';
 
 // One version, package.json's (release r2 R2-9).
 const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
