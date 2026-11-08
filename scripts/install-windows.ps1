@@ -3,7 +3,10 @@ param(
   [string]$Settings = (Join-Path $env:APPDATA 'P9\settings.json'),
   [string]$Node,
   [string]$Server,
-  [string]$Installer
+  [string]$Installer,
+  # O6b: a second (dev) P9 beside the daily one: its own task 'P9 <unit>', its own %LOCALAPPDATA%\<unit> (runtime, conflicts,
+  # ownership: ledger and lock pipe), so registering, stopping and starting it never touch the daily P9 Foundation task.
+  [string]$Unit = 'p9-foundation'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +17,10 @@ Say ('install-windows.ps1 as ' + [Security.Principal.WindowsIdentity]::GetCurren
 # Windows PowerShell started under a PowerShell 7 process (the installer run from pwsh) inherits 7's module folders,
 # autoloads 7's Microsoft.PowerShell.Security and Set-Acl fails (GitHub run 39535290300). Keep only its own folders.
 if ($PSVersionTable.PSEdition -eq 'Desktop') { $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -notmatch '\\PowerShell\\' }) -join ';' }
+if ($Unit -cnotmatch '^p9-[a-z-]+$') { Say ('invalid unit ' + $Unit); exit 1 }
+$dev = $Unit -ne 'p9-foundation'
+$taskName = if ($dev) { 'P9 ' + $Unit } else { 'P9 Foundation' }
+Say ('task ' + $taskName)
 function Full([string]$Value, [string]$Name) {
   if ([string]::IsNullOrWhiteSpace($Value) -or $Value.IndexOfAny([char[]]@([char]0, [char]13, [char]10, [char]34)) -ge 0) { throw "invalid-$Name" }
   return [IO.Path]::GetFullPath($Value)
@@ -23,7 +30,7 @@ function Full([string]$Value, [string]$Name) {
 # (release r2 R2-6). Re-registering on update also gives an older task this version's settings.
 $away = $false
 if (-not $Workspace) {
-  $installed = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
+  $installed = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   if ($installed -and $installed.Actions[0].Arguments -match '-Payload (\S+)') {
     # A payload this cannot read (not base64, not JSON, no argv: hand-edited, cut short, a later format) falls to the
     # default folder; before, it failed every reinstall and the app's launch repair (v0.1.3 review finding 2).
@@ -67,7 +74,7 @@ if (-not (Test-Path -LiteralPath $Node -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $Server -PathType Leaf)) { throw 'server-not-found' }
 
-$root = Join-Path $env:LOCALAPPDATA 'P9'
+$root = Join-Path $env:LOCALAPPDATA $(if ($dev) { $Unit } else { 'P9' })
 $state = Join-Path $root 'runtime'
 $recovery = Join-Path $root 'conflicts'
 New-Item -ItemType Directory -Force -Path $root, $state, $recovery | Out-Null
@@ -90,10 +97,10 @@ $hostArguments = @('-Mode', 'Daemon')
 # (v0.1.3 review finding 1). Stop-ScheduledTask ends only conhost.exe, so the bundled node.exe is ended too; its host exits.
 # It runs from daemon\<version> now (below), or from the install folder (v0.1.4 and before).
 # ponytail: a daemon on a node from PATH (a source run) is not ended, so it keeps the lock and the new one exits.
-Stop-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue
+Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 $bundled = Full $bundledNode 'node'
 $daemons = Join-Path $root 'daemon'
-Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -eq $bundled -or $_.ExecutablePath -like ($daemons + '\*\node.exe') } | ForEach-Object {
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { (-not $dev -and $_.ExecutablePath -eq $bundled) -or $_.ExecutablePath -like ($daemons + '\*\node.exe') } | ForEach-Object {
   Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
   Say ('stopped the daemon ' + $_.ProcessId) }
 
@@ -156,8 +163,10 @@ $allow = @('HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'LANGUAGE', 'TZ',
   'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'USERPROFILE', 'USERNAME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'ProgramData')
 $environment = @{}
 Get-ChildItem Env: | Where-Object { $allow -icontains $_.Name } | ForEach-Object { $environment[$_.Name] = $_.Value }
-$payloadJson = @{ argv = @($Node, $Server, '--workspace', $Workspace, '--state', $state, '--recovery', $recovery,
-    '--settings', $Settings); env = $environment } | ConvertTo-Json -Compress -Depth 4
+$argv = @($Node, $Server, '--workspace', $Workspace, '--state', $state, '--recovery', $recovery, '--settings', $Settings)
+# O6b: a dev unit's ledger and lock pipe are its own root's; the daily task's argv stays as it was.
+if ($dev) { $argv += @('--ownership', $root) }
+$payloadJson = @{ argv = $argv; env = $environment } | ConvertTo-Json -Compress -Depth 4
 $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson))
 # The daemon's output goes to daemon.log, which inherits the root's owner-only ACL; teh doctor reads it (issue #6 B4).
 $log = Full (Join-Path $root 'daemon.log') 'log'
@@ -170,9 +179,9 @@ $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ('--headless 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
 $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName 'P9 Foundation' -Action $action -Trigger $trigger -Principal $principal -Settings $taskSettings -Force | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $taskSettings -Force | Out-Null
 Say 'task registered'
-Start-ScheduledTask -TaskName 'P9 Foundation'
+Start-ScheduledTask -TaskName $taskName
 Say 'task started'
 # Each install leaves an ns*.tmp folder in %TEMP% when its files stay locked (the leftover in a tester's %TEMP%, issue #6 B6).
 # Only P9's own: older than an hour and holding the marker P9's installer writes there (installer.nsh customInit). Any

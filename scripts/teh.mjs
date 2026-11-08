@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
-import { unitOf, windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
+import { unitOf, windowsLockEndpoint, windowsStateRoot, windowsTaskName } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
 import { found, placeTmux } from '../apps/server/deps.mjs';
 
@@ -101,10 +101,11 @@ function command(command, args) {
 
 // The 'P9 Foundation' task: { state, execute, arguments }, or null when there is none. execute is conhost.exe for this
 // version's task and powershell.exe for v0.1.1's visible one (issue #6). The desktop app uses it to say which (B3).
-export function windowsTask() {
+// unit (O6b): a dev P9's own task, 'P9 p9-dev'; the name is fixed by windowsTaskName, never the caller's text.
+export function windowsTask(unit = 'p9-foundation') {
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    "$t = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; if ($t) { @{ state = [string]$t.State; "
+    `$t = Get-ScheduledTask -TaskName '${windowsTaskName(unitOf(unit))}' -ErrorAction SilentlyContinue; if ($t) { @{ state = [string]$t.State; `
     + "execute = $t.Actions[0].Execute; arguments = $t.Actions[0].Arguments } | ConvertTo-Json -Compress } else { 'null' }"],
   { encoding: 'utf8', timeout: 15000, windowsHide: true }, (error, stdout) => { try { resolve(error ? null : JSON.parse(stdout)); } catch { resolve(null); } }));
 }
@@ -118,11 +119,12 @@ export function windowsTask() {
 const REPAIR_EXTRA = ['PROCESSOR_ARCHITECTURE', 'SystemDrive', 'ProgramFiles', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH'];
 export const repairEnv = (source = process.env) => ({ ...childEnv(source, 'win32'),
   ...Object.fromEntries(Object.entries(source).filter(([key]) => REPAIR_EXTRA.some((name) => name.toLowerCase() === key.toLowerCase()))) });
-export function repairWindowsTask(resources, workspace) {
+// unit (O6b): a dev P9's task (install-windows.ps1 -Unit); the daily 'P9 Foundation' is not touched.
+export function repairWindowsTask(resources, workspace, unit = 'p9-foundation') {
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-InputFormat', 'None', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe'),
-    ...(workspace ? ['-Workspace', workspace] : [])],
+    ...(workspace ? ['-Workspace', workspace] : []), ...(unitOf(unit) !== 'p9-foundation' ? ['-Unit', unitOf(unit)] : [])],
   { encoding: 'utf8', timeout: 120000, windowsHide: true, env: repairEnv() }, (error, stdout, stderr) =>
     writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# ${workspace ? 'workspace change' : 'repair'} by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
       .catch(() => {}).then(() => resolve(!error))));
@@ -224,13 +226,15 @@ export async function answered(state, before, ms = 90_000, probe = health) {
 // Restarts the 'P9 Foundation' task (W3): /End stops its conhost, the host sees its parent gone and closes the job, which
 // ends node.exe. The daemon's lock pipe (main.mjs) is waited out, up to 15 s, so the next start does not hit
 // daemon-already-running: the API pipe can close before the lock does. Call it from outside the daemon's job (the desktop
-// app), never from the daemon. state: the runtime folder.
+// app), never from the daemon. state: the runtime folder. O6b: the state's own task and lock, so a dev window
+// (%LOCALAPPDATA%\p9-dev\runtime) restarts 'P9 p9-dev' and never the daily 'P9 Foundation'.
 export async function restartWindowsTask(state, ms) {
+  const unit = unitOf(state), task = windowsTaskName(unit);
   const schtasks = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'schtasks.exe');
   const run = (args) => new Promise((resolve) => execFile(schtasks, args, { timeout: 30000, windowsHide: true }, (error) => resolve(!error)));
   const before = await health(state).then((h) => h.boot, () => null);
-  await run(['/End', '/TN', 'P9 Foundation']);
-  const lock = windowsLockEndpoint(windowsStateRoot());
+  await run(['/End', '/TN', task]);
+  const lock = windowsLockEndpoint(unit === 'p9-foundation' ? windowsStateRoot() : path.win32.dirname(state));
   for (let tries = 0; ; tries++) {
     const gone = await new Promise((resolve) => {
       const socket = connect(lock);
@@ -241,7 +245,7 @@ export async function restartWindowsTask(state, ms) {
     if (tries === 60) return { error: 'daemon-did-not-stop' };
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  if (!await run(['/Run', '/TN', 'P9 Foundation'])) return { error: 'restart-failed' };
+  if (!await run(['/Run', '/TN', task])) return { error: 'restart-failed' };
   return answered(state, before, ms);
 }
 

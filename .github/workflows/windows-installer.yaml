@@ -336,6 +336,37 @@ jobs:
           $kept | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
           Remove-Item -LiteralPath $settingsFile
           if ($alive.Count -ne 2) { throw 'a daemon restart ended the app or the detach script''s child' }
+          # O6b + W3b: a dev P9 beside the daily one. teh.mjs repairWindowsTask with unit p9-dev (what a dev window's Repair runs)
+          # registers 'P9 p9-dev' on %LOCALAPPDATA%\p9-dev with its own --ownership; the daily daemon keeps running. Then
+          # restartWindowsTask on the dev state restarts only the dev daemon: the daily one keeps its pid.
+          $teh = (Resolve-Path scripts/teh.mjs).Path
+          $daily = @((Get-Daemon).ProcessId)
+          $devState = Join-Path $env:LOCALAPPDATA 'p9-dev\runtime'
+          function Get-DevDaemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like "$env:LOCALAPPDATA\p9-dev\daemon\*\node.exe" }) }
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { repairWindowsTask } = await import(pathToFileURL(process.argv[2]).href); process.exit(await repairWindowsTask(process.argv[1], undefined, 'p9-dev') ? 0 : 1)" (Join-Path $app 'resources') $teh
+          $devRepair = $LASTEXITCODE
+          Get-Content (Join-Path $app 'service-install.log') | Select-Object -Last 8 | ForEach-Object { 'dev install log: ' + $_ }
+          if ($devRepair -ne 0) { throw 'install-windows.ps1 -Unit p9-dev failed (dev install log: lines above)' }
+          $devFile = Join-Path $devState 'desktop.json'
+          $end = (Get-Date).AddSeconds(90)
+          while (-not (Test-Path $devFile) -and (Get-Date) -lt $end) { Start-Sleep 2 }
+          if (-not (Test-Path $devFile)) { throw 'the dev daemon did not write desktop.json in 90 s' }
+          $devPayload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([regex]::Match((Get-ScheduledTask -TaskName 'P9 p9-dev').Actions[0].Arguments, '-Payload (\S+)')).Groups[1].Value)) | ConvertFrom-Json
+          Write-Output ('tasks: {0}; dev argv ends {1}; daily {2} dev {3}' -f ((Get-ScheduledTask -TaskName 'P9*').TaskName -join ', '), ($devPayload.argv[-2..-1] -join ' '), ((Get-Daemon).ProcessId -join ','), ((Get-DevDaemon).ProcessId -join ','))
+          if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the dev install removed P9 Foundation' }
+          if (($devPayload.argv[-2..-1] -join ' ') -ne ('--ownership ' + (Join-Path $env:LOCALAPPDATA 'p9-dev'))) { throw 'the dev task has no --ownership of its own' }
+          if ((Get-DevDaemon).Count -ne 1) { throw 'not exactly one dev daemon' }
+          if ((Compare-Object $daily @((Get-Daemon).ProcessId))) { throw 'the dev install stopped the daily daemon' }
+          $devOld = (Get-DevDaemon).ProcessId
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { restartWindowsTask } = await import(pathToFileURL(process.argv[2]).href); const r = await restartWindowsTask(process.argv[1]); console.log('dev restart: ' + JSON.stringify(r)); process.exit(r.restarted ? 0 : 1)" $devState $teh
+          if ($LASTEXITCODE -ne 0) { throw 'restartWindowsTask on the dev state failed (dev restart: line above)' }
+          Write-Output ('after the dev restart: daily {0} (was {1}), dev {2} (was {3})' -f ((Get-Daemon).ProcessId -join ','), ($daily -join ','), ((Get-DevDaemon).ProcessId -join ','), $devOld)
+          if ((Compare-Object $daily @((Get-Daemon).ProcessId))) { throw 'restarting the dev task restarted the daily daemon' }
+          if ((Get-DevDaemon).Count -ne 1 -or (Get-DevDaemon).ProcessId -eq $devOld) { throw 'the dev daemon was not restarted' }
+          schtasks.exe /End /TN 'P9 p9-dev' | Out-Null
+          Get-DevDaemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Unregister-ScheduledTask -TaskName 'P9 p9-dev' -Confirm:$false
+          Write-Output 'dev task: own task and folder; the daily daemon untouched by its install and restart; removed'
           # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
           # alone left the daemon running (run 39540753837), which an update over this version would hit too.
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName

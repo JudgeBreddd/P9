@@ -13,7 +13,7 @@ import { connectServer, forwardPath, restartServer, startServer, sshHosts, serve
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
-import { trimLog } from '../server/windows.mjs';
+import { trimLog, unitOf, windowsTaskName } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer, open as openXfer, isFull } from './xfer.mjs';
@@ -136,13 +136,15 @@ export async function createDesktop({ state, open } = {}) {
   const wake = async () => {
     if (changing || serverHost || Date.now() - woke < 30000) return;
     woke = Date.now();
-    const task = await windowsTask();
+    // O6b: a dev window (--state %LOCALAPPDATA%\p9-dev\runtime) wakes its own task 'P9 p9-dev', and never re-registers
+    // anything at launch: the dev task is set up by hand (install-windows.ps1 -Unit), so the daily task is not touched.
+    const unit = unitOf(localState), task = await windowsTask(unit);
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
-    if (reason !== 'not-answering' && app.isPackaged && !repaired) {
+    if (reason !== 'not-answering' && app.isPackaged && !repaired && unit === 'p9-foundation') {
       repaired = true;
       if (await repairWindowsTask(process.resourcesPath)) { reason = 'not-answering'; return; }
     }
-    if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
+    if (task) execFile('schtasks.exe', ['/Run', '/TN', windowsTaskName(unit)], { windowsHide: true }, () => {});
   };
   // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
   // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
@@ -1272,6 +1274,9 @@ export async function createDesktop({ state, open } = {}) {
     if (!win && process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
     // The steps below rewrite the p9-foundation unit; a window on the dev daemon (p9-dev) must not touch the daily one.
     if (!win && unitFor(state) !== 'p9-foundation.service') return { error: 'workspace-change-unsupported', workspace: old };
+    // O6b: on Windows a dev window changes its own task's folder ('P9 p9-dev'), and only once that task exists.
+    const task = win ? unitOf(state) : 'p9-foundation';
+    if (task !== 'p9-foundation' && !await windowsTask(task)) return { error: 'dev-task-missing', workspace: old };
     const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
       properties: ['openDirectory', 'createDirectory'], defaultPath: old });
     if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
@@ -1296,9 +1301,9 @@ export async function createDesktop({ state, open } = {}) {
         if ((await health(state).catch(() => null))?.workspace?.toLowerCase() === want.toLowerCase()) return true; } return false; };
       changing = true;
       try {
-        const ran = await repairWindowsTask(process.resourcesPath, folder);
+        const ran = await repairWindowsTask(process.resourcesPath, folder, task);
         if (ran && await on(folder)) { devToWorkspace(); return { workspace: folder }; }
-        await repairWindowsTask(process.resourcesPath, old);
+        await repairWindowsTask(process.resourcesPath, old, task);
         await on(old);
         return { error: 'workspace-not-started', detail: ran ? 'daemon-not-answering' : 'install-windows.ps1 failed (service-install.log)',
           workspace: (await health(state).catch(() => null))?.workspace ?? null };
@@ -1339,6 +1344,9 @@ export async function createDesktop({ state, open } = {}) {
     const win = process.platform === 'win32';
     if (!serverHost && !win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
     if (repair && win && !await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing' };
+    // O6b: a dev window restarts or repairs its own task ('P9 p9-dev'), never 'P9 Foundation', and only once that task exists.
+    const unit = win && !serverHost ? unitOf(state) : 'p9-foundation';
+    if (unit !== 'p9-foundation' && !await windowsTask(unit)) return { error: 'dev-task-missing' };
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: repair ? 'Repair P9?' : 'Restart P9?',
       message: repair ? 'Repair P9\'s background service?' : serverHost ? 'Restart P9 on ' + serverHost + '?' : 'Restart P9\'s background service?',
       detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + (serverHost ? 'Running chats, scripts and terminals on the remote stop, the ones open on your phone too.' : 'Running chats, scripts and terminals stop.'),
@@ -1358,7 +1366,7 @@ export async function createDesktop({ state, open } = {}) {
     try {
       if (!repair) return await restartWindowsTask(state);
       const before = await health(state).then(h => h.boot, () => null);
-      return await repairWindowsTask(process.resourcesPath) ? await answered(state, before) : { error: 'repair-failed', detail: 'install-windows.ps1 failed (service-install.log)' };
+      return await repairWindowsTask(process.resourcesPath, undefined, unit) ? await answered(state, before) : { error: 'repair-failed', detail: 'install-windows.ps1 failed (service-install.log)' };
     } finally { changing = false; }
   };
   ipcMain.handle('p9:restart-service', service(false));

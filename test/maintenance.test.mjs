@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { root } from './helpers.mjs';
-import { health, restartLinuxService, repairLinuxService, repairEnv, unitFor } from '../scripts/teh.mjs';
+import { health, restartLinuxService, repairLinuxService, repairEnv, unitFor, windowsTask, repairWindowsTask, restartWindowsTask } from '../scripts/teh.mjs';
+import { unitOf, windowsTaskName } from '../apps/server/windows.mjs';
 
 // Restart and Repair act on the unit that owns the window's state folder: a dev window (p9-dev) never restarts the daily daemon.
 test('the unit is named after the state folder', () => {
@@ -161,6 +162,66 @@ test('Repair on Linux, a hung daemon: killed after the grace, then a new one ans
   for (const end = Date.now() + 3000; alive(hung) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(alive(hung), false, 'the hung daemon is gone');
   assert.match(await readFile(path.join(home, 'systemctl.log'), 'utf8'), /^kill --kill-who=main --signal=SIGKILL p9-foundation\.service$/m);
+});
+
+// O6b + W3b: a dev P9 on Windows has its own Scheduled Task ('P9 p9-dev', %LOCALAPPDATA%\p9-dev), and everything a dev
+// window does to a task (wake, Restart, Repair, Change the folder) names that one, never 'P9 Foundation'. The real
+// functions run here against a stand-in powershell.exe and schtasks.exe under a temporary SystemRoot that log their
+// argv; windows-installer.yaml registers both tasks on Windows. Linux-only: the stand-ins are node scripts.
+test('O6b: a dev window\'s Windows task is its own: unit, task name, query, repair and restart never name P9 Foundation', { skip: process.platform === 'win32', timeout: 30000 }, async (t) => {
+  assert.deepEqual(['C:\\Users\\u\\AppData\\Local\\P9\\runtime', 'C:\\Users\\u\\AppData\\Local\\p9-dev\\runtime', 'C:\\x\\P9-Dev\\runtime',
+    'C:\\x\\p9-dev\\state', '/run/user/1000/p9-dev', '/run/user/1000/p9-foundation', '/tmp/x/state'].map(unitOf),
+  ['p9-foundation', 'p9-dev', 'p9-foundation', 'p9-foundation', 'p9-dev', 'p9-foundation', 'p9-foundation']);
+  assert.deepEqual(['p9-foundation', 'p9-dev'].map(windowsTaskName), ['P9 Foundation', 'P9 p9-dev']);
+  const sys = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-o6b-'))), log = path.join(sys, 'calls.log');
+  const fake = `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify([require('node:path').basename(process.argv[1]), ...process.argv.slice(2)]) + '\\n'); process.stdout.write('null');\n`;
+  await mkdir(path.join(sys, 'System32', 'WindowsPowerShell', 'v1.0'), { recursive: true });
+  for (const file of [path.join(sys, 'System32', 'schtasks.exe'), path.join(sys, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')]) {
+    await writeFile(file, fake); await chmod(file, 0o755);
+  }
+  const saved = process.env.SystemRoot;
+  process.env.SystemRoot = sys;
+  t.after(() => { if (saved === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = saved; });
+  const calls = async () => { const text = await readFile(log, 'utf8').catch(() => ''); await writeFile(log, ''); return text.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); };
+  // The query: the unit's task by name; the daily call unchanged; a name that is not a unit falls to the daily task, never into the command.
+  for (const [unit, name] of [[undefined, 'P9 Foundation'], ['p9-dev', 'P9 p9-dev'], ["p9-dev'; Remove-Item x; '", 'P9 Foundation']]) {
+    assert.equal(await windowsTask(unit), null);
+    const [call] = await calls();
+    assert.match(call.at(-1), new RegExp(`^\\$t = Get-ScheduledTask -TaskName '${name}' -ErrorAction SilentlyContinue;`));
+  }
+  // Repair and Change the folder: -Unit only for a dev unit, so the daily argv is the same as before.
+  const resources = path.join(sys, 'app', 'resources');
+  await mkdir(resources, { recursive: true });
+  assert.equal(await repairWindowsTask(resources), true);
+  assert.equal(await repairWindowsTask(resources, 'D:\\work', 'p9-dev'), true);
+  const [daily, dev] = await calls();
+  assert.deepEqual(daily.slice(-4), ['-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe')]);
+  assert.deepEqual(dev.slice(-4), ['-Workspace', 'D:\\work', '-Unit', 'p9-dev']);
+  // Restart: /End and /Run on the state's own task (its lock pipe is gone here, so /Run follows at once).
+  assert.deepEqual(await restartWindowsTask(path.join(sys, 'p9-dev', 'runtime'), 600), { error: 'daemon-not-answering' });
+  assert.deepEqual(await calls(), [['schtasks.exe', '/End', '/TN', 'P9 p9-dev'], ['schtasks.exe', '/Run', '/TN', 'P9 p9-dev']]);
+  assert.deepEqual(await restartWindowsTask(path.join(sys, 'P9', 'runtime'), 600), { error: 'daemon-not-answering' });
+  assert.deepEqual(await calls(), [['schtasks.exe', '/End', '/TN', 'P9 Foundation'], ['schtasks.exe', '/Run', '/TN', 'P9 Foundation']]);
+  // install-windows.ps1 (text; windows-installer.yaml runs it): -Unit checked, every task cmdlet on $taskName, a dev unit's own
+  // root, --ownership only for it, and a dev install stops only its own daemon\<version>\node.exe, never the daily one.
+  const ps1 = await readFile(path.join(root, 'scripts', 'install-windows.ps1'), 'utf8');
+  assert.match(ps1, /\[string\]\$Unit = 'p9-foundation'\s*\)/);
+  assert.match(ps1, /if \(\$Unit -cnotmatch '\^p9-\[a-z-\]\+\$'\) \{ Say \('invalid unit ' \+ \$Unit\); exit 1 \}/);
+  assert.deepEqual(ps1.match(/'P9 Foundation'/g), ["'P9 Foundation'"], 'the daily name only where $taskName is chosen');
+  assert.equal((ps1.match(/ScheduledTask -TaskName \$taskName/g) ?? []).length, 4, 'Get, Stop, Register and Start name $taskName');
+  assert.match(ps1, /\$root = Join-Path \$env:LOCALAPPDATA \$\(if \(\$dev\) \{ \$Unit \} else \{ 'P9' \}\)/);
+  assert.match(ps1, /Where-Object \{ \(-not \$dev -and \$_\.ExecutablePath -eq \$bundled\) -or \$_\.ExecutablePath -like \(\$daemons \+ '\\\*\\node\.exe'\) \}/);
+  assert.match(ps1, /\$argv = @\(\$Node, \$Server, '--workspace', \$Workspace, '--state', \$state, '--recovery', \$recovery, '--settings', \$Settings\)\n[^\n]*\nif \(\$dev\) \{ \$argv \+= @\('--ownership', \$root\) \}\n\$payloadJson = @\{ argv = \$argv;/);
+  // The desktop (text: these run only on win32): wake names the unit's task and repairs only the daily one; Restart, Repair and
+  // Change the folder refuse a dev window whose task is missing before any dialog, and pass the unit on.
+  const main = await readFile(path.join(root, 'apps', 'desktop', 'main.mjs'), 'utf8');
+  const wake = main.slice(main.indexOf('const wake = async'), main.indexOf('// AU4: the AppImage'));
+  assert.match(wake, /const unit = unitOf\(localState\), task = await windowsTask\(unit\);[^]*&& !repaired && unit === 'p9-foundation'\) \{[^]*\['\/Run', '\/TN', windowsTaskName\(unit\)\]/);
+  const service = main.slice(main.indexOf('const service = repair =>'), main.indexOf("ipcMain.handle('p9:restart-service'"));
+  assert.match(service, /const unit = win && !serverHost \? unitOf\(state\) : 'p9-foundation';\s*if \(unit !== 'p9-foundation' && !await windowsTask\(unit\)\) return \{ error: 'dev-task-missing' \};[^]*showMessageBox[^]*restartWindowsTask\(state\)[^]*repairWindowsTask\(process\.resourcesPath, undefined, unit\)/);
+  const change = main.slice(main.indexOf("ipcMain.handle('p9:workspace-change'"), main.indexOf("ipcMain.handle('p9:pet-remove'"));
+  assert.match(change, /const task = win \? unitOf\(state\) : 'p9-foundation';\s*if \(task !== 'p9-foundation' && !await windowsTask\(task\)\) return \{ error: 'dev-task-missing', workspace: old \};[^]*showOpenDialog/);
+  assert.match(await readFile(path.join(root, 'apps', 'web', 'src', 'settings-view.mjs'), 'utf8'), /'dev-task-missing': \["This window runs on a second \(dev\) P9/);
 });
 
 test('The Windows repair runs with only the environment install-windows.ps1 needs (BL8)', () => {

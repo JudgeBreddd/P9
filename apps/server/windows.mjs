@@ -14,7 +14,14 @@ export function internalEndpoint(state, platform = process.platform, identity = 
 // O6 (here, not in update.mjs: teh.mjs needs it, and the bundled daemon ships this file but not update.mjs):
 // a unit's state folder is its RuntimeDirectory (install-service.mjs), so the folder's name is the unit's: p9-foundation,
 // or a dev daemon's p9-dev beside it. Any other folder (a hand-started daemon, a test's) is the daily unit.
-export const unitOf = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation');
+// Windows (O6b): a dev task's state is %LOCALAPPDATA%\<unit>\runtime (install-windows.ps1 -Unit), beside the daily
+// %LOCALAPPDATA%\P9\runtime, so there the parent folder names the unit.
+export const unitOf = (state) => {
+  const name = (p) => (/^p9-[a-z-]+$/.test(p) ? p : null), base = path.win32.basename(String(state));
+  return name(base) || (base === 'runtime' && name(path.win32.basename(path.win32.dirname(String(state))))) || 'p9-foundation';
+};
+// O6b: the unit's Scheduled Task. The daily one keeps its name, so installs before 0.1.9 are the same task.
+export const windowsTaskName = (unit) => (unit === 'p9-foundation' ? 'P9 Foundation' : 'P9 ' + unit);
 
 export function windowsStateRoot(environment = process.env, home = os.homedir()) {
   return path.join(environment.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'P9');

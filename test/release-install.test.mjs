@@ -177,7 +177,7 @@ test('release r2 R2-6/R2-8: an update keeps the task and its workspace; the task
   // Issue #6 B1: Set-Acl threw PrivilegeNotHeldException for a standard user over an earlier install; icacls, checked, instead.
   assert.doesNotMatch(ps1, /^[^#\n]*Set-Acl/m, 'no Set-Acl outside comments');
   assert.match(ps1, /icacls\.exe \$root \/inheritance:r \/grant:r \('\*' \+ \$sid \+ ':\(OI\)\(CI\)F'\)[^\n]*\n\s*if \(\$LASTEXITCODE -ne 0\) \{ throw/, 'owner-only through icacls, exit code checked');
-  assert.match(ps1, /Get-ScheduledTask -TaskName 'P9 Foundation'[^]*'--workspace'/, 'no -Workspace reads the installed task');
+  assert.match(ps1, /\$taskName = if \(\$dev\) \{ 'P9 ' \+ \$Unit \} else \{ 'P9 Foundation' \}[^]*Get-ScheduledTask -TaskName \$taskName[^]*'--workspace'/, 'no -Workspace reads the installed task');
   // Issue #6 B7: a task with no --workspace gave IndexOf -1, so argv[0] (node.exe) became the workspace.
   assert.doesNotMatch(ps1, /IndexOf\([^)]*'--workspace'\) \+ 1/);
   // BL7 (v0.1.4 note 5): exact, not a lazy [^]*? that let any line in between pass: from the argv read to the default, the
@@ -211,7 +211,7 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   const teh = readFileSync(path.join(root, 'scripts', 'teh.mjs'), 'utf8'), main = readFileSync(path.join(root, 'apps', 'desktop', 'main.mjs'), 'utf8');
   // Finding 1: Register -Force and Start-ScheduledTask left a running daemon on the old folder.
   const stop = ps1.slice(0, ps1.indexOf('Register-ScheduledTask'));
-  assert.match(stop, /Stop-ScheduledTask -TaskName 'P9 Foundation'[^]*\$_\.ExecutablePath -eq \$bundled[^]*Stop-Process[^]*Wait-Process/, 'the script ends the bundled daemon before it registers');
+  assert.match(stop, /Stop-ScheduledTask -TaskName \$taskName[^]*\(-not \$dev -and \$_\.ExecutablePath -eq \$bundled\)[^]*Stop-Process[^]*Wait-Process/, 'the script ends the bundled daemon before it registers');
   // Finding 2: a payload it cannot read threw, so every reinstall and the app's repair failed.
   assert.match(ps1, /try \{\s*\$old = [^\n]*FromBase64String[^]*\} catch \{[^\n]*\$Workspace = \$null \}\s*\}\s*if \(-not \$Workspace\)/, 'an unreadable payload falls to the default folder');
   // the owner 2026-10-22, Fable review finding 1: a saved folder not there now (an unplugged drive) failed every reinstall with
@@ -223,14 +223,14 @@ test('v0.1.4 install-windows.ps1: stops the daemon before re-registering, surviv
   assert.match(ps1, /ns\*\.tmp[^]*Test-Path -LiteralPath \(Join-Path \$_\.FullName 'p9-event-horizon\.marker'\)[^]*Remove-Item/);
   assert.match(nsh.slice(nsh.indexOf('!macro customInit')), /^[^]*?InitPluginsDir\s+FileOpen \$0 "\$PLUGINSDIR\\p9-event-horizon\.marker" w\s+FileClose \$0/, 'the installer marks its own folder');
   // Row 32: the app passes the folder to the same script and function the launch repair uses.
-  assert.match(teh, /export function repairWindowsTask\(resources, workspace\)[^]*\.\.\.\(workspace \? \['-Workspace', workspace\] : \[\]\)/);
+  assert.match(teh, /export function repairWindowsTask\(resources, workspace, unit = 'p9-foundation'\)[^]*\.\.\.\(workspace \? \['-Workspace', workspace\] : \[\]\)/);
   const change = main.slice(main.indexOf("ipcMain.handle('p9:workspace-change'"), main.indexOf("ipcMain.handle('p9:pet-remove'"));
-  assert.match(change, /if \(win\) \{[^]*\/stop-all[^]*repairWindowsTask\(process\.resourcesPath, folder\)[^]*repairWindowsTask\(process\.resourcesPath, old\)[^]*workspace-not-started/, 'Stop All, then the script, else the old folder again');
+  assert.match(change, /if \(win\) \{[^]*\/stop-all[^]*repairWindowsTask\(process\.resourcesPath, folder, task\)[^]*repairWindowsTask\(process\.resourcesPath, old, task\)[^]*workspace-not-started/, 'Stop All, then the script, else the old folder again');
   // Fable review finding 3: wake()'s schtasks /Run between Stop All and the new task restarted the old task on the old folder.
   // Server mode: no task wake either while the window is on a server (that daemon is not this machine's task).
   assert.match(main, /const wake = async \(\) => \{\s*if \(changing \|\| serverHost \|\| Date\.now\(\) - woke < 30000\) return;/, 'wake() does nothing during a change');
   assert.ok(main.indexOf('health(localState).catch(wake)') > main.indexOf('let serverHost'), 'the launch wake runs once serverHost exists');
-  assert.match(change, /changing = true;\s*try \{\s*const ran = await repairWindowsTask\(process\.resourcesPath, folder\)[^]*\} finally \{ changing = false; \}/, 'the change holds wake() off until it returns');
+  assert.match(change, /changing = true;\s*try \{\s*const ran = await repairWindowsTask\(process\.resourcesPath, folder, task\)[^]*\} finally \{ changing = false; \}/, 'the change holds wake() off until it returns');
   // Fable review finding 1: the page names a saved folder that was not there at the daemon's start.
   assert.match(main, /h\.savedWorkspace \? \{ savedWorkspace: h\.savedWorkspace, workspace: h\.workspace \}/);
   assert.match(readFileSync(path.join(root, 'apps', 'web', 'src', 'Shell.tsx'), 'utf8'), /result\.savedWorkspace\) \{\s*label\.textContent = 'Workspace folder not found: ' \+ result\.savedWorkspace/);
