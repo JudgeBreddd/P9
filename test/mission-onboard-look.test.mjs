@@ -120,8 +120,25 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   assert.deepEqual(await spaces(), ['homelab']);
   // A scratch space appears in the top bar's Space menu (finding 4); picking it shows that space.
   assert.equal((await server.desk('/mission/template', 'POST', { name: 'homelab', space: 'draft', confirm: true })).status, 201);
+  // The menu reads the space list when it opens, so draft (made through the server just now) shows within one request. Before,
+  // it waited for the window's 20 s poll: about 19.5 s every run, so CI crossed the old 20 s timeout (M4a :124, runs 14, 17).
+  // On a miss print what the menu did, with a shot; a pass prints its timing.
+  const said = [], hear = (m) => m.text().startsWith('P9M4 ') && said.push([+m.text().split(' ')[1], m.text().split(' ').slice(2).join(' ')]);
+  page.on('console', hear);
+  await page.evaluate(() => { const at = (s) => console.log(`P9M4 ${Date.now()} ${s}`), pop = document.querySelector('#spacePop');
+    new MutationObserver((rs) => rs.forEach((r) => at(r.type === 'childList' ? `menu redrawn, draft button ${pop.querySelector('[data-space="draft"]') ? 'there' : 'missing'}` : `menu hidden ${pop.hidden}`))).observe(pop, { childList: true, attributes: true, attributeFilter: ['hidden'] });
+    for (const k of ['pointerdown', 'mousedown', 'click']) document.addEventListener(k, (e) => at(`${k} on ${e.target.dataset?.space ?? e.target.id ?? e.target.nodeName} at ${e.clientX},${e.clientY}`), true);
+    addEventListener('scroll', () => at('window scroll'), true); });
+  const t0 = Date.now(), mark = [[t0, 'open the Space menu']];
   await page.locator('#spaceBtn').click();
-  await page.locator('#spacePop [data-space="draft"]').click({ timeout: 20000 });
+  mark.push([Date.now(), 'menu open; click draft starts']);
+  await page.locator('#spacePop [data-space="draft"]').click({ timeout: 5000 }).then(() => mark.push([Date.now(), 'click returned'])).catch(async (e) => {
+    const png = await Promise.race([page.screenshot(), new Promise((resolve) => setTimeout(() => resolve(null), 5000))]);
+    console.log('P9_SHOT m4a-124-miss ' + (png ? png.toString('base64') : 'none (the screenshot did not answer in 5 s)'));
+    const all = [...mark, ...said].sort((a, b) => a[0] - b[0]);
+    throw new Error('m4a-124: draft did not come into the menu; ms from opening the menu:\n' + all.map(([ms, s]) => `${ms - t0} ${s}`).join('\n'), { cause: e });
+  }).finally(() => page.off('console', hear));
+  { const seen = said.find(([, s]) => s.includes('draft button there')); console.log(`P9M4 timing: click took ${mark.at(-1)[0] - mark[1][0]} ms; draft in the menu at ${seen ? seen[0] - t0 : 'never'} ms after it opened`); }
   await page.waitForFunction(() => document.querySelector('#spaceBtn')?.dataset.spaceCurrent === 'draft', null, { timeout: 15000 });
   assert.equal((await server.desk('/mission')).body.spaceName, 'draft', 'the server shows draft after the pick');
   await page.locator('#fMission [data-group="Services"]').waitFor({ timeout: 15000 });

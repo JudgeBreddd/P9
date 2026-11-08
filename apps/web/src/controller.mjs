@@ -1540,7 +1540,8 @@ async function loadGuide() {
   if (live.empty || live.adding) renderMission();
   if (mdl.open && S.modal?.kind === 'guide') renderModal();
 }
-// Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Switching sets
+// Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Opening it reads the
+// space list again, so a space made on the phone or through the MCP tools shows at once, not at the next 20 s poll. Switching sets
 // settings.space_name through the space route and writes no space file; only Delete, after its confirm, removes one.
 let spacePop = null, spaceForm = null; // spaceForm: the Delete confirm or the Save as template form, kept through polls
 function renderSpaceBtn() {
@@ -1549,7 +1550,7 @@ function renderSpaceBtn() {
   b.dataset.spaceCurrent = live.spaceName || '';
   b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
-  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); });
+  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); refreshMission(); });
   if (!pop.hidden && !spaceForm) renderSpaceMenu(true);
 }
 let spaceMenuHtml = '';
