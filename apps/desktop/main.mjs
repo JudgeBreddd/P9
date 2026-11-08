@@ -1417,12 +1417,27 @@ export async function createDesktop({ state, open } = {}) {
   // Auto-update (threat model row 39): off unless this is an installed build with a feed (updater.mjs); its lines go to
   // p9-update.log. skip: the version a rollback came back from (row 40).
   // channel: the Nightly switch (O2), its own file beside update-state.json; anything but { nightly: true } is Stable.
-  const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
+  const channelFile = path.join(app.getPath('userData'), 'update-channel.json'), pendingFile = path.join(app.getPath('userData'), 'update-pending.json');
   const updater = startUpdater({ app, version, log: updateLog, skip: {
     get: () => readState(startFile).skip,
     clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } }, channel: {
     get: () => { try { return JSON.parse(readFileSync(channelFile, 'utf8'))?.nightly === true; } catch { return false; } },
-    set: on => writeState(channelFile, { nightly: on }) } });
+    set: on => writeState(channelFile, { nightly: on }) },
+    // O24: the update-ready popup (the release's own list of changes), the downloaded version waiting for the next open,
+    // and what that open says before it closes P9 to install. Native dialogs, as the rollback notice above.
+    ready: async ({ version: next, notes }) => (await dialog.showMessageBox(window, { type: 'info', title: 'P9 is ready to update',
+      message: `P9 ${next} is ready to install.`,
+      detail: (notes.length ? 'What changes:\n' + notes.map(line => '• ' + line).join('\n') + '\n\n' : '')
+        + 'Update now closes P9, installs the update and opens P9 again by itself. Later installs it the next time you open P9.'
+        + ' Your workspace, chats and settings stay.',
+      buttons: ['Update now', 'Later'], defaultId: 0, cancelId: 1, noLink: true })).response === 0 ? 'now' : 'later',
+    pending: {
+      get: () => { try { const next = JSON.parse(readFileSync(pendingFile, 'utf8'))?.version; return typeof next === 'string' ? next : null; } catch { return null; } },
+      set: next => { try { writeState(pendingFile, { version: next }); } catch (error) { updateLog('update-pending.json not written: ' + error.message); } } },
+    // Shown for at most 8 s: the install goes ahead whether or not OK is pressed.
+    installing: next => Promise.race([new Promise(done => setTimeout(done, 8000)), dialog.showMessageBox(window, { type: 'info',
+      title: 'Updating P9', message: `Installing P9 ${next}.`, noLink: true, buttons: ['OK'],
+      detail: 'This update was left for the next time P9 opened, so it installs now. P9 closes and opens again by itself when it is done.' })]) });
   ipcMain.handle('p9:updates', async (event, ...args) => {
     const action = updateAction(args);
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');

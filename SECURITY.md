@@ -549,8 +549,8 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
 - **Check for updates.** Where automatic updates are off, Settings > Maintenance > Updates > Check now opens P9's newest GitHub release
   (`https://github.com/JudgeBreddd/p9/releases/latest`) in your browser (threat model row 28).
 - **Auto-update.** The installed app (Windows installer, Linux AppImage) asks GitHub for P9's
-  newest release, downloads it and installs it when you quit; see Auto-update below (threat
-  model row 39). A source checkout never does. On Windows, a rollback (threat model row 40) can download the
+  newest release, downloads it and asks to install it (Update now, or Later: the next time P9 opens); see Auto-update
+  below (threat model row 39). A source checkout never does. On Windows, a rollback (threat model row 40) can download the
   installer of the version you had from that release on GitHub, when it was not kept.
 - **Mission Control tile icons.** A link tile with no picture and no text icon of its own shows the site's icon
   (threat model row 44). The daemon asks that site itself for its page head and icon (GET only, no cookies, 5 s,
@@ -572,16 +572,22 @@ never offered, a pre-release (a nightly) only with that switch on, and an older 
 except by the rollback below. Turning the switch off keeps the installed nightly until a newer stable release is out.
 The switch is kept in `update-channel.json` in the profile folder; anything but `{ "nightly": true }` there is Stable.
 
-- **What is downloaded.** `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the newest
+- **What is downloaded.** The repository's release feed (`releases.atom`), which names the newest release and
+  holds its notes; `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the newest
   version, its file and that file's sha512; then the Windows installer `.exe` (with its `.blockmap`, so
   only the changed parts download) or the `.AppImage`. Nothing else.
 - **From where.** `https://github.com` and GitHub's download host, over HTTPS, for the one repository
   P9 is published from. No sign-in, no token, no account: the release is public. GitHub learns your IP
   address, that P9 checked, and when.
 - **When.** Shortly after the app starts and every few hours while it is open. A found update downloads
-  in the background and installs when you quit the app, or at once from Settings > Maintenance >
-  Updates. Installing restarts the background service on the new version, which ends a chat turn in
+  in the background, then a box "P9 is ready to update" lists what it changes. Update now (or Settings >
+  Maintenance > Updates) closes P9, installs it and opens P9 again. Later keeps it for the next time P9 opens, which
+  installs it at once and says so (`update-pending.json` in the profile folder holds that version). Quitting P9 never
+  installs anything: an installer running on the way out could end a window opened meanwhile. Installing restarts the background service on the new version, which ends a chat turn in
   progress; on Linux the restart happens the next time the AppImage starts.
+- **The list in the box.** The list items of the release's notes before their first heading, as plain text (tags
+  removed, at most 12 lines of 240 characters) in a native box with two buttons: nothing in it is a link, an image
+  or HTML, and nothing in it runs. Whoever controls a release controls this text, as they control the release itself.
 - **How it is checked.** The downloaded file's sha512 must equal the one in `latest*.yml`, or it is
   thrown away. P9's builds are not code-signed, so there is no publisher signature to check: the
   sha512 proves the file is the one the release names, not who made the release.
