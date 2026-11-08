@@ -243,6 +243,37 @@ test('update, laptop: a checkout one version ahead pushes its HEAD and follows t
   assert.match(await swapCall(instance), new RegExp(' --version ' + NEXT.replace(/\./g, '\\.') + ' '));
 });
 
+// W1 (Builder, 2026-11-07): ask first, one rule for every build kind. ask names both versions; "Not now" leaves the server as
+// it was (no job, nothing built, no pieces), for a checkout, a packaged app and a slim server alike.
+test('W1: every build kind asks with both versions before it changes the server; declining leaves it as it was', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  const checkout = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-checkout-'));
+  await tree(checkout, NEXT);
+  const git = (...args) => execFileSync('git', ['-C', checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args]);
+  git('init', '-q'); git('add', '-A'); git('commit', '-qm', 'next');
+  const asked = [], no = async (question) => { asked.push(question); return false; };
+  for (const kind of [{ checkout }, { checkout: null }]) {
+    // deadline: without the ask the update starts and is followed; this ends that follow in a second instead of hanging.
+    const { events, run } = laptop(instance, { version: NEXT, ...kind, ask: no, deadline: 1000 });
+    assert.deepEqual(await run(), { phase: 'declined' });
+    assert.deepEqual(events, []);
+  }
+  let reinstalled = 0;
+  const slim = await updateServer({ state: null, check: async () => ({ version: '0.1.5' }), version: NEXT, checkout: null, host: 'test', reinstall: () => { reinstalled++; }, ask: no });
+  assert.deepEqual([slim, reinstalled], [{ phase: 'declined' }, 0]);
+  assert.deepEqual(asked, [{ host: 'test', server: VERSION, app: NEXT }, { host: 'test', server: VERSION, app: NEXT }, { host: 'test', server: '0.1.5', app: NEXT }]);
+  assert.deepEqual([(await call(instance, '/update/status')).job ?? null, await lines(instance.log.pnpm), await leftovers(instance)], [null, [], []]);
+  // A yes goes ahead as before (the checkout test above follows it to the restart): here the job starts.
+  const { run } = laptop(instance, { version: NEXT, checkout, live: () => false, ask: async () => true });
+  assert.equal((await run()).phase, 'left');
+  assert.equal((await call(instance, '/update/status')).job.version, NEXT);
+  // The app's dialog: both versions in it, "Not now" the cancel, and the connect passes it (main.mjs, Electron only).
+  const main = await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8');
+  assert.match(main, /message: 'P9 on ' \+ host \+ ' is ' \+ there \+ '\. This app is ' \+ here \+ '\.'/);
+  assert.match(main, /buttons: \['Not now', 'Update to ' \+ here\], defaultId: 1, cancelId: 0/);
+  assert.match(main, /ask: askUpdate, tell:/);
+});
+
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when
 // its tree has a "broken" file. The stand-in systemctl restarts it from whatever the root folder holds now.
 const TINY = `import { createServer } from 'node:http'; import { readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';

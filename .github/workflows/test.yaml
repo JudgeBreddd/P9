@@ -1,6 +1,6 @@
 # Runs P9's tests on GitHub's machines: every push to a branch other than main that changes more than docs, or by hand
 # from Actions -> Tests -> Run workflow (optionally naming test files; bare runs the bare-machine install instead).
-# The repo is public, so the runs cost nothing. 0.1.8 F1: the Linux tests run as 6 shards at once (test/shard.mjs) and the
+# The repo is public, so the runs cost nothing. 0.1.8 F1: the Linux tests run as 7 shards at once (test/shard.mjs) and the
 # Windows-only tests in their own job here, so a push answers in under 10 minutes; the installers build on tags only
 # (windows-installer.yaml). Every run keeps each shard's test output as an artifact, pass or fail (0.1.8 O2).
 # The machine gets what the tests need and a laptop has: Chromium's sandbox and unshare (user namespaces),
@@ -57,7 +57,7 @@ jobs:
       fail-fast: false
       matrix:
         # files (dispatch) runs just those files, on one runner.
-        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5]') }}
+        shard: ${{ fromJSON(inputs.files && '[0]' || '[0, 1, 2, 3, 4, 5, 6]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -106,7 +106,7 @@ jobs:
         run: |
           set -o pipefail
           systemctl --user is-system-running || true
-          if [ -z "$FILES" ]; then FILES=$(node test/shard.mjs "$SHARD" 6); fi
+          if [ -z "$FILES" ]; then FILES=$(node test/shard.mjs "$SHARD" 7); fi
           echo "shard $SHARD: $FILES"
           xvfb-run -a node scripts/with-tmp.mjs node --test $FILES 2>&1 | tee "$RUNNER_TEMP/tests.log"
       # The output the result rests on, kept on every run (a failure too), not only in the job log.

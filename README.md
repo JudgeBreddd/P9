@@ -350,8 +350,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   the local copy as moved, so the two never both run. *Send files to remote* (the files panel) copies a
   folder to the same folder there, shows what differs, asks before it replaces or deletes anything and keeps
   every replaced file in P9's recovery folder. Limits are under Settings > Remote Connect > Send files. When
-  you connect to a remote running 0.1.6 or later with an older P9, this one updates it after chats finish
-  their turn. A failed build leaves it as it was; a new build that does not start is put back. One still on
+  you connect to a remote running 0.1.6 or later with an older P9, this one asks first, naming both versions;
+  on Update it updates it after chats finish their turn, and Not now leaves it as it is. A failed build leaves it as it was; a new build that does not start is put back. One still on
   0.1.5 has no update route, so it needs one update by hand first (see Update).
   Details: [docs/guide.md](docs/guide.md#remote-connect-send-to-remote-and-send-files).
 - **Dev Focus limits.** Saves go through the guarded save, and only Ctrl+S or Save writes (a white dot on the
@@ -439,7 +439,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
 
 - **A remote running P9** is updated from the computer you connect from once it runs 0.1.6 (the small Temporary P9 is not built
   there: it is replaced whole by this version's): when this P9 is
-  newer (compared by version number), it sends its source, builds beside the running copy, waits until no chat
+  newer (compared by version number), it asks first in a dialog naming both versions (Not now leaves the remote as it is,
+  until P9 next starts), then it sends its source, builds beside the running copy, waits until no chat
   is mid-turn, swaps and restarts. A failed build leaves the running copy as it was; a restart that does not
   answer puts the previous copy back. A server still on 0.1.5 has no update route and does not update itself:
   update it once as a source checkout (the steps below: git pull, build, restart), then run
@@ -495,7 +496,7 @@ mounts (it needs unprivileged user and mount namespaces), never a real filesyste
 Besides Node and pnpm, the tests need: tmux, `ss` (iproute2), GTK 3 (Electron), a display (or `xvfb-run`),
 a systemd user manager, unprivileged user namespaces (Electron's Chromium sandbox) and gitleaks 8.19 or newer
 (`gitleaks dir`; Debian trixie's package is too old). `.github/workflows/test.yaml` installs this same set on
-GitHub's Ubuntu runner and runs the suite, split across 6 runners, on every push to a branch other than `main` that
+GitHub's Ubuntu runner and runs the suite, split across 7 runners, on every push to a branch other than `main` that
 changes more than Markdown.
 
 To publish your own copy, run `git config core.hooksPath .githooks`: the commit hook scans the staged

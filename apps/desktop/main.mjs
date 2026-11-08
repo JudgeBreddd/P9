@@ -300,7 +300,19 @@ export async function createDesktop({ state, open } = {}) {
   };
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
-  let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
+  let serverUpdate = null, serverUpdating = false, tellUpdate = () => {}, updateWindow = null;
+  // W1 (Builder, 2026-11-07: ask first, one rule for every build kind): a dialog naming both versions before this app
+  // changes the server's P9. Not now leaves it as it is, and that host and pair are not asked again until the next launch.
+  const updateDeclined = new Map();
+  const askUpdate = async ({ host, server: there, app: here }) => {
+    if (updateDeclined.get(host) === there + '>' + here) return false;
+    const options = { type: 'question', title: 'Update P9 on ' + host + '?', message: 'P9 on ' + host + ' is ' + there + '. This app is ' + here + '.',
+      detail: 'Update the server to ' + here + '? It waits for running turns to finish, then restarts. Not now leaves it on ' + there + '.',
+      buttons: ['Not now', 'Update to ' + here], defaultId: 1, cancelId: 0, noLink: true };
+    const { response } = await (updateWindow && !updateWindow.isDestroyed() ? dialog.showMessageBox(updateWindow, options) : dialog.showMessageBox(options));
+    if (response !== 1) updateDeclined.set(host, there + '>' + here);
+    return response === 1;
+  };
   // D15a (remote-install.mjs, threat model row 67; U6: no separate yes): the install on this remote, its last event for the
   // status poll; phase 'starting' while setUp tries startServer first.
   let remoteInstall = null;
@@ -332,7 +344,7 @@ export async function createDesktop({ state, open } = {}) {
             if (slimTried.get(serverHost) === old) return false; // L2: once per host and old version, each launch
             slimTried.set(serverHost, old); runInstall();
           } : null,
-          tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
+          ask: askUpdate, tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
       serverError = error.message; knownHosts = error.knownHosts ?? null;
@@ -1040,6 +1052,7 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Item 14: the server update's progress (server-update.mjs), and its last event for a window that loads after it.
   tellUpdate = event => { if (!window.isDestroyed()) window.webContents.send('p9:server-update', event); };
+  updateWindow = window;
   ipcMain.handle('p9:server-update', event => { if (!fromApp(event)) throw new Error('ipc-sender-refused'); return serverUpdate; });
   // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
   // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
