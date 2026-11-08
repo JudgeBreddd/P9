@@ -198,6 +198,38 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     if (theme === 'event-horizon-prime') { // wall 15: the card's load-time p9open opened nothing; a click opens the whole file
       await page.click('#mdlBack');
       const logs = card('logs').frameLocator('iframe');
+      // CI-only failure (M5 :212, :223): a click in the logs card right after Back is sometimes lost. Record what moves in the
+      // window and what reaches the card's frame around the click; on a miss print it, with a screenshot, instead of a bare timeout.
+      const clickAfterBack = async (button, opened, name) => {
+        await page.evaluate(() => { const log = window.__m5 = [], at = s => log.push([Date.now(), s]), body = document.querySelector('#mdlBody');
+          const of = f => f.closest('[data-card]')?.dataset.tile ?? '?', ro = new ResizeObserver(es => es.forEach(e => at(`size ${of(e.target)} ${Math.round(e.contentRect.height)}`)));
+          body.querySelectorAll('iframe').forEach(f => ro.observe(f));
+          new MutationObserver(rs => rs.forEach(r => { r.addedNodes.forEach(n => n.nodeName === 'IFRAME' && (at('new frame ' + of(n)), ro.observe(n))); r.removedNodes.forEach(n => n.nodeName === 'IFRAME' && at('frame gone')); })).observe(body, { childList: true, subtree: true });
+          body.addEventListener('scroll', () => at('scroll ' + body.scrollTop));
+          addEventListener('message', e => e.data?.p9 === 'frame' && e.data.kind !== 'selection' && at(`message ${e.data.kind} ${e.data.path ?? e.data.h ?? ''}`));
+          new MutationObserver(() => at('title ' + document.querySelector('#mdlT').textContent)).observe(document.querySelector('#mdlT'), { childList: true, characterData: true, subtree: true });
+          document.addEventListener('pointerdown', e => at(`pointerdown on the page: ${e.target.id || e.target.className || e.target.nodeName} at ${e.clientX},${e.clientY}`), true);
+          const r = document.querySelector('[data-tile="logs"] iframe').getBoundingClientRect(); at(`logs frame top ${Math.round(r.top)} height ${Math.round(r.height)}, body top ${Math.round(body.getBoundingClientRect().top)}`); });
+        const frame = await (await card('logs').locator('iframe').elementHandle()).contentFrame();
+        const said = [], hear = m => m.text().startsWith('P9M5 ') && said.push([+m.text().split(' ')[1], 'in the card: ' + m.text().split(' ').slice(2).join(' ')]);
+        page.on('console', hear); // the card's own record, kept even when the frame is made again before the miss is seen
+        await frame.evaluate(() => { const at = s => console.log(`P9M5 ${Date.now()} ${s}`), open = window.p9open;
+          for (const k of ['pointerdown', 'click']) addEventListener(k, e => at(`${k} on ${e.target.id || e.target.nodeName} at ${e.clientX},${e.clientY}, activation ${navigator.userActivation?.isActive}`), true);
+          window.p9open = path => { at(`p9open ${path}, activation ${navigator.userActivation?.isActive}`); return open(path); }; });
+        // The cause: a card frame (its own process) that was out of view draws nothing, and until it has drawn again Chromium gives
+        // a click on it to the page's <iframe> element, so the card never sees it ("pointerdown on the page: art-frame"). Its
+        // script runs anyway, so data-ready says nothing about that. Scroll it in and let it draw two frames before the click.
+        await logs.locator(button).scrollIntoViewIfNeeded();
+        await frame.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        const t = [[Date.now(), 'click ' + button + ' starts']];
+        await logs.locator(button).click();
+        t.push([Date.now(), 'click returned']);
+        await opened.waitFor({ timeout: 10000 }).finally(() => page.off('console', hear)).catch(async (e) => {
+          console.log(`P9_SHOT ${name}-miss ` + (await page.screenshot()).toString('base64'));
+          const all = [...t, ...await page.evaluate(() => window.__m5), ...said].sort((a, b) => a[0] - b[0]);
+          throw new Error(`${name}: lost click; the window says ${JSON.stringify(await page.locator('#mdlT').innerText())}; ms from the click:\n` + all.map(([ms, s]) => `${ms - t[0][0]} ${s}`).join('\n'), { cause: e });
+        });
+      };
       await card('logs').scrollIntoViewIfNeeded();
       await sleep(1000);
       assert.equal(await page.locator('#mdlT').innerText(), 'Home · 7 items', 'p9open with no click opens nothing');
@@ -208,14 +240,12 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       await page.click('#mdlBack');
       await card('logs').scrollIntoViewIfNeeded();
       await logs.locator('body[data-ready]').waitFor({ timeout: 10000 }); // Back draws the window whole: a new frame
-      await logs.locator('#b').click();
-      await page.locator('#mdlBody pre', { hasText: 'Could not read it' }).waitFor({ timeout: 10000 });
+      await clickAfterBack('#b', page.locator('#mdlBody pre', { hasText: 'Could not read it' }), 'm5-212');
       assert.equal(await page.locator('#mdlFoot [data-fix]').count(), 0, 'no Fix with Claude on a file that did not open');
       await page.click('#mdlBack');
       await card('logs').scrollIntoViewIfNeeded();
       await logs.locator('body[data-ready]').waitFor({ timeout: 10000 });
-      await logs.locator('#a').click();
-      await page.locator('#mdlT', { hasText: 'a.log' }).waitFor({ timeout: 10000 });
+      await clickAfterBack('#a', page.locator('#mdlT', { hasText: 'a.log' }), 'm5-223');
       await page.locator('#mdlFoot [data-fix]').click({ timeout: 10000 });
       await page.locator('#mdlBody', { hasText: 'Find why this log failed.' }).waitFor({ timeout: 30000 });
       assert.match(await page.locator('#mdlBody').innerText(), /Find why this log failed\.[\s\S]*logs\/a\.log[\s\S]*the whole log, not its last lines/);
