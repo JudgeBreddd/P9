@@ -661,7 +661,7 @@ jobs:
           if ((Get-Content (Join-Path $p9 'daemon\current') -Raw).Trim() -ne $next) { throw "daemon\current is not $next" }
           if (@(Get-Daemon).Count -ne 1 -or @(Get-Daemon | Where-Object { $_.ExecutablePath -like "$p9\daemon\$next\node.exe" }).Count -ne 1) { throw "the daemon is not one daemon\$next\node.exe" }
           if (-not (Test-Path (Join-Path $p9 "daemon\$version\.complete"))) { throw "the update did not keep daemon\$version" }
-          Write-Output "installed $version: Later installed nothing on quit; the next open updated it to $next and P9 opened again on it; daemon runs from daemon\$next, daemon\$version kept"
+          Write-Output "installed ${version}: Later installed nothing on quit; the next open updated it to $next and P9 opened again on it; daemon runs from daemon\$next, daemon\$version kept"
       # AU5 (threat model row 40): the installed version (the step above's) starts healthy and updates itself to a build
       # whose window is never ready to show. That one fails 2 starts, goes back on its own (its kept installer, run by the
       # launcher), and the restored version shows the notice. Its screenshot goes to the rollback-evidence artifact.
