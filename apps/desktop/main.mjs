@@ -401,7 +401,11 @@ export async function createDesktop({ state, open } = {}) {
   }
   // MT1: Rebuild + reload is for source checkouts only; P9_PACKAGED=1 lets a test see what a packaged build shows.
   const source = !app.isPackaged && process.env.P9_PACKAGED !== '1';
+  // O25: no OS title bar on Windows and Linux; P9's top row is the title bar (drag region in shell.css) and the window
+  // buttons are drawn over its right end, in the theme's foreground (p9:look). macOS keeps its own title bar.
+  const overlay = process.platform !== 'darwin' && { color: '#00000000', symbolColor: '#ffffff', height: 44 };
   const window = new BrowserWindow({ width: 1440, height: 900, minWidth: 720, minHeight: 600, backgroundColor: '#000000',
+    ...(overlay && { titleBarStyle: 'hidden', titleBarOverlay: overlay }),
     webPreferences: { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false,
       additionalArguments: ['--p9-version=' + version, ...(['off', 'original'].includes(process.env.P9_LANDING) ? ['--p9-landing=' + process.env.P9_LANDING] : []), // the test runs click the shell straight away
@@ -1493,6 +1497,7 @@ export async function createDesktop({ state, open } = {}) {
         || !input || typeof input.dark !== 'boolean' || !input.colors || Object.keys(input.colors).length !== LOOK_TOKENS.length
         || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))) throw new Error('ipc-sender-refused');
     look = { dark: input.dark, colors: Object.fromEntries(LOOK_TOKENS.map(token => [token, input.colors[token]])) };
+    if (overlay) window.setTitleBarOverlay({ ...overlay, symbolColor: look.colors.foreground.slice(0, 7) });
     devView?.webContents.send('p9dev:look', look);
     cardsView?.webContents.send('p9cards:look', look);
     return { ok: true };

@@ -2,6 +2,10 @@
 /* Layer 3: this page. The real app's shell (42px topbar · 38px rail · files · chat grid · dock · 24px status) kept, every surface refined. */
 .shell{display:grid;grid-template-rows:44px 1fr 24px;grid-template-columns:minmax(0,1fr);height:100vh}
 .topbar{position:relative;z-index:50;display:flex;align-items:center;gap:6px;padding:0 10px 0 12px;border-bottom:1px solid var(--border);background:color-mix(in oklch,var(--card) 70%,transparent);backdrop-filter:blur(10px)}
+/* O25: on the desktop (Windows, Linux) the top row is the window's title bar: drag it to move, double-click to maximise; the
+   window buttons sit over its right end (titlebar-area-* from the window-controls overlay; nothing reserved in a browser). */
+.topbar{-webkit-app-region:drag;padding-right:calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 10px)}
+.topbar :is(button,a,input,select,[role=tab],[role=tablist],.pop,.agent-ind){-webkit-app-region:no-drag}
 .brand{display:flex;align-items:center;gap:8px;font-weight:600;letter-spacing:-.01em;margin-right:8px}
 /* D12: the P9 mark (public/p9-mark.png: docs/brand/icon-simplified-256.png at 64 px, the brand file that reads at 20 px), the same in every theme; the window's own icon above it is the desktop's title bar */
 .brand .p9mark{width:20px;height:20px;flex:none;display:block;border-radius:5px;box-shadow:0 0 0 1px color-mix(in oklch,var(--foreground) 14%,transparent)}
