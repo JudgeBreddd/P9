@@ -271,6 +271,11 @@ EOF
     as_user 'pkill -f "[/]tmp/[.]mount_"; kill $(cat /tmp/start.pid); true' 2>/dev/null || true
     # The app's own log and the service install's (the staged daemon's node runs there, with its own libraries).
     log=$(as_user 'cat /tmp/start.log ~/.local/share/p9/service-install.log 2>/dev/null' || true)
+    # O22: a node that cannot load libatomic must be named by P9 itself (teh.mjs appImageService), so the window can say it.
+    if grep -q 'libatomic.so.1' <<< "$log"; then
+      if grep -q 'missing library: libatomic1' <<< "$log"; then echo "BARE_APPIMAGE_NAMES_PACKAGE round $round: libatomic1"
+      else echo "BARE_APPIMAGE_FAILED round $round: the node could not load libatomic.so.1 and P9 did not name libatomic1"; extra="$extra libatomic1-unnamed"; fi
+    fi
     # A library the app opens later (dlopen, libGL for one) is not in ldd's list but is named in the log.
     opened=$(grep -o 'Could not dlopen [^:]*' <<< "$log" | awk '{ print $4 }' | sort -u | while read -r l; do
       as_user "ldconfig -p | grep -q ' $l '" || echo "$l"; done || true)

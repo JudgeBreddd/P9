@@ -147,7 +147,9 @@ export async function createDesktop({ state, open } = {}) {
   // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
   // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
   const appImage = process.platform === 'linux' && app.isPackaged && Boolean(process.env.APPIMAGE);
-  if (appImage) appImageService(process.resourcesPath);
+  // O22: a system library the staged daemon node cannot load (libatomic1) is named in the status, so the window says it.
+  let missingLib = null;
+  if (appImage) appImageService(process.resourcesPath).then((result) => { missingLib = result?.missing ?? null; });
   // Item 16 (threat model row 52): the AppImage carries the pinned editor server (package-linux.mjs) and installs it from that
   // copy, checked against the same SHA-256 as the download, when ~/.local/share/p9's is missing or another release (a first
   // start, or an update that moved the pin). Dev Focus's Install uses the copy too, so no network is needed. Logs, never throws.
@@ -504,7 +506,7 @@ export async function createDesktop({ state, open } = {}) {
       const h = state && await health(state);
       if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
     } catch {}
-    if (process.platform !== 'win32' || !state) return { status: 'unavailable' };
+    if (process.platform !== 'win32' || !state) return { status: 'unavailable', ...(missingLib && { reason: 'missing-library', library: missingLib }) };
     await wake();
     return { status: 'unavailable', reason };
   });

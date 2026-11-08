@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { stageDaemon } from '../scripts/teh.mjs';
 
+const execFileAsync = promisify(execFile);
 const launcherSource = fileURLToPath(new URL('../scripts/launcher/p9-launch.sh', import.meta.url));
 // A resources/daemon folder whose node prints what it was started with.
 async function daemon(version) {
@@ -93,4 +94,28 @@ test('an update\'s launcher waits as .next; a rollback puts the kept AppImage ba
   assert.match(await readFile(path.join(share, 'rollback.log'), 'utf8'), /going back to 3\.0\.0[\s\S]*starting it/);
   for (let i = 0; i < 50 && !await stat(started).catch(() => null); i++) await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await readFile(started, 'utf8'), '3.0.0 none\n', 'started again without the old mount\'s variables');
+});
+
+// O22: on a minimal or server Ubuntu the bundled daemon node cannot load libatomic.so.1. appImageService runs the staged
+// node once, names the package in service-install.log, returns it for the window (main.mjs getStatus), installs no unit,
+// and teh doctor's bundle carries it.
+test('O22: a staged node missing libatomic names libatomic1 and installs no unit', { skip: process.platform === 'win32', timeout: 30_000 }, async () => {
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), 'p9-home-')));
+  const resources = await mkdtemp(path.join(os.tmpdir(), 'p9-resources-'));
+  const source = await daemon('4.0.0');
+  await writeFile(path.join(source, 'node'), '#!/bin/sh\necho "$0: error while loading shared libraries: libatomic.so.1: cannot open shared object file: No such file or directory" >&2\nexit 127\n', { mode: 0o755 });
+  await execFileAsync('cp', ['-r', source, path.join(resources, 'daemon')]);
+  const teh = new URL('../scripts/teh.mjs', import.meta.url).href;
+  const { stdout } = await execFileAsync(process.execPath, ['--input-type=module', '-e',
+    `const m = await import(${JSON.stringify(teh)}); console.log(JSON.stringify(await m.appImageService(process.argv[1], '/nonexistent.AppImage')))`, resources],
+  { env: { ...process.env, HOME: home }, timeout: 20_000 });
+  assert.deepEqual(JSON.parse(stdout.trim().split('\n').pop()), { missing: 'libatomic1' });
+  const log = await readFile(path.join(home, '.local', 'share', 'p9', 'service-install.log'), 'utf8');
+  assert.match(log, /missing library: libatomic1 \(on Ubuntu: sudo apt install libatomic1\)/);
+  assert.equal(await stat(path.join(home, '.config', 'systemd', 'user', 'p9-foundation.service')).catch(() => null), null, 'no unit');
+  const { collectBundle, missingLibrary } = await import('../scripts/teh.mjs');
+  assert.equal(collectBundle({ status: '', journal: '', install: log }).missingLibrary, 'libatomic1', 'doctor bundle names it');
+  assert.equal(collectBundle({ status: '', journal: '' }).missingLibrary, null);
+  assert.equal(missingLibrary('node: error while loading shared libraries: libfoo.so.3: cannot open'), 'libfoo.so.3', 'unknown file: its own name');
+  assert.equal(missingLibrary('error while loading shared libraries: /etc/passwd; rm'), null, 'only lib*.so names');
 });

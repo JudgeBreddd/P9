@@ -57,10 +57,20 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
 // retrying never helps, so the page is told the daemon is out of date.
 export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } } : { status: 503, body: { error: 'daemon-unavailable' } };
 
-export function collectBundle({ status, journal, daemon }) {
+// O22: the bundled daemon node links libatomic.so.1, which a minimal or server Ubuntu lacks (the desktop has it). The
+// loader's own error names the file; this turns it into the package to install, or null. Only names matching lib*.so*
+// come back, so the value is safe for the doctor bundle and the window.
+const LIBRARY_PACKAGES = { 'libatomic.so.1': 'libatomic1' };
+export function missingLibrary(text) {
+  const file = /error while loading shared libraries: (lib[\w+-]+\.so[\w.]*)/.exec(text ?? '')?.[1];
+  return file ? LIBRARY_PACKAGES[file] ?? file : null;
+}
+
+// install: the Linux service-install.log (appImageService), read only for a missing library.
+export function collectBundle({ status, journal, daemon, install = '' }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
   return {
-    version: VERSION, node: process.versions.node, platform: process.platform,
+    version: VERSION, node: process.versions.node, platform: process.platform, missingLibrary: missingLibrary(install),
     daemon: daemon?.status === 'ok' ? { status: 'ok', phase: 3, writes: daemon.writes === 'guarded' ? 'guarded' : 'unavailable',
       recoveryRecordCount: Number.isSafeInteger(daemon.recoveryRecordCount) && daemon.recoveryRecordCount >= 0
         ? daemon.recoveryRecordCount : null } : { status: 'unavailable' },
@@ -167,6 +177,11 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
     const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
       say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
     await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    // O22: the staged node is run once first. A system library it cannot load (libatomic1 on a minimal Ubuntu) is named
+    // here and returned, so the window says which package to install instead of "daemon unavailable".
+    const missing = await new Promise((resolve) => execFile(path.join(dir, 'node'), ['--version'], { env, timeout: 30_000 },
+      (error, stdout, stderr) => resolve(error ? say('node --version: failed ' + stderr.trim()).then(() => missingLibrary(stderr)) : null)));
+    if (missing) { await say('missing library: ' + missing + ' (on Ubuntu: sudo apt install ' + missing + ')'); return { missing }; }
     // K7: the daemon cannot start without tmux. A system tmux wins; with none, the AppImage's pinned copy goes into P9's
     // bin folder first (before the slow copy below and the service), so a machine with no tmux needs no admin password and no network.
     if (!await found('tmux', { env })) await say('tmux from the AppImage: ' + await placeTmux({ from: path.join(resources, 'tmux', 'tmux') }));
@@ -294,6 +309,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     await readFile(path.join(values.state, '..', 'daemon.log'), 'utf8').catch(() => '')) : {
     status: command('systemctl', ['--user', 'show', unitFor(values.state), '--property=ActiveState,SubState,Result']),
     journal: command('journalctl', ['--user', '-u', unitFor(values.state), '-n', '100', '-o', 'json', '--no-pager']),
+    install: await readFile(path.join(os.homedir(), '.local', 'share', 'p9', 'service-install.log'), 'utf8').then((text) => text.slice(-4000), () => ''),
   }) });
   const text = JSON.stringify(bundle, null, 2) + '\n';
   if (values.bundle) await writeFile(values.bundle, text, { flag: 'wx', mode: 0o600 });
