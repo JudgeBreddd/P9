@@ -13,7 +13,7 @@ import { connectServer, forwardPath, restartServer, startServer, sshHosts, serve
 import { updateServer } from './server-update.mjs';
 import { installRemote, sourceArchive, slimArchive, adminLocal, adminArgs } from './remote-install.mjs';
 import { adminCommand } from '../server/deps.mjs';
-import { trimLog } from '../server/windows.mjs';
+import { trimLog, unitOf, windowsTaskName } from '../server/windows.mjs';
 import { createKeeper } from './keep.mjs';
 import { sendToServer } from './move.mjs';
 import { XFER_LIMITS, planFolder, resolve as resolveXfer, overLimit, runPlan, describe as describeXfer, noAnswer, open as openXfer, isFull } from './xfer.mjs';
@@ -136,18 +136,22 @@ export async function createDesktop({ state, open } = {}) {
   const wake = async () => {
     if (changing || serverHost || Date.now() - woke < 30000) return;
     woke = Date.now();
-    const task = await windowsTask();
+    // O6b: a dev window (--state %LOCALAPPDATA%\p9-dev\runtime) wakes its own task 'P9 p9-dev', and never re-registers
+    // anything at launch: the dev task is set up by hand (install-windows.ps1 -Unit), so the daily task is not touched.
+    const unit = unitOf(localState), task = await windowsTask(unit);
     reason = !task ? 'task-missing' : task.execute !== 'conhost.exe' ? 'task-stale' : 'not-answering';
-    if (reason !== 'not-answering' && app.isPackaged && !repaired) {
+    if (reason !== 'not-answering' && app.isPackaged && !repaired && unit === 'p9-foundation') {
       repaired = true;
       if (await repairWindowsTask(process.resourcesPath)) { reason = 'not-answering'; return; }
     }
-    if (task) execFile('schtasks.exe', ['/Run', '/TN', 'P9 Foundation'], { windowsHide: true }, () => {});
+    if (task) execFile('schtasks.exe', ['/Run', '/TN', windowsTaskName(unit)], { windowsHide: true }, () => {});
   };
   // AU4: the AppImage's mount goes when it quits, so its daemon is copied out and the service installed, or restarted onto
   // the new version after an update (teh.mjs appImageService, which logs and never throws). Once per launch.
   const appImage = process.platform === 'linux' && app.isPackaged && Boolean(process.env.APPIMAGE);
-  if (appImage) appImageService(process.resourcesPath);
+  // O22: a system library the staged daemon node cannot load (libatomic1) is named in the status, so the window says it.
+  let missingLib = null;
+  if (appImage) appImageService(process.resourcesPath).then((result) => { missingLib = result?.missing ?? null; });
   // Item 16 (threat model row 52): the AppImage carries the pinned editor server (package-linux.mjs) and installs it from that
   // copy, checked against the same SHA-256 as the download, when ~/.local/share/p9's is missing or another release (a first
   // start, or an update that moved the pin). Dev Focus's Install uses the copy too, so no network is needed. Logs, never throws.
@@ -507,7 +511,7 @@ export async function createDesktop({ state, open } = {}) {
       const h = state && await health(state);
       if (h?.status === 'ok') return { status: 'ok', ...(h.savedWorkspace ? { savedWorkspace: h.savedWorkspace, workspace: h.workspace } : {}) };
     } catch {}
-    if (process.platform !== 'win32' || !state) return { status: 'unavailable' };
+    if (process.platform !== 'win32' || !state) return { status: 'unavailable', ...(missingLib && { reason: 'missing-library', library: missingLib }) };
     await wake();
     return { status: 'unavailable', reason };
   });
@@ -1276,6 +1280,9 @@ export async function createDesktop({ state, open } = {}) {
     if (!win && process.platform !== 'linux') return { error: 'workspace-change-unsupported', workspace: old };
     // The steps below rewrite the p9-foundation unit; a window on the dev daemon (p9-dev) must not touch the daily one.
     if (!win && unitFor(state) !== 'p9-foundation.service') return { error: 'workspace-change-unsupported', workspace: old };
+    // O6b: on Windows a dev window changes its own task's folder ('P9 p9-dev'), and only once that task exists.
+    const task = win ? unitOf(state) : 'p9-foundation';
+    if (task !== 'p9-foundation' && !await windowsTask(task)) return { error: 'dev-task-missing', workspace: old };
     const pick = await dialog.showOpenDialog(window, { title: 'Choose the workspace folder', buttonLabel: 'Use this folder',
       properties: ['openDirectory', 'createDirectory'], defaultPath: old });
     if (pick.canceled || !pick.filePaths[0]) return { workspace: old };
@@ -1300,9 +1307,9 @@ export async function createDesktop({ state, open } = {}) {
         if ((await health(state).catch(() => null))?.workspace?.toLowerCase() === want.toLowerCase()) return true; } return false; };
       changing = true;
       try {
-        const ran = await repairWindowsTask(process.resourcesPath, folder);
+        const ran = await repairWindowsTask(process.resourcesPath, folder, task);
         if (ran && await on(folder)) { devToWorkspace(); return { workspace: folder }; }
-        await repairWindowsTask(process.resourcesPath, old);
+        await repairWindowsTask(process.resourcesPath, old, task);
         await on(old);
         return { error: 'workspace-not-started', detail: ran ? 'daemon-not-answering' : 'install-windows.ps1 failed (service-install.log)',
           workspace: (await health(state).catch(() => null))?.workspace ?? null };
@@ -1343,6 +1350,9 @@ export async function createDesktop({ state, open } = {}) {
     const win = process.platform === 'win32';
     if (!serverHost && !win && process.platform !== 'linux') return { error: (repair ? 'repair' : 'restart') + '-unsupported' };
     if (repair && win && !await stat(path.join(process.resourcesPath, 'daemon', 'scripts', 'install-windows.ps1')).catch(() => null)) return { error: 'service-missing' };
+    // O6b: a dev window restarts or repairs its own task ('P9 p9-dev'), never 'P9 Foundation', and only once that task exists.
+    const unit = win && !serverHost ? unitOf(state) : 'p9-foundation';
+    if (unit !== 'p9-foundation' && !await windowsTask(unit)) return { error: 'dev-task-missing' };
     const { response } = await dialog.showMessageBox(window, { type: 'warning', title: repair ? 'Repair P9?' : 'Restart P9?',
       message: repair ? 'Repair P9\'s background service?' : serverHost ? 'Restart P9 on ' + serverHost + '?' : 'Restart P9\'s background service?',
       detail: (repair ? 'P9 sets up its background service again and starts it. ' : '') + (serverHost ? 'Running chats, scripts and terminals on the remote stop, the ones open on your phone too.' : 'Running chats, scripts and terminals stop.'),
@@ -1362,7 +1372,7 @@ export async function createDesktop({ state, open } = {}) {
     try {
       if (!repair) return await restartWindowsTask(state);
       const before = await health(state).then(h => h.boot, () => null);
-      return await repairWindowsTask(process.resourcesPath) ? await answered(state, before) : { error: 'repair-failed', detail: 'install-windows.ps1 failed (service-install.log)' };
+      return await repairWindowsTask(process.resourcesPath, undefined, unit) ? await answered(state, before) : { error: 'repair-failed', detail: 'install-windows.ps1 failed (service-install.log)' };
     } finally { changing = false; }
   };
   ipcMain.handle('p9:restart-service', service(false));
@@ -1413,12 +1423,27 @@ export async function createDesktop({ state, open } = {}) {
   // Auto-update (threat model row 39): off unless this is an installed build with a feed (updater.mjs); its lines go to
   // p9-update.log. skip: the version a rollback came back from (row 40).
   // channel: the Nightly switch (O2), its own file beside update-state.json; anything but { nightly: true } is Stable.
-  const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
+  const channelFile = path.join(app.getPath('userData'), 'update-channel.json'), pendingFile = path.join(app.getPath('userData'), 'update-pending.json');
   const updater = startUpdater({ app, version, log: updateLog, skip: {
     get: () => readState(startFile).skip,
     clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } }, channel: {
     get: () => { try { return JSON.parse(readFileSync(channelFile, 'utf8'))?.nightly === true; } catch { return false; } },
-    set: on => writeState(channelFile, { nightly: on }) } });
+    set: on => writeState(channelFile, { nightly: on }) },
+    // O24: the update-ready popup (the release's own list of changes), the downloaded version waiting for the next open,
+    // and what that open says before it closes P9 to install. Native dialogs, as the rollback notice above.
+    ready: async ({ version: next, notes }) => (await dialog.showMessageBox(window, { type: 'info', title: 'P9 is ready to update',
+      message: `P9 ${next} is ready to install.`,
+      detail: (notes.length ? 'What changes:\n' + notes.map(line => '• ' + line).join('\n') + '\n\n' : '')
+        + 'Update now closes P9, installs the update and opens P9 again by itself. Later installs it the next time you open P9.'
+        + ' Your workspace, chats and settings stay.',
+      buttons: ['Update now', 'Later'], defaultId: 0, cancelId: 1, noLink: true })).response === 0 ? 'now' : 'later',
+    pending: {
+      get: () => { try { const next = JSON.parse(readFileSync(pendingFile, 'utf8'))?.version; return typeof next === 'string' ? next : null; } catch { return null; } },
+      set: next => { try { writeState(pendingFile, { version: next }); } catch (error) { updateLog('update-pending.json not written: ' + error.message); } } },
+    // Shown for at most 8 s: the install goes ahead whether or not OK is pressed.
+    installing: next => Promise.race([new Promise(done => setTimeout(done, 8000)), dialog.showMessageBox(window, { type: 'info',
+      title: 'Updating P9', message: `Installing P9 ${next}.`, noLink: true, buttons: ['OK'],
+      detail: 'This update was left for the next time P9 opened, so it installs now. P9 closes and opens again by itself when it is done.' })]) });
   ipcMain.handle('p9:updates', async (event, ...args) => {
     const action = updateAction(args);
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');

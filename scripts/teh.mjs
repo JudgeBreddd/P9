@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
-import { unitOf, windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
+import { unitOf, windowsLockEndpoint, windowsStateRoot, windowsTaskName } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
 import { found, placeTmux } from '../apps/server/deps.mjs';
 
@@ -57,10 +57,20 @@ export async function daemonRequest(state, method, route, body, op = randomUUID(
 // retrying never helps, so the page is told the daemon is out of date.
 export const failedReply = (error) => error?.status === 404 ? { status: 404, body: { error: 'daemon-outdated' } } : { status: 503, body: { error: 'daemon-unavailable' } };
 
-export function collectBundle({ status, journal, daemon }) {
+// O22: the bundled daemon node links libatomic.so.1, which a minimal or server Ubuntu lacks (the desktop has it). The
+// loader's own error names the file; this turns it into the package to install, or null. Only names matching lib*.so*
+// come back, so the value is safe for the doctor bundle and the window.
+const LIBRARY_PACKAGES = { 'libatomic.so.1': 'libatomic1' };
+export function missingLibrary(text) {
+  const file = /error while loading shared libraries: (lib[\w+-]+\.so[\w.]*)/.exec(text ?? '')?.[1];
+  return file ? LIBRARY_PACKAGES[file] ?? file : null;
+}
+
+// install: the Linux service-install.log (appImageService), read only for a missing library.
+export function collectBundle({ status, journal, daemon, install = '' }) {
   const allowed = new Set(['P9_READY', 'P9_START_FAILED']);
   return {
-    version: VERSION, node: process.versions.node, platform: process.platform,
+    version: VERSION, node: process.versions.node, platform: process.platform, missingLibrary: missingLibrary(install),
     daemon: daemon?.status === 'ok' ? { status: 'ok', phase: 3, writes: daemon.writes === 'guarded' ? 'guarded' : 'unavailable',
       recoveryRecordCount: Number.isSafeInteger(daemon.recoveryRecordCount) && daemon.recoveryRecordCount >= 0
         ? daemon.recoveryRecordCount : null } : { status: 'unavailable' },
@@ -91,10 +101,11 @@ function command(command, args) {
 
 // The 'P9 Foundation' task: { state, execute, arguments }, or null when there is none. execute is conhost.exe for this
 // version's task and powershell.exe for v0.1.1's visible one (issue #6). The desktop app uses it to say which (B3).
-export function windowsTask() {
+// unit (O6b): a dev P9's own task, 'P9 p9-dev'; the name is fixed by windowsTaskName, never the caller's text.
+export function windowsTask(unit = 'p9-foundation') {
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-    "$t = Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue; if ($t) { @{ state = [string]$t.State; "
+    `$t = Get-ScheduledTask -TaskName '${windowsTaskName(unitOf(unit))}' -ErrorAction SilentlyContinue; if ($t) { @{ state = [string]$t.State; `
     + "execute = $t.Actions[0].Execute; arguments = $t.Actions[0].Arguments } | ConvertTo-Json -Compress } else { 'null' }"],
   { encoding: 'utf8', timeout: 15000, windowsHide: true }, (error, stdout) => { try { resolve(error ? null : JSON.parse(stdout)); } catch { resolve(null); } }));
 }
@@ -108,11 +119,12 @@ export function windowsTask() {
 const REPAIR_EXTRA = ['PROCESSOR_ARCHITECTURE', 'SystemDrive', 'ProgramFiles', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH'];
 export const repairEnv = (source = process.env) => ({ ...childEnv(source, 'win32'),
   ...Object.fromEntries(Object.entries(source).filter(([key]) => REPAIR_EXTRA.some((name) => name.toLowerCase() === key.toLowerCase()))) });
-export function repairWindowsTask(resources, workspace) {
+// unit (O6b): a dev P9's task (install-windows.ps1 -Unit); the daily 'P9 Foundation' is not touched.
+export function repairWindowsTask(resources, workspace, unit = 'p9-foundation') {
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return new Promise((resolve) => execFile(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-InputFormat', 'None', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(resources, 'daemon', 'scripts', 'install-windows.ps1'), '-Node', path.join(resources, 'daemon', 'node.exe'),
-    ...(workspace ? ['-Workspace', workspace] : [])],
+    ...(workspace ? ['-Workspace', workspace] : []), ...(unitOf(unit) !== 'p9-foundation' ? ['-Unit', unitOf(unit)] : [])],
   { encoding: 'utf8', timeout: 120000, windowsHide: true, env: repairEnv() }, (error, stdout, stderr) =>
     writeFile(path.join(resources, '..', 'service-install.log'), `\r\n# ${workspace ? 'workspace change' : 'repair'} by the app ${new Date().toISOString()}: ${error ? 'failed' : 'ok'}\r\n${stdout}${stderr}`, { flag: 'a' })
       .catch(() => {}).then(() => resolve(!error))));
@@ -167,6 +179,11 @@ export async function appImageService(resources, image = process.env.APPIMAGE) {
     const run = (file, args) => new Promise((resolve) => execFile(file, args, { env, timeout: 60_000 }, (error, stdout, stderr) =>
       say(path.basename(file) + ' ' + path.basename(args[0]) + ': ' + (error ? 'failed ' : 'ok ') + stdout + stderr).then(() => resolve(!error))));
     await say('daemon ' + version + ', before it ' + (previous || 'none'));
+    // O22: the staged node is run once first. A system library it cannot load (libatomic1 on a minimal Ubuntu) is named
+    // here and returned, so the window says which package to install instead of "daemon unavailable".
+    const missing = await new Promise((resolve) => execFile(path.join(dir, 'node'), ['--version'], { env, timeout: 30_000 },
+      (error, stdout, stderr) => resolve(error ? say('node --version: failed ' + stderr.trim()).then(() => missingLibrary(stderr)) : null)));
+    if (missing) { await say('missing library: ' + missing + ' (on Ubuntu: sudo apt install ' + missing + ')'); return { missing }; }
     // K7: the daemon cannot start without tmux. A system tmux wins; with none, the AppImage's pinned copy goes into P9's
     // bin folder first (before the slow copy below and the service), so a machine with no tmux needs no admin password and no network.
     if (!await found('tmux', { env })) await say('tmux from the AppImage: ' + await placeTmux({ from: path.join(resources, 'tmux', 'tmux') }));
@@ -209,13 +226,15 @@ export async function answered(state, before, ms = 90_000, probe = health) {
 // Restarts the 'P9 Foundation' task (W3): /End stops its conhost, the host sees its parent gone and closes the job, which
 // ends node.exe. The daemon's lock pipe (main.mjs) is waited out, up to 15 s, so the next start does not hit
 // daemon-already-running: the API pipe can close before the lock does. Call it from outside the daemon's job (the desktop
-// app), never from the daemon. state: the runtime folder.
+// app), never from the daemon. state: the runtime folder. O6b: the state's own task and lock, so a dev window
+// (%LOCALAPPDATA%\p9-dev\runtime) restarts 'P9 p9-dev' and never the daily 'P9 Foundation'.
 export async function restartWindowsTask(state, ms) {
+  const unit = unitOf(state), task = windowsTaskName(unit);
   const schtasks = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'schtasks.exe');
   const run = (args) => new Promise((resolve) => execFile(schtasks, args, { timeout: 30000, windowsHide: true }, (error) => resolve(!error)));
   const before = await health(state).then((h) => h.boot, () => null);
-  await run(['/End', '/TN', 'P9 Foundation']);
-  const lock = windowsLockEndpoint(windowsStateRoot());
+  await run(['/End', '/TN', task]);
+  const lock = windowsLockEndpoint(unit === 'p9-foundation' ? windowsStateRoot() : path.win32.dirname(state));
   for (let tries = 0; ; tries++) {
     const gone = await new Promise((resolve) => {
       const socket = connect(lock);
@@ -226,7 +245,7 @@ export async function restartWindowsTask(state, ms) {
     if (tries === 60) return { error: 'daemon-did-not-stop' };
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  if (!await run(['/Run', '/TN', 'P9 Foundation'])) return { error: 'restart-failed' };
+  if (!await run(['/Run', '/TN', task])) return { error: 'restart-failed' };
   return answered(state, before, ms);
 }
 
@@ -294,6 +313,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     await readFile(path.join(values.state, '..', 'daemon.log'), 'utf8').catch(() => '')) : {
     status: command('systemctl', ['--user', 'show', unitFor(values.state), '--property=ActiveState,SubState,Result']),
     journal: command('journalctl', ['--user', '-u', unitFor(values.state), '-n', '100', '-o', 'json', '--no-pager']),
+    install: await readFile(path.join(os.homedir(), '.local', 'share', 'p9', 'service-install.log'), 'utf8').then((text) => text.slice(-4000), () => ''),
   }) });
   const text = JSON.stringify(bundle, null, 2) + '\n';
   if (values.bundle) await writeFile(values.bundle, text, { flag: 'wx', mode: 0o600 });

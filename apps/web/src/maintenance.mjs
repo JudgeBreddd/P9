@@ -16,7 +16,7 @@ const UPDATE_TEXT = {
   idle: u => u.available ? 'P9 ' + u.available + ' is out.' : 'You have the newest P9.',
   checking: () => 'Checking for a newer P9…',
   downloading: u => 'Downloading P9 ' + (u.available || '') + '…',
-  ready: u => 'P9 ' + (u.available || '') + ' is downloaded. Restart P9 to update.',
+  ready: u => 'P9 ' + (u.available || '') + ' is downloaded. Restart to update now, or it installs the next time you open P9.',
   error: u => 'The last check failed' + (u.reason ? ': ' + u.reason : '') + '.',
 };
 // Updates off (a source checkout, or a build with no updater): Check now opens GitHub's newest release instead (threat
@@ -28,7 +28,7 @@ const updatesRow = u => `<div class="set-row"><span><strong>Updates</strong><spa
   + (u.state === 'ready' ? '<button data-slot="button" data-variant="default" id="mtUpdInstall">Restart to update</button>'
     : opens(u) ? '<button data-slot="button" data-variant="outline" id="mtUpdOpen">Check now</button>'
     : `<button data-slot="button" data-variant="outline" id="mtUpdCheck" ${['off', 'checking', 'downloading'].includes(u.state) ? 'disabled' : ''}>Check now</button>`)
-  + info(opens(u) ? 'Opens the newest P9 release page on GitHub in your browser.' : 'Checks GitHub for a newer P9 and installs it when you restart. Your workspace and settings stay.', 'updates') + '</div>'
+  + info(opens(u) ? 'Opens the newest P9 release page on GitHub in your browser.' : 'Checks GitHub for a newer P9. Once one is downloaded P9 asks: Update now, or Later (the next time you open P9). Your workspace and settings stay.', 'updates') + '</div>'
   + nightlyRow(u);
 // O2 (0.1.8): the Nightly switch, only where updates are on. Off goes back to stable releases from the next one newer than
 // the nightly installed; it never installs an older version.

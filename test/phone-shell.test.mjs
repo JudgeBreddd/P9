@@ -30,13 +30,16 @@ async function open(device, server, { fix = [], init } = {}) {
   const hit = fix.map(() => false), seen = fix.map(() => '');
   await page.route('**/*', async (route) => {
     if (!fix.length || !['document', 'stylesheet', 'script'].includes(route.request().resourceType())) return route.continue();
-    const response = await route.fetch({ url: route.request().url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...route.request().headers(), host: server.host } });
-    let body = await response.text();
+    // open() reloads while the first load's handler may still be reading: Playwright then disposes the response. Only that
+    // error is dropped (the reload's own request is patched; hits()/missed() still prove every swap landed) (CI 42508960941).
+    let response, body;
+    try { response = await route.fetch({ url: route.request().url().replace('app.p9.localhost', '127.0.0.1'), headers: { ...route.request().headers(), host: server.host } }); body = await response.text(); }
+    catch (error) { if (/disposed|closed/i.test(error.message)) return; throw error; }
     for (const [index, [from, to]] of fix.entries()) {
       if (typeof from === 'string' ? body.includes(from) : from.test(body)) { body = body.replace(from, to); hit[index] = true; }
       else if (!seen[index] && typeof from === 'string') { const at = body.indexOf(from.slice(0, 14)); if (at >= 0) seen[index] = body.slice(at, at + 160); }
     }
-    await route.fulfill({ response, body });
+    await route.fulfill({ response, body }).catch((error) => { if (!/disposed|closed/i.test(error.message)) throw error; });
   });
   // The phone's service worker re-fetches /_astro/ itself once it claims the page, and page.route never sees that fetch:
   // the reload would get the unpatched file whenever the worker wins the race. These pages run without it.

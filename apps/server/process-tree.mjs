@@ -22,17 +22,31 @@ export const hasUserBus = () => process.platform === 'linux' && !!process.env.XD
 
 const lookup = (environment, name) => Object.entries(environment).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
 
+// O23: with WSL installed, System32\bash.exe and WindowsApps\bash.exe are WSL launchers, and System32 comes early on PATH,
+// so a bare bash or sh (a Mission button's cmd) ran in WSL, where Doctor hung. For those two names both folders are
+// skipped and Git for Windows' own bin is the fallback; no Git Bash means command-not-found, never WSL.
+const wslFolders = (environment) => [path.win32.join(lookup(environment, 'SystemRoot') || 'C:\\Windows', 'System32'),
+  ...(lookup(environment, 'LOCALAPPDATA') ? [path.win32.join(lookup(environment, 'LOCALAPPDATA'), 'Microsoft', 'WindowsApps')] : [])]
+  .map((folder) => path.win32.resolve(folder).toLowerCase());
+
 export function resolveWindowsExecutable(executable, environment = process.env, fileExists = existsSync) {
   if (path.win32.isAbsolute(executable) || /[\\/]/.test(executable)) return executable;
   const pathValue = lookup(environment, 'path') ?? '';
   const suppliedExtension = path.win32.extname(executable).toLowerCase();
   if (suppliedExtension && !['.exe', '.com', '.cmd', '.bat'].includes(suppliedExtension)) throw new Error(`command-not-found:${executable}`);
   const extensions = suppliedExtension ? [''] : ['.exe', '.com', '.cmd', '.bat'];
+  const unix = /^(bash|sh)(\.exe)?$/i.test(executable) ? executable.toLowerCase().replace(/\.exe$/, '') : null;
+  const skip = unix ? wslFolders(environment) : [];
   for (const directory of pathValue.split(';').filter(Boolean)) {
+    if (skip.includes(path.win32.resolve(directory).toLowerCase())) continue;
     for (const extension of extensions) {
       const candidate = path.win32.resolve(directory, executable + extension);
       if (fileExists(candidate)) return candidate;
     }
+  }
+  if (unix) {
+    const git = path.win32.join(lookup(environment, 'ProgramFiles') || 'C:\\Program Files', 'Git', 'bin', unix + '.exe');
+    if (fileExists(git)) return git;
   }
   throw new Error(`command-not-found:${executable}`);
 }

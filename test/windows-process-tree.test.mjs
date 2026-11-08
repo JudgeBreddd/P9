@@ -70,6 +70,28 @@ test('Windows endpoint, payload, executable and job host contracts are owner-sco
   assert.match(extract, /Expand-Archive/);
 });
 
+// O23: on a Windows machine with WSL, System32\bash.exe and WindowsApps\bash.exe are WSL launchers. A bare bash or sh (a
+// Mission button's cmd) must reach Git Bash, never WSL; every other name resolves exactly as before.
+test('O23: bare bash and sh skip the WSL launchers and fall back to Git Bash; cmd, node and powershell are unchanged', () => {
+  const env = { Path: 'C:\\Windows\\system32;C:\\Users\\one\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\Git\\cmd;C:\\Program Files\\nodejs;C:\\Windows\\System32\\WindowsPowerShell\\v1.0',
+    SystemRoot: 'C:\\Windows', LOCALAPPDATA: 'C:\\Users\\one\\AppData\\Local', ProgramFiles: 'C:\\Program Files' };
+  const disk = new Set(['C:\\Windows\\system32\\bash.exe', 'C:\\Users\\one\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe',
+    'C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files\\Git\\bin\\sh.exe', 'C:\\Windows\\system32\\cmd.exe',
+    'C:\\Program Files\\nodejs\\node.exe', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe']);
+  const exists = (file) => disk.has(file);
+  for (const name of ['bash', 'BASH', 'bash.exe']) assert.equal(resolveWindowsExecutable(name, env, exists), 'C:\\Program Files\\Git\\bin\\bash.exe', name);
+  assert.equal(resolveWindowsExecutable('sh', env, exists), 'C:\\Program Files\\Git\\bin\\sh.exe');
+  // A real bash earlier on PATH than Git's own still wins (MSYS2, a portable Git): only the WSL launchers are skipped.
+  const msys = { ...env, Path: 'C:\\msys64\\usr\\bin;' + env.Path };
+  assert.equal(resolveWindowsExecutable('bash', msys, (file) => file === 'C:\\msys64\\usr\\bin\\bash.exe' || exists(file)), 'C:\\msys64\\usr\\bin\\bash.exe');
+  // Only WSL on the machine: refused, never WSL. An explicit path is the user's choice and is kept.
+  assert.throws(() => resolveWindowsExecutable('bash', env, (file) => file.includes('system32') || file.includes('WindowsApps')), /command-not-found:bash/);
+  assert.equal(resolveWindowsExecutable('C:\\Windows\\System32\\bash.exe', env, exists), 'C:\\Windows\\System32\\bash.exe');
+  assert.equal(resolveWindowsExecutable('cmd', env, exists), 'C:\\Windows\\system32\\cmd.exe');
+  assert.equal(resolveWindowsExecutable('node', env, exists), 'C:\\Program Files\\nodejs\\node.exe');
+  assert.equal(resolveWindowsExecutable('powershell', env, exists), 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+});
+
 test('Windows host: a .cmd runs with & intact, Console starts a program, Acl refuses a shared folder, the DLL loads', {
   skip: process.platform !== 'win32' && 'requires cmd.exe, PowerShell 5.1 and NTFS ACLs',
   timeout: 120000,

@@ -336,6 +336,37 @@ jobs:
           $kept | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
           Remove-Item -LiteralPath $settingsFile
           if ($alive.Count -ne 2) { throw 'a daemon restart ended the app or the detach script''s child' }
+          # O6b + W3b: a dev P9 beside the daily one. teh.mjs repairWindowsTask with unit p9-dev (what a dev window's Repair runs)
+          # registers 'P9 p9-dev' on %LOCALAPPDATA%\p9-dev with its own --ownership; the daily daemon keeps running. Then
+          # restartWindowsTask on the dev state restarts only the dev daemon: the daily one keeps its pid.
+          $teh = (Resolve-Path scripts/teh.mjs).Path
+          $daily = @((Get-Daemon).ProcessId)
+          $devState = Join-Path $env:LOCALAPPDATA 'p9-dev\runtime'
+          function Get-DevDaemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like "$env:LOCALAPPDATA\p9-dev\daemon\*\node.exe" }) }
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { repairWindowsTask } = await import(pathToFileURL(process.argv[2]).href); process.exit(await repairWindowsTask(process.argv[1], undefined, 'p9-dev') ? 0 : 1)" (Join-Path $app 'resources') $teh
+          $devRepair = $LASTEXITCODE
+          Get-Content (Join-Path $app 'service-install.log') | Select-Object -Last 8 | ForEach-Object { 'dev install log: ' + $_ }
+          if ($devRepair -ne 0) { throw 'install-windows.ps1 -Unit p9-dev failed (dev install log: lines above)' }
+          $devFile = Join-Path $devState 'desktop.json'
+          $end = (Get-Date).AddSeconds(90)
+          while (-not (Test-Path $devFile) -and (Get-Date) -lt $end) { Start-Sleep 2 }
+          if (-not (Test-Path $devFile)) { throw 'the dev daemon did not write desktop.json in 90 s' }
+          $devPayload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([regex]::Match((Get-ScheduledTask -TaskName 'P9 p9-dev').Actions[0].Arguments, '-Payload (\S+)')).Groups[1].Value)) | ConvertFrom-Json
+          Write-Output ('tasks: {0}; dev argv ends {1}; daily {2} dev {3}' -f ((Get-ScheduledTask -TaskName 'P9*').TaskName -join ', '), ($devPayload.argv[-2..-1] -join ' '), ((Get-Daemon).ProcessId -join ','), ((Get-DevDaemon).ProcessId -join ','))
+          if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the dev install removed P9 Foundation' }
+          if (($devPayload.argv[-2..-1] -join ' ') -ne ('--ownership ' + (Join-Path $env:LOCALAPPDATA 'p9-dev'))) { throw 'the dev task has no --ownership of its own' }
+          if ((Get-DevDaemon).Count -ne 1) { throw 'not exactly one dev daemon' }
+          if ((Compare-Object $daily @((Get-Daemon).ProcessId))) { throw 'the dev install stopped the daily daemon' }
+          $devOld = (Get-DevDaemon).ProcessId
+          node --input-type=module -e "import { pathToFileURL } from 'node:url'; const { restartWindowsTask } = await import(pathToFileURL(process.argv[2]).href); const r = await restartWindowsTask(process.argv[1]); console.log('dev restart: ' + JSON.stringify(r)); process.exit(r.restarted ? 0 : 1)" $devState $teh
+          if ($LASTEXITCODE -ne 0) { throw 'restartWindowsTask on the dev state failed (dev restart: line above)' }
+          Write-Output ('after the dev restart: daily {0} (was {1}), dev {2} (was {3})' -f ((Get-Daemon).ProcessId -join ','), ($daily -join ','), ((Get-DevDaemon).ProcessId -join ','), $devOld)
+          if ((Compare-Object $daily @((Get-Daemon).ProcessId))) { throw 'restarting the dev task restarted the daily daemon' }
+          if ((Get-DevDaemon).Count -ne 1 -or (Get-DevDaemon).ProcessId -eq $devOld) { throw 'the dev daemon was not restarted' }
+          schtasks.exe /End /TN 'P9 p9-dev' | Out-Null
+          Get-DevDaemon | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          Unregister-ScheduledTask -TaskName 'P9 p9-dev' -Confirm:$false
+          Write-Output 'dev task: own task and folder; the daily daemon untouched by its install and restart; removed'
           # The real uninstaller, silent and in place (_?= makes it wait): no daemon left, no task left. Stop-ScheduledTask
           # alone left the daemon running (run 39540753837), which an update over this version would hit too.
           $uninstaller = (Get-ChildItem $app -Filter 'Uninstall*.exe' | Select-Object -First 1).FullName
@@ -534,6 +565,62 @@ jobs:
           $app = Join-Path $env:LOCALAPPDATA 'Programs\P9 Event Horizon'
           $p9 = Join-Path $env:LOCALAPPDATA 'P9'
           function Get-Daemon { @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ExecutablePath -like "$p9\daemon\*\node.exe" }) }
+          # The popup's screenshots go to the rollback-evidence artifact (uploaded after the next step, also on failure).
+          $evidence = (New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'rollback-evidence')).FullName
+          function Wait-For([string]$What, [int]$Minutes, [scriptblock]$Done) {
+            $end = (Get-Date).AddMinutes($Minutes)
+            while ((Get-Date) -lt $end) { try { if (& $Done) { return } } catch {}; Start-Sleep 5 }
+            throw "$What, not in $Minutes min"
+          }
+          function Shot([string]$Name) {
+            try {
+              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+              $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+              [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              $shot.Save((Join-Path $evidence $Name), [System.Drawing.Imaging.ImageFormat]::Png)
+            } catch { Write-Output "no screenshot: $_" }
+          }
+          # O24: a button of one of P9's native boxes, found by the box's title through UI Automation, as a user clicks it.
+          function Press-Button([string]$Title, [string]$Button, [int]$Minutes, [string]$ShotName) {
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+            $A = [System.Windows.Automation.AutomationElement]
+            $all = [System.Windows.Automation.TreeScope]::Descendants
+            $named = { param($n) New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $n) }
+            # The box's buttons are Panes without Invoke on the runner (Installers 42522629111's dump), Buttons elsewhere.
+            $kind = { param($t) New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $t) }
+            $either = [System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]@((& $kind ([System.Windows.Automation.ControlType]::Button)), (& $kind ([System.Windows.Automation.ControlType]::Pane))))
+            $want = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@((& $named $Button), $either))
+            if (-not ('P9.Mouse' -as [type])) { Add-Type -Namespace P9 -Name Mouse -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, System.UIntPtr e);' }
+            $end = (Get-Date).AddMinutes($Minutes)
+            while ((Get-Date) -lt $end) {
+              $box = $A::RootElement.FindFirst($all, (& $named $Title))
+              $press = if ($box) { $box.FindFirst($all, $want) }
+              if ($press) {
+                if ($ShotName) { Start-Sleep 1; Shot $ShotName }
+                $invoke = $null
+                if ($press.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { $invoke.Invoke() }
+                else {
+                  # ponytail: a click at the Pane's centre, as a user clicks; assumes 100% display scaling (the runner's 1024x768).
+                  $r = $press.Current.BoundingRectangle
+                  $x = [int]($r.X + $r.Width / 2); $y = [int]($r.Y + $r.Height / 2)
+                  Write-Output ("uia: '{0}' is a {1} without Invoke, so a click at {2},{3}" -f $Button, $press.Current.ControlType.ProgrammaticName, $x, $y)
+                  $null = [P9.Mouse]::SetCursorPos($x, $y)
+                  [P9.Mouse]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [P9.Mouse]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+                }
+                return
+              }
+              Start-Sleep 2
+            }
+            # What is on screen when the button is not found: a desktop screenshot (rollback-evidence), every top-level window, the box's tree.
+            Shot "press-miss-$Button.png"
+            foreach ($w in $A::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+              $c = $w.Current
+              Write-Output ("window: {0} '{1}' class {2}" -f (Get-Process -Id $c.ProcessId -ErrorAction SilentlyContinue).ProcessName, $c.Name, $c.ClassName)
+            }
+            if ($box) { foreach ($e in $box.FindAll($all, [System.Windows.Automation.Condition]::TrueCondition)) { Write-Output ("uia: {0} '{1}'" -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name) } }
+            throw "no '$Title' box with a '$Button' button in $Minutes min"
+          }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $v = [version]($version -replace '-.*$')
           $next = '{0}.{1}.{2}' -f $v.Major, $v.Minor, ($v.Build + 1)
@@ -558,10 +645,23 @@ jobs:
             while ((Get-Date) -lt $end -and -not ($log -and (Select-String -LiteralPath $log.FullName "state ready $next" -SimpleMatch -Quiet)))
             if ($log) { Get-Content $log.FullName | ForEach-Object { 'p9-update.log: ' + $_ } }
             if (-not ($log -and (Select-String -LiteralPath $log.FullName "state ready $next" -SimpleMatch -Quiet))) { throw "the app did not download $next in 10 min" }
-            # Closing the window quits the app, and electron-updater runs the downloaded installer silently on the way out.
+            # O24: the downloaded update asks. Later leaves it for the next open: closing the app then installs nothing (0.1.8
+            # installed on quit, behind any window opened meanwhile, and never opened P9 again).
+            $has = { param($text) Select-String -LiteralPath $log.FullName $text -SimpleMatch -Quiet }
+            Press-Button 'P9 is ready to update' 'Later' 3 'update-ready-popup.png'
+            Wait-For "the popup did not log Later" 1 { & $has "popup ${next}: later" }
             Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
-            $end = (Get-Date).AddMinutes(15)
+            Wait-For 'the app did not quit' 2 { -not (Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue) }
+            Start-Sleep 30
             $installed = Join-Path $app 'resources\daemon\package.json'
+            if ((Get-Content $installed -Raw | ConvertFrom-Json).version -ne $version -or (Get-Process | Where-Object { $_.Path -like '*p9-event-horizon*' })) { throw "closing the app after Later installed $next" }
+            $waiting = Join-Path $log.Directory.FullName 'update-pending.json'
+            if ((Get-Content $waiting -Raw | ConvertFrom-Json).version -ne $next) { throw "update-pending.json does not hold $next" }
+            # The next open installs it at once, says so, and P9 opens again by itself on the new version.
+            Start-Process (Join-Path $app 'P9 Event Horizon.exe')
+            Wait-For "the next open did not start installing $next" 3 { & $has "installing ${next}: it was left for this open" }
+            Start-Sleep 2
+            Shot 'update-installing.png'
             # The installer rewrites these files while this polls: a missing or half-written one reads as not yet.
             function Test-Updated {
               try {
@@ -570,15 +670,20 @@ jobs:
                   @(Get-Daemon | Where-Object { $_.ExecutablePath -like "$p9\daemon\$next\node.exe" }).Count -eq 1
               } catch { $false }
             }
-            while ((Get-Date) -lt $end -and -not (Test-Updated)) { Start-Sleep 5 }
+            Wait-For "$next was not installed" 15 { Test-Updated }
+            Wait-For "P9 did not open again by itself on $next" 5 { & $has "healthy start $next" }
+            Shot 'update-reopened.png'
+            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
+            Wait-For "$next did not quit" 2 { -not (Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue) }
+            if ((Get-Content $waiting -Raw | ConvertFrom-Json).version) { throw "update-pending.json still holds a version once $next runs" }
           } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
           Get-Content (Join-Path $app 'service-install.log') -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object { 'hook: ' + $_ }
           $now = (Get-Content $installed -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).version
-          if ($now -ne $next) { throw "after closing the app the installed version is $now, not $next" }
+          if ($now -ne $next) { throw "after the next open the installed version is $now, not $next" }
           if ((Get-Content (Join-Path $p9 'daemon\current') -Raw).Trim() -ne $next) { throw "daemon\current is not $next" }
           if (@(Get-Daemon).Count -ne 1 -or @(Get-Daemon | Where-Object { $_.ExecutablePath -like "$p9\daemon\$next\node.exe" }).Count -ne 1) { throw "the daemon is not one daemon\$next\node.exe" }
           if (-not (Test-Path (Join-Path $p9 "daemon\$version\.complete"))) { throw "the update did not keep daemon\$version" }
-          Write-Output "installed $version updated itself to $next from the feed; daemon runs from daemon\$next, daemon\$version kept"
+          Write-Output "installed ${version}: Later installed nothing on quit; the next open updated it to $next and P9 opened again on it; daemon runs from daemon\$next, daemon\$version kept"
       # AU5 (threat model row 40): the installed version (the step above's) starts healthy and updates itself to a build
       # whose window is never ready to show. That one fails 2 starts, goes back on its own (its kept installer, run by the
       # launcher), and the restored version shows the notice. Its screenshot goes to the rollback-evidence artifact.
@@ -613,6 +718,55 @@ jobs:
             $end = (Get-Date).AddMinutes($Minutes)
             while ((Get-Date) -lt $end) { try { if (& $Done) { return } } catch {}; Start-Sleep 5 }
             throw "$What, not in $Minutes min"
+          }
+          function Shot([string]$Name) {
+            try {
+              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+              $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+              [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              $shot.Save((Join-Path $evidence $Name), [System.Drawing.Imaging.ImageFormat]::Png)
+            } catch { Write-Output "no screenshot: $_" }
+          }
+          # O24: a button of one of P9's native boxes, found by the box's title through UI Automation, as a user clicks it.
+          function Press-Button([string]$Title, [string]$Button, [int]$Minutes, [string]$ShotName) {
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+            $A = [System.Windows.Automation.AutomationElement]
+            $all = [System.Windows.Automation.TreeScope]::Descendants
+            $named = { param($n) New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $n) }
+            # The box's buttons are Panes without Invoke on the runner (Installers 42522629111's dump), Buttons elsewhere.
+            $kind = { param($t) New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $t) }
+            $either = [System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]@((& $kind ([System.Windows.Automation.ControlType]::Button)), (& $kind ([System.Windows.Automation.ControlType]::Pane))))
+            $want = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@((& $named $Button), $either))
+            if (-not ('P9.Mouse' -as [type])) { Add-Type -Namespace P9 -Name Mouse -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, System.UIntPtr e);' }
+            $end = (Get-Date).AddMinutes($Minutes)
+            while ((Get-Date) -lt $end) {
+              $box = $A::RootElement.FindFirst($all, (& $named $Title))
+              $press = if ($box) { $box.FindFirst($all, $want) }
+              if ($press) {
+                if ($ShotName) { Start-Sleep 1; Shot $ShotName }
+                $invoke = $null
+                if ($press.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$invoke)) { $invoke.Invoke() }
+                else {
+                  # ponytail: a click at the Pane's centre, as a user clicks; assumes 100% display scaling (the runner's 1024x768).
+                  $r = $press.Current.BoundingRectangle
+                  $x = [int]($r.X + $r.Width / 2); $y = [int]($r.Y + $r.Height / 2)
+                  Write-Output ("uia: '{0}' is a {1} without Invoke, so a click at {2},{3}" -f $Button, $press.Current.ControlType.ProgrammaticName, $x, $y)
+                  $null = [P9.Mouse]::SetCursorPos($x, $y)
+                  [P9.Mouse]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [P9.Mouse]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+                }
+                return
+              }
+              Start-Sleep 2
+            }
+            # What is on screen when the button is not found: a desktop screenshot (rollback-evidence), every top-level window, the box's tree.
+            Shot "press-miss-$Button.png"
+            foreach ($w in $A::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+              $c = $w.Current
+              Write-Output ("window: {0} '{1}' class {2}" -f (Get-Process -Id $c.ProcessId -ErrorAction SilentlyContinue).ProcessName, $c.Name, $c.ClassName)
+            }
+            if ($box) { foreach ($e in $box.FindAll($all, [System.Windows.Automation.Condition]::TrueCondition)) { Write-Output ("uia: {0} '{1}'" -f $e.Current.ControlType.ProgrammaticName, $e.Current.Name) } }
+            throw "no '$Title' box with a '$Button' button in $Minutes min"
           }
           # The app's profile folder, the one with p9-update.log in it.
           function UserData { Get-ChildItem $env:APPDATA -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'p9-update.log') } | Select-Object -First 1 -ExpandProperty FullName }
@@ -736,14 +890,15 @@ jobs:
             Start-Process $exe
             Wait-For "$good did not start healthy" 5 { Log-Has "healthy start $good" }
             Wait-For "$good did not download $bad" 10 { Log-Has "state ready $bad" }
-            Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
-            Wait-For "$bad was not installed on quit" 15 { (Get-Content $installed -Raw | ConvertFrom-Json).version -eq $bad -and "$(Get-Content (Join-Path $p9 'daemon\current') -Raw)".Trim() -eq $bad }
+            # O24: Update now closes P9, installs, and starts the new version (here the broken one) by itself.
+            Press-Button 'P9 is ready to update' 'Update now' 3
+            Wait-For "$bad was not installed by Update now" 15 { (Get-Content $installed -Raw | ConvertFrom-Json).version -eq $bad -and "$(Get-Content (Join-Path $p9 'daemon\current') -Raw)".Trim() -eq $bad }
             Wait-For "the $bad installer did not finish" 5 { -not (Get-Process | Where-Object { $_.Path -like '*p9-event-horizon*' }) }
           } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
           try {
-            # Closing the window before the start is healthy is the user's choice, not a failed start.
-            Start-Process $exe
-            Wait-For "$bad's window did not open" 2 { Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 }
+            # Closing the window before the start is healthy is the user's choice, not a failed start. The installer
+            # started $bad itself (silent and --force-run), so nothing here starts it.
+            Wait-For "$bad's window did not open by itself after Update now" 3 { Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 }
             Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { $null = $_.CloseMainWindow() }
             Wait-For "closing $bad's window was counted" 2 { Log-Has "quit before a healthy start of ${bad}: not counted" }
             Wait-For "$bad did not quit" 2 { -not (Get-Process 'P9 Event Horizon' -ErrorAction SilentlyContinue) }
