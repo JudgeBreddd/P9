@@ -504,8 +504,15 @@ index for secrets, and the push hook runs gitleaks and a private-path scan over 
 
 ## Status and known gaps
 
-**Version 0.1.7, beta.** It is for testers: expect rough edges, and file what you hit as an issue
+**Version 0.1.8, beta.** It is for testers: expect rough edges, and file what you hit as an issue
 (`pnpm teh doctor` above prints a bundle you can attach). Updating from an earlier build: `UPGRADE.md`.
+
+**New in 0.1.8** (a fix release): the AppImage starts on a fresh Ubuntu user with no extra packages beyond `fuse3`
+(O1); the desktop asks before updating a server on another version and names both (W1); Settings has a Nightly builds
+switch for pre-releases (O2); the Mission Space menu lists a space made on the phone as soon as it opens (M4a); a dev
+P9 runs beside the daily one on Linux with its own unit, state and port (O6); CI answers a code push in about 9
+minutes and builds installers only on tags (F1); one test per 0.1.7 install fix (H5); the brand folder keeps only the
+images the app uses (F11).
 
 **New in 0.1.7** (a fix release): a failed chat-history write or an unawaited error is logged instead of
 stopping the background service; streaming replies no longer stall the daemon once per chunk (the history database
