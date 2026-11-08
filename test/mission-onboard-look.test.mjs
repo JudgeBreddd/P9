@@ -131,6 +131,9 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.locator('#mission [data-space-pick]').waitFor({ timeout: 15000 });
   await phone.locator('#mission [data-open]:has-text("Services")').waitFor({ timeout: 15000 });
   assert.equal((await server.desk('/mission')).body.spaceName, 'draft', 'the server still shows draft when the phone opens');
+  // O5: a tap on Mission first draws the kept answer (T7; the phone last saw homelab, which has Services too), then the
+  // route refreshes behind. The picker has to come to read the server's draft.
+  await phone.waitForFunction(() => document.querySelector('#mission [data-space-pick]')?.value === 'draft', null, { timeout: 15000 }).catch(() => {});
   assert.equal(await phone.locator('#mission [data-space-pick]').inputValue(), 'draft');
   await settled(phone); shot('m4a-picker-phone', await phone.screenshot());
 

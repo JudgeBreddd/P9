@@ -308,6 +308,8 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   assert.deepEqual(refused, { save: 403, spaceSave: 403, spaceText: 400, spaceUnknown: 404 });
   await page.click('[data-nav="usage"]');
   await page.waitForSelector('#usage >> text=$0.28');
+  // O5: the tap redraws usage; wait for the per-chat line itself rather than read the view once.
+  await page.locator('#usage .ctx', { hasText: /Claude · / }).first().waitFor({ timeout: 10000 }).catch(() => {});
   assert.match(await page.locator('#usage').innerText(), /Claude · [\s\S]*%[\s\S]*of [\d,]+ tokens/);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
   // P5: each window is a ring with its % inside and when it resets under it; the plan says how old its numbers are.
