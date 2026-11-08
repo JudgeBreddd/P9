@@ -86,8 +86,18 @@ test('the Nightly switch: read at start, kept, and it turns pre-releases on and 
   assert.deepEqual([fake.allowPrerelease, saved, updates.read().nightly, calls], [false, false, false, ['check false']]);
   updates.nightly({ nightly: true });
   fake.emit('update-available', { version: '1.0.1-nightly.1' });
+  fake.emit('update-downloaded', { version: '1.0.1-nightly.1' });
+  assert.deepEqual([updates.read().state, fake.autoInstallOnAppQuit], ['ready', true]);
+  // Review finding 1: off drops the nightly that is ready, so quitting installs nothing; one still arriving is dropped too.
   updates.nightly({ nightly: false });
-  assert.deepEqual([updates.read().state, updates.read().available, fake.allowDowngrade, calls], ['downloading', '1.0.1-nightly.1', false, ['check false', 'check true', 'download']]);
+  assert.deepEqual([updates.read().state, updates.read().available, fake.autoInstallOnAppQuit, fake.allowDowngrade], ['checking', null, false, false]);
+  fake.emit('update-available', { version: '1.0.1-nightly.2' });
+  fake.emit('update-downloaded', { version: '1.0.1-nightly.2' });
+  assert.deepEqual([updates.read().state, fake.autoInstallOnAppQuit, calls], ['idle', false, ['check false', 'check true', 'download', 'check false']]);
+  // A stable release still downloads and installs on quit with the switch off.
+  fake.emit('update-available', { version: '1.0.2' });
+  fake.emit('update-downloaded', { version: '1.0.2' });
+  assert.deepEqual([updates.read().state, updates.read().available, fake.autoInstallOnAppQuit], ['ready', '1.0.2', true]);
   // Off (a source checkout): the switch is still kept for when updates are on, and nothing loads.
   let loaded = false;
   const off = await startUpdater({ app: { isPackaged: false }, version: '1.0.0', log() {}, resources: await feed(), platform: 'win32', env: {},

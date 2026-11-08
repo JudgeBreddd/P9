@@ -97,7 +97,8 @@ test('M4a look: a fresh profile shows only the onboarding card; each button open
   await phone.goto(server.origin + '/phone/');
   await phone.click('[data-nav="mission"]');
   await phone.locator('#mission [data-onboard] [data-template="blank"]').waitFor({ timeout: 15000 });
-  assert.equal(await phone.locator('#mission [data-onboard-protect]').count(), 0);
+  // The phone draws its saved Mission first (T7), from before protection went off, then the fresh one (CI run 42436874683).
+  await phone.locator('#mission [data-onboard-protect]').waitFor({ state: 'detached', timeout: 15000 });
   assert.equal((await server.desk('/file-protection', 'POST', { on: true })).status, 200);
   await page.locator('#fMission [data-onboard-protect]').waitFor({ timeout: 20000 });
   // Finding 4 follow-up: a phone template tap is a preview too. Back writes nothing; Choose (File protection asks with a

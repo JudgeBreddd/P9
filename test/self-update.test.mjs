@@ -268,9 +268,16 @@ test('W1: every build kind asks with both versions before it changes the server;
   assert.deepEqual([slim, reinstalled], [{ phase: 'declined' }, 0]);
   assert.deepEqual(asked, [{ host: 'test', server: VERSION, app: NEXT }, { host: 'test', server: VERSION, app: NEXT }, { host: 'test', server: '0.1.5', app: NEXT }]);
   assert.deepEqual([(await call(instance, '/update/status')).job ?? null, await lines(instance.log.pnpm), await leftovers(instance)], [null, [], []]);
+  // A yes given after the connection was replaced (the dialog stayed open while the window moved on) does nothing.
+  let open = true;
+  const late = laptop(instance, { version: NEXT, checkout, live: () => open, ask: async () => { open = false; return true; } });
+  assert.deepEqual(await late.run(), { phase: 'gone' });
+  const slimLate = await updateServer({ state: null, check: async () => ({ version: '0.1.5' }), version: NEXT, checkout: null, host: 'test', live: () => false, reinstall: () => { reinstalled++; }, ask: async () => true });
+  assert.deepEqual([slimLate, reinstalled], [{ phase: 'gone' }, 0]);
+  assert.deepEqual([(await call(instance, '/update/status')).job ?? null, await lines(instance.log.pnpm)], [null, []]);
   // A yes goes ahead as before (the checkout test above follows it to the restart): here the job starts.
-  const { run } = laptop(instance, { version: NEXT, checkout, live: () => false, ask: async () => true });
-  assert.equal((await run()).phase, 'left');
+  const { run } = laptop(instance, { version: NEXT, checkout, deadline: 1000, ask: async () => true });
+  assert.notEqual((await run()).phase, 'gone');
   assert.equal((await call(instance, '/update/status')).job.version, NEXT);
   // The app's dialog: both versions in it, "Not now" the cancel, and the connect passes it (main.mjs, Electron only).
   const main = await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8');

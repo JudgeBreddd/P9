@@ -128,6 +128,38 @@ test('Phase 13: uninstall removes only the named P9 unit; other apps and P9 stat
     + (hubUp ? ', Mission Control still running' : ''));
 });
 
+// O6: removing a dev unit runs Stop All on that unit's own daemon (its state folder is named after it), so its chats
+// and terminals do not outlive it; the daily p9-foundation's socket is never asked. HOME, the runtime folder and
+// systemctl are stand-ins, so nothing real is touched.
+test('O6: uninstalling a dev unit stops its own daemon first and never asks p9-foundation', { timeout: 30000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  const { execFile } = await import('node:child_process');
+  const { rmSync } = await import('node:fs');
+  const root = mkdtempSync(path.join(os.tmpdir(), 'p9-o6u-')), home = path.join(root, 'h'), run = path.join(root, 'r'), bin = path.join(root, 'b');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const units = path.join(home, '.config', 'systemd', 'user');
+  mkdirSync(units, { recursive: true }); mkdirSync(bin);
+  writeFileSync(path.join(units, 'p9-dev.service'), '[Service]\nExecStart=/bin/true\n');
+  writeFileSync(path.join(bin, 'systemctl'), '#!/bin/sh\necho "$*" >> "$P9_CALLS"\n', { mode: 0o755 });
+  const seen = [], servers = [];
+  t.after(() => servers.forEach((server) => server.close()));
+  for (const name of ['p9-dev', 'p9-foundation']) {
+    const folder = path.join(run, name); mkdirSync(folder, { recursive: true });
+    const server = createServer((req, res) => { seen.push(name + ' ' + req.method + ' ' + req.url); res.setHeader('content-type', 'application/json'); res.end('{"ok":true}'); });
+    await new Promise((resolve) => server.listen(path.join(folder, 's'), resolve)); servers.push(server);
+    writeFileSync(path.join(folder, 'desktop.json'), JSON.stringify({ cookie: 'c', csrf: 'x', socketPath: path.join(folder, 's') }));
+  }
+  const calls = path.join(root, 'calls');
+  const out = await new Promise((resolve, reject) => execFile(process.execPath, ['scripts/uninstall-service.mjs', '--unit', 'p9-dev.service'], { cwd: app, timeout: 20000,
+    env: { ...process.env, HOME: home, XDG_RUNTIME_DIR: run, XDG_DATA_HOME: path.join(home, 'd'), P9_CALLS: calls, PATH: bin + path.delimiter + process.env.PATH } },
+  (error, stdout, stderr) => (error ? reject(new Error(stdout + stderr)) : resolve(stdout))));
+  assert.match(out, /P9_STOP_ALL_DONE/, 'the dev daemon was asked to stop all: ' + out);
+  assert.deepEqual(seen, ['p9-dev POST /stop-all'], 'only the dev daemon was asked, once');
+  assert.match(readFileSync(calls, 'utf8'), /--user disable --now p9-dev\.service/);
+  assert.doesNotMatch(readFileSync(calls, 'utf8'), /p9-foundation/);
+  assert.ok(!existsSync(path.join(units, 'p9-dev.service')), 'the dev unit file is gone');
+});
+
 // Release r2 R2-3: a conversation left cleanup-failed by a startup scope query that failed is in no in-memory map;
 // Stop All must still query systemd for it and report cleanup-failed, never stopped.
 test('release r2 R2-3: Stop All sweeps a conversation still cleanup-failed from startup', { skip: process.platform !== 'linux' && 'linux only' }, async (t) => {

@@ -34,6 +34,8 @@ export function updateAction(args) {
 // is never downloaded again; get() reads it, clear() forgets it once a different release is offered. channel: the Nightly
 // switch (O2, 0.1.8), get() and set(on); on, GitHub pre-releases (the nightlies) are offered as well as stable releases.
 // Turning it off never goes back down: a nightly stays until a stable release newer than it is out (allowDowngrade off).
+// With it off, a pre-release already on its way (a download under way or done, or a check sent while it was on) is
+// dropped and never installed on quit (phase 1 review finding 1).
 export async function startUpdater({ app, version, log, resources = process.resourcesPath, platform = process.platform,
   env = process.env, load = () => import('electron-updater').then(module => module.default.autoUpdater), skip = { get: () => null, clear() {} },
   channel = { get: () => false, set() {} } }) {
@@ -64,14 +66,21 @@ export async function startUpdater({ app, version, log, resources = process.reso
   const set = (state, fields = {}) => { Object.assign(status, { state, reason: null }, fields); log(`state ${state}${status.available ? ' ' + status.available : ''}`); };
   updater.on('checking-for-update', () => set('checking'));
   updater.on('update-not-available', () => set('idle', { available: null }));
+  const pre = v => String(v ?? '').includes('-');
+  const drop = v => { updater.autoInstallOnAppQuit = false; log('dropped ' + v + ': Nightly is off'); set('idle', { available: null }); };
   updater.on('update-available', info => {
+    if (!status.nightly && pre(info.version)) return drop(info.version);
     const skipped = skip.get();
     if (info.version === skipped) { log('skipped ' + skipped + ': P9 went back from it'); return set('idle', { available: null }); }
     if (skipped) skip.clear();
     set('downloading', { available: info.version });
     updater.downloadUpdate().catch(() => {}); // a failure also arrives as 'error'
   });
-  updater.on('update-downloaded', info => set('ready', { available: info.version }));
+  updater.on('update-downloaded', info => {
+    if (!status.nightly && pre(info.version)) return drop(info.version);
+    updater.autoInstallOnAppQuit = true;
+    set('ready', { available: info.version });
+  });
   // The first line only: electron-updater's messages can run to a whole HTTP response.
   updater.on('error', error => set('error', { reason: String(error?.message ?? error).split('\n')[0].slice(0, 200) }));
   const check = () => {
@@ -87,8 +96,12 @@ export async function startUpdater({ app, version, log, resources = process.reso
     if (status.state === 'ready') setImmediate(() => updater.quitAndInstall(true, true));
     return read();
   };
-  // A new channel checks again at once; a download already under way or done is kept.
-  const nightly = ask => { pick(ask.nightly); updater.allowPrerelease = ask.nightly; log('channel ' + (ask.nightly ? 'nightly' : 'stable')); return check(); };
+  // A new channel checks again at once. Off drops a pre-release under way or done; a stable one is kept.
+  const nightly = ask => {
+    pick(ask.nightly); updater.allowPrerelease = ask.nightly; log('channel ' + (ask.nightly ? 'nightly' : 'stable'));
+    if (!ask.nightly && pre(status.available) && (status.state === 'downloading' || status.state === 'ready')) drop(status.available);
+    return check();
+  };
   setTimeout(check, FIRST_CHECK_MS).unref();
   setInterval(check, EVERY_MS).unref();
   set('idle');
