@@ -6,7 +6,7 @@
 #   bash scripts/bare-machine.sh discover   install.sh --headless; each MISSING line's packages installed, then again
 #   bash scripts/bare-machine.sh install headless|desktop   after boot: the fixed install.sh, its admin question answered yes
 #   bash scripts/bare-machine.sh tmux DIR   static tmux from the pinned source on pinned Alpine, run on bare Ubuntu, into DIR
-#   bash scripts/bare-machine.sh appimage FILE   what the AppImage's runtime needs to mount it on bare Ubuntu, round by round
+#   bash scripts/bare-machine.sh appimage FILE   what the AppImage's runtime needs to mount it on bare Ubuntu, round by round; fails on a package Ubuntu Desktop lacks
 set -euo pipefail
 cd "$(dirname -- "$0")/.."
 UBUNTU=ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
@@ -211,7 +211,7 @@ appimage)
   docker run -d --name "$NAME" --privileged -v "$image:/p9.AppImage:ro" "$UBUNTU" sleep infinity >/dev/null
   desktop_manifest
   docker exec "$NAME" apt-get update -q >/dev/null
-  status=1
+  status=1 extra=
   for round in 1 2 3 4; do
     said=$(docker exec -u ubuntu "$NAME" sh -c '/p9.AppImage --appimage-mount > /tmp/mount.log 2>&1 & sleep 8
       grep -q " /tmp/.mount_" /proc/mounts && echo MOUNTED; head -c 600 /tmp/mount.log; kill $! 2>/dev/null; true')
@@ -220,10 +220,13 @@ appimage)
     if grep -q 'libfuse\.so\.2' <<< "$said"; then p=libfuse2t64
     elif grep -qi 'fusermount' <<< "$said"; then p=fuse3
     else echo "BARE_APPIMAGE_FAILED round $round (the cause is above)"; break; fi
-    echo "BARE_APPIMAGE_NEEDS round $round: $p $(grep -qx "$p" /tmp/p9-bare-desktop.txt && echo on-ubuntu-desktop || echo NOT-on-ubuntu-desktop)"
+    if grep -qx "$p" /tmp/p9-bare-desktop.txt; then echo "BARE_APPIMAGE_NEEDS round $round: $p on-ubuntu-desktop"
+    else echo "BARE_APPIMAGE_NEEDS round $round: $p NOT-on-ubuntu-desktop"; extra="$extra $p"; fi
     docker exec "$NAME" bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y $p" | tail -1
   done
   docker rm -f "$NAME" >/dev/null
+  # O1 (0.1.8): a package stock Ubuntu Desktop lacks is an admin install before P9 opens, so it fails the check.
+  [ -z "$extra" ] || { echo "BARE_APPIMAGE_FAILED: needs packages Ubuntu Desktop lacks:$extra"; status=1; }
   exit $status
   ;;
 *) echo "usage: bash scripts/bare-machine.sh boot | discover | install headless|desktop | tmux DIR | appimage FILE"; exit 2 ;;

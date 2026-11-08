@@ -1,0 +1,2 @@
+# A gitleaks keyword inside the generated rule list (the base64 of bedrock.amazonaws.com), not a key. One line per finding.
+apps/server/secret-rules.mjs:aws-amazon-bedrock-api-key-short-lived:4

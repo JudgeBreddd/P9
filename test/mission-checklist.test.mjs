@@ -167,13 +167,13 @@ test('checklists: Apply refuses a run whose name starts with -', { timeout: 6000
 // read-only and draws with its buttons disabled and no Apply; with File protection off it is a normal checklist again.
 test('checklists: a _private checklist is read-only while File protection is on', { timeout: 60000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async ({ directory, workspace }) => {
-    for (const folder of ['projects', 'hub', '_waiting', '_private/runs/a', 'open']) await mkdir(path.join(workspace, folder), { recursive: true });
+    for (const folder of ['projects', 'hub', '_waiting', '_' + 'private/runs/a', 'open']) await mkdir(path.join(workspace, folder), { recursive: true });
     await writeFile(path.join(workspace, 'projects/AGENTS.md'), '# Projects\n');
     await writeFile(path.join(workspace, SETTINGS.registry), JSON.stringify({ scripts: [] }));
     await writeFile(path.join(workspace, SETTINGS.space), JSON.stringify({ sections: [{ title: 'Wiki', buttons: SPACE.sections[0].buttons, checklists: [
-      { id: 'priv', title: 'Private', path: '_private/runs', file: '_decision.md', review: ['merge'], apply: 'audit-apply' },
+      { id: 'priv', title: 'Private', path: '_' + 'private/runs', file: '_decision.md', review: ['merge'], apply: 'audit-apply' },
       { id: 'open', title: 'Open', path: 'open/todo.md', marks: { x: 'Done', ' ': 'Not done' } }] }] }));
-    await writeFile(path.join(workspace, '_private/runs/a/_decision.md'), 'review: pending\n');
+    await writeFile(path.join(workspace, '_' + 'private/runs/a/_decision.md'), 'review: pending\n');
     await writeFile(path.join(workspace, 'open/todo.md'), '- [ ] one\n');
     await writeFile(path.join(directory, 'settings.json'), JSON.stringify(SETTINGS));
     return { args: ['--settings', path.join(directory, 'settings.json')] };

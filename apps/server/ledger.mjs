@@ -138,7 +138,11 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
   return {
     db,
     append(conversation, type, data) {
-      return Number(statements.append.run(conversation, type, JSON.stringify(data), Date.now()).lastInsertRowid);
+      const at = Date.now();
+      const cursor = Number(statements.append.run(conversation, type, JSON.stringify(data), at).lastInsertRowid);
+      // The watcher (telemetry.mjs, set by main.mjs) sees each event as written; it never fails or delays the append.
+      try { this?.tap?.({ cursor, conversation, type, data, at }); } catch {}
+      return cursor;
     },
     after(cursor, limit = 500) {
       return statements.after.all(cursor, limit).map(parsed);

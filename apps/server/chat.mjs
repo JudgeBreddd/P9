@@ -656,6 +656,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
 
   const api = {
     login: loginRoutes,
+    // The watcher (telemetry.mjs) reads a live chat's CPU and peak memory from its systemd scope: the unit, or null.
+    scopeOf: (id) => live.get(id)?.proc.unit ?? null,
     lock: () => ({ status: 200, on: locked }),
     // Unrestricted mode (v0.1.6 U1-U5): the agent lock off and File protection off, the two switches the mode turns off and the
     // daemon holds. Folder roots may hold home and the workspace, P9's MCP tools stop asking, a chat may start in any folder.

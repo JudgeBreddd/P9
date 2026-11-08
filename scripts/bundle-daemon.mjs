@@ -72,8 +72,9 @@ export async function bundleDaemon(root, out, platform) {
   const modules = await bundle(path.join(root, 'apps', 'server', 'main.mjs'), path.join(out, 'apps', 'server', 'main.mjs'));
   // The P9 MCP relay runs as its own process beside main.mjs (chat.mjs). The daemon's teh.mjs (doctor, and the AppImage's
   // install-service.mjs) imports windows.mjs and child-env.mjs from here, and child-env.mjs imports deps.mjs (run8 caught
-  // its absence: the doctor could not start). All four import only Node's standard library and each other.
-  for (const file of ['mcp-relay.mjs', 'windows.mjs', 'child-env.mjs', 'deps.mjs']) await cp(path.join(root, 'apps', 'server', file), path.join(out, 'apps', 'server', file));
+  // its absence: the doctor could not start). telemetry.mjs and memory.mjs are worker threads, loaded by path (memory.mjs imports secret-rules.mjs). All seven import
+  // only Node's standard library and each other.
+  for (const file of ['mcp-relay.mjs', 'windows.mjs', 'child-env.mjs', 'deps.mjs', 'telemetry.mjs', 'memory.mjs', 'secret-rules.mjs']) await cp(path.join(root, 'apps', 'server', file), path.join(out, 'apps', 'server', file));
   const modulesDir = path.join(out, 'node_modules');
   const claudeAcp = await packageDir(root, '@agentclientprotocol/claude-agent-acp');
   modules.push(...await bundle(path.join(claudeAcp, 'dist', 'index.js'), path.join(modulesDir, '@agentclientprotocol', 'claude-agent-acp', 'dist', 'index.js')));

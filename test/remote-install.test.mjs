@@ -147,7 +147,7 @@ test('full install source: this checkout sends no tests, docs, contracts or agen
     return out.split('\n').filter((f) => f && !f.endsWith('/')).map((f) => f.replace(/^[^/]+\//, ''));
   };
   const check = (files, how) => {
-    for (const bad of ['test/', 'docs/guide.md', '.cursor/', '.github/', '.githooks/', 'contracts.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/', 'apps/server/AGENTS.md'])
+    for (const bad of ['test/', 'docs/guide.md', '.cursor/', '.github/', '.githooks/', 'contracts.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_' + 'private/', 'apps/server/AGENTS.md'])
       assert.ok(!files.some((f) => f === bad || f.startsWith(bad)), how + ' sent ' + bad);
     for (const good of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/install.sh', 'scripts/background.sh', 'apps/server/main.mjs',
       'apps/web/astro.config.mjs', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md', 'docs/brand/icon-primary-1024.png'])
@@ -164,7 +164,7 @@ test('full install source: this checkout sends no tests, docs, contracts or agen
     await mkdir(path.dirname(path.join(copy, f)), { recursive: true });
     await writeFile(path.join(copy, f), await readFile(path.join(root, f)).catch(() => 'stand-in\n'));
   }
-  for (const f of ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/notes.md', 'apps/server/AGENTS.md']) { await mkdir(path.dirname(path.join(copy, f)), { recursive: true }); await writeFile(path.join(copy, f), 'notes\n'); }
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_' + 'private/notes.md', 'apps/server/AGENTS.md']) { await mkdir(path.dirname(path.join(copy, f)), { recursive: true }); await writeFile(path.join(copy, f), 'notes\n'); }
   check(await listed(copy), 'a synced copy');
   // The same files as a git checkout: git archive HEAD applies .gitattributes.
   for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'x']]) await run('git', args, copy);

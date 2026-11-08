@@ -39,7 +39,8 @@ export async function scan(directory) {
       await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       await copyFile(file, target);
     }
-    const result = spawnSync('gitleaks', ['dir', source, '--redact', '--no-banner'], { encoding: 'utf8' });
+    // From inside the copy, so findings carry relative paths and .gitleaksignore's lines match them.
+    const result = spawnSync('gitleaks', ['dir', '.', '--redact', '--no-banner'], { cwd: source, encoding: 'utf8' });
     if (result.status !== 0) throw new Error('gitleaks-refused');
   } finally { await rm(source, { recursive: true, force: true }); }
 }

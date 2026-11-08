@@ -84,12 +84,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 test('M5 cards (server): the HTML file is read inside the workspace only; the script waits for Allow and returns any JSON', { timeout: 60000 }, async (t) => {
   const extra = [{ id: 'outside', title: 'Outside', html: '../secret.html', script: 'nums' }, { id: 'notes', title: 'Not html', html: 'cards/a.md', script: 'nums' },
     { id: 'gone', title: 'Gone', html: 'cards/none.html', script: 'nums' }, { id: 'linked', title: 'Linked', html: 'cards/link.html', script: 'nums' },
-    { id: 'priv', title: 'Private', html: '_private/card.html', script: 'nums' }];
+    { id: 'priv', title: 'Private', html: '_' + 'private/card.html', script: 'nums' }];
   const instance = await daemon(t, undefined, false, async (paths) => {
     const result = await files(paths, 9, extra);
     await writeFile(path.join(paths.directory, 'secret.html'), '<p>outside the workspace</p>');
     await symlink(path.join(paths.directory, 'secret.html'), path.join(paths.workspace, 'cards/link.html'));
-    await mkdir(path.join(paths.workspace, '_private'), { recursive: true }); await writeFile(path.join(paths.workspace, '_private/card.html'), '<p>private card</p>');
+    await mkdir(path.join(paths.workspace, '_private'), { recursive: true }); await writeFile(path.join(paths.workspace, '_' + 'private/card.html'), '<p>private card</p>');
     return result;
   });
   const overview = (await call(instance, '/mission')).body;

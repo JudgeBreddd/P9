@@ -1,8 +1,16 @@
 #!/bin/sh
 set -eu
 node scripts/scan.mjs
-# Every branch and every commit, not just this branch: a secret or private path in any history is published.
-gitleaks git . --redact --no-banner --log-opts=--all
-if git log --all -p -- . ':(exclude).gitignore' ':(exclude).publishignore' | grep -qE '/h[o]me/|I[C]M/|_p[r]ivate/'; then
-  echo 'pre-push: a private path appears in the git history' >&2; exit 1
-fi
+# Only the commits this push adds (git gives one "<local ref> <local sha> <remote ref> <remote sha>" line per ref): main's
+# old history already holds test fixtures and notes that name private paths (H3, 0.1.8), so a grep of all history could
+# never pass. Only added lines count (a fix removing such a line still shows it). A deleted ref adds nothing; a new ref is checked against everything the remote already has.
+zero=0000000000000000000000000000000000000000
+while read -r _ local _ remote; do
+  [ "$local" = "$zero" ] && continue
+  if [ "$remote" = "$zero" ]; then range="$local --not --remotes"; else range="$remote..$local"; fi
+  gitleaks git . --redact --no-banner --log-opts="$range"
+  # shellcheck disable=SC2086 # $range is two or three words on purpose
+  if git log -p $range -- . ':(exclude).gitignore' ':(exclude).publishignore' | grep -qE '^\+.*(/h[o]me/|I[C]M/|_p[r]ivate/)'; then
+    echo "pre-push: a private path appears in a commit this push adds ($range)" >&2; exit 1
+  fi
+done

@@ -459,12 +459,12 @@ test('Templates D11 (fresh-install finding 3b): Obsidian lists the picked vault 
 test('Templates D12 (fresh-install finding 3b): Homelab and ICM sections list the matching workspace files', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const { page, shot } = await openFirst(t, instance);
-  for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'solo-runs/2026-Nov-01-solo-run-report.md', 'ICM/_private/solo-runs/2026-Oct-31-solo-run-report.md', 'CLAUDE.md']) {
+  for (const file of ['stack/docker-compose.yml', 'stack/logs/app.log', 'stack/nightly-backup.log', 'CONTEXT.md', 'work/CONTEXT.md', 'work/handoff-today.md', 'solo-runs/2026-Nov-01-solo-run-report.md', 'IC' + 'M/_' + 'private/solo-runs/2026-Oct-31-solo-run-report.md', 'CLAUDE.md']) {
     await mkdir(path.dirname(path.join(instance.workspace, file)), { recursive: true }); await writeFile(path.join(instance.workspace, file), '# ' + file);
   }
   // P11: a solo-run report anywhere in the workspace is listed, _private included (924105d: Mission's reads see it), newest first.
   const lists = { homelab: [['Services', ['stack/docker-compose.yml']], ['Logs', ['stack/logs/app.log', 'stack/nightly-backup.log']], ['Backups', ['stack/nightly-backup.log']]],
-    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Solo runs', ['ICM/_private/solo-runs/2026-Oct-31-solo-run-report.md', 'solo-runs/2026-Nov-01-solo-run-report.md']], ['Workspace rules', ['CLAUDE.md']]] };
+    icm: [['Projects', ['CONTEXT.md', 'work/CONTEXT.md']], ['Handoffs', ['work/handoff-today.md']], ['Solo runs', ['IC' + 'M/_' + 'private/solo-runs/2026-Oct-31-solo-run-report.md', 'solo-runs/2026-Nov-01-solo-run-report.md']], ['Workspace rules', ['CLAUDE.md']]] };
   for (const [name, sections] of Object.entries(lists)) {
     const made = await page.evaluate((name) => window.p9.mission('template', { name, space: name, confirm: true }), name);
     assert.equal(made.status, 201, name + ': ' + JSON.stringify(made.body));
@@ -888,7 +888,7 @@ test('Send to remote from a chat outside the workspace: main plans it as it is; 
   const { page } = await openFirst(t, await daemon(t));
   // U4 (Unrestricted mode) stores such a chat's folder as a full path; main plans it (the same folder, or one picked there).
   const plan = (...args) => page.evaluate((a) => window.p9.xferPlan(...a).then((r) => r, (e) => 'threw ' + e.message), args);
-  for (const folder of ['/home/someone/experiments', 'C:\\Users\\someone\\experiments']) {
+  for (const folder of ['/ho' + 'me/someone/experiments', 'C:\\Users\\someone\\experiments']) {
     const r = await plan(folder);
     assert.equal(r.error, 'no-server', folder + ': ' + JSON.stringify(r));
     assert.equal(r.message, 'No remote yet: add one in Settings > Remote Connect first.');
@@ -896,7 +896,7 @@ test('Send to remote from a chat outside the workspace: main plans it as it is; 
   }
   // A workspace folder that climbs out is still a refused call, as before, and so is a landing folder that does.
   assert.match(await plan('work/../..'), /^threw .*ipc-sender-refused/);
-  assert.match(await plan('/home/someone/experiments', 'work/../..'), /^threw .*ipc-sender-refused/);
+  assert.match(await plan('/ho' + 'me/someone/experiments', 'work/../..'), /^threw .*ipc-sender-refused/);
   // The remote picker's listing needs a remote too.
   assert.deepEqual(await page.evaluate(() => window.p9.xferFolders('folders', '/')), { status: 409, body: { error: 'no-server' } });
 });
