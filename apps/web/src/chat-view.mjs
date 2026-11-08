@@ -6,7 +6,10 @@ import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
 import { phoneDialogBody } from './phone-link.mjs';
 
 export function installChat(outer) {
-const ART = { state: null, mode: 'panel' };
+const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
+const pinKey = art => art.sid + '\n' + art.title;
+// The chats on screen in Chat Focus: the pane (two in Split) and a chat modal (an artifact goes with its chat: O28, item 19).
+const chatsInView = () => [...(outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)), outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id];
 const artSession = () => outer.S.sessions.find(s => s.id === ART.state?.sid);
 function artSend(text) {
   const s = artSession();
@@ -21,7 +24,7 @@ function keepBox() { // the overlay ends where the side chat's text box starts
 }
 function openArtifact(art) {
   if (!ART.state || ['kind', 'src', 'sid'].some(k => ART.state.art[k] !== art[k])) ART.state = { art, sid: art.sid };
-  ART.mode = art.mode ?? 'panel';
+  ART.mode = ART.pins.has(pinKey(art)) ? 'pinned' : art.mode ?? 'panel';
   const full = { label: 'Full screen', on: () => outer.side.current()?.mode === 'full', go: () => outer.side.current()?.mode === 'full' ? outer.side.back() : outer.side.mode('full') };
   if (outer.S.focus === 'dev' && outer.side.current()?.slot === 'dan-chat') {
     let over = artOverlay(); if (!over) { over = document.createElement('div'); over.className = 'art-over'; outer.side.body.append(over); } over.replaceChildren();
@@ -29,10 +32,14 @@ function openArtifact(art) {
     if (ART.mode === 'full') outer.side.mode('full');
     return keepBox();
   }
-  outer.side.open('artifact', { title: art.title, mode: ART.mode, focuses: [outer.S.focus], defaultWidth: w => w / 2, // it goes with its chat's focus: hidden in another, back (still pinned) on return
+  const n = art.versions?.length ?? 0, at = n > 1 ? art.versions.findIndex(v => v.src === art.src) : -1, step = d => openArtifact({ ...art, ...art.versions[at + d] });
+  // it goes with its chat's focus and, pinned, with its chat (when): hidden elsewhere, back (still pinned) on return
+  outer.side.open('artifact', { title: art.title + (at >= 0 ? ` · version ${at + 1} of ${n}` : ''), mode: ART.mode, focuses: [outer.S.focus], defaultWidth: w => w / 2,
+    when: () => outer.S.focus !== 'chat' || ART.mode !== 'pinned' || chatsInView().includes(ART.state?.sid),
     render: b => artifactView(b.appendChild(document.createElement('div')), ART.state, { ...outer.FRAME, send: artSend, modes: [
       ...(art.list ? [{ label: 'Back to list', go: () => openChatFiles(art.sid) }] : []), // opened from the chat's list: back to it
-      { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; outer.side.mode(ART.mode); } }, full] }),
+      ...(at > 0 ? [{ label: 'Older version', go: () => step(-1) }] : []), ...(at >= 0 && at < n - 1 ? [{ label: 'Newer version', go: () => step(1) }] : []), // O26
+      { label: 'Pin', on: () => ART.mode === 'pinned', go: () => { ART.mode = ART.mode === 'pinned' ? 'panel' : 'pinned'; ART.pins[ART.mode === 'pinned' ? 'add' : 'delete'](pinKey(art)); outer.side.mode(ART.mode); } }, full] }),
     onClose: why => { if (why === 'close' && art.list) localStorage.removeItem(cfKey(art.sid)); // its x closes the chat's list too
       if (why !== 'replaced' && outer.chatOn()) outer.side.open('dan-chat', outer.danChat); } }); // Dev Focus gets its chat back (it shows only there)
 }
@@ -85,7 +92,10 @@ function chatItems(s) {
     try { localStorage.setItem(artKey(s.id), JSON.stringify(kept)); } catch {} // full storage: listed while loaded, as before
   }
   out.unshift(...kept.filter(a => !loaded.has(artSig(a))).map(art => ({ type: 'artifact', at: -1, art })));
-  return out.reverse();
+  // O26: one row per title, at its newest send; its versions open from it, oldest first (a re-send moves that version to newest).
+  const versions = new Map();
+  for (const it of out) if (it.type === 'artifact') versions.set(it.art.title, [...(versions.get(it.art.title) ?? []).filter(a => artSig(a) !== artSig(it.art)), it.art]);
+  return out.filter(it => it.type !== 'artifact' || versions.get(it.art.title).at(-1) === it.art).map(it => it.type === 'artifact' ? { ...it, versions: versions.get(it.art.title) } : it).reverse();
 }
 const fwd = p => String(p).replace(/\\/g, '/');
 // An agent's file path as a workspace path ('proj/notes.md'), or null outside the workspace (or while its path is not known
@@ -111,7 +121,7 @@ function renderChatFiles() {
   const s = outer.S.sessions.find(x => x.id === CF.sid), all = s ? chatItems(s) : [], changes = CF.tab === 'changes';
   const arts = all.filter(it => it.type === 'artifact'), files = all.filter(it => it.type === 'file'), items = changes ? files : arts;
   const row = (it, i) => {
-    if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact</span></button></li>`;
+    if (it.type === 'artifact') return `<li><button type="button" class="cf-item" data-cf="${i}" title="Open the artifact"><span class="art-kind">${esc(KIND_NAMES[it.art.kind])}</span><span class="cf-name">${esc(it.art.title)}</span><span class="cf-sub">Artifact${it.versions.length > 1 ? ` · ${it.versions.length} versions` : ''}</span></button></li>`;
     const rel = wsPath(it.path, s.folder), shown = rel ?? fwd(it.path), cut = shown.lastIndexOf('/');
     const where = rel === null ? (CF.ws ? 'outside the workspace, ' : '') + (shown.slice(0, cut) || '/') : cut < 0 ? 'workspace' : shown.slice(0, cut);
     return `<li><button type="button" data-cf="${i}" title="Show the changes to ${esc(shown)} (read-only)" class="cf-item" data-cf-file><span class="art-kind">Diff</span><span class="cf-name">${esc(shown.slice(cut + 1))}</span><span class="cf-sub">${esc((it.created ? 'Created' : 'Edited') + ' · ' + where)}</span></button>`
@@ -123,7 +133,7 @@ function renderChatFiles() {
   if (CF.html === html) return; // called on every chat change: the DOM is left alone when nothing in it changed
   CF.html = html; b.innerHTML = html;
   b.querySelectorAll('[data-cf-tab]').forEach(el => el.onclick = () => { CF.tab = el.dataset.cfTab; localStorage.setItem(cfKey(CF.sid), CF.tab); renderChatFiles(); });
-  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true }); else openChange(s, it); });
+  b.querySelectorAll('[data-cf]').forEach(el => el.onclick = () => { const it = items[+el.dataset.cf]; if (it.type === 'artifact') openArtifact({ ...it.art, sid: s.id, list: true, versions: it.versions.map(v => ({ ...v, sid: s.id })) }); else openChange(s, it); });
   b.querySelectorAll('[data-cf-copy]').forEach(el => el.onclick = () => copy(fwd(items[+el.dataset.cfCopy].path), el));
 }
 // A changed file's diffs, read-only, in the artifact view as plain text (artifact.mjs frameDoc 'diff'): every finished edit call
@@ -438,7 +448,8 @@ function renderChats(only) {
   if (outer.mdl.open && outer.S.modal?.kind === 'chat') paint(outer.$('#mdlBody'), [outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(Boolean), only);
   outer.renderSideChat(only);
   refreshPill();
-  if (outer.side.current()?.slot === 'artifact' && ART.mode === 'panel' && outer.S.focus === 'chat' && ![...ids, outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id].includes(ART.state?.sid)) outer.side.close('artifact', 'hidden'); // item 19: a panel artifact goes with its chat; a pinned one stays
+  if (outer.side.current()?.slot === 'artifact' && ART.mode === 'panel' && outer.S.focus === 'chat' && !chatsInView().includes(ART.state?.sid)) outer.side.close('artifact', 'hidden'); // item 19
+  outer.side.refresh(); // a pinned artifact shows only while its chat is in view (O28)
   chatFilesFollow(ids);
   outer.tickPets(); // paint rebuilt the panes: put their pets back now, not on the next frame
 }
