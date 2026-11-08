@@ -108,7 +108,7 @@ export function createTerminal({ screen, state, connect, open }) {
       found.push({ text: url, range: { start: { x: m.index % cols + 1, y: first + 1 }, end: { x: (m.index + url.length - 1) % cols + 1, y: last + 1 } },
         decorations: { underline: true, pointerCursor: true },
         hover: () => { screen.title = 'Ctrl+click to open in your browser'; }, leave: () => { screen.title = ''; },
-        activate: (event, href) => { if (event.ctrlKey || event.metaKey) open(href); } });
+        activate() {} }); // the click itself is handled in attach (O4)
     }
     done(found.length ? found : undefined);
   }
@@ -120,6 +120,23 @@ export function createTerminal({ screen, state, connect, open }) {
         linkHandler: { activate() {} } });
       term.view.open(screen);
       if (open) term.view.registerLinkProvider({ provideLinks: links });
+      // O4: Ctrl/Cmd+click opens the link under the pointer at the click. xterm's own activate needs the link it found on
+      // hover, and a resize drops that until the pointer reaches another cell, so a click from a still pointer was lost.
+      if (open) {
+        const cell = (event) => {
+          const view = term.view, box = view.element?.querySelector('.xterm-screen')?.getBoundingClientRect(); if (!box?.width) return null;
+          const x = Math.floor((event.clientX - box.left) / (box.width / view.cols)) + 1, row = Math.floor((event.clientY - box.top) / (box.height / view.rows));
+          return x >= 1 && x <= view.cols && row >= 0 && row < view.rows ? { x, y: row + 1 + view.buffer.active.viewportY } : null;
+        };
+        const inside = ({ start, end }, { x, y }) => (y > start.y || (y === start.y && x >= start.x)) && (y < end.y || (y === end.y && x <= end.x));
+        let down = null;
+        screen.addEventListener('mousedown', (event) => { down = cell(event); }, true);
+        screen.addEventListener('mouseup', (event) => {
+          const at = cell(event), from = down; down = null;
+          if (!(event.ctrlKey || event.metaKey) || !at || from?.x !== at.x || from?.y !== at.y) return; // a drag selects, it does not open
+          links(at.y, (found) => { const hit = found?.find((link) => inside(link.range, at)); if (hit) open(hit.text); });
+        }, true);
+      }
       term.view.onData((data) => { const safe = mended(data); if (safe) sendKeys(safe, pasting); });
     }
     term.view.reset();

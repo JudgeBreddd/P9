@@ -1,5 +1,23 @@
 # Upgrading P9
 
+## To 0.1.8 (beta)
+
+A fix release. The Windows app and the AppImage update themselves from 0.1.7 (Settings > Maintenance > Updates). A
+source checkout updates as `README.md` § Update, roll back, uninstall says, then reopen the window (the desktop main
+process changed). Installing restarts the background service, which ends a chat turn in progress.
+
+**What you will notice**
+
+- The AppImage needs `fuse3` instead of `libfuse2t64`. Ubuntu Desktop already has `fuse3`; a minimal or server
+  install needs `sudo apt install fuse3`, and the background service there also needs `libatomic1`.
+- When the desktop connects to a server on another version, it asks before updating it and names both versions.
+  "Not now" leaves the server as it is.
+- Settings has a Nightly builds switch (shown only when updates are on, off by default). Turning it off drops a
+  nightly that is downloaded but not yet installed.
+- The Mission Space menu lists a space made on the phone or through the MCP tools as soon as you open it.
+
+**Nothing to do by hand.** Settings, chats and the workspace carry over unchanged.
+
 ## To 0.1.7 (beta)
 
 A fix release. The Windows app and the AppImage update themselves from 0.1.6 (Settings > Maintenance > Updates). A

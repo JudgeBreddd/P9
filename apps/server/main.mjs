@@ -9,6 +9,8 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createListener } from './server.mjs';
 import { openLedger } from './ledger.mjs';
+import { startTelemetry } from './telemetry.mjs';
+import { startMemory } from './memory.mjs';
 import { createAnymouse } from './anymouse.mjs';
 import { createHash } from 'node:crypto';
 import { parseSettings } from './mission.mjs';
@@ -71,10 +73,10 @@ const socketPath = internalEndpoint(state);
 if (!windows && Buffer.byteLength(socketPath) > 107) throw new Error('socket-path-too-long: ' + socketPath);
 const idleSeconds = values['idle-exit'] === undefined ? null : Number(values['idle-exit']);
 if (idleSeconds !== null && !(Number.isInteger(idleSeconds) && idleSeconds >= 1 && idleSeconds <= 86400)) throw new Error('invalid-idle-exit');
-// ponytail: --ownership gives a second Linux daemon (the dev build's p9-dev unit) its own ledger, lock and tmux socket;
+// ponytail: --ownership gives a second daemon (the dev build's p9-dev unit, or a second Windows task) its own ledger, lock and tmux socket;
 // only a unit's ExecStart passes it. Without it, the one folder every install uses.
 if (values.ownership !== undefined && !path.isAbsolute(values.ownership)) throw new Error('absolute-ownership-required');
-const ownershipDirectory = windows ? windowsStateRoot() : values.ownership ?? path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+const ownershipDirectory = values.ownership ?? (windows ? windowsStateRoot() : path.join(os.homedir(), '.local', 'state', 'p9-foundation'));
 if (inside(workspace, await canonicalDestination(ownershipDirectory))) throw new Error('private-directory-inside-workspace');
 await mkdir(ownershipDirectory, { recursive: true, mode: 0o700 });
 const ownershipStat = await lstat(ownershipDirectory);
@@ -136,6 +138,15 @@ catch (error) { if (error.code !== 'ENOENT') { settingsInvalid = true; console.e
 const credentials = { cookie: randomBytes(32).toString('hex'), csrf: randomBytes(32).toString('hex'), socketPath };
 // Chat history and operation IDs outlive the daemon: they live in the 0700 ownership directory, not the state directory.
 const ledger = openLedger(path.join(ownershipDirectory, 'p9.db'));
+// The watcher: one row per turn in telemetry.db beside the ledger, written by a worker off the chat path (telemetry.mjs).
+// Phase 3: per-turn CPU and peak memory from each chat's scope, and 60 s samples, in telemetry-samples.db beside it.
+// scopeOf reaches the chat made below; a turn before then has no scope to read (telemetry.mjs catches the early call).
+const telemetry = startTelemetry({ ledgerFile: path.join(ownershipDirectory, 'p9.db'), file: path.join(ownershipDirectory, 'telemetry.db'),
+  scopeOf: (conversation) => server.chat.scopeOf(conversation) });
+// Memory capture (memory.mjs, learning layers 2-5): one record per prompted turn in memory.db beside the ledger, only while
+// the memory switch (a 'memory' ledger event) is on; its worker reads the ledger itself, push only wakes it at a turn's end.
+const memory = startMemory({ ledgerFile: path.join(ownershipDirectory, 'p9.db'), file: path.join(ownershipDirectory, 'memory.db'), workspace });
+ledger.tap = (event) => { telemetry.push(event); memory.push(event); };
 // ponytail: --acp-override swaps the real adapters for a test or recording shim; only the unit's ExecStart can pass it.
 const adapterOverride = values['acp-override'];
 if (adapterOverride !== undefined && !path.isAbsolute(adapterOverride)) throw new Error('absolute-acp-override-required');

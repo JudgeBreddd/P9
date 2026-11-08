@@ -250,7 +250,7 @@ A path box shows the end of the path (the file name); hover it for the full path
 
 ### Updates
 
-The Updates row sits in the Maintenance group. In the installed app, **Check now** asks GitHub for a newer P9, and **Restart to update** installs one that has downloaded. Where automatic updates are off (a source checkout), **Check now** opens the newest P9 release on GitHub instead; if its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.
+The Updates row sits in the Maintenance group. In the installed app, **Check now** asks GitHub for a newer P9, and **Restart to update** installs one that has downloaded. **Nightly builds** also takes P9's test builds between releases (GitHub pre-releases); they can break. Turning it off keeps the nightly you have until a newer stable release is out, so it never goes back to an older version. Where automatic updates are off (a source checkout), **Check now** opens the newest P9 release on GitHub instead; if its number is higher than yours, the README's Update section says how to install it. Your workspace and settings stay.
 
 ### Maintenance
 

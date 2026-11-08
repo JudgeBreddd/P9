@@ -50,7 +50,10 @@ async function push(state, checkout, target) {
 // check(): the tunnel's health check, which picks up the restarted daemon's new credentials (remote.mjs).
 // deadline: how long the follow waits for the server's end, then says so (timed-out) instead of waiting for ever.
 // reinstall(): U8, the slim Temporary P9 there has no source to build; an older one is installed again from this app instead.
-export async function updateServer({ state, check, version, checkout, host, tell = () => {}, live = () => true, deadline = FOLLOW_MS, reinstall = null }) {
+// ask({ host, server, app }): W1, true to go ahead; a yes given after this connection was replaced does nothing ('gone'),
+// since the state may already be another server's. Asked before anything changes the server (an update or a slim reinstall),
+// for every build kind; false leaves the server as it is ('declined'). A job the server already runs is followed, not asked.
+export async function updateServer({ state, check, version, checkout, host, tell = () => {}, live = () => true, deadline = FOLLOW_MS, reinstall = null, ask = async () => true }) {
   const health = await check().catch(() => null);
   if (!health?.version) return { phase: 'unknown' };
   if (newer(health.version, version)) return tell({ phase: 'app-older', host, server: health.version, app: version }) ?? { phase: 'app-older' };
@@ -58,6 +61,8 @@ export async function updateServer({ state, check, version, checkout, host, tell
   // old daemon still answers: said once, instead of installing again on every connect.
   if (reinstall) {
     if (!newer(version, health.version)) return { phase: 'current' };
+    if (!await ask({ host, server: health.version, app: version })) return { phase: 'declined' };
+    if (!live()) return { phase: 'gone' };
     if (reinstall(health.version) !== false) return { phase: 'reinstall' };
     const event = { phase: 'failed', host, version, error: 'still-older' };
     tell(event);
@@ -84,6 +89,8 @@ export async function updateServer({ state, check, version, checkout, host, tell
     return event;
   }
   let started = status.body.job && !['failed'].includes(status.body.job.phase) ? { status: 202, body: status.body.job } : null;
+  if (!started && !await ask({ host, server: health.version, app: target.version })) return { phase: 'declined' };
+  if (!started && !live()) return { phase: 'gone' };
   if (!started) started = checkout ? await push(state, checkout, target) : await daemonRequest(state, 'POST', '/update/fetch', { version: target.version }, undefined, LONG);
   if (started.status !== 202) return tell({ phase: 'failed', host, version: target.version, error: started.body?.error ?? 'update-refused' }) ?? { phase: 'failed' };
   const id = started.body.id;

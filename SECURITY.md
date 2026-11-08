@@ -567,8 +567,10 @@ in more detail above or in its own section (threat model rows 5, 13, 15, 16, 28,
 ## Auto-update
 
 The installed app updates itself from P9's public GitHub Releases (threat model row 39). It uses
-electron-updater, Stable releases only: a draft or a pre-release is never offered, and an older
-version never replaces a newer one, except by the rollback below.
+electron-updater, Stable releases only unless the user turns on Settings > Maintenance > Nightly builds: a draft is
+never offered, a pre-release (a nightly) only with that switch on, and an older version never replaces a newer one,
+except by the rollback below. Turning the switch off keeps the installed nightly until a newer stable release is out.
+The switch is kept in `update-channel.json` in the profile folder; anything but `{ "nightly": true }` there is Stable.
 
 - **What is downloaded.** `latest.yml` (Windows) or `latest-linux.yml` (Linux), which names the newest
   version, its file and that file's sha512; then the Windows installer `.exe` (with its `.blockmap`, so

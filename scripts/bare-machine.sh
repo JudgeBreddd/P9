@@ -6,7 +6,7 @@
 #   bash scripts/bare-machine.sh discover   install.sh --headless; each MISSING line's packages installed, then again
 #   bash scripts/bare-machine.sh install headless|desktop   after boot: the fixed install.sh, its admin question answered yes
 #   bash scripts/bare-machine.sh tmux DIR   static tmux from the pinned source on pinned Alpine, run on bare Ubuntu, into DIR
-#   bash scripts/bare-machine.sh appimage FILE   what the AppImage's runtime needs to mount it on bare Ubuntu, round by round
+#   bash scripts/bare-machine.sh appimage FILE   a new user on bare Ubuntu mounts the AppImage, then starts it (window and daemon), round by round; fails on a package Ubuntu Desktop lacks
 set -euo pipefail
 cd "$(dirname -- "$0")/.."
 UBUNTU=ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
@@ -202,16 +202,37 @@ tmux)
   (cd "$out" && sha256sum tmux | tee tmux.sha256 && file tmux && cat tmux.versions)
   ;;
 appimage)
-  # What an AppImage download needs before P9 can ask for anything: its runtime mounts the image with FUSE. A bare Ubuntu
-  # 24.04 (privileged for /dev/fuse, which a desktop has), the default user mounting it as a user does: each round's
-  # failure names a package, which is installed, then again. Each is checked against Ubuntu Desktop's manifest.
+  # O1 (0.1.8): a new Ubuntu 24.04 user downloads the AppImage and opens it. Part 1, what its runtime needs to mount the
+  # image with FUSE, round by round (each failure names a package, which is installed, then again). Part 2, the same user
+  # starts it: the window opens on the screen and its first start brings up the daemon as a user service; each library the
+  # app cannot load is installed the same way. Every package is checked against Ubuntu Desktop's manifest, and one the
+  # desktop lacks fails the check (an admin install before P9 opens). The machine: bare Ubuntu 24.04 plus the user session
+  # every desktop runs (systemd, dbus-user-session, the user lingering as if logged in); privileged for /dev/fuse and
+  # systemd, which a desktop has. The screen is Xvfb in its own container, so its packages never reach this machine; the
+  # app reaches it through Xvfb's abstract socket, so this machine shares the screen container's network (abstract
+  # sockets belong to a network, and the socket file Xvfb makes never showed in a shared volume).
   image=$(realpath -- "${2:?AppImage file}"); NAME=$NAME-appimage
   [ -f "$image" ] || { echo "no AppImage at $image"; exit 2; } # docker -v would make a root-owned folder there
-  docker rm -f "$NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$NAME" --privileged -v "$image:/p9.AppImage:ro" "$UBUNTU" sleep infinity >/dev/null
+  session="systemd systemd-sysv dbus-user-session"
+  docker build -q -t p9-bare-appimage - > /dev/null <<EOF
+FROM $UBUNTU
+RUN apt-get update && apt-get install -y $session && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/ubuntu
+CMD ["/sbin/init"]
+EOF
+  printf 'FROM %s\nRUN apt-get update && apt-get install -y xvfb x11-utils\n' "$UBUNTU" | docker build -q -t p9-bare-xvfb - > /dev/null
+  docker rm -f "$NAME" "$NAME-x" >/dev/null 2>&1 || true
+  docker run -d --name "$NAME-x" p9-bare-xvfb Xvfb :99 -screen 0 1280x800x24 -ac -nolisten tcp >/dev/null
+  docker run -d --name "$NAME" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock --shm-size 1g \
+    --network "container:$NAME-x" -v "$image:/p9.AppImage:ro" p9-bare-appimage >/dev/null
+  for i in $(seq 1 100); do docker exec "$NAME" test -S /run/user/1000/bus 2>/dev/null && break; sleep 0.3; done
+  docker exec "$NAME" test -S /run/user/1000/bus || { docker logs "$NAME" | tail -40; echo "BARE_APPIMAGE_NOT_BOOTED"; exit 1; }
   desktop_manifest
+  status=1 extra=
+  for p in $session; do
+    if grep -qx "$p" /tmp/p9-bare-desktop.txt; then echo "BARE_APPIMAGE_SESSION $p on-ubuntu-desktop"
+    else echo "BARE_APPIMAGE_SESSION $p NOT-on-ubuntu-desktop"; extra="$extra $p"; fi
+  done
   docker exec "$NAME" apt-get update -q >/dev/null
-  status=1
   for round in 1 2 3 4; do
     said=$(docker exec -u ubuntu "$NAME" sh -c '/p9.AppImage --appimage-mount > /tmp/mount.log 2>&1 & sleep 8
       grep -q " /tmp/.mount_" /proc/mounts && echo MOUNTED; head -c 600 /tmp/mount.log; kill $! 2>/dev/null; true')
@@ -220,10 +241,65 @@ appimage)
     if grep -q 'libfuse\.so\.2' <<< "$said"; then p=libfuse2t64
     elif grep -qi 'fusermount' <<< "$said"; then p=fuse3
     else echo "BARE_APPIMAGE_FAILED round $round (the cause is above)"; break; fi
-    echo "BARE_APPIMAGE_NEEDS round $round: $p $(grep -qx "$p" /tmp/p9-bare-desktop.txt && echo on-ubuntu-desktop || echo NOT-on-ubuntu-desktop)"
+    if grep -qx "$p" /tmp/p9-bare-desktop.txt; then echo "BARE_APPIMAGE_NEEDS round $round: $p on-ubuntu-desktop"
+    else echo "BARE_APPIMAGE_NEEDS round $round: $p NOT-on-ubuntu-desktop"; extra="$extra $p"; fi
     docker exec "$NAME" bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y $p" | tail -1
   done
-  docker rm -f "$NAME" >/dev/null
+  # Part 2. Started as a user starts it, from the file, in their logged-in session; up to 150 s for the window and the
+  # daemon's /health (asked through the staged daemon's own teh.mjs, as the desktop asks it).
+  as_user() { docker exec -u ubuntu -e XDG_RUNTIME_DIR=/run/user/1000 -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus -e DISPLAY=:99 "$NAME" bash -c "cd; $1"; }
+  started=
+  [ "$status" = 0 ] && for round in 1 2 3 4 5 6 7 8; do
+    as_user 'setsid /p9.AppImage > /tmp/start.log 2>&1 < /dev/null & echo $! > /tmp/start.pid'
+    window= up=
+    for i in $(seq 1 75); do
+      sleep 2
+      as_user 'kill -0 $(cat /tmp/start.pid) 2>/dev/null' || break
+      [ -n "$window" ] || window=$(docker exec -e LANG=C.UTF-8 -e DISPLAY=:99 "$NAME-x" xwininfo -root -tree 2>/dev/null | grep -m1 '"P9 — Event Horizon"' || true)
+      [ -n "$up" ] || up=$(as_user 'd=$(ls -d ~/.local/share/p9/daemon/*/ 2>/dev/null | head -1); [ -n "$d" ] && "$d/node" --input-type=module -e "
+        const { daemonRequest } = await import(process.argv[1] + \"scripts/teh.mjs\"); const r = await daemonRequest(process.env.XDG_RUNTIME_DIR + \"/p9-foundation\", \"GET\", \"/health\");
+        if (r.status === 200) console.log(JSON.stringify(r.body))" "$d" 2>/dev/null' || true)
+      [ -n "$window" ] && [ -n "$up" ] && break
+    done
+    if [ -n "$window" ] && [ -n "$up" ]; then
+      echo "BARE_APPIMAGE_WINDOW round $round:$window"; echo "BARE_APPIMAGE_DAEMON $up"
+      echo "BARE_APPIMAGE_SERVICE $(as_user 'systemctl --user is-active p9-foundation.service' || true)"
+      as_user 'cat ~/.local/share/p9/service-install.log' | sed 's/^/BARE_APPIMAGE_INSTALL_LOG /' || true
+      started=1; break
+    fi
+    as_user 'head -c 1500 /tmp/start.log; echo; echo ...; tail -c 2500 /tmp/start.log' | sed 's/^/BARE_APPIMAGE_START_SAYS /' || true
+    as_user 'pkill -f "[/]tmp/[.]mount_"; kill $(cat /tmp/start.pid); true' 2>/dev/null || true
+    # The app's own log and the service install's (the staged daemon's node runs there, with its own libraries).
+    log=$(as_user 'cat /tmp/start.log ~/.local/share/p9/service-install.log 2>/dev/null' || true)
+    # A library the app opens later (dlopen, libGL for one) is not in ldd's list but is named in the log.
+    opened=$(grep -o 'Could not dlopen [^:]*' <<< "$log" | awk '{ print $4 }' | sort -u | while read -r l; do
+      as_user "ldconfig -p | grep -q ' $l '" || echo "$l"; done || true)
+    grep -q 'error while loading shared libraries' <<< "$log" || [ -n "$opened" ] \
+      || { echo "BARE_APPIMAGE_START_FAILED round $round (window: ${window:-none}; daemon: ${up:-none}; the cause is above)"; break; }
+    # Every library the app cannot load, at once (ldd on the mounted binary and the staged node, found by its folder since the mount line is
+    # buffered, with the AppImage's own lib folder as AppRun sets it); a library's own libraries show only once it is
+    # there, so the next round asks again.
+    libs=$(as_user '/p9.AppImage --appimage-mount > /tmp/m.out 2>&1 & for i in $(seq 20); do m=$(ls -d /tmp/.mount_*/usr 2>/dev/null | head -1); m=${m%/usr}; [ -n "$m" ] && break; sleep 0.5; done
+      { LD_LIBRARY_PATH="$m/usr/lib" ldd "$m/p9-event-horizon"; ldd ~/.local/share/p9/daemon/*/node 2>/dev/null; } | awk "/not found/ { print \$1 }" | sort -u
+      kill $! 2>/dev/null; true' || true)
+    libs=$(echo $libs $opened)
+    [ -n "$libs" ] || { echo "BARE_APPIMAGE_START_FAILED round $round (a library is missing but ldd names none; the cause is above)"; break; }
+    add=()
+    for l in $libs; do
+      p=$(apt_file "$l")
+      [ -n "$p" ] || { echo "BARE_APPIMAGE_START_NEEDS round $round: $l (no Ubuntu package holds it)"; extra="$extra $l"; continue; }
+      add+=("$p")
+      if grep -qx "$p" /tmp/p9-bare-desktop.txt; then echo "BARE_APPIMAGE_START_NEEDS round $round: $l $p on-ubuntu-desktop"
+      else echo "BARE_APPIMAGE_START_NEEDS round $round: $l $p NOT-on-ubuntu-desktop"; extra="$extra $p"; fi
+    done
+    [ ${#add[@]} -gt 0 ] || break
+    docker exec "$NAME" bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y $(printf '%s ' "${add[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')" | tail -1
+  done
+  [ -n "$started" ] || status=1
+  docker rm -f "$NAME" "$NAME-x" >/dev/null
+  # A package stock Ubuntu Desktop lacks is an admin install before P9 opens, so it fails the check.
+  [ -z "$extra" ] || { echo "BARE_APPIMAGE_FAILED: needs packages Ubuntu Desktop lacks:$extra"; status=1; }
+  [ "$status" = 0 ] && echo "BARE_APPIMAGE_STARTS"
   exit $status
   ;;
 *) echo "usage: bash scripts/bare-machine.sh boot | discover | install headless|desktop | tmux DIR | appimage FILE"; exit 2 ;;

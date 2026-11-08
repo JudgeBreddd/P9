@@ -14,6 +14,7 @@ import path from 'node:path';
 import { chromium } from '@playwright/test';
 import { daemon, remoteDaemon, http, authenticated, root, passkeyDevice, enrollDevice } from './helpers.mjs';
 import { newer } from '../apps/server/update.mjs';
+import { unitOf } from '../apps/server/windows.mjs';
 import { PIECE } from '../apps/server/pieces.mjs';
 import { daemonRequest } from '../scripts/teh.mjs';
 import { updateServer, names } from '../apps/desktop/server-update.mjs';
@@ -158,6 +159,10 @@ test('update: a newer version builds beside the checkout, waits for the turn, th
   const swap = await swapCall(instance);
   assert.match(swap, new RegExp('^--user --unit p9-update-' + pushed.id.slice(0, 8) + ' --collect --quiet -- \\S+ \\S+/scripts/update-swap\\.mjs --root ' + instance.source
     + ' --next ' + next + ' --version ' + NEXT + ' --from ' + VERSION + ' --id ' + pushed.id + ' '));
+  // O6: the swap restarts this daemon's own unit, named from its state folder; a dev daemon's (p9-dev) never the daily one.
+  assert.match(swap, / --service p9-foundation --wait /);
+  assert.deepEqual(['/run/user/1000/p9-dev', '/run/user/1000/p9-foundation', '/tmp/x/state', '/run/p9-Dev'].map(unitOf),
+    ['p9-dev', 'p9-foundation', 'p9-foundation', 'p9-foundation']);
   // Held: a message now would start a turn the restart cuts off.
   const refused = await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   assert.deepEqual([refused.status, refused.error], [503, 'updating']);
@@ -241,6 +246,44 @@ test('update, laptop: a checkout one version ahead pushes its HEAD and follows t
   const commit = git('rev-parse', 'HEAD').toString().trim();
   assert.equal((await call(instance, '/update/status')).job.commit, commit);
   assert.match(await swapCall(instance), new RegExp(' --version ' + NEXT.replace(/\./g, '\\.') + ' '));
+});
+
+// W1 (Builder, 2026-11-07): ask first, one rule for every build kind. ask names both versions; "Not now" leaves the server as
+// it was (no job, nothing built, no pieces), for a checkout, a packaged app and a slim server alike.
+test('W1: every build kind asks with both versions before it changes the server; declining leaves it as it was', { skip, timeout: 60000 }, async (t) => {
+  const instance = await server(t);
+  const checkout = await mkdtemp(path.join(os.tmpdir(), 'p9-upd-checkout-'));
+  await tree(checkout, NEXT);
+  const git = (...args) => execFileSync('git', ['-C', checkout, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args]);
+  git('init', '-q'); git('add', '-A'); git('commit', '-qm', 'next');
+  const asked = [], no = async (question) => { asked.push(question); return false; };
+  for (const kind of [{ checkout }, { checkout: null }]) {
+    // deadline: without the ask the update starts and is followed; this ends that follow in a second instead of hanging.
+    const { events, run } = laptop(instance, { version: NEXT, ...kind, ask: no, deadline: 1000 });
+    assert.deepEqual(await run(), { phase: 'declined' });
+    assert.deepEqual(events, []);
+  }
+  let reinstalled = 0;
+  const slim = await updateServer({ state: null, check: async () => ({ version: '0.1.5' }), version: NEXT, checkout: null, host: 'test', reinstall: () => { reinstalled++; }, ask: no });
+  assert.deepEqual([slim, reinstalled], [{ phase: 'declined' }, 0]);
+  assert.deepEqual(asked, [{ host: 'test', server: VERSION, app: NEXT }, { host: 'test', server: VERSION, app: NEXT }, { host: 'test', server: '0.1.5', app: NEXT }]);
+  assert.deepEqual([(await call(instance, '/update/status')).job ?? null, await lines(instance.log.pnpm), await leftovers(instance)], [null, [], []]);
+  // A yes given after the connection was replaced (the dialog stayed open while the window moved on) does nothing.
+  let open = true;
+  const late = laptop(instance, { version: NEXT, checkout, live: () => open, ask: async () => { open = false; return true; } });
+  assert.deepEqual(await late.run(), { phase: 'gone' });
+  const slimLate = await updateServer({ state: null, check: async () => ({ version: '0.1.5' }), version: NEXT, checkout: null, host: 'test', live: () => false, reinstall: () => { reinstalled++; }, ask: async () => true });
+  assert.deepEqual([slimLate, reinstalled], [{ phase: 'gone' }, 0]);
+  assert.deepEqual([(await call(instance, '/update/status')).job ?? null, await lines(instance.log.pnpm)], [null, []]);
+  // A yes goes ahead as before (the checkout test above follows it to the restart): here the job starts.
+  const { run } = laptop(instance, { version: NEXT, checkout, deadline: 1000, ask: async () => true });
+  assert.notEqual((await run()).phase, 'gone');
+  assert.equal((await call(instance, '/update/status')).job.version, NEXT);
+  // The app's dialog: both versions in it, "Not now" the cancel, and the connect passes it (main.mjs, Electron only).
+  const main = await readFile(path.join(root, 'apps/desktop/main.mjs'), 'utf8');
+  assert.match(main, /message: 'P9 on ' \+ host \+ ' is ' \+ there \+ '\. This app is ' \+ here \+ '\.'/);
+  assert.match(main, /buttons: \['Not now', 'Update to ' \+ here\], defaultId: 1, cancelId: 0/);
+  assert.match(main, /ask: askUpdate, tell:/);
 });
 
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when

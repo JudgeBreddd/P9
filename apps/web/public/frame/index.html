@@ -18,7 +18,9 @@
   // the render and each p9data too, since Chromium runs no observer in a frame scrolled out of view.
   const size = () => { const r = document.documentElement, h = Math.ceil(r.getBoundingClientRect().height + innerHeight - r.clientHeight) /* + a sideways scrollbar */; if (h !== last) tell({ kind: 'height', h: last = h }); };
   const tell = message => parent.postMessage({ p9: 'frame', ...message }, '*'); // the parent's origin is not known here: nothing secret goes out
-  window.p9open = path => tell({ kind: 'open', path: String(path).slice(0, 1024) }); // a Mission card asks to show one of its files; P9 opens it only on a click
+  // A Mission card asks to show one of its files; P9 opens it only on a click. Sent only during a click in this frame, so a
+  // p9open from loading cannot wait in the page and ride a later click on another file (M5 in CI). The page still checks.
+  window.p9open = path => navigator.userActivation?.isActive && tell({ kind: 'open', path: String(path).slice(0, 1024) });
   addEventListener('error', event => tell({ kind: 'error', text: String(event.message).slice(0, 500) }));
   addEventListener('unhandledrejection', event => tell({ kind: 'error', text: String(event.reason?.message ?? event.reason).slice(0, 500) }));
   document.addEventListener('selectionchange', () => tell({ kind: 'selection', text: String(getSelection()).slice(0, 4000) }));

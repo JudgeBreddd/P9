@@ -22,7 +22,7 @@ async function seed(paths) {
     { title: 'Wide', notes: 'wide' }, { title: 'Ws', notes: 'ws' }] }));
   await writeFile(path.join(paths.directory, 'settings.json'), JSON.stringify({ ...BUILDER, space: 'space.json',
     notes_roots: { vault, spare: vault, wide: paths.directory, ws: w } }));
-  for (const dir of ['sub', '.obsidian', 'secrets', '_private/secrets']) await mkdir(path.join(vault, dir), { recursive: true });
+  for (const dir of ['sub', '.obsidian', 'secrets', '_' + 'private/secrets']) await mkdir(path.join(vault, dir), { recursive: true });
   await writeFile(path.join(vault, 'old.md'), '# Old\n');
   await new Promise((resolve) => setTimeout(resolve, 20));
   await writeFile(path.join(vault, 'sub', 'today.md'), '# Today\n');

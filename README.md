@@ -350,8 +350,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   the local copy as moved, so the two never both run. *Send files to remote* (the files panel) copies a
   folder to the same folder there, shows what differs, asks before it replaces or deletes anything and keeps
   every replaced file in P9's recovery folder. Limits are under Settings > Remote Connect > Send files. When
-  you connect to a remote running 0.1.6 or later with an older P9, this one updates it after chats finish
-  their turn. A failed build leaves it as it was; a new build that does not start is put back. One still on
+  you connect to a remote running 0.1.6 or later with an older P9, this one asks first, naming both versions;
+  on Update it updates it after chats finish their turn, and Not now leaves it as it is. A failed build leaves it as it was; a new build that does not start is put back. One still on
   0.1.5 has no update route, so it needs one update by hand first (see Update).
   Details: [docs/guide.md](docs/guide.md#remote-connect-send-to-remote-and-send-files).
 - **Dev Focus limits.** Saves go through the guarded save, and only Ctrl+S or Save writes (a white dot on the
@@ -430,7 +430,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
 ## Update, roll back, uninstall
 
 - **Installed app (Windows, AppImage):** it checks P9's GitHub releases shortly after it starts and every 4
-  hours, takes only releases that are not pre-releases, downloads a newer one in the background and installs it
+  hours, takes only releases that are not pre-releases (with Settings > Maintenance > Nightly builds on, the
+  nightlies too), downloads a newer one in the background and installs it
   when you quit, or at once from Settings > Maintenance > Updates. Installing restarts the daemon on the new
   version, which ends a chat turn in progress (reopen it to resume). What it downloads and how that is checked:
   `SECURITY.md` § Auto-update. Remove the AppImage's service with
@@ -438,7 +439,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
 
 - **A remote running P9** is updated from the computer you connect from once it runs 0.1.6 (the small Temporary P9 is not built
   there: it is replaced whole by this version's): when this P9 is
-  newer (compared by version number), it sends its source, builds beside the running copy, waits until no chat
+  newer (compared by version number), it asks first in a dialog naming both versions (Not now leaves the remote as it is,
+  until P9 next starts), then it sends its source, builds beside the running copy, waits until no chat
   is mid-turn, swaps and restarts. A failed build leaves the running copy as it was; a restart that does not
   answer puts the previous copy back. A server still on 0.1.5 has no update route and does not update itself:
   update it once as a source checkout (the steps below: git pull, build, restart), then run
@@ -494,7 +496,8 @@ mounts (it needs unprivileged user and mount namespaces), never a real filesyste
 Besides Node and pnpm, the tests need: tmux, `ss` (iproute2), GTK 3 (Electron), a display (or `xvfb-run`),
 a systemd user manager, unprivileged user namespaces (Electron's Chromium sandbox) and gitleaks 8.19 or newer
 (`gitleaks dir`; Debian trixie's package is too old). `.github/workflows/test.yaml` installs this same set on
-GitHub's Ubuntu runner and runs the suite on every push to a branch other than `main`.
+GitHub's Ubuntu runner and runs the suite, split across 7 runners, on every push to a branch other than `main` that
+changes more than Markdown.
 
 To publish your own copy, run `git config core.hooksPath .githooks`: the commit hook scans the staged
 index for secrets, and the push hook runs gitleaks and a private-path scan over the full history.
@@ -541,9 +544,11 @@ save; and the setup wizard finding an existing Mission Control layout. Also new 
 
 - **Tested:** Linux is the main platform, built and tested on Arch-based CachyOS. The test suite (real
   daemons, Electron windows and tmux in temporary homes) runs on GitHub's Ubuntu runner on every push to a
-  branch other than `main`; on the same pushes the Windows installers (x64 and arm64) are built, installed,
-  updated, restarted and uninstalled on GitHub's Windows runners, and the AppImage is built and checked on
-  Ubuntu (Actions, Installers; a runner session, not a real desktop).
+  branch other than `main`, and the Windows-only tests on GitHub's Windows runners (x64 and arm64). The
+  Windows installers (x64 and arm64) are built, installed, updated, restarted and uninstalled on those
+  runners, and the AppImage is built and checked on Ubuntu, on each release tag and when run by hand
+  before one (Actions, Installers; a runner session, not a real desktop). From 0.1.8 that is no longer on
+  every push.
 - **Not tested:** a fresh install under a second Linux account; the Windows installer on a real PC beyond
   that runner; what happens to the host on Windows when Electron crashes (`SECURITY.md`). New in 0.1.6 and
   not run on real machines: Send to remote, Send files to remote and the remote's self-update over real ssh between

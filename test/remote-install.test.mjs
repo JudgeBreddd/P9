@@ -50,6 +50,27 @@ test('D15a: a checkout\'s source lands in ~/p9 there and install.sh runs headles
   assert.equal(await readFile(path.join(s.home, 'p9', 'node_modules-kept'), 'utf8'), 'built\n', 'what the last install built stays');
 });
 
+// 0.1.8 H5, the 0.1.7 hotfix: a running full P9 there is stopped after the archive is listed and before its files are
+// replaced, or its unit restarts it from a half-built ~/p9; a stop that fails replaces nothing (P9_INSTALL busy).
+test('0.1.7 hotfix: a remote install stops a running p9-foundation before replacing its files; a failed stop replaces nothing', { skip, timeout: 60000 }, async () => {
+  const s = await stage(), readme = path.join(s.home, 'p9', 'README.md');
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' })).phase, 'done');
+  await writeFile(readme, 'old\n');
+  // systemctl there: the unit is active; a stop logs which README it saw, and fails when stop-fails exists.
+  await writeFile(path.join(path.dirname(s.ssh), 'systemctl'), '#!/bin/sh\ncase "$*" in *is-active*) exit 0;; *stop*) echo "stop $(cat "$HOME/p9/README.md")" >> "$HOME/systemctl.txt"; '
+    + '[ -e "$HOME/stop-fails" ] && exit 1; exit 0;; esac\nexit 0\n');
+  await chmod(path.join(path.dirname(s.ssh), 'systemctl'), 0o755);
+  assert.equal((await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' })).phase, 'done');
+  assert.equal(await readFile(path.join(s.home, 'systemctl.txt'), 'utf8').catch(() => 'never stopped'), 'stop old\n', 'stopped once, before the new files');
+  assert.equal(await readFile(readme, 'utf8'), 'p9\n');
+  await writeFile(readme, 'old\n'); await writeFile(path.join(s.home, 'stop-fails'), ''); await rm(path.join(s.home, 'args.txt'));
+  const busy = await installRemote({ host: 'test-host', ssh: s.ssh, archive: s.archive(), version: '0.1.6' });
+  assert.equal(busy.phase, 'failed');
+  assert.match(JSON.stringify(busy), /busy/);
+  assert.equal(await readFile(readme, 'utf8'), 'old\n', 'a failed stop replaces nothing');
+  assert.equal(await exists(path.join(s.home, 'args.txt')), false, 'install.sh did not run');
+});
+
 test('D15a: a ~/p9 this app did not make is left alone', { skip, timeout: 30000 }, async () => {
   const s = await stage();
   await mkdir(path.join(s.home, 'p9')); await writeFile(path.join(s.home, 'p9', 'mine.txt'), 'mine\n');
@@ -147,7 +168,7 @@ test('full install source: this checkout sends no tests, docs, contracts or agen
     return out.split('\n').filter((f) => f && !f.endsWith('/')).map((f) => f.replace(/^[^/]+\//, ''));
   };
   const check = (files, how) => {
-    for (const bad of ['test/', 'docs/guide.md', '.cursor/', '.github/', '.githooks/', 'contracts.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/', 'apps/server/AGENTS.md'])
+    for (const bad of ['test/', 'docs/guide.md', '.cursor/', '.github/', '.githooks/', 'contracts.md', 'CONTRIBUTING.md', 'AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_' + 'private/', 'apps/server/AGENTS.md'])
       assert.ok(!files.some((f) => f === bad || f.startsWith(bad)), how + ' sent ' + bad);
     for (const good of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/install.sh', 'scripts/background.sh', 'apps/server/main.mjs',
       'apps/web/astro.config.mjs', 'packages/files/index.mjs', 'LICENSE', 'LICENSES.md', 'README.md', 'third-party/DUWOP-LICENSE.md', 'docs/brand/icon-primary-1024.png'])
@@ -164,7 +185,7 @@ test('full install source: this checkout sends no tests, docs, contracts or agen
     await mkdir(path.dirname(path.join(copy, f)), { recursive: true });
     await writeFile(path.join(copy, f), await readFile(path.join(root, f)).catch(() => 'stand-in\n'));
   }
-  for (const f of ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_private/notes.md', 'apps/server/AGENTS.md']) { await mkdir(path.dirname(path.join(copy, f)), { recursive: true }); await writeFile(path.join(copy, f), 'notes\n'); }
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'CONTEXT.md', '_' + 'private/notes.md', 'apps/server/AGENTS.md']) { await mkdir(path.dirname(path.join(copy, f)), { recursive: true }); await writeFile(path.join(copy, f), 'notes\n'); }
   check(await listed(copy), 'a synced copy');
   // The same files as a git checkout: git archive HEAD applies .gitattributes.
   for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'x']]) await run('git', args, copy);

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session, shell, WebContentsView } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { appendFileSync, constants, openSync, watch } from 'node:fs';
+import { appendFileSync, constants, openSync, readFileSync, watch } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -300,7 +300,19 @@ export async function createDesktop({ state, open } = {}) {
   };
   // The server update's last event, kept for a window that loads after it (a switch reloads the window); tellUpdate is
   // pointed at the window once it exists.
-  let serverUpdate = null, serverUpdating = false, tellUpdate = () => {};
+  let serverUpdate = null, serverUpdating = false, tellUpdate = () => {}, updateWindow = null;
+  // W1 (Builder, 2026-11-07: ask first, one rule for every build kind): a dialog naming both versions before this app
+  // changes the server's P9. Not now leaves it as it is, and that host and pair are not asked again until the next launch.
+  const updateDeclined = new Map();
+  const askUpdate = async ({ host, server: there, app: here }) => {
+    if (updateDeclined.get(host) === there + '>' + here) return false;
+    const options = { type: 'question', title: 'Update P9 on ' + host + '?', message: 'P9 on ' + host + ' is ' + there + '. This app is ' + here + '.',
+      detail: 'Update the server to ' + here + '? It waits for running turns to finish, then restarts. Not now leaves it on ' + there + '.',
+      buttons: ['Not now', 'Update to ' + here], defaultId: 1, cancelId: 0, noLink: true };
+    const { response } = await (updateWindow && !updateWindow.isDestroyed() ? dialog.showMessageBox(updateWindow, options) : dialog.showMessageBox(options));
+    if (response !== 1) updateDeclined.set(host, there + '>' + here);
+    return response === 1;
+  };
   // D15a (remote-install.mjs, threat model row 67; U6: no separate yes): the install on this remote, its last event for the
   // status poll; phase 'starting' while setUp tries startServer first.
   let remoteInstall = null;
@@ -332,7 +344,7 @@ export async function createDesktop({ state, open } = {}) {
             if (slimTried.get(serverHost) === old) return false; // L2: once per host and old version, each launch
             slimTried.set(serverHost, old); runInstall();
           } : null,
-          tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
+          ask: askUpdate, tell: event => { serverUpdate = event; tellUpdate(event); } }).catch(() => {}).finally(() => { serverUpdating = false; });
       }
     } catch (error) {
       serverError = error.message; knownHosts = error.knownHosts ?? null;
@@ -1040,6 +1052,7 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Item 14: the server update's progress (server-update.mjs), and its last event for a window that loads after it.
   tellUpdate = event => { if (!window.isDestroyed()) window.webContents.send('p9:server-update', event); };
+  updateWindow = window;
   ipcMain.handle('p9:server-update', event => { if (!fromApp(event)) throw new Error('ipc-sender-refused'); return serverUpdate; });
   // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
   // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
@@ -1711,13 +1724,17 @@ export async function createDesktop({ state, open } = {}) {
   });
   // Auto-update (threat model row 39): off unless this is an installed build with a feed (updater.mjs); its lines go to
   // p9-update.log. skip: the version a rollback came back from (row 40).
+  // channel: the Nightly switch (O2), its own file beside update-state.json; anything but { nightly: true } is Stable.
+  const channelFile = path.join(app.getPath('userData'), 'update-channel.json');
   const updater = startUpdater({ app, version, log: updateLog, skip: {
     get: () => readState(startFile).skip,
-    clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } } });
+    clear: () => { const start = readState(startFile); start.skip = null; writeState(startFile, start); } }, channel: {
+    get: () => { try { return JSON.parse(readFileSync(channelFile, 'utf8'))?.nightly === true; } catch { return false; } },
+    set: on => writeState(channelFile, { nightly: on }) } });
   ipcMain.handle('p9:updates', async (event, ...args) => {
     const action = updateAction(args);
     if (!fromApp(event) || !action) throw new Error('ipc-sender-refused');
-    return (await updater)[action]();
+    return (await updater)[action](args[0]);
   });
   // A link in an agent reply (threat model row 18): one plain http(s) address, checked again here, opens in the browser.
   ipcMain.handle('p9:open-link', async (event, ...args) => {

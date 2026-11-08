@@ -12,10 +12,12 @@ import { daemonRequest } from './teh.mjs';
 const { values } = parseArgs({ options: { unit: { type: 'string', default: 'p9-foundation.service' }, force: { type: 'boolean', default: false }, 'keep-menu': { type: 'boolean', default: false } } });
 if (!/^p9-[a-z0-9-]+\.service$/.test(values.unit)) throw new Error('p9-unit-required');
 const directory = path.join(os.homedir(), '.config', 'systemd', 'user');
-// Removing the installed daemon: Stop All first, so its chats, scripts and tmux terminals (their own units) do not
-// outlive it. Only for the real unit, whose socket is the one below; never for another p9-* unit.
-if (values.unit === 'p9-foundation.service' && process.env.XDG_RUNTIME_DIR) {
-  const stopped = await daemonRequest(path.join(process.env.XDG_RUNTIME_DIR, 'p9-foundation'), 'POST', '/stop-all', {}).catch(() => null);
+// Removing an installed daemon: Stop All first, so its chats, scripts and tmux terminals (their own units) do not
+// outlive it. O6: a unit's state folder is named after it (install-service.mjs), so Stop All goes to that unit's own
+// daemon: p9-foundation always, another p9-* unit (a dev P9) when its state folder holds a daemon's credentials.
+const own = process.env.XDG_RUNTIME_DIR && path.join(process.env.XDG_RUNTIME_DIR, values.unit.replace(/\.service$/, ''));
+if (own && (values.unit === 'p9-foundation.service' || existsSync(path.join(own, 'desktop.json')))) {
+  const stopped = await daemonRequest(own, 'POST', '/stop-all', {}).catch(() => null);
   console.log(stopped?.status === 200 ? 'P9_STOP_ALL_DONE'
     : "P9_STOP_ALL_SKIPPED: daemon not answering; check with systemctl --user list-units 'p9-*'");
   if (stopped?.status !== 200) process.exitCode = 1;
@@ -39,5 +41,5 @@ if (values.unit === 'p9-foundation.service' && !values['keep-menu'] && existsSyn
   rmSync(path.join(data, 'applications', 'p9-event-horizon.desktop'), { force: true });
   rmSync(path.dirname(open), { recursive: true, force: true });
 }
-const state = path.join(os.homedir(), '.local', 'state', 'p9-foundation');
+const state = path.join(os.homedir(), '.local', 'state', values.unit.slice(0, -'.service'.length));
 console.log('P9_SERVICE_REMOVED ' + values.unit + (existsSync(state) ? '; state kept at ' + state : ''));

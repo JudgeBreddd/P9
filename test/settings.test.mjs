@@ -84,6 +84,8 @@ test('Settings: refused shapes leave the file alone; zoom, close on send, focus 
   assert.deepEqual(await call(instance, '/agent-lock'), { on: true });
   // The last focus mode left on cannot be turned off.
   await page.click('[data-set-page="Dev Focus"]'); await page.uncheck('#setF-dev');
+  // The box is disabled after the save comes back (main refuses all three off: main.mjs normalizes to null).
+  await page.locator('#setF-chat:disabled').waitFor({ timeout: 5000 }).catch(() => {});
   assert.equal(await page.locator('#setF-chat').isDisabled(), true);
   await page.check('#setF-dev'); await page.click('[data-set-page="General"]');
   if (process.env.P9_EVIDENCE) { await mkdir(process.env.P9_EVIDENCE, { recursive: true }); await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, 'settings.png') }); }

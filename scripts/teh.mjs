@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { ORIGIN } from '../packages/protocol/index.mjs';
-import { windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
+import { unitOf, windowsLockEndpoint, windowsStateRoot } from '../apps/server/windows.mjs';
 import { childEnv } from '../apps/server/child-env.mjs';
 import { found, placeTmux } from '../apps/server/deps.mjs';
 
@@ -233,7 +233,7 @@ export async function restartWindowsTask(state, ms) {
 // The same on Linux: the p9-foundation user unit, restarted by systemd. No unit means there is nothing to restart
 // (install-service.mjs makes one). Resolves { restarted: true } or { error }.
 // The unit is named after its RuntimeDirectory, the state folder: p9-foundation, or the dev build's p9-dev beside it.
-export const unitFor = (state) => (/^p9-[a-z-]+$/.test(path.basename(String(state))) ? path.basename(String(state)) : 'p9-foundation') + '.service';
+export const unitFor = (state) => unitOf(state) + '.service';
 const systemctl = (...args) => new Promise((resolve) => execFile('systemctl', ['--user', ...args], { timeout: 60_000 }, (error) => resolve(!error)));
 // RS2, a hung daemon (its SIGTERM handler never runs, so main.mjs's own 10 s stop never fires): systemd would wait the unit's
 // TimeoutStopSec (90 s by default) before its SIGKILL, longer than this command used to wait. sh -c this with $1 the unit and $2
@@ -292,8 +292,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // daemon.log sits next to the runtime folder (install-windows.ps1).
   const bundle = collectBundle({ daemon, ...(process.platform === 'win32' ? windowsSources(await windowsTask(),
     await readFile(path.join(values.state, '..', 'daemon.log'), 'utf8').catch(() => '')) : {
-    status: command('systemctl', ['--user', 'show', 'p9-foundation.service', '--property=ActiveState,SubState,Result']),
-    journal: command('journalctl', ['--user', '-u', 'p9-foundation.service', '-n', '100', '-o', 'json', '--no-pager']),
+    status: command('systemctl', ['--user', 'show', unitFor(values.state), '--property=ActiveState,SubState,Result']),
+    journal: command('journalctl', ['--user', '-u', unitFor(values.state), '-n', '100', '-o', 'json', '--no-pager']),
   }) });
   const text = JSON.stringify(bundle, null, 2) + '\n';
   if (values.bundle) await writeFile(values.bundle, text, { flag: 'wx', mode: 0o600 });

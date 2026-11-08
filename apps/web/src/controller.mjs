@@ -1540,7 +1540,8 @@ async function loadGuide() {
   if (live.empty || live.adding) renderMission();
   if (mdl.open && S.modal?.kind === 'guide') renderModal();
 }
-// Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Switching sets
+// Finding 4: the space Mission shows, in the top bar in Mission focus: Main, every scratch space, and + Add. Opening it reads the
+// space list again, so a space made on the phone or through the MCP tools shows at once, not at the next 20 s poll. Switching sets
 // settings.space_name through the space route and writes no space file; only Delete, after its confirm, removes one.
 let spacePop = null, spaceForm = null; // spaceForm: the Delete confirm or the Save as template form, kept through polls
 function renderSpaceBtn() {
@@ -1549,14 +1550,19 @@ function renderSpaceBtn() {
   b.dataset.spaceCurrent = live.spaceName || '';
   b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
-  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); });
-  if (!pop.hidden && !spaceForm) renderSpaceMenu();
+  spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); refreshMission(); });
+  if (!pop.hidden && !spaceForm) renderSpaceMenu(true);
 }
-function renderSpaceMenu() {
+let spaceMenuHtml = '';
+function renderSpaceMenu(redraw) {
   const pop = $('#spacePop'), now = live.spaceName || '';
-  pop.innerHTML = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
+  const html = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
     + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button><button class="item" role="menuitem" data-space-save>Save as template…</button>'
     + (now ? `<button class="item space-del" role="menuitem" data-space-del>Delete ${esc(now)}…</button>` : '');
+  // A poll's redraw of the open menu with nothing new keeps its buttons: a fresh node under the pointer eats the click (M4a in CI).
+  if (redraw && html === spaceMenuHtml && !pop.querySelector('.space-form')) return;
+  spaceMenuHtml = html;
+  pop.innerHTML = html;
   pop.querySelector('[data-space-save]').onclick = () => spaceSave();
   pop.querySelector('[data-space-del]')?.addEventListener('click', spaceDelete);
   pop.querySelectorAll('[data-space]').forEach(b => b.onclick = async () => {
@@ -2731,6 +2737,7 @@ function renderSettings() {
   const asked = async ask => { updates = await window.p9.updates(ask).catch(() => updates); renderSettings(); };
   if ($('#mtUpdCheck')) $('#mtUpdCheck').onclick = () => asked({ check: true });
   if ($('#mtUpdInstall')) $('#mtUpdInstall').onclick = () => asked({ install: true });
+  if ($('#mtUpdNightly')) $('#mtUpdNightly').onchange = e => asked({ nightly: e.target.checked });
   if ($('#mtUpdOpen')) $('#mtUpdOpen').onclick = () => window.p9.openUpdates();
   clearTimeout(updatesTimer); // a check or download in progress: show its next state while Settings is open
   if (['checking', 'downloading'].includes(updates?.state)) updatesTimer = setTimeout(() => { if ($('#setDlg').open) asked(); }, 2000);
@@ -2928,7 +2935,8 @@ async function loadSetup(paths) {
   const st = await window.p9.getStatus?.().catch(() => null);
   setupMode = st?.mode ?? '';
   if (st?.mode === 'server' && st.status !== 'ok') return null;
-  const r = await liveChat.call('setup', paths || {}).catch(() => null);
+  // No toast either when this computer's P9 does not answer: the wizard shows the failure, the status line the daemon.
+  const r = await liveChat.call('setup', paths || {}, { quiet: true }).catch(() => null);
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
@@ -3259,13 +3267,14 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
 const dataNote = () => { $('#dataNote').textContent = [live.on && !serverInfo?.slim && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
-liveChat.call = async (action, payload = {}) => {
+liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
-  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.
+  if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {
