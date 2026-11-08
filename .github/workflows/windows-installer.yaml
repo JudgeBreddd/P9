@@ -180,6 +180,9 @@ jobs:
           $feed = Get-Content -Raw (Join-Path $app 'resources\app-update.yml')
           Write-Output ('app-update.yml: ' + ($feed -replace '\s+', ' '))
           if ($feed -notmatch 'provider: github') { throw 'app-update.yml does not name the GitHub feed' }
+          # A channel here (a pre-release version's beta, rc) makes the install ask for <channel>.yml, which no release attaches.
+          if ($feed -match 'channel:') { throw 'app-update.yml names a channel: electron-builder needs -c.detectUpdateChannel=false' }
+          if (-not (Test-Path dist/windows/latest.yml)) { throw 'no dist/windows/latest.yml: the feed job attaches only that name' }
           $script = Join-Path $app 'resources\daemon\scripts\install-windows.ps1'
           # This step's shell is PowerShell 7, so the installer inherits 7's module path: the case run 39535290300 failed on.
           if (-not (Get-ScheduledTask -TaskName 'P9 Foundation' -ErrorAction SilentlyContinue)) { throw 'the installer registered no task (hook: lines above)' }
@@ -997,6 +1000,8 @@ jobs:
           root="$RUNNER_TEMP/squashfs-root/resources"
           cat "$root/app-update.yml"
           grep -q 'provider: github' "$root/app-update.yml"
+          ! grep -q 'channel:' "$root/app-update.yml" || { echo '::error::app-update.yml names a channel (package-linux.mjs)'; exit 1; }
+          test -f dist/linux/latest-linux.yml || { echo '::error::no dist/linux/latest-linux.yml: the feed job attaches only that name'; exit 1; }
           file "$root/daemon/node" | tee /dev/stderr | grep -q 'x86-64, .*, stripped'
           test "$("$root/daemon/node" --version)" = v26.10.0
           test -f "$root/daemon/apps/server/main.mjs"
