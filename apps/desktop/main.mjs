@@ -28,6 +28,12 @@ import { REPO, NEW_ISSUE } from '../server/anymouse.mjs';
 import { updatedFrom } from './whats-new.mjs';
 import { serverPath, trusted, setTrust } from './dev-folder.mjs';
 import { CARDS_URL, cardsSite } from './cards-page.mjs';
+import { PET_NAME, addPet } from './pet-files.mjs';
+import { devErrorPage, inlineHashes, assets } from './served-pages.mjs';
+import { sendIpc } from './send-ipc.mjs';
+import { cardsIpc } from './cards-ipc.mjs';
+import { petsIpc } from './pets-ipc.mjs';
+import { devIpc } from './dev-ipc.mjs';
 
 export const APP_URL = 'p9://app/';
 const FRAME_URL = 'p9://frame/'; // item 19: the artifact frame's page (row 65)
@@ -57,7 +63,6 @@ const checkXfer = x => exactly(x, 'fileMiB,files,sendGiB') && Object.entries(XFE
 export const DEFAULT_SETTINGS = Object.freeze({ zoom: 1, closeOnSend: false, focus: Object.freeze({ chat: true, dev: true, mission: true }),
   pet: Object.freeze({ chat: petLook(true), dev: petLook(false), mission: petLook(false) }), name: '', startLast: false, xfer: XFER_DEFAULTS });
 const NAME = /^[^\p{Cc}\p{Cf}]{0,40}$/u;
-const PET_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/, PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const exactly = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === keys;
 const petName = name => name === null || (typeof name === 'string' && PET_NAME.test(name));
 const spot = at => at === null || (Array.isArray(at) && at.length === 2 && at.every(n => Number.isFinite(n) && n >= 0 && n <= 1));
@@ -94,109 +99,26 @@ export async function accountName() {
   const word = (full?.split(',')[0].trim().split(/\s+/)[0] || username || '').slice(0, 40);
   return NAME.test(word) ? word.charAt(0).toUpperCase() + word.slice(1) : '';
 }
-// Agent-working pets (threat model row 16): a petdex folder under <profile>/pets, read as plain files only (never a link),
-// pet.json up to 16 KB, the spritesheet a bare .webp/.png name up to 8 MB with a matching signature, handed over as a data URL.
-async function readPlain(file, max) {
-  if ((await lstat(file)).isSymbolicLink()) throw new Error('pet-refused'); // Windows has no O_NOFOLLOW
-  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.size > max) throw new Error('pet-refused');
-    return await handle.readFile();
-  } finally { await handle.close(); }
-}
-async function readPet(pets, name) {
-  if (typeof name !== 'string' || !PET_NAME.test(name)) return null;
-  try {
-    const folder = path.join(pets, name);
-    if (!(await lstat(folder)).isDirectory()) return null;
-    const meta = JSON.parse(await readPlain(path.join(folder, 'pet.json'), 16384));
-    const file = meta?.spritesheetPath;
-    if (typeof meta?.id !== 'string' || typeof meta.displayName !== 'string' || typeof file !== 'string'
-        || file.startsWith('.') || !/^[\w.-]{1,128}\.(?:webp|png)$/i.test(file)) return null;
-    const bytes = await readPlain(path.join(folder, file), 8 << 20);
-    const type = bytes.subarray(0, 8).equals(PNG) ? 'png' : bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP' ? 'webp' : null;
-    return type && { meta, file, bytes, type };
-  } catch { return null; }
-}
-async function loadPet(pets, name) {
-  const pet = await readPet(pets, name);
-  return pet && { name, displayName: pet.meta.displayName.slice(0, 80), sprite: `data:image/${pet.type};base64,` + pet.bytes.toString('base64') };
-}
-// Adding copies a checked pet out of a folder the user picked: a rewritten pet.json and the sheet bytes, never over an existing pet.
-async function addPet(pets, folder) {
-  const name = path.basename(folder), pet = await readPet(path.dirname(folder), name);
-  if (!PET_NAME.test(name)) return 'name';
-  if (!pet) return 'invalid';
-  const target = path.join(pets, name), { id, displayName, description = '', spritesheetPath } = pet.meta;
-  await mkdir(pets, { recursive: true });
-  try { await mkdir(target); } catch (error) { return error.code === 'EEXIST' ? 'exists' : 'invalid'; }
-  try {
-    await writeFile(path.join(target, 'pet.json'), JSON.stringify({ id, displayName, description: String(description).slice(0, 1000), spritesheetPath }, null, 2) + '\n');
-    await writeFile(path.join(target, spritesheetPath), pet.bytes);
-  } catch { await rm(target, { recursive: true, force: true }); return 'invalid'; }
-  return null;
-}
 // The Dev Focus page itself (query and hash aside); any other p9://dev/ file is an asset, never a page with IPC.
 const isDevPage = url => url.split(/[?#]/)[0] === DEV_URL;
 
-// D5: the page Dev Focus shows when it cannot start. It names the cause; a missing editor server or another release of it
-// gets one button, Install, which asks main (p9dev:install-editor, no arguments) for the pinned download (threat model row 52).
-const html = text => String(text).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
-const INSTALL_SCRIPT = "const b = document.getElementById('install'), n = document.getElementById('note');\n"
-  + "b.onclick = async () => { b.disabled = true; n.textContent = 'Installing and checking it. This takes a minute or two.';\n"
-  + "  const r = await window.p9dev.installEditor().catch(() => ({ error: 'The install did not answer. Try again.' }));\n"
-  + "  if (r.error) { n.textContent = r.error; b.disabled = false; } else n.textContent = 'Installed. Starting Dev Focus.'; };";
-// Issue #14: a start that failed says what is missing and what to do, for the causes seen on real installs.
-const AGAIN = ' Switch to another focus and back to Dev Focus to try again.';
-const failedText = (message, where) => /spawn systemd-run ENOENT/.test(message)
-  ? 'Dev Focus is unavailable: ' + where + ' has no systemd-run. P9 runs the editor server in a systemd user scope (part of systemd), so it needs a Linux with systemd.'
-  : /Failed to connect to .*bus|Failed to create bus connection/i.test(message)
-    ? 'Dev Focus is unavailable: ' + where + ' has no systemd user session for the editor server (systemd-run --user could not reach the user bus). Log in there normally (not with su or sudo); on a remote, run "loginctl enable-linger" as you once, then restart P9.' + AGAIN
-    : message === 'editor-host-timeout' ? 'Dev Focus is unavailable: the editor server on ' + where + ' did not say it was ready within 30 seconds.' + AGAIN
-      : 'Dev Focus is unavailable: the editor server on ' + where + ' did not start (' + message.slice(0, 300) + '). Installing it again replaces a damaged copy.';
-function devErrorPage(error, download = editorDownload()) {
-  const plain = ['daemon-unavailable', 'server-old'].includes(error.message);
-  const problem = plain ? error.message : error.problem ?? editorProblem(error);
-  // error.server: Server mode, where the daemon there answered (POST /dev/editor) with the cause, its folder and its download.
-  const remote = typeof error.server === 'string', where = remote ? 'the remote ' + error.server : 'this computer';
-  const host = remote ? error.place : process.env.P9_EDITOR_HOST ?? path.join(EDITOR_DIR, 'codium-server');
-  if (remote) download = error.download;
-  const text = {
-    'daemon-unavailable': remote ? 'Dev Focus is unavailable: the remote ' + error.server + ' is not answering through the tunnel. P9 reconnects on its own; open Dev Focus again in a few seconds.'
-      : 'Dev Focus is unavailable: P9\'s background service is not answering. It restarts on its own; open Dev Focus again in a few seconds.',
-    'server-old': 'Dev Focus is unavailable: the P9 on the remote ' + error.server + ' is older than 0.1.6 and cannot run the editor for this window. Update P9 on the remote, then open Dev Focus again.',
-    missing: 'Dev Focus needs VSCodium\'s editor server (release 1.121.03429), and it is not installed on ' + where + '. It belongs in ' + host + '.',
-    'other-release': 'Dev Focus needs VSCodium\'s editor server release 1.121.03429; ' + host + ' on ' + where + ' holds a different release.',
-    failed: failedText(String(error.message), where),
-  }[problem];
-  const fixable = problem === 'missing' || problem === 'other-release' || (problem === 'failed' && / did not start \(/.test(text));
-  const fix = !fixable ? '' : download ? '<p><button id="install" style="font:inherit;padding:6px 14px">Install the editor server' + (remote ? ' on the remote' : '') + '</button></p>'
-      + '<p id="note" style="color:#8b97ad">' + (!remote && path.isAbsolute(download[0]) ? 'Takes the copy this AppImage carries' : 'Downloads about 83 MB from VSCodium\'s GitHub releases' + (remote ? ' onto ' + html(error.server) : ''))
-      + ', checks its SHA-256 against the one P9 pins, and installs it there.'
-      + (problem !== 'missing' ? ' The copy there now is kept beside it.' : '') + '</p><script>' + INSTALL_SCRIPT + '</script>'
-    : '<p style="color:#8b97ad">P9 has no download of it for ' + html(remote ? 'that remote' : 'this computer (' + process.platform + '-' + process.arch + ')') + '. The README\'s Requirements say how to install it by hand.</p>';
-  const page = '<!doctype html><title>Dev Focus</title><body style="background:#05070e;color:#dce4f2;font:14px system-ui;padding:24px"><p id="cause">' + html(text) + '</p>' + fix + '</body>';
-  return { files: new Map([['/index.html', Buffer.from(page)]]), csp: "default-src 'none'; style-src 'unsafe-inline'; script-src " + (inlineHashes(page).join(' ') || "'none'") };
-}
 
-// CSP hashes of a page's inline scripts (the ones without src).
-const inlineHashes = html => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
-  .filter(match => !/\bsrc\s*=/.test(match[1]))
-  .map(match => "'sha256-" + createHash('sha256').update(match[2]).digest('base64') + "'");
 
-async function assets(directory, prefix = '/') {
-  const result = new Map();
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const name = path.join(directory, entry.name), route = prefix + entry.name;
-    if (entry.isDirectory()) for (const [key, value] of await assets(name, route + '/')) result.set(key, value);
-    else if (entry.isFile()) result.set(route, await readFile(name));
-    else throw new Error('nonregular-build-asset');
-  }
-  return result;
-}
 
 export async function createDesktop({ state, open } = {}) {
+  // outer: createDesktop's names that the modules split out of it (F9) read and set; getters and setters keep them live.
+  const outer = { get APP_URL() { return APP_URL; }, get cardsHide() { return cardsHide; }, set cardsHide(v) { cardsHide = v; },
+    get cardsItems() { return cardsItems; }, set cardsItems(v) { cardsItems = v; },
+    get cardsView() { return cardsView; }, set cardsView(v) { cardsView = v; }, get devFolder() { return devFolder; },
+    get devReady() { return devReady; }, set devReady(v) { devReady = v; }, get devServing() { return devServing; },
+    get devToWorkspace() { return devToWorkspace; }, get devView() { return devView; }, get editorHost() { return editorHost; },
+    get fromApp() { return fromApp; }, get fromDev() { return fromDev; }, get localState() { return localState; }, get look() { return look; },
+    get openDev() { return openDev; }, get petsFolder() { return petsFolder; }, get queued() { return queued; }, get serve() { return serve; },
+    get serverHost() { return serverHost; }, get serverLast() { return serverLast; }, get serverUpdate() { return serverUpdate; },
+    get settings() { return settings; }, get sites() { return sites; }, get sshCommand() { return sshCommand; }, get state() { return state; },
+    get tellUpdate() { return tellUpdate; }, set tellUpdate(v) { tellUpdate = v; },
+    get updateWindow() { return updateWindow; }, set updateWindow(v) { updateWindow = v; }, get uuid() { return uuid; },
+    get window() { return window; } };
   // KDE/GNOME on Wayland match a window to its menu entry and icon by app id; without this it is "electron" (generic icon).
   if (process.platform === 'linux') app.setDesktopName('p9-event-horizon.desktop');
   // Lets the freeze record read the stack a hung page is stuck in (with the Document-Policy header serve() sends).
@@ -1005,116 +927,7 @@ export async function createDesktop({ state, open } = {}) {
     await keepServer();
     return { remotes };
   });
-  // Send to server (D14, move.mjs): this computer's chat moves to the server used last. From Local only: in Server mode the
-  // chats are on the server already. One move per chat at a time; each has its Cancel.
-  // Its progress goes to the window on p9:move (specs/move-progress-events.md, threat row 3): phase, percent, bytes and the
-  // host main chose, never a path or a credential. Only for drawing; the ledger events stay the record.
-  // With a Send files plan (item 23): id, plan id, choice, deleteToo, as the page answered the prompt for the chat's folder. The
-  // folder goes over first, a Syncthing folder's not at all (Builder, 2026-10-27: "Keep today's wait"). Limits refuse before the freeze.
-  const sending = new Map();
-  let xferPlan = null, xferBusy = false; // Send files' plan and its one-at-a-time, below; a move with files takes them too
-  ipcMain.handle('p9:send-to-server', async (event, ...args) => {
-    const [id, planId, choice, deleteToo] = args;
-    const ok = uuid(id) && (args.length === 1 || args.length === 4 && uuid(planId) && (choice === null || ['laptop', 'server', 'newer'].includes(choice)) && typeof deleteToo === 'boolean');
-    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
-    if (serverHost) return { status: 409, body: { error: 'server-mode', message: 'This window is on the remote already.' } };
-    if (!serverLast) return { status: 409, body: { error: 'no-server', message: 'No remote yet: add one in Settings > Remote Connect first.' } };
-    if (!localState || sending.has(id)) return { status: 409, body: { error: 'busy', message: 'This chat is moving already.' } };
-    let files = null, to;
-    if (planId) {
-      if (xferBusy) return { status: 409, body: { error: 'busy', message: 'A send is running already.' } };
-      if (xferPlan?.id !== planId || xferPlan.host !== serverLast) return { status: 409, body: { error: 'stale', message: 'That check of the files is gone: press Send to remote again.' } };
-      const { plan: p } = xferPlan, synced = p.syncthing.laptop.length || p.syncthing.server.length;
-      // U4: a chat outside the workspace lands where its plan settled (p.roots.server). In a Syncthing folder its plan
-      // carries only that: the files wait for the sync, as a workspace chat's do.
-      to = p.roots?.server;
-      if (!synced) {
-        const work = resolveXfer(p, choice, deleteToo);
-        if (!work) return { status: 409, body: { error: 'choice', message: 'Pick how to settle the files that differ.' } };
-        const limit = overLimit(work, settings.xfer, p.truncated);
-        if (limit) return { status: 409, body: limit };
-        files = { userData: app.getPath('userData'), plan: p, work };
-      }
-      xferPlan = null;
-    }
-    const stop = new AbortController();
-    sending.set(id, stop);
-    if (files) xferBusy = true;
-    const onProgress = move => { if (!window.isDestroyed()) window.webContents.send('p9:move', move); };
-    try { return await sendToServer({ local: localState, id, host: serverLast, ssh: sshCommand, onProgress, signal: stop.signal, files, to }); }
-    catch (error) { return { status: 503, body: { error: 'daemon-unavailable', message: noAnswer(error, serverLast) } }; }
-    finally { sending.delete(id); if (files) xferBusy = false; }
-  });
-  ipcMain.handle('p9:move-cancel', (event, ...args) => {
-    if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
-    sending.get(args[0])?.abort();
-    return { cancelling: sending.has(args[0]) };
-  });
-  // Item 14: the server update's progress (server-update.mjs), and its last event for a window that loads after it.
-  tellUpdate = event => { if (!window.isDestroyed()) window.webContents.send('p9:server-update', event); };
-  updateWindow = window;
-  ipcMain.handle('p9:server-update', event => { if (!fromApp(event)) throw new Error('ipc-sender-refused'); return serverUpdate; });
-  // Send files (item 23, xfer.mjs): 'plan' compares a workspace folder here and on the server used last and keeps the plan
-  // here by id; the page shows what it asks and answers with 'run', id, choice, deleteToo. The page never sees a path's
-  // bytes or the server's credentials. One send at a time; progress comes as p9:xfer events.
-  const XFER_FOLDER = /^(?:[^/\\\0]+(?:\/[^/\\\0]+)*)?$/, SHOWN = 500;
-  const inWorkspace = f => typeof f === 'string' && f.length <= 4096 && XFER_FOLDER.test(f) && !f.split('/').some(p => p === '.' || p === '..');
-  const fullPath = f => typeof f === 'string' && f.length <= 4096 && !f.includes('\0') && isFull(f);
-  // U4 (Builder, 2026-11-02): the remote folder picker for a chat started outside the workspace walks the remote over a tunnel
-  // of its own ('folders' and 'list', as the window's /files/folders and /files/list). Kept open between clicks, closed after
-  // a minute without one. ponytail: one picker tunnel; a second window's walk shares it.
-  let pickLink = null, pickTimer;
-  const pickCall = async (route) => {
-    clearTimeout(pickTimer);
-    if (pickLink?.host !== serverLast) { pickLink?.link.then(l => l.tunnel.close()).catch(() => {}); pickLink = { host: serverLast, link: openXfer({ local: localState, host: serverLast, ssh: sshCommand }) }; }
-    const mine = pickLink;
-    try { return await (await mine.link).serverCall('GET', route); }
-    catch (error) { if (pickLink === mine) pickLink = null; mine.link.then(l => l.tunnel.close()).catch(() => {}); return { status: 503, body: { error: 'no-answer', message: noAnswer(error, serverLast) } }; }
-    finally { pickTimer = setTimeout(() => { const gone = pickLink; pickLink = null; gone?.link.then(l => l.tunnel.close()).catch(() => {}); }, 60_000); pickTimer.unref?.(); }
-  };
-  // The picker's tunnel goes with P9: an ssh left behind would hold the connection open after quit.
-  app.once('will-quit', () => { clearTimeout(pickTimer); const gone = pickLink; pickLink = null; gone?.link.then(l => l.tunnel.close()).catch(() => {}); });
-  ipcMain.handle('p9:xfer', async (event, ...args) => {
-    const [action, a, b, c] = args;
-    // 'plan' with a chat's full path (U4, a chat started outside the workspace) and maybe to, where it goes on the remote.
-    const ok = action === 'plan' ? (args.length === 2 && (inWorkspace(a) || fullPath(a))) || (args.length === 3 && fullPath(a) && (inWorkspace(b) || fullPath(b)))
-      : action === 'folders' ? args.length === 3 && ['folders', 'list'].includes(a) && typeof b === 'string' && b.length <= 4096 && !b.includes('\0')
-      : action === 'run' && args.length === 4 && uuid(a) && (b === null || ['laptop', 'server', 'newer'].includes(b)) && typeof c === 'boolean';
-    if (!fromApp(event) || !ok) throw new Error('ipc-sender-refused');
-    if (action === 'folders') {
-      if (serverHost || !serverLast || !localState) return { status: 409, body: { error: 'no-server' } };
-      return pickCall(a === 'folders' ? '/files/folders?' + new URLSearchParams({ path: b }) : '/files/list?' + new URLSearchParams({ path: b }));
-    }
-    if (serverHost) return { error: 'server-mode', message: 'Switch Settings > Remote Connect to Local first: Send files copies this computer\'s files to the remote.' };
-    if (!serverLast) return { error: 'no-server', message: 'No remote yet: add one in Settings > Remote Connect first.' };
-    if (!localState) return { error: 'daemon-unavailable', message: 'P9 on this computer did not answer.' };
-    if (xferBusy) return { error: 'busy', message: 'A send is running already.' };
-    xferBusy = true;
-    try {
-      if (action === 'plan') {
-        const got = await planFolder({ local: localState, host: serverLast, folder: a, to: args.length === 3 ? b : undefined, userData: app.getPath('userData'), ssh: sshCommand });
-        if (got.error) return got;
-        const p = got.plan, record = !p.first.length; // first: nothing sent to this folder yet
-        xferPlan = { id: randomUUID(), host: serverLast, plan: p };
-        const asked = [...p.conflicts, ...p.first];
-        return { id: xferPlan.id, host: serverLast, folder: a, ...(p.roots && { to: p.roots.server }), send: p.send.length, same: p.same.length, sendBytes: p.send.reduce((n, i) => n + i.laptop.size, 0),
-          kind: p.first.length ? 'first' : p.conflicts.length ? 'conflict' : null, summary: p.summary, asked: asked.length,
-          list: asked.slice(0, SHOWN).map(item => ({ path: item.path, text: describeXfer(item, record) })),
-          deletes: p.deletes.length, deleteList: p.deletes.slice(0, SHOWN).map(item => item.path), skipped: p.skipped, syncthing: p.syncthing };
-      }
-      if (xferPlan?.id !== a) return { error: 'stale', message: 'That plan is gone: press Send files again.' };
-      const { host, plan: p } = xferPlan, work = resolveXfer(p, b, c);
-      if (!work) return { error: 'choice', message: 'Pick how to settle the files that differ.' };
-      const limit = overLimit(work, settings.xfer, p.truncated);
-      if (limit) return limit;
-      xferPlan = null; // used once: sending again plans again (Builder, 2026-10-27: that is the resync)
-      const r = await runPlan({ local: localState, host, userData: app.getPath('userData'), plan: p, work, ssh: sshCommand,
-        onProgress: progress => { if (!window.isDestroyed()) window.webContents.send('p9:xfer', { id: a, ...progress }); } });
-      return { ...r, sent: r.sent?.length ?? 0, received: r.received?.length ?? 0, deletedOnServer: r.deletedOnServer?.length ?? 0, deletedHere: r.deletedHere?.length ?? 0,
-        kept: (r.recovery?.server.length ?? 0) + (r.recovery?.laptop.length ?? 0), recovery: undefined, changed: r.changed?.length ?? 0 };
-    } catch (error) { return { error: 'daemon-unavailable', message: noAnswer(error, serverLast) }; }
-    finally { xferBusy = false; }
-  });
+  sendIpc(outer);
   ipcMain.handle('p9:terminal-open', async (event, ...args) => {
     if (!fromApp(event) || args.length !== 1 || !uuid(args[0])) throw new Error('ipc-sender-refused');
     endDock();
@@ -1385,60 +1198,7 @@ export async function createDesktop({ state, open } = {}) {
     const image = await devView.webContents.capturePage().catch(() => null);
     return image && !image.isEmpty() ? 'data:image/jpeg;base64,' + image.toJPEG(90).toString('base64') : null;
   });
-  // The Dev Focus cards overlay (threat model row 3, p9:cards): the shell hands over a bounded list of card texts and where to
-  // put them; the overlay view above the editor draws them and says which one was clicked. Created when first needed, closed a
-  // minute after it was last hidden, so it costs nothing in the other focuses.
-  const fromCards = event => cardsView && event.sender === cardsView.webContents && event.senderFrame === cardsView.webContents.mainFrame && event.senderFrame.url.startsWith(CARDS_URL);
-  const text = (value, max) => typeof value === 'string' && value.length <= max;
-  const openCards = () => {
-    if (cardsView) return cardsView;
-    const cardsSession = session.fromPartition('p9-cards'); // not persist: nothing kept
-    if (!cardsSession.protocol.isProtocolHandled('p9')) { sites.cards = cardsSite(); cardsSession.protocol.handle('p9', serve('cards')); }
-    cardsSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (_details, callback) => callback({ cancel: true }));
-    cardsSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    cardsSession.setPermissionCheckHandler(() => false);
-    cardsView = new WebContentsView({ webPreferences: { preload: fileURLToPath(new URL('./cards-preload.cjs', import.meta.url)), session: cardsSession, sandbox: true,
-      contextIsolation: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false } });
-    cardsView.setBackgroundColor('#00000000');
-    cardsView.webContents.on('dom-ready', () => cardsView?.webContents.setZoomFactor(settings.zoom));
-    cardsView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    cardsView.webContents.on('will-navigate', event => event.preventDefault());
-    cardsView.webContents.on('will-attach-webview', event => event.preventDefault());
-    cardsView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-    window.contentView.addChildView(cardsView);
-    cardsView.webContents.loadURL(CARDS_URL).catch(() => {});
-    return cardsView;
-  };
-  ipcMain.handle('p9:cards', (event, ...args) => {
-    const [c] = args, whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000;
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length !== 1 || !c || typeof c.visible !== 'boolean'
-        || (c.visible && (!['x', 'y', 'width'].every(key => whole(c[key])) || !Array.isArray(c.items) || c.items.length > 8
-          || !c.items.every(i => i && text(i.key, 300) && text(i.title, 200) && text(i.sub, 300) && (i.n === undefined || whole(i.n)))))) throw new Error('ipc-sender-refused');
-    if (!c.visible || !c.items.length) {
-      cardsView?.setVisible(false);
-      if (cardsView && !cardsHide) cardsHide = setTimeout(() => { cardsHide = null; if (cardsView && !cardsView.getVisible()) { window.contentView.removeChildView(cardsView); cardsView.webContents.close(); cardsView = null; } }, 60000);
-      return { ok: true };
-    }
-    clearTimeout(cardsHide); cardsHide = null;
-    const z = window.webContents.getZoomFactor(), px = value => Math.round(value * z), view = openCards();
-    cardsItems = c.items.map(i => ({ key: i.key, title: i.title, sub: i.sub, ...(i.n === undefined ? {} : { n: i.n }) }));
-    view.webContents.send('p9cards:list', cardsItems);
-    const bounds = view.getBounds();
-    view.setBounds({ x: px(c.x), y: px(c.y), width: px(c.width), height: bounds.height }); // the page says how tall it is
-    view.setVisible(true);
-    return { ok: true };
-  });
-  ipcMain.handle('p9cards:ready', event => { if (!fromCards(event)) throw new Error('ipc-sender-refused'); return { items: cardsItems, look }; });
-  ipcMain.on('p9cards:size', (event, height) => {
-    if (!fromCards(event) || !Number.isSafeInteger(height) || height < 0 || height > 4000) return;
-    const b = cardsView.getBounds(); cardsView.setBounds({ ...b, height: Math.round(height * window.webContents.getZoomFactor()) });
-  });
-  ipcMain.on('p9cards:act', (event, input) => {
-    if (!fromCards(event) || !input || !text(input.key, 300) || !['open', 'x'].includes(input.action)) return;
-    window.webContents.focus();
-    window.webContents.send('p9:card-act', { key: input.key, action: input.action });
-  });
+  cardsIpc(outer);
   // Settings: no argument reads them; one argument is the whole new shape, refused unless checkSettings takes it.
   ipcMain.handle('p9:settings', async (event, ...args) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
@@ -1458,85 +1218,7 @@ export async function createDesktop({ state, open } = {}) {
     devView?.webContents.setZoomFactor(settings.zoom);
     return settings;
   });
-  // Pets: no argument lists the usable ones (name and display name only); one argument is a folder name to load.
-  ipcMain.handle('p9:pets', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length > 1) throw new Error('ipc-sender-refused');
-    if (args.length) return (await loadPet(petsFolder, args[0])) ?? Promise.reject(new Error('pet-refused'));
-    const names = (await readdir(petsFolder).catch(() => [])).filter(name => PET_NAME.test(name)).sort().slice(0, 50);
-    const pets = (await Promise.all(names.map(name => loadPet(petsFolder, name)))).filter(Boolean).map(({ name, displayName }) => ({ name, displayName }));
-    return { folder: petsFolder, pets, importable: (await importable()).length };
-  });
-  // Import: Codex's pets folders, names P9 does not have yet; each still goes through addPet's checks on the click. Codex keeps
-  // them under CODEX_HOME when it is set, but petdex 1.4.0 always writes ~/.codex/pets (read 2026-11-01), so both are read,
-  // CODEX_HOME's first; a name in both comes from CODEX_HOME.
-  const petdexFolders = () => [...new Set([process.env.CODEX_HOME && path.join(path.resolve(process.env.CODEX_HOME), 'pets'), path.join(app.getPath('home'), '.codex', 'pets')].filter(Boolean))];
-  const importable = async () => {
-    const have = new Set(await readdir(petsFolder).catch(() => [])), found = new Map();
-    for (const folder of petdexFolders()) {
-      for (const name of await readdir(folder).catch(() => [])) if (PET_NAME.test(name) && !have.has(name) && !found.has(name)) found.set(name, path.join(folder, name));
-    }
-    return [...found.keys()].sort().slice(0, 20).map(name => found.get(name)); // the folders to import
-  };
-  const addFolders = async folders => {
-    const added = [], refused = [];
-    for (const folder of folders.slice(0, 20)) {
-      const why = await addPet(petsFolder, folder);
-      (why ? refused : added).push({ name: path.basename(folder).slice(0, 80), ...(why && { why }) });
-    }
-    return { added, refused };
-  };
-  ipcMain.handle('p9:pet-import', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length) throw new Error('ipc-sender-refused');
-    return addFolders(await importable());
-  });
-  // Install (Builder, 2026-10-18: paste "the npm command from petdex.dev"): the page sends the pasted text; main keeps only the pet
-  // names after "install", then does what petdex 1.4.0's install does (read 2026-10-18): petdex.dev's manifest, then the pet's
-  // pet.json and sheet from assets.petdex.dev only. Nothing downloaded runs; each pet goes through Add's checks (threat model row 16).
-  const getBytes = async (url, max) => {
-    const res = await fetch(url, { headers: { Accept: 'application/json, image/*' }, signal: AbortSignal.timeout(20000) });
-    if (!res.ok || +res.headers.get('content-length') > max) throw new Error('fetch');
-    const bytes = Buffer.from(await res.arrayBuffer()); if (bytes.length > max) throw new Error('fetch'); return bytes;
-  };
-  const asset = (rel, base) => { const u = new URL(rel, base + '/'); if (u.protocol !== 'https:' || u.hostname !== 'assets.petdex.dev') throw new Error('host'); return u.href; };
-  ipcMain.handle('p9:pet-install', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 300) throw new Error('ipc-sender-refused');
-    // The words after the last "install" (or all of them), each a pet name; split, not one regex (a nested one froze main on a long typo).
-    const words = args[0].trim().split(/\s+/), tail = words.slice(words.lastIndexOf('install') + 1);
-    const names = tail.every(word => PET_NAME.test(word)) ? [...new Set(tail)].slice(0, 5) : [];
-    if (!names.length) return { added: [], refused: [{ name: args[0].slice(0, 80), why: 'command' }] };
-    let list;
-    try { const m = JSON.parse(await getBytes('https://petdex.dev/api/manifest/v2', 16 << 20)); list = m.v === 2 && Array.isArray(m.pets) && m.pets; if (!list) throw 0; asset('', m.assetBase); list.base = m.assetBase; }
-    catch { return { added: [], refused: names.map(name => ({ name, why: 'offline' })) }; }
-    const tmp = await mkdtemp(path.join(os.tmpdir(), 'p9-petdex-')), folders = [], refused = [];
-    try {
-      for (const name of names) {
-        const row = list.find(p => Array.isArray(p) && p[0] === name);
-        if (!row) { refused.push({ name, why: 'unknown' }); continue; }
-        try {
-          const meta = JSON.parse(await getBytes(asset(row[5], list.base), 16 << 10)), sheet = asset(row[4], list.base), ext = path.extname(new URL(sheet).pathname);
-          if (!['.webp', '.png'].includes(ext)) throw 0;
-          await mkdir(path.join(tmp, name));
-          await writeFile(path.join(tmp, name, 'pet.json'), JSON.stringify({ id: String(meta.id ?? name), displayName: String(meta.displayName ?? row[1]), description: String(meta.description ?? ''), spritesheetPath: 'spritesheet' + ext }));
-          await writeFile(path.join(tmp, name, 'spritesheet' + ext), await getBytes(sheet, 8 << 20));
-          folders.push(path.join(tmp, name));
-        } catch (error) { refused.push({ name, why: error?.message === 'host' ? 'invalid' : 'offline' }); }
-      }
-      const r = await addFolders(folders); r.refused.push(...refused); return r;
-    } finally { await rm(tmp, { recursive: true, force: true }); }
-  });
-  // Add: no argument; the user picks folders in the native picker (it opens where the petdex command installs). Remove: one pet name.
-  ipcMain.handle('p9:pet-add', async (event, ...args) => {
-    if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL
-        || args.length) throw new Error('ipc-sender-refused');
-    let petdex = app.getPath('home');
-    for (const folder of petdexFolders()) if ((await stat(folder).catch(() => null))?.isDirectory()) { petdex = folder; break; }
-    const pick = await dialog.showOpenDialog(window, { title: 'Add pets', buttonLabel: 'Add', properties: ['openDirectory', 'multiSelections'],
-      defaultPath: petdex });
-    return addFolders(pick.canceled ? [] : pick.filePaths);
-  });
+  petsIpc(outer);
   // New chat's Choose folder... (threat model row 24): the system folder dialog, then only a folder inside the workspace's real path goes
   // back, workspace-relative ('' is the workspace itself). The daemon checks it again when the chat is made.
   // Setup's Pick buttons name a file ('setup-file') or folder ('setup-folder') the same way; the daemon checks the path again.
@@ -1784,93 +1466,7 @@ export async function createDesktop({ state, open } = {}) {
     cardsView?.webContents.send('p9cards:look', look);
     return { ok: true };
   });
-  ipcMain.handle('p9dev:config', async (event, ...args) => {
-    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
-    return { ...(await openDev()), look };
-  });
-  // A folder outside the workspace: the write names the root this page was opened on, so the daemon refuses it once Dev Focus has
-  // moved on. A restarted daemon has forgotten the root: set it again once, while it is still the open folder.
-  const devWrite = async (method, body) => {
-    const served = devServing, write = () => daemonRequest(state, method, '/files', served?.outside ? { ...body, root: served.path } : body);
-    const result = await write();
-    if (result.body?.error !== 'dev-root-unset' || served !== devFolder) return result;
-    if ((await daemonRequest(state, 'POST', '/dev/root', { path: served.path })).status !== 200) return result;
-    return write();
-  };
-  // Every editor save is the daemon's guarded save: the expected hash is what the editor loaded, so a disk change is a conflict.
-  ipcMain.handle('p9dev:save', async (event, ...args) => {
-    const [input] = args;
-    if (!fromDev(event) || args.length !== 1 || !input || typeof input.path !== 'string' || !/^[0-9a-f]{64}$/.test(input.hash ?? '') || typeof input.content !== 'string') throw new Error('ipc-sender-refused');
-    if (!state) return { kind: 'failed', error: 'daemon-unavailable' };
-    try { return (await devWrite('PUT', { path: input.path, hash: input.hash, content: input.content })).body; }
-    catch { return { kind: 'failed', error: 'daemon-unavailable' }; }
-  });
-  ipcMain.handle('p9dev:create', async (event, ...args) => {
-    const [input] = args;
-    if (!fromDev(event) || args.length !== 1 || !input || typeof input.path !== 'string' || typeof input.content !== 'string') throw new Error('ipc-sender-refused');
-    if (!state) return { kind: 'failed', error: 'daemon-unavailable' };
-    try {
-      const result = await devWrite('POST', { path: input.path, content: input.content });
-      return result.status === 201 ? result.body : { kind: 'failed', error: result.body?.error ?? String(result.status) };
-    } catch { return { kind: 'failed', error: 'daemon-unavailable' }; }
-  });
-  ipcMain.handle('p9dev:host-path', async (event, ...args) => {
-    if (!fromDev(event) || args.length !== 2 || typeof args[0] !== 'string' || !['write', 'name'].includes(args[1])) throw new Error('ipc-sender-refused');
-    if (serverHost) {
-      // The editor's data folder is on the server: its daemon checks the path there.
-      const answer = await daemonRequest(state, 'POST', '/dev/editor/writable', { path: args[0], kind: args[1] }).catch(() => null);
-      return answer?.status === 200 && answer.body?.ok === true;
-    }
-    const host = await editorHost?.catch(() => null);
-    return Boolean(host) && hostWritable(host.data, args[0], args[1]);
-  });
-  ipcMain.handle('p9dev:open-in-code', async (event, ...args) => {
-    const [input] = args;
-    if (!fromDev(event) || args.length !== 1 || !input) throw new Error('ipc-sender-refused');
-    const config = await openDev();
-    if (config.error) return { ok: false, error: config.error };
-    if (config.server) return { ok: false, error: 'server-mode' };
-    return openInCode({ workspace: config.workspace, name: input.name, line: input.line, reason: input.reason });
-  });
-  // p9 edit / p9 diff (threat model row 14). Anything running as Builder can start a second instance, so this is the boundary:
-  // exact shape, absolute paths, real path a regular file inside the workspace's real path. It only opens; saving stays guarded.
-  const checkOpen = async data => {
-    if (!state || !data || typeof data !== 'object' || Array.isArray(data)) return null;
-    const keys = Object.keys(data).sort().join(',');
-    const edit = data.open === 'edit' && keys === 'line,open,path' && Number.isSafeInteger(data.line) && data.line >= 1 && data.line <= 10000000;
-    if (!edit && !(data.open === 'diff' && keys === 'a,b,open')) return null;
-    const root = (await realpath((await health(state)).workspace)) + path.sep;
-    const name = async file => {
-      if (typeof file !== 'string' || !path.isAbsolute(file)) return null;
-      try {
-        const real = await realpath(file);
-        return real.startsWith(root) && (await stat(real)).isFile() ? real.slice(root.length).split(path.sep).join('/') : null;
-      } catch { return null; }
-    };
-    const names = await Promise.all(edit ? [name(data.path)] : [name(data.a), name(data.b)]);
-    if (names.includes(null)) return null;
-    return edit ? { open: 'edit', name: names[0], line: data.line } : { open: 'diff', a: names[0], b: names[1] };
-  };
-  const deliver = () => { while (devReady && queued.length) devView.webContents.send('p9dev:open', queued.shift()); };
-  const request = async data => {
-    const checked = await checkOpen(data).catch(() => null);
-    if (!checked) return console.error('p9: open request refused');
-    queued.push(checked);
-    // Names are workspace-relative: a folder outside it goes back to the workspace first (the new page's open-ready delivers).
-    if (devFolder?.outside) { daemonRequest(state, 'POST', '/dev/root', { path: null }).catch(() => null); devToWorkspace(); }
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-    window.webContents.send('p9:focus', 'dev');
-    deliver();
-  };
-  app.on('second-instance', (_event, _argv, _cwd, data) => { if (data && Object.keys(data).length) request(data); });
-  ipcMain.handle('p9dev:open-ready', (event, ...args) => {
-    if (!fromDev(event) || args.length) throw new Error('ipc-sender-refused');
-    devReady = true;
-    deliver();
-    return { ok: true };
-  });
+  const { request } = devIpc(outer);
   // Hot reload, source checkouts only: a new web build (pnpm build) is read again and the window reloads. Chats live in the
   // daemon and keep running; unsent composer text is lost. Daemon code still needs a daemon restart.
   // ponytail: an 800 ms quiet gap stands in for "build finished"; a half-written dist fails to load and the next file event retries.
