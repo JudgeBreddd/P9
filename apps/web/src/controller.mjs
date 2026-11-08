@@ -47,19 +47,21 @@ export function mountShell({ askAdmin } = {}) {
     get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
     get land() { return land; }, get landOn() { return landOn; }, get landVideo() { return landVideo; },
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
-    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; },
+    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get keepLists() { return keepLists; },
+    get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get defaultEffort() { return defaultEffort; },
+    get fresh() { return fresh; }, get startDefaults() { return startDefaults; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
     get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
     get looseOk() { return looseOk; }, get maintain() { return maintain; }, get mdOf() { return mdOf; }, get mdl() { return mdl; },
     get mirror() { return mirror; }, get missionFiles() { return missionFiles; }, set missionFiles(v) { missionFiles = v; },
-    get missionLive() { return missionLive; }, get modals() { return modals; }, get modelOpts() { return modelOpts; }, get morph() { return morph; },
+    get missionLive() { return missionLive; }, get modals() { return modals; }, get morph() { return morph; },
     get moveDlg() { return moveDlg; }, get moveReloaded() { return moveReloaded; }, get names() { return names; },
     get needsLabel() { return needsLabel; }, get newFolder() { return newFolder; }, get noteModal() { return noteModal; },
     get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; }, get petCanvas() { return petCanvas; },
     get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
     get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
-    get pickRemoteFolder() { return pickRemoteFolder; }, get pickerSelects() { return pickerSelects; }, get popover() { return popover; },
+    get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; },
     get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
     get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get renderMission() { return renderMission; },
     get renderModal() { return renderModal; }, get renderSideChat() { return renderSideChat; }, get renderTabs() { return renderTabs; },
@@ -144,21 +146,24 @@ function attrs(o, n) {
 }
 const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; addHalos(el); } return el; };
 // note 7: every chat starts in Auto mode
-// Each agent's last model and command lists (daemon config / available_commands_update), so a new chat has them before its own session starts.
+// Each agent's last model, picker and command lists (daemon config / available_commands_update), so a new chat has them
+// before its own session starts. 0.1.8: the lists are kept per computer too, so Settings > New chats start in can offer
+// Default model and Default effort after a restart (keepLists).
 const lastModels = {}, lastCommands = {}, lastPickers = {};
-// Live chats list the agent's own models; the sample data keeps its two names.
-function modelOpts(s) {
-  const m = s.models || lastModels[s.agent];
-  if (!s.live || !m) return `<option>${esc(s.model)}</option><option>${s.agent === 'codex' ? 'gpt-5.1-codex-mini' : 'Sonnet 5.5'}</option>`;
-  const pick = s.modelPick || m.current;
-  return m.options.map(o => `<option value="${esc(o.value)}"${o.value === pick ? ' selected' : ''}>${esc(o.name)}</option>`).join('');
-}
-// Live chats show the agent's own Effort, Fast mode and (Codex) plan switch (threat model row 22); the sample data keeps its Effort.
-function pickerSelects(s) {
-  const list = s.pickers || lastPickers[s.agent];
-  if (!s.live || !list) return `<select data-slot="select" aria-label="Effort"><option>${esc(s.effort)}</option><option>High</option><option>Low</option></select>`;
-  return list.map(p => { const pick = s.pick?.[p.id] ?? p.current;
-    return `<select data-slot="select" aria-label="${esc(p.name)}" data-pick="${esc(p.id)}">${p.options.map(o => `<option value="${esc(o.value)}"${o.value === pick ? ' selected' : ''}>${esc(p.name)}: ${esc(o.name)}</option>`).join('')}</select>`; }).join('');
+const KEPT = { models: lastModels, pickers: lastPickers };
+for (const [k, into] of Object.entries(KEPT)) for (const a of Object.keys(modes)) try { const v = JSON.parse(localStorage.getItem(`p9-${k}:` + a)); if (v) into[a] = v; } catch {}
+const keepLists = agent => { for (const [k, from] of Object.entries(KEPT)) try { localStorage.setItem(`p9-${k}:` + agent, JSON.stringify(from[agent] ?? null)); } catch {} };
+// The agent's other settings (threat model row 22), told apart by category: Effort (thought_level), Fast mode (model_config, in
+// the Model menu) and Codex's plan switch (collaboration_mode, the Mode menu's Plan). A list without categories (an older
+// daemon on a remote) goes by name. The chat bar's pills that read them are in chat-view.mjs.
+const pickerKind = p => p.category === 'thought_level' || !p.category && /effort|thought/i.test(p.id + p.name) ? 'effort' : p.category === 'collaboration_mode' || !p.category && /collab/i.test(p.id) ? 'collab' : 'model';
+// Settings > New chats start in: Default model and Default effort per agent, applied to chats this window makes (startDefaults)
+// when the agent still offers them; a chat's own pick never changes them. fresh: ids made here whose 'created' is still to come.
+const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
+const fresh = new Set();
+function startDefaults(s) {
+  const m = defaultModel(s.agent); if (m && lastModels[s.agent]?.options.some(o => o.value === m)) s.modelPick = m;
+  const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
 // picked for its agent on this computer (at first Claude Auto, Codex Auto review); the two loosened modes ask first, in red.
@@ -1206,6 +1211,7 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
 };
 liveChat.create = async (agent, folder = '') => {
   const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }) });
+  if (r.status === 201) { const s = S.sessions.find(x => x.id === r.body.conversation); s ? startDefaults(s) : fresh.add(r.body.conversation); }
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;
 };

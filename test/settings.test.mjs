@@ -17,6 +17,13 @@ const SKIPPER = { system: 'skipper' }, DEFAULT_PETS = { chat: look(true, SKIPPER
 const DOCS_URL = 'https://github.com/' + REPO + '#readme'; // main.mjs loads only inside Electron
 const RELEASES_URL = 'https://github.com/' + REPO + '/releases/latest';
 const PETDEX_URL = 'https://petdex.dev';
+// 0.1.8: Mode, Model and Effort are pills in the message bar (controller.mjs pillMenu); each opens a menu of menuitemradio choices.
+// pillValue reads a pill's value from its aria-label; pillItems lists a menu (the checked ones marked); choose picks (no submenus, Builder, 2026-11-05).
+const pillOf = (pane, kind) => pane.locator(`[data-pill="${kind}"]`);
+const pillValue = async (pane, kind) => (await pillOf(pane, kind).getAttribute('aria-label')).replace(kind + ': ', '');
+const menuItem = (page, label) => page.locator('#pillMenu .item').filter({ has: page.locator(`.truncate:text-is("${label}")`) });
+const pillItems = async (page, pane, kind) => { await pillOf(pane, kind).click(); await page.locator('#pillMenu:not([hidden])').waitFor(); const items = await page.locator('#pillMenu .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent + (b.getAttribute('aria-checked') === 'true' ? ' ✓' : ''))); await page.keyboard.press('Escape'); return items; };
+const choose = async (page, pane, kind, ...labels) => { await pillOf(pane, kind).click(); for (const label of labels) await menuItem(page, label).click(); };
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -1156,7 +1163,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   console.log('PASS cards: old item quiet in the bell, chat-made item carded at turn end, card kept across events, Skip clears it, chat is a robot head, x stops it');
 });
 
-test('Models and slash commands: the Model select lists the agent\'s own models, typing / lists its commands, a picked model reaches the agent', { timeout: 120000 }, async (t) => {
+test('Models and slash commands: the Model pill lists the agent\'s own models, typing / lists its commands, a picked model reaches the agent', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-models-')), 'profile');
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
@@ -1169,9 +1176,11 @@ test('Models and slash commands: the Model select lists the agent\'s own models,
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
   await page.locator('#tabs .tab[data-id="' + id + '"]').click();
-  const pane = page.locator('.pane[data-id="' + id + '"]'), select = pane.locator('select[data-model]');
-  await select.locator('option[value="haiku"]').waitFor({ state: 'attached', timeout: 10000 });
-  assert.deepEqual(await select.locator('option').allInnerTexts(), ['Default (recommended)', 'Opus', 'Haiku']);
+  const pane = page.locator('.pane[data-id="' + id + '"]');
+  // 0.1.8: the Model pill in the message bar lists the agent's models under its name, then Fast mode under its own (no submenus).
+  await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
+  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended) ✓', 'Opus', 'Haiku', 'On', 'Off ✓']);
+  assert.deepEqual(await page.locator('#pillMenu .hd').evaluateAll((l) => l.map((h) => h.textContent)), ['Claude', 'Fast mode']);
   const ta = pane.locator('.composer textarea'), menu = pane.locator('[data-slash]');
   await ta.click(); await page.keyboard.type('/');
   assert.deepEqual(await menu.locator('[data-cmd]').evaluateAll((b) => b.map((x) => x.dataset.cmd)), ['compact', 'context', 'review']);
@@ -1192,21 +1201,24 @@ test('Models and slash commands: the Model select lists the agent\'s own models,
   await ta.fill('');
   // Flashing (Builder, 2026-10-18): a turn updates the pane and its tab in place; rebuilt ones restart every animation.
   await pane.evaluate((el) => { el.kept = 'yes'; }); await page.locator('#tabs .tab[data-id="' + id + '"]').evaluate((el) => { el.kept = 'yes'; });
-  await select.selectOption('opus');
+  await choose(page, pane, 'Model', 'Opus');
+  assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the pick at once');
   await ta.click(); await page.keyboard.type('model'); await page.keyboard.press('Enter');
   await pane.getByText('model:opus').waitFor({ timeout: 15000 });
   await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
-  assert.equal(await pane.locator('select[data-model]').inputValue(), 'opus', 'the select shows the model now in use');
+  assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the model now in use');
   assert.deepEqual([await pane.evaluate((el) => el.kept), await page.locator('#tabs .tab[data-id="' + id + '"]').evaluate((el) => el.kept)], ['yes', 'yes'], 'pane or tab rebuilt by the turn');
   // Effort and the other agent settings (Builder, 2026-10-18: "wire all of them"; threat model row 22): the agent's own lists, picked values reach it.
-  assert.deepEqual(await pane.locator('select[data-pick]').evaluateAll((l) => l.map((x) => x.getAttribute('aria-label') + '=' + x.value + ':' + [...x.options].map((o) => o.text).join('|'))),
-    ['Effort=medium:Effort: Low|Effort: Medium|Effort: High', 'Fast mode=off:Fast mode: On|Fast mode: Off']);
-  await pane.locator('select[data-pick="effort"]').selectOption('high'); await pane.locator('select[data-pick="fast"]').selectOption('on');
+  assert.equal(await pillValue(pane, 'Effort'), 'Medium');
+  assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium ✓', 'High']);
+  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On', 'Off ✓']);
+  await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
   await ta.click(); await page.keyboard.type('config'); await page.keyboard.press('Enter');
   await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 });
   await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
-  assert.deepEqual(await pane.locator('select[data-pick]').evaluateAll((l) => l.map((x) => x.value)), ['high', 'on'], 'the selects show the settings now in use');
-  if (process.env.P9_EVIDENCE) await pane.locator('.ptool').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'pickers.png') });
+  assert.equal(await pillValue(pane, 'Effort'), 'High', 'the pill shows the effort now in use');
+  assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On ✓', 'Off'], 'the menu shows the fast mode now in use');
+  if (process.env.P9_EVIDENCE) await pane.locator('.composer .bar').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'pickers.png') });
   // Split shows the last two chats opened (Builder, 2026-10-19: one chat open, then a new one, and Split showed one pane).
   await page.click('#rSplit');
   const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
@@ -1311,15 +1323,15 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
     const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
     await page.locator(`#tabs .tab[data-id="${id}"]`).click();
     const pane = page.locator(`#chats .pane[data-id="${id}"]`);
-    await pane.locator('[data-mode]').waitFor();
+    await pane.locator('[data-pill="Mode"]').waitFor();
     return pane;
   };
   let dlg = page.locator('#looseDlg');
-  const mode = (pane) => pane.locator('[data-mode]');
-  // The dialog's close event runs a task after open turns false; give the picker up to 3 s to show the mode, then assert.
+  const mode = (pane) => pillOf(pane, 'Mode');
+  // The dialog's close event runs a task after open turns false; give the pill up to 3 s to show the mode, then assert.
   const settled = async (pane, want, message) => {
-    await mode(pane).evaluate((el, w) => new Promise((ok) => { const end = Date.now() + 3000; (function tick() { if (el.value === w || Date.now() > end) ok(); else setTimeout(tick, 20); })(); }), want);
-    assert.equal(await mode(pane).inputValue(), want, message);
+    await mode(pane).evaluate((el, w) => new Promise((ok) => { const end = Date.now() + 3000; (function tick() { if (el.getAttribute('aria-label') === 'Mode: ' + w || Date.now() > end) ok(); else setTimeout(tick, 20); })(); }), want);
+    assert.equal(await pillValue(pane, 'Mode'), want, message);
   };
   // After Turn on the picker already reads the new mode (the browser set it); the handler sets s.mode only once the dialog's
   // close task runs. Its localStorage write marks that, so the next prompt carries the new mode (GitHub run 39527149498).
@@ -1329,9 +1341,9 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
     try { await pane.locator('.msg.agent', { hasText: want }).waitFor({ timeout: 15000 }); }
     catch (error) { throw new Error(`no reply "${want}"; the pane shows:\n${(await pane.innerText().catch(() => '?')).slice(-1500)}`, { cause: error }); } };
   let codex = await chat('codex');
-  assert.equal(await mode(codex).inputValue(), 'Auto review', 'a new install starts Codex in Auto review');
-  assert.deepEqual(await mode(codex).locator('option').allInnerTexts(), ['Read-only', 'Workspace access', 'Auto review', 'Full access']);
-  await mode(codex).selectOption('Full access');
+  assert.equal(await pillValue(codex, 'Mode'), 'Auto review', 'a new install starts Codex in Auto review');
+  assert.deepEqual(await pillItems(page, codex, 'Mode'), ['Read-only', 'Workspace access', 'Auto review ✓', 'Full access', 'Plan']);
+  await choose(page, codex, 'Mode', 'Full access');
   await dlg.waitFor();
   assert.match(await dlg.innerText(), /Turn on Full access for Codex\?[\s\S]*any file on this computer/);
   const red = await dlg.evaluate((d) => [getComputedStyle(d).borderTopColor, getComputedStyle(d).borderTopWidth]);
@@ -1341,15 +1353,15 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   await dlg.getByRole('button', { name: 'Cancel' }).click();
   await settled(codex, 'Auto review', 'Cancel keeps the old mode');
   await said(codex, 'mode', 'mode:agent');
-  await mode(codex).selectOption('Full access'); await dlg.waitFor(); await page.keyboard.press('Escape'); await dlg.waitFor({ state: 'hidden' });
+  await choose(page, codex, 'Mode', 'Full access'); await dlg.waitFor(); await page.keyboard.press('Escape'); await dlg.waitFor({ state: 'hidden' });
   await settled(codex, 'Auto review', 'Escape cancels too');
-  await mode(codex).selectOption('Full access'); await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
+  await choose(page, codex, 'Mode', 'Full access'); await dlg.getByRole('button', { name: 'Turn on', exact: true }).click();
   await settled(codex, 'Full access', 'Turn on sets the mode');
   await applied('codex', 'Full access');
   await said(codex, 'mode', 'mode:agent-full-access');
   let claude = await chat('claude');
-  assert.equal(await mode(claude).inputValue(), 'Auto');
-  await mode(claude).selectOption('Bypass permissions');
+  assert.equal(await pillValue(claude, 'Mode'), 'Auto');
+  await choose(page, claude, 'Mode', 'Bypass permissions');
   await dlg.getByRole('button', { name: 'Turn on, don\'t show again' }).click();
   await settled(claude, 'Bypass permissions', 'Turn on sets the mode');
   await applied('claude', 'Bypass permissions');
@@ -1358,12 +1370,12 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   ({ app, page } = await launch()); dlg = page.locator('#looseDlg');
   codex = await chat('codex');
   // Review #2: "Turn on" was for that chat; a new one does not start in Full access without "don't show again".
-  assert.equal(await mode(codex).inputValue(), 'Auto review', 'a loosened last pick does not carry to a new chat after a plain Turn on');
+  assert.equal(await pillValue(codex, 'Mode'), 'Auto review', 'a loosened last pick does not carry to a new chat after a plain Turn on');
   claude = await chat('claude');
-  await mode(claude).selectOption('Manual'); await mode(claude).selectOption('Bypass permissions');
+  await choose(page, claude, 'Mode', 'Manual'); await choose(page, claude, 'Mode', 'Bypass permissions');
   await said(claude, 'mode', 'mode:bypassPermissions');
   assert.equal(await dlg.evaluate((d) => d.open), false, 'don\'t show again: no warning');
-  codex = await chat('codex'); await mode(codex).selectOption('Read-only'); await mode(codex).selectOption('Full access');
+  codex = await chat('codex'); await choose(page, codex, 'Mode', 'Read-only'); await choose(page, codex, 'Mode', 'Full access');
   await dlg.waitFor(); await dlg.getByRole('button', { name: 'Cancel' }).click();
   await settled(codex, 'Read-only', 'Full access still warns: its own don\'t show again was never picked');
   console.log('PASS loosened modes: Codex starts in Auto review; Full access warns in red, Cancel and Escape keep Auto review, Turn on reaches the agent but does not carry to the next new chat; Claude bypass with don\'t show again skips the warning after a restart; Full access still warns');
@@ -1382,8 +1394,8 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
     const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
     await page.locator(`#tabs .tab[data-id="${id}"]`).click();
     const pane = page.locator(`#chats .pane[data-id="${id}"]`);
-    await pane.locator('[data-mode]').waitFor();
-    return pane.locator('[data-mode]');
+    await pane.locator('[data-pill="Mode"]').waitFor();
+    return pane;
   };
   const pick = page.locator('[data-default-mode="codex"]'), dlg = page.locator('#looseDlg');
   const settings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); await page.click('[data-set-page="Chat Focus"]'); };
@@ -1401,7 +1413,7 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
   await page.waitForFunction(() => document.querySelector('[data-default-mode="codex"]').value === '', null, { timeout: 3000 });
   assert.equal(await kept(), null);
   await closeSettings();
-  assert.equal(await (await chat('codex')).inputValue(), 'Auto review', 'Cancel: a new chat still starts in Auto review');
+  assert.equal(await pillValue(await chat('codex'), 'Mode'), 'Auto review', 'Cancel: a new chat still starts in Auto review');
   // Turn on: every new Codex chat starts in Full access, and a chat's own pick does not change that.
   await settings();
   await pick.selectOption('Full access');
@@ -1409,17 +1421,17 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
   await page.waitForFunction(() => localStorage.getItem('p9-mode-default:codex') === 'Full access', null, { timeout: 3000 });
   await closeSettings();
   const first = await chat('codex');
-  assert.equal(await first.inputValue(), 'Full access');
-  await first.selectOption('Read-only');
+  assert.equal(await pillValue(first, 'Mode'), 'Full access');
+  await choose(page, first, 'Mode', 'Read-only');
   await page.waitForFunction(() => localStorage.getItem('p9-mode:codex') === 'Read-only', null, { timeout: 3000 });
-  assert.equal(await (await chat('codex')).inputValue(), 'Full access', 'a chat\'s own pick left the default alone');
-  assert.equal(await (await chat('claude')).inputValue(), 'Auto', 'Claude has its own default');
+  assert.equal(await pillValue(await chat('codex'), 'Mode'), 'Full access', 'a chat\'s own pick left the default alone');
+  assert.equal(await pillValue(await chat('claude'), 'Mode'), 'Auto', 'Claude has its own default');
   // Back to "Last mode picked": the last pick (Read-only) wins again.
   await settings();
   await pick.selectOption('');
   assert.equal(await kept(), null);
   await closeSettings();
-  assert.equal(await (await chat('codex')).inputValue(), 'Read-only');
+  assert.equal(await pillValue(await chat('codex'), 'Mode'), 'Read-only');
 });
 
 test('Security settings: one switch per restriction; Unrestricted mode asks once through File protection, turns them all off, new chats start loosened; off puts the defaults back (threat model row 66)', { timeout: 120000 }, async (t) => {
@@ -1465,9 +1477,9 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
   const id = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await page.locator(`#tabs .tab[data-id="${id}"]`).click();
-  const mode = page.locator(`#chats .pane[data-id="${id}"] [data-mode]`);
+  const mode = page.locator(`#chats .pane[data-id="${id}"] [data-pill="Mode"]`);
   await mode.waitFor();
-  assert.equal(await mode.inputValue(), 'Full access');
+  assert.equal(await mode.getAttribute('aria-label'), 'Mode: Full access');
   assert.equal(await page.locator('#looseDlg[open]').count(), 0, 'no red warning in Unrestricted mode');
   // Off: protection back on without asking, the warnings on, new chats in the agents' own modes; the lock stays off.
   await answers([]);
