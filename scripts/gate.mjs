@@ -143,6 +143,8 @@ export async function mutationInventory(directory) {
       if ((relative.startsWith('docs/brand/') || relative === 'apps/web/public/p9-icon.png' || relative === 'apps/web/public/p9-mark.png' || relative === 'apps/desktop/pets/skipper/spritesheet.png') && ['.png', '.jpg', '.ico'].includes(extension)) continue;
       // The landing v5 poster and its rendered loop (163ac1e), imported by the controller as asset URLs.
       if (['apps/web/src/components/landing-v5/black-hole.webp', 'apps/web/src/components/landing-v5/rendered/horizon-loop.mp4'].includes(relative)) continue;
+      // The stands-alone check's baseline, plain rows of counts (data).
+      if (relative === 'scripts/stands-alone-baseline.txt') continue;
       throw new Error('unsupported-source-extension: ' + relative);
     }
     if (relative.startsWith('test/')) continue;

@@ -1550,13 +1550,18 @@ function renderSpaceBtn() {
   b.innerHTML = esc(live.spaceName || 'Main') + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
   b.title = 'The space Mission Control shows. Click to switch spaces or add one.';
   spacePop ??= popover(b, pop, () => { pop.style.left = Math.max(8, Math.min(b.offsetLeft, innerWidth - pop.offsetWidth - 8)) + 'px'; spaceForm = null; renderSpaceMenu(); });
-  if (!pop.hidden && !spaceForm) renderSpaceMenu();
+  if (!pop.hidden && !spaceForm) renderSpaceMenu(true);
 }
-function renderSpaceMenu() {
+let spaceMenuHtml = '';
+function renderSpaceMenu(redraw) {
   const pop = $('#spacePop'), now = live.spaceName || '';
-  pop.innerHTML = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
+  const html = '<div class="hd eyebrow">Space</div>' + ['', ...(live.spaces || [])].map(n => `<button class="item" role="menuitemradio" aria-checked="${n === now}" data-space="${esc(n)}">${esc(n || 'Main')}</button>`).join('')
     + '<hr data-slot="separator" style="margin:6px 0"><button class="item" role="menuitem" data-space-add>+ Add</button><button class="item" role="menuitem" data-space-save>Save as template…</button>'
     + (now ? `<button class="item space-del" role="menuitem" data-space-del>Delete ${esc(now)}…</button>` : '');
+  // A poll's redraw of the open menu with nothing new keeps its buttons: a fresh node under the pointer eats the click (M4a in CI).
+  if (redraw && html === spaceMenuHtml && !pop.querySelector('.space-form')) return;
+  spaceMenuHtml = html;
+  pop.innerHTML = html;
   pop.querySelector('[data-space-save]').onclick = () => spaceSave();
   pop.querySelector('[data-space-del]')?.addEventListener('click', spaceDelete);
   pop.querySelectorAll('[data-space]').forEach(b => b.onclick = async () => {
