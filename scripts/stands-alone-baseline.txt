@@ -1,0 +1,36 @@
+apps/server/chat.mjs needs you 1
+apps/server/chat.mjs needs_you  1
+apps/server/limits.mjs icm-  1
+apps/server/mcp.mjs needs-you  4
+apps/server/mcp.mjs needs_you  6
+apps/server/memory.mjs plan.md  2
+apps/server/mission-fields.mjs needs-you  1
+apps/server/mission-fields.mjs plan.md  2
+apps/server/mission-fields.mjs workspace-hub  2
+apps/server/mission.mjs plan.md  2
+apps/server/mission.mjs _private  3
+apps/server/mission.mjs _tyler  1
+apps/server/mission.mjs workspace-hub  2
+apps/server/server.mjs needs you 2
+apps/server/server.mjs needs-you  5
+apps/server/server.mjs _tyler  2
+apps/server/server.mjs workspace-hub  5
+apps/server/sprint.mjs needs you 1
+apps/server/sprint.mjs status.json  1
+apps/server/telemetry.mjs plan.md  1
+apps/web/src/checklist.mjs _private  1
+apps/web/src/controller.mjs needs you 10
+apps/web/src/controller.mjs plan.md  1
+apps/web/src/controller.mjs _private  1
+apps/web/src/controller.mjs _tyler  7
+apps/web/src/controller.mjs workspace-hub  4
+apps/web/src/mission-files.mjs needs you 1
+apps/web/src/phone.ts needs you 1
+apps/web/src/phone.ts _private  1
+apps/web/src/security.mjs _private  2
+apps/web/src/shell.html needs you 1
+apps/web/src/shell.html plan.md  1
+apps/web/src/walkthrough.mjs needs you 1
+apps/web/src/walkthrough.mjs _private  1
+packages/files/index.mjs _private  4
+packages/protocol/index.mjs _private  2

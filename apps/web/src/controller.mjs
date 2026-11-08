@@ -2929,7 +2929,8 @@ async function loadSetup(paths) {
   const st = await window.p9.getStatus?.().catch(() => null);
   setupMode = st?.mode ?? '';
   if (st?.mode === 'server' && st.status !== 'ok') return null;
-  const r = await liveChat.call('setup', paths || {}).catch(() => null);
+  // No toast either when this computer's P9 does not answer: the wizard shows the failure, the status line the daemon.
+  const r = await liveChat.call('setup', paths || {}, { quiet: true }).catch(() => null);
   return r?.status === 200 ? r.body : null;
 }
 // The four checks the card counts. Off Linux tmux is null and counts as done: the dock's terminals are tmux there only.
@@ -3260,13 +3261,14 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
 const dataNote = () => { $('#dataNote').textContent = [live.on && !serverInfo?.slim && 'Mission Control live', liveChat.on && 'Chat live', !liveChat.on && (sampleView ? 'Chat sample data' : 'Chat waiting for the daemon'), sampleView && 'Dev sample data'].filter(Boolean).join(' · '); };
-liveChat.call = async (action, payload = {}) => {
+liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
   // The connecting screen already says why a remote does not answer, so a chat call failing under it raises no toast.
-  if (r.status >= 400 && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
+  // quiet: a background read the user did not start (loadSetup) says nothing; its caller shows what it needs.
+  if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
 liveChat.create = async (agent, folder = '') => {

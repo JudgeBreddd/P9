@@ -220,6 +220,10 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
 
   await t.test('10. Chat Focus full: the artifact ends above the chat text box, which is visible and takes typing (desktop and phone width)', async () => {
     await reset();
+    // CI runs 2-12: the load's setup read found no daemon, retried after 1 s and raised "Could not reach the chat", which at
+    // phone width lay over the text box. A background read raises no toast (loadSetup, quiet); 3 s covers the retry.
+    await page.waitForTimeout(3000);
+    assert.deepEqual(await page.locator('#toasts .toast .truncate').allTextContents(), [], 'a plain load raises no chat toast');
     const [minW, minH] = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getMinimumSize());
     t.after(() => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setMinimumSize(w, h), [minW, minH]).catch(() => {}));
     for (const [name, w, h] of [['desktop', 1400, 900], ['phone', 390, 844]]) {
