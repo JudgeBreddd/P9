@@ -18,7 +18,7 @@ const call = (instance, route, method = 'GET', body) => http({ socketPath: path.
   body: body === undefined ? undefined : JSON.stringify(body) }).then((r) => ({ status: r.status, ...JSON.parse(r.text) }));
 const until = async (check, what, ms = 15000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 200))) if (await check()) return;
-  assert.fail('timed out: ' + what);
+  assert.fail('timed out: ' + (typeof what === 'function' ? await what() : what));
 };
 const conv = async (instance, id) => (await call(instance, '/chat')).conversations.find((c) => c.id === id);
 const ended = (instance, id) => until(async () => (await call(instance, '/chat/events?after=0&only=' + id)).events.some((e) => e.type === 'turn-end'), id + ' answered');
@@ -114,9 +114,9 @@ test('projects: New project (three places, adopt offer, shared folder), the page
   await page.locator(`#navList .row[data-chat="${elsewhere}"]`).click();
   await page.locator(`#chats .pane[data-id="${elsewhere}"]`).waitFor({ timeout: 10000 });
   assert.ok(await page.locator('#projPage').isHidden(), 'opening a chat leaves the page');
-  await until(async () => (await treeRoot(page)) === 'other', 'the chat in no project: its own folder (' + await treeRoot(page) + ')');
+  await until(async () => (await treeRoot(page)) === 'other', async () => 'the chat in no project: its own folder (' + await treeRoot(page) + ')');
   await page.locator(`#navList .row[data-chat="${moved}"]`).click();
-  await until(async () => (await treeRoot(page)) === 'garden', 'the chat in the project: its work folder, not its own (' + await treeRoot(page) + ')');
+  await until(async () => (await treeRoot(page)) === 'garden', async () => 'the chat in the project: its work folder, not its own (' + await treeRoot(page) + ')');
 
   // A new folder somewhere else: P9 makes it under the picked parent, named from the project.
   await page.locator('#navList [data-newproj]').first().click();
@@ -184,6 +184,11 @@ test('projects: delete leaves the folder, Locate, archive and back, a chat\'s Re
   await page.locator(`#navList [data-proj="${gone}"]`).waitFor({ state: 'detached', timeout: 5000 });
   assert.equal((await call(instance, '/projects/' + gone)).project.archived, true);
   await page.locator('#navList [data-archived]').click();
+  // The Files pane drawn while the Archived page shows (no project, no chat in view): it used to throw in renderTree.
+  const palette = async (cmd) => { await page.keyboard.press('Control+k'); await page.fill('#palIn', cmd); await page.locator('#palList li[data-i]', { hasText: cmd }).first().waitFor({ timeout: 5000 }); await page.keyboard.press('Enter'); };
+  await palette('Toggle files pane'); if (await page.locator('#files').isHidden()) await palette('Toggle files pane');
+  await page.locator('#tree .where').waitFor({ timeout: 5000 });
+  assert.deepEqual(errors, [], 'the file tree draws on the Archived page');
   await page.locator(`#projPage [data-pj=unproj][data-id="${gone}"]`).click();
   await page.locator(`#navList [data-proj="${gone}"]`).waitFor({ timeout: 5000 });
 
