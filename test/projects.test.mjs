@@ -220,6 +220,63 @@ test("an In P9 project's chat starts and resumes in its own files folder; no cli
   console.log("PASS In P9: starts and resumes in its files, follows a move, refuses every client-sent P9 folder in both modes and a linked files/");
 });
 
+test("a chat's agent reads its own project's added files without being asked; nothing else is", { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const make = async (name) => (await call(instance, '/projects', 'POST', { name, work: { kind: 'p9' } })).body.project.id;
+  const a = await make('Notes'), b = await make('Other');
+  const files = (id) => path.join(home(instance), id, 'files');
+  await writeFile(path.join(files(a), 'notes.md'), 'mine\n');
+  await writeFile(path.join(files(b), 'other.md'), 'theirs\n');
+  await writeFile(path.join(instance.workspace, 'secret.txt'), 'outside\n');
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude', project: a })).body.conversation;
+  await turn(instance, id, 'hello'); // the project note goes with the first message; the requests below are whole messages
+  // 'auto' when P9 answered it alone, 'asked' when it reached the user (answered No here), 'lock' when the lock refused it.
+  const perm = async (toolCall) => {
+    const events = async () => (await call(instance, `/chat/events?after=0&only=${id}`)).body.events ?? [];
+    const before = (await events()).length;
+    assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'perm-json ' + JSON.stringify(toolCall) })).status, 202);
+    let answered = false;
+    for (let i = 0; i < 100; i++) {
+      const now = (await events()).slice(before);
+      const approval = now.find((e) => e.type === 'approval');
+      if (approval && !answered) {
+        answered = true;
+        assert.equal((await call(instance, `/chat/${id}/answer`, 'POST', { request: approval.data.request, answer: { optionId: 'reject' } })).status, 200);
+        continue;
+      }
+      const said = now.find((e) => e.type === 'update' && e.data.content?.text?.startsWith('permission:'))?.data.content.text;
+      if (said && now.some((e) => e.type === 'turn-end')) {
+        if (now.some((e) => e.type === 'auto-allowed')) return assert.equal(said, 'permission:allow-once') ?? 'auto';
+        return now.some((e) => e.type === 'lock-rejected') ? 'lock' : 'asked';
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('no answer for ' + toolCall.name);
+  };
+  const read = (file) => ({ name: 'Read', kind: 'read', title: 'Read ' + file, rawInput: { file_path: file }, locations: [{ path: file }] });
+  const own = path.join(files(a), 'notes.md');
+  assert.equal(await perm(read(own)), 'auto', "a read in its own project's files is not asked");
+  assert.equal(await perm({ name: 'Grep', kind: 'search', rawInput: { pattern: 'mine', path: files(a) } }), 'auto', 'a search there is not asked');
+  assert.equal(await perm({ name: 'Glob', kind: 'search', rawInput: { pattern: '*.md', path: files(a) } }), 'auto', 'nor a glob');
+  assert.equal(await perm({ name: 'Glob', kind: 'search', rawInput: { pattern: '../**', path: files(a) } }), 'asked', 'a glob that climbs out is asked');
+  assert.equal(await perm({ name: 'Grep', kind: 'search', rawInput: { pattern: 'mine' } }), 'asked', 'a search with no path (the cwd) is asked');
+  assert.equal(await perm(read(path.join(files(b), 'other.md'))), 'asked', "a read in another project's files is asked");
+  assert.equal(await perm(read(path.join(home(instance), a, 'project.json'))), 'asked', 'the project folder itself is asked');
+  // An existing file: a new one is asked anyway (its path cannot be resolved), which would hide a missing tool check.
+  assert.equal(await perm({ name: 'Write', kind: 'edit', title: 'Write notes.md', rawInput: { file_path: own, content: 'x' },
+    locations: [{ path: own }] }), 'asked', 'a write in its own files is asked');
+  assert.equal(await perm({ name: 'Bash', kind: 'execute', rawInput: { command: 'cat ' + own } }), 'asked', 'a command that reads is asked');
+  await symlink(path.join(instance.workspace, 'secret.txt'), path.join(files(a), 'out.md'));
+  assert.equal(await perm(read(path.join(files(a), 'out.md'))), 'asked', 'a link in its files pointing outside is asked');
+  assert.equal(await perm({ name: 'Grep', kind: 'search', rawInput: { pattern: 'outside', path: files(a) } }), 'asked', 'a search over a folder holding a link is asked');
+  assert.equal(await perm(read(own)), 'auto', 'a plain file beside the link is still not asked');
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: true })).status, 200);
+  assert.equal(await perm(read(own)), 'lock', 'the agent lock still refuses it');
+  assert.equal((await call(instance, '/agent-lock', 'POST', { on: false })).status, 200);
+  assert.equal((await call(instance, `/chat/${id}/project`, 'POST', { project: null })).status, 200);
+  assert.equal(await perm(read(own)), 'asked', 'after the chat is moved out, the same read is asked');
+});
+
 test('a project id that is not a UUID is refused on every route', { timeout: 120000 }, async (t) => {
   const instance = await start(t);
   const chat = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;

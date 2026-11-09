@@ -545,6 +545,14 @@ another project's `files/`) is still refused in every mode. The routes are on bo
 change carries its operation id. Deleting a chat (from its menu) removes its row and events from the ledger; the memory
 and telemetry databases keep what they recorded from it until their own limits remove it.
 
+While a chat is in a project, its agent reads that project's added files without asking you (threat model row N1d:
+putting the chat in the project is the permission): only Claude's read and search tools (Read, Glob, Grep), only paths
+inside that project's own `files/` after links are resolved, answered once each time and never as a lasting rule. The
+daemon finds the folder from the chat's project at every request; another project's `files/`, `projects/<id>/` and
+`state/` are asked as before. Writes, edits and commands (a shell command that reads a file included) are asked as
+before, the agent lock still refuses everything, and taking the chat out of the project ends it. Each such answer is
+kept as an `auto-allowed` event in the chat. Codex is unchanged: its sandbox reads without asking in every mode.
+
 ## Outbound requests a reader of this file should know about
 
 Things P9 does that reach the network or a host outside your machine, each covered
