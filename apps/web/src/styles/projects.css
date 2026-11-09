@@ -1,0 +1,98 @@
+/* N1 points 9 and 10: the project page, the Archived page and the New project dialog (projects-view.mjs), from the
+   approved mock (round 3). Sections, not boxes; text edited in place; theme tokens only. */
+#chats[hidden],#projPage[hidden]{display:none}
+.ppage{overflow:auto;min-height:0;padding:40px 40px 56px}
+.ppage svg{flex:none;width:15px;height:15px}
+.ppage .wrap{max-width:740px;margin:0 auto}
+.ppage .ph{display:flex;align-items:flex-start;gap:16px}
+.ppage .ph .grow{flex:1;min-width:0}
+.ppage .ph h1{margin:0 0 0 -6px;padding:2px 6px;font-size:28px;font-weight:650;letter-spacing:-.02em;line-height:1.2;border-radius:6px;outline:none;text-wrap:balance;overflow-wrap:anywhere}
+.ppage .ph .about{margin:4px 0 0 -6px;padding:2px 6px;font-size:14px;line-height:1.55;color:var(--muted-foreground);border-radius:6px;outline:none;max-width:62ch;white-space:pre-wrap}
+.ppage .ph .about:empty::before{content:attr(data-ph);opacity:.7}
+.ppage :is(.ph h1[contenteditable],.ph .about):hover{background:color-mix(in oklch,var(--foreground) 5%,transparent)}
+.ppage :is(.ph h1[contenteditable],.ph .about):focus{background:transparent;box-shadow:inset 0 0 0 1px var(--ring)}
+.ppage .ph .acts2{display:flex;gap:6px;align-items:center;padding-top:4px}
+.ppage .ph .acts2 [data-slot="button"]{gap:7px}
+.ppage .lead{margin:6px 0 0;color:var(--muted-foreground);font-size:14px;line-height:1.55}
+.ppage .wf{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;color:var(--muted-foreground);flex-wrap:wrap}
+.ppage .wf .mono{color:var(--foreground);overflow-wrap:anywhere}
+.ppage .wf .plain{color:var(--foreground)}
+#projPage:focus{outline:none}
+.pj-dlg .path{display:inline-block;max-width:100%;overflow-wrap:anywhere}
+.ppage .wf .tag{font-size:11px;padding:1px 7px;border-radius:999px;background:color-mix(in oklch,var(--foreground) 7%,transparent)}
+.ppage .wf [data-slot="button"]{height:24px;padding:0 8px;font-size:12px}
+.ppage .missing{display:flex;align-items:center;gap:12px;margin-top:16px;padding:10px 12px;border-radius:var(--radius);background:color-mix(in oklch,var(--warn) 12%,transparent);font-size:13px}
+.ppage .missing svg{color:var(--warn);width:17px;height:17px}
+.ppage .missing div{flex:1;line-height:1.45}
+.ppage .missing b{display:block}
+.ppage .missing span{color:var(--muted-foreground);font-size:12.5px}
+.ppage .sec{margin-top:28px;padding-top:18px;border-top:1px solid var(--border)}
+.ppage .sec[data-over]{box-shadow:inset 0 0 0 1px var(--ring);border-radius:var(--radius)}
+.ppage .sh2{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.ppage .sec h2{margin:0;font-size:14px;font-weight:600}
+.ppage .sh2 .muted{font-size:12px;color:var(--muted-foreground)}
+.ppage .sh2 [data-slot="button"]{margin-left:auto;height:26px;font-size:12px;gap:6px}
+.ppage .crow{display:flex;align-items:center;gap:10px;margin-left:-8px;width:calc(100% + 16px);padding:7px 8px;border:0;border-radius:calc(var(--radius) - 4px);background:none;color:inherit;font:inherit;font-size:13.5px;text-align:left}
+.ppage button.crow{cursor:pointer}
+.ppage :is(button.crow,.crow.file,.crow.arch):hover{background:var(--accent)}
+.ppage button.crow:focus-visible,.ppage .crow button:focus-visible,.ppage .instr-all:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+.ppage .crow .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:8px}
+.ppage .crow[data-s="unread"] .t{font-weight:600}
+.ppage .crow :is(.when,.sz){font-size:12px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.ppage .crow .sz{min-width:56px;text-align:right}
+.ppage .crow>svg{color:var(--muted-foreground)}
+.ppage .crow .rm{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted-foreground);cursor:pointer;opacity:0}
+.ppage .crow .rm svg{width:13px;height:13px}
+.ppage .crow:is(:hover,:focus-within) .rm{opacity:1}
+.ppage .crow .rm:hover{color:var(--foreground);background:color-mix(in oklch,var(--foreground) 8%,transparent)}
+.ppage .crow .mk{flex:none;display:inline-grid;place-items:center;width:14px;height:14px}
+.ppage .crow .mk svg{width:13px;height:13px}
+.ppage .crow .mk-run::before{content:"";width:8px;height:8px;box-sizing:border-box;border-radius:50%;border:2px solid var(--ok)}
+.ppage .crow .mk-unread::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--foreground)}
+.ppage .crow .mk-needs{color:var(--warn)}
+.ppage .crow .mk-failed{color:var(--destructive)}
+.ppage .crow.arch [data-slot="button"]{height:26px;font-size:12px}
+.ppage p.hint{margin:0;font-size:13px;color:var(--muted-foreground);line-height:1.55}
+.ppage .ownfile{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:12.5px;color:var(--muted-foreground)}
+.ppage .instr{margin:0;font-size:13.5px;line-height:1.6;white-space:pre-wrap;max-width:68ch}
+.ppage .instr-all{margin-top:6px;padding:0;border:0;background:none;font:inherit;font-size:12.5px;color:var(--muted-foreground);cursor:pointer;border-radius:4px}
+.ppage .instr-all:hover{color:var(--foreground)}
+.ppage textarea{width:100%;min-height:120px;resize:vertical;font:inherit;font-size:13.5px;line-height:1.6}
+.ppage .saved{font-size:11.5px;color:var(--ok);opacity:0}
+.ppage .saved.on{opacity:1}
+@media (prefers-reduced-motion:no-preference){.ppage .saved{transition:opacity .2s}}
+@media (max-width:700px){.ppage{padding:24px 18px 40px}.ppage .ph{flex-direction:column;gap:10px}}
+.lp-menu button.danger{color:var(--destructive)}
+.lp-menu button.danger svg{color:currentColor}
+.lp-menu>.sep:first-child{display:none}
+.lpanel .row.arch{margin-top:10px;color:var(--muted-foreground)}
+
+/* ---- The New project dialog and the questions (Rename chat, Delete) ---- */
+dialog.pj-dlg{max-width:min(540px,calc(100vw - 40px))}
+.pj-dlg form{display:grid;gap:14px;padding:22px}
+.pj-dlg h2{margin:0;font-size:18px;font-weight:650}
+.pj-dlg form>label{display:grid;gap:5px;font-size:12.5px;color:var(--muted-foreground)}
+.pj-dlg textarea{min-height:56px;resize:vertical;font:inherit;font-size:13px}
+.pj-dlg fieldset{border:0;margin:0;padding:0;display:grid;gap:2px}
+.pj-dlg legend{font-size:12.5px;color:var(--muted-foreground);margin-bottom:6px;padding:0}
+.pj-dlg .opt{display:grid;grid-template-columns:18px 1fr;gap:2px 10px;padding:9px 10px;border-radius:calc(var(--radius) - 2px);cursor:pointer}
+.pj-dlg .opt:hover{background:color-mix(in oklch,var(--foreground) 4%,transparent)}
+.pj-dlg .opt:has(>input:checked){background:color-mix(in oklch,var(--primary) 10%,transparent)}
+.pj-dlg .opt>input{margin:3px 0 0;accent-color:var(--primary);width:15px;height:15px}
+.pj-dlg .opt>input:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.pj-dlg .opt b{font-weight:550;font-size:13.5px;color:var(--foreground)}
+.pj-dlg .opt>label{display:grid;gap:2px;cursor:pointer}
+.pj-dlg .opt small{font-size:12px;color:var(--muted-foreground);line-height:1.45}
+.pj-dlg .opt .sub{grid-column:2;display:none;gap:8px;margin-top:8px}
+.pj-dlg .opt:has(>input:checked) .sub{display:grid}
+.pj-dlg .pick{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.pj-dlg .pick .mono{flex:1;min-width:0;padding:5px 8px;border-radius:6px;background:color-mix(in oklch,var(--foreground) 6%,transparent);color:var(--foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pj-dlg .pick .mono:empty::before{content:"No folder chosen";font-family:inherit;color:var(--muted-foreground)}
+.pj-dlg .found,.pj-dlg .shared{display:flex;align-items:center;gap:8px;font-size:12.5px;line-height:1.45;color:var(--foreground)}
+.pj-dlg :is(.found,.shared)[hidden]{display:none}
+.pj-dlg .found input{accent-color:var(--primary)}
+.pj-dlg .quiet{font-size:11.5px;color:var(--muted-foreground);line-height:1.45}
+.pj-dlg .err{margin:0;font-size:12.5px;color:var(--destructive)}
+.pj-dlg .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+.pj-dlg .body2{margin:0;font-size:13.5px;line-height:1.55;color:var(--muted-foreground)}
+.pj-dlg .body2 b{color:var(--foreground);font-weight:550;overflow-wrap:anywhere}
