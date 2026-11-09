@@ -105,7 +105,10 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
    light-dismiss lets the click through). O31: a select left to the system opened as a white list with the look's light words.
    select[data-slot] outranks d1.css's [data-slot="select"]{appearance:none}; a plain select would lose to it. */
 select,select[data-slot],select::picker(select){appearance:base-select}
-[data-slot="select"]::picker-icon{display:none}
+/* One arrow on every dropdown: d1.css's thin chevron and its right padding (it gives them only to [data-slot="select"]), and
+   never base-select's own filled arrow beside it. */
+select,select[data-slot]{padding-right:26px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center}
+select::picker-icon{display:none}
 select::picker(select){margin-top:4px;padding:4px;border:1px solid var(--border);border-radius:9px;background:var(--popover);color:var(--foreground);box-shadow:0 12px 32px rgb(0 0 0/.45)}
 select option{padding:5px 10px 5px 6px;border-radius:6px;font-size:12.5px}
 select option:hover,select option:focus-visible{background:var(--accent);outline:none}

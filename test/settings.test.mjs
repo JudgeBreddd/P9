@@ -106,7 +106,10 @@ test('Dropdowns: every option of every select is readable in its open list, in e
         if (!worst || ratio < worst.ratio) worst = { ratio, select: sel.getAttribute('aria-label') || sel.id, option: o.textContent, own, list, fg: fg.join(','), bg: bg.join(',') };
       }
     }
-    return { selects: selects.length, worst };
+    // One arrow each: the thin chevron drawn as the background, room for it on the right, and no picker icon beside it.
+    const arrows = [...selects].filter((sel) => { const s = getComputedStyle(sel); return !s.backgroundImage.includes('svg') || parseFloat(s.paddingRight) < 20 || getComputedStyle(sel, '::picker-icon').display !== 'none'; })
+      .map((sel) => sel.getAttribute('aria-label') || sel.id || sel.dataset.slot);
+    return { selects: selects.length, worst, arrows };
   });
   const openSettings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); };
   const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
@@ -117,7 +120,8 @@ test('Dropdowns: every option of every select is readable in its open list, in e
     await openSettings(); looks[id] = await read();
     if (id === 'daylight' || id === ids[0]) {
       // The open list itself: Settings > Chat Focus > Claude's Mode.
-      await page.click('[data-set-page="Chat Focus"]'); await page.click('[data-default-mode="claude"]'); await shot('select-open-' + id);
+      await page.click('[data-set-page="Chat Focus"]'); await shot('select-closed-' + id);
+      await page.click('[data-default-mode="claude"]'); await shot('select-open-' + id);
       await page.keyboard.press('Escape');
     }
     await closeSettings();
@@ -125,8 +129,9 @@ test('Dropdowns: every option of every select is readable in its open list, in e
   await page.evaluate(() => document.documentElement.setAttribute('data-amoled', ''));
   await openSettings(); looks.amoled = await read(); await closeSettings();
   console.log('SELECTS ' + JSON.stringify(Object.fromEntries(Object.entries(looks).map(([k, v]) => [k, v.worst.ratio]))));
-  for (const [look, { selects, worst }] of Object.entries(looks)) {
+  for (const [look, { selects, worst, arrows }] of Object.entries(looks)) {
     assert.ok(selects >= 6, look + ': only ' + selects + ' selects found');
+    assert.deepEqual(arrows, [], look + ': these selects lack the one thin arrow');
     assert.ok(worst.ratio >= 4.5, `${look}: "${worst.option}" in ${worst.select} is ${worst.ratio}:1 (${JSON.stringify(worst)})`);
   }
   console.log('PASS dropdowns: ' + Object.keys(looks).length + ' looks, ' + looks.amoled.selects + ' selects, lowest ' + Math.min(...Object.values(looks).map((v) => v.worst.ratio)) + ':1');
