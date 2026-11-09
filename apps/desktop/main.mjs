@@ -603,6 +603,9 @@ export async function createDesktop({ state, open } = {}) {
     idea: ({ name, text, needs_done }) =>[name, text].every(v => typeof v === 'string') && typeof needs_done === 'boolean' && ['POST', '/mission/idea', { name, text, needs_done }],
     // Chat Focus file browser (threat model row 23): read-only; the daemon applies the file routes' path and File protection rules.
     list: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ path: dir })],
+    projectList: ({ project, path: dir = '' }) => uuid(project) && typeof dir === 'string' && ['GET', '/files/list?' + new URLSearchParams({ project, path: dir })],
+    projectRead: ({ project, path: file }) => uuid(project) && typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ project, path: file })],
+    projectImage: ({ project, path: file }) => uuid(project) && typeof file === 'string' && ['GET', '/files/image?' + new URLSearchParams({ project, path: file })],
     folders: ({ path: dir = '' }) => typeof dir === 'string' && ['GET', '/files/folders?' + new URLSearchParams({ path: dir })], // U4: Unrestricted only
     read: ({ path: file }) => typeof file === 'string' && ['GET', '/files?' + new URLSearchParams({ path: file })],
     image: ({ path: file }) => typeof file === 'string' && ['GET', '/files/image?' + new URLSearchParams({ path: file })],

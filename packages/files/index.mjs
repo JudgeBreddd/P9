@@ -19,12 +19,12 @@ export async function quietFfi(load) {
 
 export const hash = (content) => createHash('sha256').update(content).digest('hex');
 
-function partsFor(relative, root, isLocked = locked) {
+function partsFor(relative, root, isLocked = locked, privateRoot = false) {
   if (typeof relative !== 'string' || !relative || !relative.isWellFormed() || relative.length > 4096
       || path.isAbsolute(relative) || /[\\\x00-\x1f:]/.test(relative)) throw new Error('unsafe-path');
   const parts = relative.split('/');
   if (parts.some((part) => !part || Buffer.byteLength(part) > 255 || part === '.' || part === '..' || isLocked(part))) throw new Error('locked-path');
-  if (root !== undefined) notPrivate(root, parts);
+  if (root !== undefined) notPrivate(root, parts, privateRoot);
   return parts;
 }
 // v0.1.6 U5 (threat model rows 34 and 41): P9's own state, recovery and ownership folders. Unrestricted mode lets a root hold
@@ -50,9 +50,9 @@ export const desktopFolders = ({ platform = process.platform, home = os.homedir(
 const within = (parent, child) => { const relative = path.relative(parent, child); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
 // Review 3 L8: for the U4 folder picker, which lists folders by absolute path outside packages/files' reads.
 export const isGuarded = (full) => { for (const folder of guarded) if (within(folder, full)) return true; return false; };
-function notPrivate(root, parts) {
+function notPrivate(root, parts, privateRoot = false) {
   const full = path.join(path.resolve(root), ...parts);
-  for (const folder of guarded) if (within(folder, full)) throw new Error('private-folder');
+  for (const folder of guarded) if (within(folder, full) && !(privateRoot && within(folder, path.resolve(root)))) throw new Error('private-folder');
 }
 // File protection (threat model row 4): on unless the desktop turned it off (server.mjs keeps the choice in the ledger).
 let protect = true;
@@ -72,8 +72,8 @@ export const HEAVY = Object.freeze(['node_modules', '.venv', 'venv', '__pycache_
 export const WALK_SKIP = Object.freeze([...HEAVY, '_archive', '_private', '_intake', '_templates', 'templates', 'recommended-delete', 'agent_skills']);
 
 // Walk with O_NOFOLLOW directory handles; subsequent access stays on these inodes.
-async function resolveSafe(root, relative, maxBytes = MAX_BYTES, isLocked = locked) {
-  const parts = partsFor(relative, root, isLocked);
+async function resolveSafe(root, relative, maxBytes = MAX_BYTES, isLocked = locked, privateRoot = false) {
+  const parts = partsFor(relative, root, isLocked, privateRoot);
   if (win) return win.resolveSafe(root, parts, maxBytes);
   const handles = [];
   try {
@@ -132,8 +132,8 @@ export const imageType = (bytes) => {
 // A workspace image for the Chat Focus file window (rows 23/26/27 adds): readFile's walk (no links, locked names refused, a
 // regular file opened non-blocking), then row 27's checks: 12 bytes to 6 MiB, and the type from the bytes. Read-only.
 export const MAX_IMAGE = 6 * 1024 * 1024;
-export async function readImage(root, relative) {
-  const safe = await resolveSafe(root, relative, MAX_IMAGE);
+export async function readImage(root, relative, { privateRoot = false } = {}) {
+  const safe = await resolveSafe(root, relative, MAX_IMAGE, locked, privateRoot);
   try {
     const bytes = Buffer.alloc(safe.stat.size);
     let length = 0;
@@ -148,8 +148,8 @@ export async function readImage(root, relative) {
   } finally { await safe.close(); }
 }
 
-export async function readFile(root, relative, { space = false } = {}) {
-  const safe = await resolveSafe(root, relative, MAX_BYTES, space ? spaceLocked : locked);
+export async function readFile(root, relative, { space = false, privateRoot = false } = {}) {
+  const safe = await resolveSafe(root, relative, MAX_BYTES, space ? spaceLocked : locked, privateRoot);
   try {
     const buffer = await contents(safe.file);
     return { content: textFrom(buffer), hash: hash(buffer) };
@@ -158,10 +158,10 @@ export async function readFile(root, relative, { space = false } = {}) {
 
 // Regular files and subdirectories directly inside one workspace directory ('' is the root), walked like resolveSafe
 // (no symlinks; locked names refused in the path and left out of the listing).
-export async function listDirectory(root, relative, { space = false } = {}) {
+export async function listDirectory(root, relative, { space = false, privateRoot = false } = {}) {
   const isLocked = space ? spaceLocked : locked;
-  const parts = relative === '' ? [] : partsFor(relative, root, isLocked);
-  notPrivate(root, parts);
+  const parts = relative === '' ? [] : partsFor(relative, root, isLocked, privateRoot);
+  notPrivate(root, parts, privateRoot);
   if (win) return win.listDirectory(root, parts, isLocked);
   const handles = [];
   try {

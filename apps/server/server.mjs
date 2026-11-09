@@ -247,13 +247,21 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   let phoneRoot = null;
   const phoneTarget = (root) => (root === undefined ? { root: workspace } : !phoneRoot ? { status: 409, error: 'dev-root-unset' } : root === phoneRoot ? devCheck(phoneRoot) : { status: 409, error: 'dev-root-changed' });
   // The desktop's reads stay in the workspace (its outside folder is read by Dev Focus's editor); a root here is the phone's.
-  const readTarget = (c) => (c.get('device') ? phoneTarget(c.req.query('root')) : { root: workspace });
-  api.get('/files', async (c) => { const target = await readTarget(c); return target.error ? reply(c, target) : c.json(await readWorkspaceFile(target.root, c.req.query('path'))); });
+  const readTarget = async (c) => {
+    const project = c.req.query('project');
+    if (project !== undefined) {
+      if (c.get('device')) return { status: 404, error: 'not-found' };
+      const root = await chat.projects.filesStart(project).catch(() => null);
+      return root ? { root, privateRoot: true } : { status: 404, error: 'unknown-project' };
+    }
+    return c.get('device') ? phoneTarget(c.req.query('root')) : { root: workspace };
+  };
+  api.get('/files', async (c) => { const target = await readTarget(c); return target.error ? reply(c, target) : c.json(await readWorkspaceFile(target.root, c.req.query('path'), { privateRoot: target.privateRoot })); });
   // A workspace image for the Chat Focus file window (rows 23/26/27 adds): GET /files's walk and target, then row 27's size and
   // byte checks; anything else is not-an-image or request-refused, and its bytes stay here.
   api.get('/files/image', async (c) => {
     const target = await readTarget(c); if (target.error) return reply(c, target);
-    try { return c.json(await readWorkspaceImage(target.root, c.req.query('path'))); }
+    try { return c.json(await readWorkspaceImage(target.root, c.req.query('path'), { privateRoot: target.privateRoot })); }
     catch (error) {
       if (error.message === 'not-an-image') return c.json({ error: 'not-an-image' }, 415);
       if (error.code === 'ENOENT') return c.json({ error: 'not-found' }, 404);
@@ -263,7 +271,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // The file tree never shows the folders P9 does not crawl (HEAVY: node_modules, .venv and the like).
   api.get('/files/list', async (c) => {
     const target = await readTarget(c); if (target.error) return reply(c, target);
-    return c.json({ entries: (await listDirectory(target.root, c.req.query('path') ?? '')).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) });
+    return c.json({ entries: (await listDirectory(target.root, c.req.query('path') ?? '', { privateRoot: target.privateRoot })).filter((entry) => !(entry.dir && HEAVY.includes(entry.name))) });
   });
   // U4 on a remote (Builder, 2026-11-02: "need a picker so i can click in and out of folders"): in Unrestricted mode the
   // desktop's New chat picker walks the whole computer, folders only, from an absolute path ('': the workspace). Links are
