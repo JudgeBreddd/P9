@@ -19,6 +19,7 @@ import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
 import { createMove, movedNote } from './move.mjs';
+import { createProjects } from './projects.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -238,7 +239,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
   // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
-  // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. Chats are never deleted, so nothing else removes them.
+  // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. A deleted chat (N1) leaves them: one photo may be in several chats.
   // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
   const imageDir = (ownership || state) && path.join(ownership || state, 'images');
   const keep = (images) => images.map(({ mimeType, data }) => {
@@ -465,7 +466,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // Both adapters name the chat after its first turn (session_info_update.title); kept so the tab and list show it.
         if (update?.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
           const title = update.title.replace(/\s+/g, ' ').trim().slice(0, 120);
-          if (title) db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, conversation.id);
+          // A name the user gave (N1, the rename route's 'renamed' event) is kept.
+          if (title) db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE conversation = ? AND type = 'renamed')").run(title, conversation.id, conversation.id);
         }
         emit(conversation.id, 'update', trim(agentImages(update)));
         if (session.ghost) session.ghost.refresh();
@@ -656,6 +658,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
   }
 
+  // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).
+  const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
+    stop: (id) => stopConversation(id), recovered });
   const api = {
     login: loginRoutes,
     // The watcher (telemetry.mjs) reads a live chat's CPU and peak memory from its systemd scope: the unit, or null.
@@ -713,7 +718,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // not counting the stops a close, an exit or a daemon restart write, nor the created event (its time is a later Date.now()
     // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
-    list: () => db.prepare(`SELECT id, provider, title, state, created, folder,
+    list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
@@ -723,15 +728,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map((c) => ({ ...c, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id) })),
+      .map((c) => ({ ...c, archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id) })),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
+    // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
+    // with no project is a general chat, wherever it starts: its project is never taken from its folder.
     async create(body) {
+      const project = body?.project === undefined ? null : await projects.record(body.project);
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
-          || (body.folder !== undefined && (typeof body.folder !== 'string' || !await folderThere(body.folder))))
+          || (body.project !== undefined && !project))
         return refused(400, 'request-refused');
+      const folder = body.folder ?? (project ? projects.startFolder(project) : '');
+      if (typeof folder !== 'string' || !await folderThere(folder)) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
       const id = randomUUID(), title = body.title?.trim() || (body.provider === 'claude' ? 'Claude' : 'Codex');
-      db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder) VALUES (?, ?, ?, 'idle', ?, ?)").run(id, body.provider, title, Date.now(), body.folder ?? '');
-      emit(id, 'created', { provider: body.provider, title, folder: body.folder ?? '' });
+      db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project) VALUES (?, ?, ?, 'idle', ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null);
+      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }) });
       return { status: 201, conversation: id };
     },
     // held: the waiting messages this prompt carries (drain), named in its user event so the window drops them.
@@ -761,8 +771,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (closing) { release(); return refused(503, 'shutting-down'); }
       setState(id, 'turn');
       const note = movedNote(db, id); // read before this message's own user event
+      // N1: the project's instructions and added files, when this chat has not been sent this exact text since its last
+      // message named a project note (first message, moved in, or changed). projectNote names what was current.
+      const project = await projects.note(conversation).catch(() => null);
+      const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
+      const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }) }); // hash and type only: events stay small
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
       release();
@@ -805,7 +820,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const turn = session.turn = randomUUID();
       clearTimeout(session.ghost); session.ghost = null; // this turn's own end comes; no unprompted one to wait for
       let ended;
-      const prompt = [...(note ? [{ type: 'text', text: note }] : []), ...blocks(body.text, images)];
+      const prompt = [...(note ? [{ type: 'text', text: note }] : []), ...(projectText ? [{ type: 'text', text: projectText }] : []), ...blocks(body.text, images)];
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
@@ -877,6 +892,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,
+    projects,
     ...createMove({ db, workspace, ownership, row, emit, stopConversation, recovered, loose }),
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The

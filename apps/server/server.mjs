@@ -497,6 +497,22 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const made = await terminals.create({}, { cwd, typed: command, phone: !!c.get('device') });
     return reply(c, made.terminal ? { ...result, terminal: made.terminal } : { ...made, command });
   });
+  // N1 (threat model row N1): projects and a chat's project, title, archive and delete, on both listeners like the chat
+  // routes (the phone's list groups by project). Shapes: apps/server/projects.mjs; every POST carries its x-p9-op.
+  api.get('/projects', async (c) => reply(c, await chat.projects.list()));
+  api.post('/projects', async (c) => reply(c, await chat.projects.create(await json(c))));
+  api.get('/projects/:id', async (c) => reply(c, await chat.projects.get(c.req.param('id'))));
+  api.post('/projects/:id', async (c) => reply(c, await chat.projects.update(c.req.param('id'), await json(c))));
+  api.post('/projects/:id/locate', async (c) => reply(c, await chat.projects.relocate(c.req.param('id'), await json(c))));
+  api.post('/projects/:id/delete', async (c) => reply(c, await chat.projects.remove(c.req.param('id'), await json(c))));
+  api.post('/projects/:id/files', async (c) => reply(c, await chat.projects.addFile(c.req.param('id'), await json(c))));
+  api.post('/projects/:id/files/remove', async (c) => { const body = await json(c);
+    return reply(c, body && typeof body === 'object' && Object.keys(body).join() === 'name' ? await chat.projects.removeFile(c.req.param('id'), body.name) : { status: 400, error: 'request-refused' }); });
+  api.get('/chat/started-in', (c) => reply(c, chat.projects.chats.startedIn(c.req.query('folder'))));
+  api.post('/chat/:id/project', async (c) => reply(c, await chat.projects.chats.move(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/rename', async (c) => reply(c, chat.projects.chats.rename(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/archive', async (c) => reply(c, chat.projects.chats.archive(c.req.param('id'), await json(c))));
+  api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'))));
   api.get('/chat/:id/images/:hash', (c) => reply(c, chat.image(c.req.param('id'), c.req.param('hash'))));
   api.get('/terminals', async (c) => {
     try { return c.json({ terminals: await terminals.list() }); } catch (error) {

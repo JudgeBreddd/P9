@@ -21,7 +21,7 @@ export const CAPTURE = 2; // bump when capture() changes what it writes: the nex
 export const MEMORY_CONVERSATION = '00000000-0000-4000-8000-000000000000'; // the ledger's conversation for memory's own events
 export const RULES = createHash('sha256').update(JSON.stringify(SECRETS)).digest('hex').slice(0, 12); // the scanner rules version
 const ENDS = new Set(['turn-end', 'error', 'exited', 'interrupted']);
-const TYPES = ['created', 'user', 'update', 'memory', ...ENDS];
+const TYPES = ['created', 'user', 'update', 'memory', 'project', ...ENDS];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // --- Secret scan: gitleaks' semantics (keywords first, the secret group or first non-empty group, entropy, allowlists) ---
@@ -111,7 +111,8 @@ const SELECT = `SELECT cursor, conversation, type, at, CASE WHEN NOT json_valid(
       data ->> '$.rawInput.workdir'),
     'command', data ->> '$.rawInput.command', 'locations', (SELECT json_group_array(value ->> '$.path') FROM json_each(data, '$.locations')))
   WHEN type = 'user' THEN json_object('text', data ->> '$.text', 'steered', data ->> '$.steered')
-  WHEN type = 'created' THEN json_object('provider', data ->> '$.provider', 'folder', data ->> '$.folder')
+  WHEN type = 'created' THEN json_object('provider', data ->> '$.provider', 'folder', data ->> '$.folder', 'project', data ->> '$.project')
+  WHEN type = 'project' THEN json_object('project', data ->> '$.project')
   WHEN type = 'memory' THEN data
   ELSE json_object('unprompted', data ->> '$.unprompted') END AS data
   FROM events WHERE cursor > ? AND type IN (${TYPES.map((type) => `'${type}'`).join(', ')})
@@ -154,7 +155,10 @@ export function capture(state, row, ctx) {
     case 'created':
       chat.provider = ['claude', 'codex'].includes(data.provider) ? data.provider : null;
       chat.cwd = typeof data.folder === 'string' ? path.resolve(ctx.workspace, data.folder) : ctx.workspace;
+      chat.explicit = projectId(data.project);
       break;
+    // N1: the chat moved into a project, out of one (null), or between two.
+    case 'project': chat.explicit = projectId(data.project); break;
     case 'user': {
       const text = typeof data.text === 'string' ? data.text : '';
       if (data.steered && turn) { turn.texts.push(text); userPaths(turn, text); break; }
@@ -193,6 +197,10 @@ export function capture(state, row, ctx) {
 
 // The project most touched (first touched wins a tie): tool paths first, then paths in your text, then the chat's last
 // project, then the chat's folder.
+// N1: the memory project of a chat the user put in a P9 project: 'project:<id>'. ponytail: a path id has that shape only
+// if a top workspace folder is itself named project:<uuid>; such a folder's turns would read as that project's.
+export const EXPLICIT = /^project:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const projectId = (id) => (typeof id === 'string' && EXPLICIT.test('project:' + id) ? 'project:' + id : null);
 function projectOf(paths, resolve) {
   const counts = new Map();
   for (const target of paths) { const id = resolve(target); if (id !== null) counts.set(id, (counts.get(id) ?? 0) + 1); }
@@ -206,8 +214,8 @@ function close(state, chat, turn, row, outcome, end, ctx) {
   const toolPaths = [...turn.touched.values()].flatMap((set) => [...set]);
   const root = path.resolve(ctx.workspace);
   const cwdId = ctx.resolve(chat.cwd) ?? (chat.cwd === root || chat.cwd.startsWith(root + path.sep) ? path.relative(root, chat.cwd) : chat.cwd);
-  const project = projectOf(toolPaths, ctx.resolve) ?? projectOf(turn.textPaths, ctx.resolve) ?? chat.project ?? cwdId;
-  chat.project = project;
+  // N1: a chat in a project takes its id; only a chat in none is inferred from paths.
+  const project = chat.explicit ?? (chat.project = projectOf(toolPaths, ctx.resolve) ?? projectOf(turn.textPaths, ctx.resolve) ?? chat.project ?? cwdId);
   if (!turn.on) return [];
   const inside = (target) => [...state.private].some((folder) => target === folder || target.startsWith(folder + path.sep));
   const isPrivate = [...toolPaths, ...turn.textPaths, chat.cwd].some(inside);
@@ -314,7 +322,7 @@ export function compile({ turns, handoff = null, resolve, workspace }) {
     const textPaths = range.flatMap((turn) => turn.parts.flatMap((part) => tokens(part.text).map((token) => absolute(token, turn.cwd))));
     const f = flags.slice(lo, hi + 1);
     items.push({ kind, claim, anchors, from_cursor: turns[lo].key, to_cursor: turns[hi].end,
-      project: projectOf(toolPaths, resolve) ?? projectOf(textPaths, resolve) ?? range.at(-1).project,
+      project: EXPLICIT.test(range.at(-1).project ?? '') ? range.at(-1).project : projectOf(toolPaths, resolve) ?? projectOf(textPaths, resolve) ?? range.at(-1).project,
       cross: everywhere && (toolPaths.length || textPaths.length) ? 1 : 0, // only a handoff line marked so, and never without paths
       private: range.some((turn) => turn.private) ? 1 : 0,
       weight: 1 + 2 * f.some((x) => x.steer) + 2 * f.some((x) => x.correct) + 2 * f.some((x) => x.failed), source, valid_from: turns[hi].at });
