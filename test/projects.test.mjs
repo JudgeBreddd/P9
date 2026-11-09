@@ -53,7 +53,7 @@ async function turn(instance, id, text) {
     const { body } = await call(instance, `/chat/events?after=0&only=${id}`);
     const events = body.events ?? [];
     const ends = events.filter((e) => e.type === 'turn-end' || e.type === 'error');
-    const users = events.filter((e) => e.type === 'user');
+    const users = events.filter((e) => e.type === 'user' && !e.data.steered); // a steered message makes no turn of its own
     if (ends.length >= users.length && users.at(-1)?.data.text === text) {
       const at = events.lastIndexOf(users.at(-1));
       return events.slice(at).filter((e) => e.type === 'update' && e.data.sessionUpdate === 'agent_message_chunk').map((e) => e.data.content.text).join('');
@@ -215,6 +215,23 @@ test("a chat started in a project's folder with no project id stays a general ch
   assert.equal((await call(instance, `/chat/${general}/project`, 'POST', { project: id })).status, 200);
   assert.match(await turn(instance, general, 'first'), /\[P9: this chat is in the project "Site"\.[\s\S]*Answer in French\.[\s\S]*first$/);
   assert.equal(await turn(instance, general, 'second'), 'echo:second', 'the same note is not sent twice');
+  // Step 1c: a message steered into a running turn carries no projectNote; the next message still gets no note.
+  const seen = async (test, what) => {
+    for (let i = 0; i < 100; i++) {
+      if (test((await call(instance, `/chat/events?after=0&only=${general}`)).body.events ?? [])) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('never ' + what);
+  };
+  const said = (text) => seen((events) => events.some((e) => e.type === 'update' && e.data.content?.text === text), 'said ' + text);
+  const ends = ((await call(instance, `/chat/events?after=0&only=${general}`)).body.events ?? []).filter((e) => e.type === 'turn-end').length;
+  assert.equal((await call(instance, `/chat/${general}/prompt`, 'POST', { text: 'slow' })).status, 202);
+  await said('working');
+  assert.equal((await call(instance, `/chat/${general}/prompt`, 'POST', { text: 'mid' })).body.steered, true);
+  await said('got:mid');
+  assert.equal((await call(instance, `/chat/${general}/cancel`, 'POST')).status, 200);
+  await seen((events) => events.filter((e) => e.type === 'turn-end').length > ends, 'ended the cancelled turn');
+  assert.equal(await turn(instance, general, 'after steer'), 'echo:after steer', 'a steered message does not make the note go again');
   await call(instance, `/projects/${id}/files`, 'POST', { name: 'brief.txt', data: b64('b') });
   assert.ok((await turn(instance, general, 'third')).includes(path.join(home(instance), id, 'files', 'brief.txt')), 'an added file changes the note');
   // Rename sticks over the agent's own title; archive hides without deleting.
@@ -225,7 +242,7 @@ test("a chat started in a project's folder with no project id stays a general ch
   assert.equal((await list(instance)).find((c) => c.id === general).archived, true);
   assert.equal((await call(instance, `/chat/${general}/project`, 'POST', { project: null })).status, 200);
   assert.equal((await list(instance)).find((c) => c.id === general).project, null);
-  console.log('PASS general chat in a project folder: project null, no note; moved in: note once, again after a change; rename and archive stick');
+  console.log('PASS general chat in a project folder: project null, no note; moved in: note once, not again after a steer, again after a change; rename and archive stick');
 });
 
 test("memory: a chat in a P9 project takes project:<id>; a chat in its folder with no project is inferred as today", { timeout: 120000 }, async (t) => {
