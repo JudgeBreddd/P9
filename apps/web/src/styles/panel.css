@@ -224,7 +224,7 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 .ptool .tools [data-slot="button"]{width:28px;height:28px}
 .ptool .tools svg{width:15px;height:15px}
 .ptool .tools [aria-pressed="true"]{background:var(--accent);color:var(--foreground)}
-.ptool .state[data-s="needs"]{color:var(--warn)}
+.ptool .state[data-s="needs"]{color:var(--warn);white-space:nowrap;flex-shrink:0}
 .ptool .state[data-s="failed"]{color:var(--destructive)}
 
 @media (prefers-reduced-motion:reduce){.lpanel .mk-run::after,.lpanel .row[data-moved],.lpanel .bot[data-busy]>svg,.lp-toast{animation:none}.lpanel{transition:none}}

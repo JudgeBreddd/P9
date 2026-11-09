@@ -108,7 +108,15 @@ test('panel: help with no project, Show more, Ctrl Tab, Split, drag with Undo, w
   await until(async () => (await call(instance, '/chat/events?after=0&only=' + asks)).events.some((e) => e.type === 'approval'), 'the chat asks for approval');
   const three = await launch(t, instance, one.profile);
   await three.page.locator(`#navList .row[data-chat="${asks}"]`).click();
-  await three.page.locator(`#chats .pane[data-id="${asks}"] .ptool .state[data-s="needs"]`, { hasText: 'Needs you' }).waitFor({ timeout: 10000 });
+  const needs = three.page.locator(`#chats .pane[data-id="${asks}"] .ptool .state[data-s="needs"]`, { hasText: 'Needs you' });
+  await needs.waitFor({ timeout: 10000 });
+  // In a split pane the header is narrow; the label stays on one line (it wrapped to two before).
+  await three.page.locator(`#chats .pane[data-id="${asks}"] [data-tool="split"]`).click();
+  await until(async () => (await panes(three.page)).length === 2, 'split shows two panes');
+  const h = await needs.evaluate((el) => el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).fontSize));
+  assert.ok(h < 1.8, '"Needs you" stays on one line in a split pane (height ' + h.toFixed(2) + ' em)');
+  await three.page.locator(`#chats .pane[data-id="${asks}"] [data-tool="split"]`).click();
+  await until(async () => (await panes(three.page)).length === 1, 'split off again');
   // Row marks by shape: a hand for the waiting chat, a ring for a running one; hovering a row shows its time beside Stop and ⋯.
   await three.page.locator(`#navList .row[data-chat="${asks}"] .mk-needs svg`).waitFor({ state: 'attached', timeout: 5000 }); // shown, it is in the time's place; the clicked row has focus, so the time shows
   const row = three.page.locator(`#navList .row[data-chat="${second}"]`);
