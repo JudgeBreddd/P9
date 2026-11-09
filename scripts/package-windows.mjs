@@ -79,8 +79,11 @@ run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPo
 // settings still go into the app (resources/app-update.yml, the feed updater.mjs reads) and latest.yml beside the installer.
 // arm64: 7za packs the 45 ARM64 .exe and .dll files with its ARM64 filter (method 0A); the installer exited 0 with no
 // node.exe on disk (job 119734051928), the NSIS 7z plugin skipping it. BCJ2 is the filter x64 installs extract.
+// detectUpdateChannel off: a pre-release version (0.1.9-beta.1, a candidate's -rc.1) would otherwise write beta.yml, not the
+// latest.yml the feed job attaches, and put channel: beta in app-update.yml, so that install asks for beta.yml from every
+// stable release. Off, every build writes latest.yml; a nightly install asks for beta.yml and falls back to latest.yml.
 const cacheDir = process.env.npm_config_cache_dir || (process.platform === 'win32' ? path.join(path.parse(root).root, 'p9') : undefined);
-run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', `--${arch}`, '--publish', 'never',
+run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--win', 'nsis', `--${arch}`, '--publish', 'never', '-c.detectUpdateChannel=false',
   '-c.publish.provider=github', '-c.publish.owner=' + REPO.split('/')[0], '-c.publish.repo=' + REPO.split('/')[1]],
   { env: { ...process.env, ...(cacheDir ? { npm_config_cache_dir: cacheDir, npm_config_virtual_store_dir_max_length: '40' } : {}),
     ...(arch === 'arm64' ? { ELECTRON_BUILDER_7Z_FILTER: 'BCJ2' } : {}) } });

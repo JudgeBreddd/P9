@@ -89,7 +89,8 @@ await writeFile(path.join(licenses, 'daemon-NOTICES.md'), await bundleDaemon(roo
 // --publish never as on Windows; the feed goes into resources/app-update.yml and latest-linux.yml beside the AppImage.
 // O1 (0.1.8): the static AppImage runtime (toolset 1.0.3, labelled beta by electron-builder) carries its own FUSE code, so
 // a stock Ubuntu Desktop opens it without libfuse2t64 and an admin password; the legacy default needs that package.
-run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--linux', 'AppImage', '--x64', '--publish', 'never',
+// detectUpdateChannel off: latest-linux.yml and no channel in app-update.yml for a pre-release version too (package-windows.mjs).
+run(process.execPath, [process.env.npm_execpath, 'dlx', 'electron-builder@26.15.3', '--linux', 'AppImage', '--x64', '--publish', 'never', '-c.detectUpdateChannel=false',
   '-c.toolsets.appimage=1.0.3', '-c.directories.output=dist/linux', '-c.publish.provider=github', '-c.publish.owner=' + REPO.split('/')[0], '-c.publish.repo=' + REPO.split('/')[1]]);
 // Unsigned like the Windows installers: SHA256SUMS-linux-x64 beside the AppImage is how a download is checked.
 const out = path.join(root, 'dist', 'linux');
