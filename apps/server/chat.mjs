@@ -4,7 +4,7 @@
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, rename, rmdir, unlink } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -281,6 +281,34 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     await folderCheck(conversation.folder ?? '');
     return folderPath(conversation.folder);
   };
+  // Step 1d (threat model row N1d; the owner, 2026-11-08: "the act of moving is permission"): while a chat is in a project,
+  // a read by its agent of that project's own files/ is answered here, once, without asking. Only Claude asks for reads
+  // (Codex's sandbox reads anywhere), so only Claude's built-in Read, Glob and Grep, by their real request shape
+  // (claude-agent-acp's permissionToolCall: name, rawInput, locations). Anything else, or any doubt, goes to the user.
+  const READS = { Read: { paths: ['file_path'] }, Glob: { paths: ['path'], globs: ['pattern'] }, Grep: { paths: ['path'], globs: ['glob'] } };
+  // ponytail: a Glob or Grep over a folder with more than 5,000 entries is asked rather than walked for links.
+  const ownRead = async (id, request) => {
+    const call = request?.toolCall, tool = READS[call?.name], input = call?.rawInput;
+    const allow = request?.options?.find((o) => o?.kind === 'allow_once');
+    if (locked || row(id)?.provider !== 'claude' || !tool || !input || typeof input !== 'object' || typeof allow?.optionId !== 'string') return null;
+    for (const key of tool.globs ?? []) if (input[key] !== undefined && (typeof input[key] !== 'string' || /\.\.|^[/\\~]|:/.test(input[key]))) return null;
+    const folder = await projects.ownFiles(row(id)?.project); // the chat's project now, read again on every request
+    if (!folder) return null;
+    const root = await realpath(folder);
+    const wanted = [...tool.paths.map((key) => input[key]), ...(Array.isArray(call.locations) ? call.locations.map((l) => l?.path) : [])];
+    for (const value of wanted) {
+      if (typeof value !== 'string' || !path.isAbsolute(value)) return null; // no path: Glob and Grep would search the cwd
+      const real = await realpath(value); // links resolved first: one inside files/ pointing out fails here
+      const rel = path.relative(root, real);
+      if (rel.split(path.sep)[0] === '..' || path.isAbsolute(rel)) return null;
+      if ((await lstat(real)).isDirectory()) {
+        const entries = await readdir(real, { recursive: true, withFileTypes: true });
+        if (entries.length > 5000 || entries.some((entry) => entry.isSymbolicLink())) return null;
+      }
+    }
+    emit(id, 'auto-allowed', { toolCall: trim(call) });
+    return { outcome: { outcome: 'selected', optionId: allow.optionId } };
+  };
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
   const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
     .then((result) => { session.mode = value; emit(session.id, 'mode', { mode: value, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === value) ?? value, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
@@ -481,7 +509,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         if (update?.sessionUpdate === 'tool_call' || update?.sessionUpdate === 'tool_call_update') toolStep(conversation.id, session, update);
       },
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
-      requestPermission: (request) => session.approve(request),
+      requestPermission: async (request) => (await ownRead(conversation.id, request).catch(() => null)) ?? session.approve(request),
       createElicitation: ask('question'),
     }), stream);
     live.set(conversation.id, session);

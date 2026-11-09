@@ -72,10 +72,15 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
   // An IN_P9 chat's folder, found again from its project id at every start: that project's own files/, a real folder with
   // no link below projects/. null when the chat is no longer in an In P9 project (it then starts in the workspace).
   async function filesStart(id) {
-    const value = typeof id === 'string' && await record(id);
-    if (!value || value.work.kind !== 'p9') return null;
-    for (const folder of [folderOf(value.id), filesOf(value.id)]) if (!(await lstat(folder)).isDirectory()) throw new Error('unsafe-path');
-    return filesOf(value.id);
+    const value = await record(id); // null for anything but a project's UUID
+    return value?.work.kind === 'p9' ? ownFiles(value.id) : null;
+  }
+  // Any project's own files/ (step 1d, threat model row N1d: its chats' agents read there without being asked), with the
+  // same check as filesStart: projects/<id>/ and files/ real folders, no link. null when there is no such project.
+  async function ownFiles(id) {
+    if (!(await record(id))) return null;
+    for (const folder of [folderOf(id), filesOf(id)]) if (!(await lstat(folder)).isDirectory()) throw new Error('unsafe-path');
+    return filesOf(id);
   }
   // A gone or refused work folder is reported, never thrown. AGENTS.md and CLAUDE.md are seen in the listing only.
   async function view(value, full = true) {
@@ -209,6 +214,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     record,
     startFolder,
     filesStart,
+    ownFiles,
     // What the agent gets (N1 chats): the project's instructions and its added files' paths, as one text block before
     // the message. hash names what was sent; prompt() sends it only when it differs from the chat's last message's.
     // The work folder's AGENTS.md or CLAUDE.md is the agent's to read; nothing here opens it.

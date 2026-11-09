@@ -330,6 +330,15 @@ const connection = new acp.AgentSideConnection(() => ({
       await say('permission:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
       return { stopReason: 'end_turn' };
     }
+    // perm-json <toolCall>: a permission request in claude-agent-acp 0.88.0's real shape (its options as recorded in
+    // test/fixtures/acp/claude.json), for step 1d's own-project reads.
+    if (text.startsWith('perm-json ')) {
+      const result = await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'perm-' + Date.now(), status: 'pending', ...JSON.parse(text.slice(10)) },
+        options: [{ optionId: 'allow-once', name: 'Yes', kind: 'allow_once' }, { optionId: 'allow-with-updates', name: 'Yes, allow reading from this folder during this session', kind: 'allow_always' },
+          { optionId: 'reject', name: 'No', kind: 'reject_once' }] });
+      await say('permission:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
+      return { stopReason: 'end_turn' };
+    }
     if (text === 'ask') {
       const result = await connection.createElicitation({ sessionId, mode: 'form', message: 'Pick a colour',
         requestedSchema: { type: 'object', properties: { colour: { type: 'string', enum: ['red', 'blue'] } } } });
