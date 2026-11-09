@@ -160,7 +160,7 @@ Each focus mode has its own pet settings: on or off, size, and a pet for System,
 
 ## Remote Connect, Send to remote and Send files
 
-Remote Connect points this window at a P9 on another Linux machine (a remote). Chat, Mission Control, the terminal and Dev Focus use the remote's P9 through an ssh tunnel (the way VS Code Remote-SSH works). This computer's own P9 keeps running.
+Remote Connect points this window at a P9 on another Linux machine (a remote). Chat, Mission Control, the terminal and Dev Focus use the remote's P9 through one ssh tunnel that forwards its daemon's socket. This computer's own P9 keeps running.
 
 1. **Pick the machine.** Click the Local/Remote badge in the top bar: its menu lists this computer, each saved remote with whether P9 there is reachable, **Add a machine…**, and, for a saved remote, **Remove**. Settings → Remote Connect has the same list: every `Host` in your `~/.ssh/config`, plus any `Host` name or `user@address` you add, each with **Connect**. The setup wizard's welcome step offers the same.
 2. **Log in.** A key works as with `ssh`. Without one, P9 asks for your password in its own window (from Linux only; Windows needs a key). The password goes to ssh through a pipe and is never saved, logged or put on a command line; the login is kept for 10 idle minutes so you type it once. Afterwards P9 offers **Log in without a password next time** (ticked), which adds a key of P9's own on the remote. If this computer has no ssh program, P9 says `ssh-missing` with how to install it, and **Try again**.

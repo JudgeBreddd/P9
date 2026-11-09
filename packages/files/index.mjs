@@ -64,7 +64,7 @@ export const lockedName = (name) => locked(name);
 // person's space names ({ space: true }) see _private too. Keys (.env, secrets, .git) stay hidden, and writes keep the lock.
 const spaceLocked = (name) => locked(name) && !/^_private$/i.test(name);
 
-// Folders P9 never crawls (Builder, 2026-10-27: no VS Code-style out-of-memory from walking them): the file tree, Dev
+// Folders P9 never crawls (Builder, 2026-10-27: walking them must never run P9 out of memory): the file tree, Dev
 // Focus's tree, search and watcher, and a tunnel send of a folder that is not a git repo.
 export const HEAVY = Object.freeze(['node_modules', '.venv', 'venv', '__pycache__', '.cache', 'dist', 'build', '.astro']);
 // K14: the one list a workspace walk leaves out (Mission's plans list, the setup wizard's "Use what's here"): HEAVY plus

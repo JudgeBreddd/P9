@@ -103,8 +103,8 @@ function wireMission() {
     saveMission({ [k]: picked });
   }; });
 }
-// Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host lines of ~/.ssh/config (as VS Code Remote-SSH
-// lists them). Nothing is built in; Add remote takes a Host name or user@address.
+// Settings > Remote (desktop/remote.mjs, D3): the remotes added here, then the Host aliases of ~/.ssh/config (no wildcards or
+// negations; remote.mjs). Nothing is built in; Add remote takes a Host name or user@address.
 function serverRow() {
   const { host, connected, error, hosts, remotes = [], keep = {}, noKey = [] } = outer.serverInfo, all = [...new Set([...remotes, ...hosts])];
   // Row I1: what P9 on each remote does when you disconnect, as answered with Do not ask again; Ask until then.
