@@ -32,6 +32,10 @@ reach it.
    adapter's four modes by their own names: `read-only`, `workspace-write`, `agent`,
    `agent-full-access` (no sandbox, never asks; threat model row 25). Claude adds `bypassPermissions`.
    The agent lock overrides all of them.
+   On resume (0.1.9 O32), Codex is set to `agent` first, or the lock's mode when the lock is on. Then
+   `carry()` puts back the chat's last mode that was not the lock's, so a chat last in `agent-full-access`
+   or `bypassPermissions` comes back in it, with no new warning (threat model row 25). With the lock on,
+   the mode is left alone. If setting the mode back fails, the chat stays on the mode set first.
 3. Stop = `session/close` (800 ms), close stdin (1 s), then `systemctl --user stop` on the session's
    scope, which ends everything in its cgroup, including `setsid` children. Without a user bus, the
    fallback signals the process group, and `setsid` children escape it.

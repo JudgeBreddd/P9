@@ -804,3 +804,74 @@ test('U4: a chat starts in a folder outside the workspace only in Unrestricted m
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 502, 'mode off again: refused at start');
   console.log('PASS U4: outside folder 400 with the mode off; with it on, 3 bad folders 400 and the agent starts in it; off again, refused at start');
 });
+
+// O32: a chat on a model, effort and mode other than the agent's own defaults is resumed on them after a restart (the Claude
+// adapter starts a resumed session on the computer's default model; the fake starts every new process on its defaults too).
+test('resume: a chat keeps its model, effort and mode across a daemon restart', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  const turn = async (at, body, from) => {
+    assert.equal((await call(at, `/chat/${id}/prompt`, 'POST', body)).status, 202, JSON.stringify(body));
+    return until(at, (event) => event.type === 'turn-end' && event.conversation === id, from);
+  };
+  const first = await turn(instance, { text: 'config', model: 'opus', config: { effort: 'high' }, mode: 'Plan' }, 0);
+  assert.equal((await until(instance, said(id, 'config:'), 0)).hit.data.content.text, 'config:model=opus,effort=high,fast=off,sandbox=on');
+  await turn(instance, { text: 'mode' }, first.cursor);
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  const resumed = await turn(second, { text: 'config' }, 0);
+  assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > first.cursor, 0)).hit.data.content.text, 'config:model=opus,effort=high,fast=off,sandbox=on', 'model and effort put back');
+  const back = (await until(second, (e) => e.type === 'resumed' && e.conversation === id, 0)).hit;
+  assert.equal(back.data.model, 'Opus', 'the resumed event names the model the session is on');
+  const config = (await until(second, (e) => e.type === 'config' && e.conversation === id && e.cursor > back.cursor, back.cursor - 1)).hit;
+  assert.deepEqual([config.data.model.current, config.data.pickers.find((p) => p.id === 'effort').current], ['opus', 'high'], 'one config after the resume, with what it is on');
+  await turn(second, { text: 'mode' }, resumed.cursor);
+  assert.equal((await until(second, (e) => said(id, 'mode:')(e) && e.cursor > resumed.cursor, resumed.cursor)).hit.data.content.text, 'mode:plan', 'mode put back');
+  console.log('PASS resume: opus, high effort and Plan kept across a daemon restart; resumed names Opus');
+});
+
+// O32, Codex: resume first sets Codex's own safe mode (contracts.md rule 2), which is a mode event too; the chat still goes
+// back to the mode it was last in, not that one.
+test('resume: a Codex chat goes back to its own mode, not the one resume sets first', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance, 'codex');
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode: 'Read-only' })).status, 202);
+  const before = await until(instance, said(id, 'mode:'), 0);
+  assert.equal(before.hit.data.content.text, 'mode:read-only');
+  await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, 0);
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const { hit, seen } = await until(second, (e) => said(id, 'mode:')(e) && e.cursor > before.hit.cursor, 0);
+  assert.equal(hit.data.content.text, 'mode:read-only', 'the chat\'s own mode, after the safe one');
+  assert.equal(seen.filter((e) => e.type === 'mode' && e.conversation === id).at(-1).data.name, 'Read-only', 'the last mode event is the chat\'s');
+  console.log('PASS resume (Codex): back in Read-only after the safe mode resume sets first');
+});
+
+// Threat model row 25: a chat last in Full access comes back in it after a restart, even for a message that sends no mode
+// (the phone's 'As set'); one resumed while the agent lock is on runs read-only, the lock's mode.
+test('resume: a chat last in Full access comes back in it for a message with no mode, and the lock still wins', async (t) => {
+  const instance = await start(t);
+  const loose = await create(instance, 'codex'), held = await create(instance, 'codex');
+  let after = 0;
+  for (const id of [loose, held]) {
+    assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode: 'Full access' })).status, 202);
+    after = (await until(instance, said(id, 'mode:agent-full-access'), after)).hit.cursor;
+    await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, after - 1);
+  }
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  assert.equal((await call(second, `/chat/${loose}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const back = (await until(second, (e) => said(loose, 'mode:')(e) && e.cursor > after, 0)).hit;
+  assert.equal(back.data.content.text, 'mode:agent-full-access', 'a message with no mode runs in the chat\'s own Full access');
+  await until(second, (event) => event.type === 'turn-end' && event.conversation === loose, back.cursor - 1);
+  assert.deepEqual((await json(call(second, '/agent-lock', 'POST', { on: true }))).body, { on: true });
+  assert.equal((await call(second, `/chat/${held}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const { hit: locked, seen } = await until(second, (e) => said(held, 'mode:')(e) && e.cursor > back.cursor, 0);
+  assert.equal(locked.data.content.text, 'mode:read-only', 'the lock wins over the Full access a resume puts back');
+  assert.ok(!seen.some((e) => e.type === 'mode' && e.conversation === held && e.cursor > back.cursor && e.data.mode === 'agent-full-access'), 'resume set Full access under the lock, if only until the prompt');
+  console.log('PASS resume: Full access comes back for a message with no mode; with the lock on, read-only');
+});
