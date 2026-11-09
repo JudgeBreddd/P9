@@ -288,12 +288,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const READS = { Read: { paths: ['file_path'] }, Glob: { paths: ['path'], globs: ['pattern'] }, Grep: { paths: ['path'], globs: ['glob'] } };
   // ponytail: a Glob or Grep over a folder with more than 5,000 entries is asked rather than walked for links.
   // A tool is looked up only as READS' own key (not "constructor"); a glob part may not start at the root, a drive or home,
-  // at its start or after a brace or a comma ({/etc/*,x}).
+  // at its start or after a brace, a comma, a parenthesis or a pipe ({/etc/*,x}, @(x|/etc/*)).
   const ownRead = async (id, request) => {
     const call = request?.toolCall, tool = Object.hasOwn(READS, call?.name) ? READS[call.name] : undefined, input = call?.rawInput;
     const allow = request?.options?.find((o) => o?.kind === 'allow_once');
     if (locked || row(id)?.provider !== 'claude' || !tool || !input || typeof input !== 'object' || typeof allow?.optionId !== 'string') return null;
-    for (const key of tool.globs ?? []) if (input[key] !== undefined && (typeof input[key] !== 'string' || /\.\.|(^|[{,])[/\\~]|:/.test(input[key]))) return null;
+    for (const key of tool.globs ?? []) if (input[key] !== undefined && (typeof input[key] !== 'string' || /\.\.|(^|[{,(|])[/\\~]|:/.test(input[key]))) return null;
     const folder = await projects.ownFiles(row(id)?.project); // the chat's project now, read again on every request
     if (!folder) return null;
     const root = await realpath(folder);
