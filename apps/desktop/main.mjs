@@ -217,7 +217,12 @@ export async function createDesktop({ state, open } = {}) {
   // U8: Keep on the slim Temporary P9 there (P9_KEEP full) is the full install, with keep and this password if any.
   const keeper = createKeeper({ saved: saved?.keep, named, save: () => keepServer(), run: (h, action, password) => remoteMode(h, action, sshCommand, password)
     .then(r => { if (r.phase === 'full' && h === serverHost) runInstall(password, { full: true, keep: true }); return r; }) });
-  const keepServer = () => writeFile(serverFile, JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, ...(openOn !== null && { openOn }) }), { mode: 0o600 });
+  // Temp file + rename, one write at a time: a reader (the next start, a test) never sees a half-written file, and two
+  // quick saves cannot interleave. The data is read when the write starts, so the last save always wins.
+  let serverSaving = Promise.resolve();
+  const keepServer = () => serverSaving = serverSaving.catch(() => {}).then(() =>
+    writeFile(serverFile + '.tmp', JSON.stringify({ host: serverHost, last: serverLast, remotes, keep: keeper.keep, noKey, agents: agentsFor, ...(openOn !== null && { openOn }) }), { mode: 0o600 })
+      .then(() => rename(serverFile + '.tmp', serverFile)));
   // The download runs on the remote (POST /setup/agents-fetch); the page shows its phase from p9:get-status.
   const fetchAgents = (host, names) => {
     if (!names.length || !server?.slim || (agentsJob?.host === host && agentsJob.phase === 'running')) return;
