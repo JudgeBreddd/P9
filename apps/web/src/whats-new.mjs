@@ -2,12 +2,11 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.1',
+  version: '0.1.9-beta.2',
   changes: [
-    'Mode, Model and Effort are pills in the message bar; Settings sets the default model and effort.',
-    'A downloaded update asks first: Update now reopens P9, Later installs it at the next open.',
-    'The Artifacts list shows one row per title with its versions, and a Pin stays where you put it.',
-    "On Windows and Linux P9's top row is the title bar, with the window buttons at its right end.",
-    'On Windows a bare bash or sh opens Git Bash, never the WSL launcher.',
+    'A new look, Event Horizon Azure, is in the Look picker; the default look is unchanged.',
+    'Dev Focus colours JSON, CSS and shell files.',
+    'In Dev Focus the editor turns light with a light look.',
+    'Two quick saves of the connection settings can no longer leave the file half-written.',
   ],
 };
