@@ -103,7 +103,7 @@ the daemon answers ([Check the daemon](#install-on-linux-per-user-from-source)).
 One window, three focus modes:
 
 - **Chat Focus**: Claude and Codex chats over the Agent Client Protocol, with approvals, history and Stop.
-- **Dev Focus**: a VS Code–style editor (VSCodium's remote server) whose saves go through P9's guarded save.
+- **Dev Focus**: a code editor (VSCodium's remote server) whose saves go through P9's guarded save.
 - **Mission Control**: your scripts as buttons, your apps and pages, and a "waiting on you" queue.
 
 ```text

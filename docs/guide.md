@@ -20,7 +20,7 @@ The first time P9 opens, a setup wizard walks through what it needs. A **Set up*
 One window, three modes. Switch with the buttons at the top of the window.
 
 - **Chat**: agent chats.
-- **Dev**: a VS Code-style editor on your workspace.
+- **Dev**: a code editor on your workspace.
 - **Mission Control**: your scripts as buttons, your apps and pages, and what is waiting on you.
 
 You can turn off modes you don't use: each mode's page in Settings has its own on/off row. At least one stays on. The look you pick applies to every focus mode, Dev Focus included.
@@ -60,7 +60,7 @@ Settings → Security settings → Agent lock. While it's on, agents can read an
 
 ## Dev
 
-A VS Code-style editor (VSCodium's server) on your workspace folder, with its file tree, terminal, extensions from Open VSX, and debugging.
+A code editor (VSCodium's server) on your workspace folder, with its file tree, terminal, extensions from Open VSX, and debugging.
 
 - **Saving.** A file is written only when you press Ctrl+S or Save; the editor no longer writes by itself after you stop typing. A white dot on a tab marks a file you have not saved. A file you open from Chat Focus saves the same way.
 - **Guarded save.** If a file changed on disk after you opened it, P9 won't overwrite it. It shows the conflict and keeps your text as a recovery draft. The README explains how to get a draft back.
