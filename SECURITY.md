@@ -343,9 +343,11 @@ share one result. Stop All waits for starts already in flight, so each start is 
 an adapter that does not finish the ACP handshake within 45 s is ended and its start
 fails with 502. The daemon stops only `p9-chat-*` and `p9-run-*` scopes for its hashed
 instance, `p9-*` sessions on its dedicated tmux socket, and that socket's tmux server
-unit (`p9-tmux-<socket>.service`), which ends every process a pane started, including
+unit (`p9-tmux-<socket>.service`) together with the slice it runs in
+(`p9-tmux-<socket>.slice`, inside `p9.slice`). tmux moves each new pane into a scope of its
+own in that slice, so stopping the slice ends every process a pane started, including
 jobs a pane detached with nohup or setsid. It verifies all of it is gone (the server
-unit reads inactive or failed) before reporting success. Failed scope or tmux cleanup is returned as a failure,
+unit and its slice read inactive or failed) before reporting success. Failed scope or tmux cleanup is returned as a failure,
 and a retry enumerates real systemd and tmux state again. Other user units and other
 tmux sockets are outside the namespace and are never enumerated or stopped. Also outside Stop All:
 the Dev Focus editor host (its own `p9-editor-host-*` scope, stopped when the window quits), apps
@@ -365,11 +367,11 @@ Task Scheduler).
 
 Linux terminal sessions are real tmux sessions recorded in the daemon ledger and
 reconciled against the dedicated socket at startup. The tmux server runs as its own
-transient user unit with only P9's allowlisted environment, and tmux puts each pane in a
-scope that is PartOf that unit, so neither a systemd restart nor SIGKILL of the daemon
+transient user unit, in a slice of its own, with only P9's allowlisted environment, and
+tmux puts each pane in a scope in that slice, so neither a systemd restart nor SIGKILL of the daemon
 touches them (the daemon's service also keeps `KillMode=process`). Stop Session ends one
 terminal's panes; a job that pane detached lives until Stop All stops the server unit
-(known gap). Stored ACP provider session IDs resume
+and its slice (known gap). Stored ACP provider session IDs resume
 through `session/resume` after restart. An in-flight turn becomes interrupted, its
 pending approval expires, and P9 never retries the prompt automatically.
 
