@@ -80,6 +80,58 @@ test('Code colours: ts, python, json and shell blocks coloured in Azure and the 
   console.log('PASS code colours: 4 coloured blocks plus an unknown language, open block and markup as text; contrast ' + Object.entries(looks).map(([l, k]) => l + ' min ' + Math.min(...Object.values(k).map((v) => v.ratio))).join(', '));
 });
 
+// O31 (Builder, nightly 1, a dark gold look): Settings > Default effort opened as a white list with near-white words. Every
+// dropdown's open list, in every look plus AMOLED: each option's words against the list it is drawn on, at least 4.5:1.
+test('Dropdowns: every option of every select is readable in its open list, in every look and AMOLED', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t);
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-selects-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const ids = await page.locator('[data-theme-pick]').evaluateAll((buttons) => buttons.map((b) => b.dataset.themePick));
+  // The list's background: the option's own, else P9's list (base-select), else the system's list, which nightly 1 showed white.
+  const read = () => page.evaluate(() => {
+    const px = (colour, under) => { const c = document.createElement('canvas').getContext('2d', { willReadFrequently: true }); c.fillStyle = under || '#000'; c.fillRect(0, 0, 1, 1); c.fillStyle = colour; c.fillRect(0, 0, 1, 1); return [...c.getImageData(0, 0, 1, 1).data].slice(0, 3); };
+    const lum = (rgb) => { const [r, g, b] = rgb.map((v) => v / 255).map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    let worst = null; const selects = document.querySelectorAll('select');
+    for (const sel of selects) {
+      const own = getComputedStyle(sel).appearance === 'base-select', list = own ? getComputedStyle(sel, '::picker(select)').backgroundColor : '';
+      const under = own ? px(list || 'rgba(0,0,0,0)', '#fff') : [255, 255, 255];
+      for (const o of sel.options) {
+        const bg = px(getComputedStyle(o).backgroundColor, 'rgb(' + under + ')'), fg = px(getComputedStyle(o).color, 'rgb(' + bg + ')'), [x, y] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+        const ratio = Math.round(((x + 0.05) / (y + 0.05)) * 100) / 100;
+        if (!worst || ratio < worst.ratio) worst = { ratio, select: sel.getAttribute('aria-label') || sel.id, option: o.textContent, own, list, fg: fg.join(','), bg: bg.join(',') };
+      }
+    }
+    return { selects: selects.length, worst };
+  });
+  const openSettings = async () => { await page.click('#setBtn'); await page.locator('#setDlg[open]').waitFor(); };
+  const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
+  const shot = async (name) => { if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(300); console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); } };
+  const looks = {};
+  for (const id of ids) {
+    await page.click('#themeBtn'); await page.click(`[data-theme-pick="${id}"]`); await page.keyboard.press('Escape');
+    await openSettings(); looks[id] = await read();
+    if (id === 'daylight' || id === ids[0]) {
+      // The open list itself: Settings > Chat Focus > Claude's Mode.
+      await page.click('[data-set-page="Chat Focus"]'); await page.click('[data-default-mode="claude"]'); await shot('select-open-' + id);
+      await page.keyboard.press('Escape');
+    }
+    await closeSettings();
+  }
+  await page.evaluate(() => document.documentElement.setAttribute('data-amoled', ''));
+  await openSettings(); looks.amoled = await read(); await closeSettings();
+  console.log('SELECTS ' + JSON.stringify(Object.fromEntries(Object.entries(looks).map(([k, v]) => [k, v.worst.ratio]))));
+  for (const [look, { selects, worst }] of Object.entries(looks)) {
+    assert.ok(selects >= 6, look + ': only ' + selects + ' selects found');
+    assert.ok(worst.ratio >= 4.5, `${look}: "${worst.option}" in ${worst.select} is ${worst.ratio}:1 (${JSON.stringify(worst)})`);
+  }
+  console.log('PASS dropdowns: ' + Object.keys(looks).length + ' looks, ' + looks.amoled.selects + ' selects, lowest ' + Math.min(...Object.values(looks).map((v) => v.worst.ratio)) + ':1');
+});
+
 // Phase 18 row 2: the Settings page. Threat model row 15 case 4 (the settings IPC refuses any other shape and leaves the
 // file alone) plus each setting surviving an app restart; the agent lock goes through the real daemon.
 import test from 'node:test';
