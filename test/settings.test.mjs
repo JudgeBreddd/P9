@@ -11,7 +11,7 @@ test('Code colours: ts, python, json and shell blocks coloured in Azure and the 
   await page.locator('#rChat').waitFor();
   const fence = (lang, code) => '```' + lang + '\n' + code.replace(/\n$/, '') + '\n```\n\n';
   const text = '\nFour blocks:\n\n' + fence('ts', FIXTURE.ts) + fence('python', OTHERS['app.py']) + fence('json', OTHERS['data.json']) + fence('bash', OTHERS['run.sh'])
-    + fence('zz', 'const plain = 1;') + fence('ts', 'const x = "<img src=x onerror=window.pwned=1>"; // </code></pre><script>window.pwned = 2</script>')
+    + fence('zz', 'const plain = 1;') + fence('constructor', 'a') + fence('toString', 'b') + fence('__proto__', 'c') + fence('ts', 'const x = "<img src=x onerror=window.pwned=1>"; // </code></pre><script>window.pwned = 2</script>')
     + '```py\ndef still_open():';
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text });
@@ -26,18 +26,23 @@ test('Code colours: ts, python, json and shell blocks coloured in Azure and the 
       kinds: [...new Set([...code.querySelectorAll('span')].map((s) => s.className))].sort() };
   }));
   assert.deepEqual(blocks.map((b) => [b.lang, b.spans > 0, b.copy]), [['language-ts', true, true], ['language-python', true, true], ['language-json', true, true],
-    ['language-bash', true, true], ['language-zz', false, true], ['language-ts', true, true], ['language-py', false, true]]);
+    ['language-bash', true, true], ['language-zz', false, true], ['language-constructor', false, true], ['language-toString', false, true],
+    ['language-__proto__', false, true], ['language-ts', true, true], ['language-py', false, true]]);
   // The text in each block is the code exactly as sent (colouring adds spans, never characters).
   assert.equal(blocks[0].text, FIXTURE.ts);
   assert.equal(blocks[2].text, OTHERS['data.json']);
   assert.equal(blocks[4].text, 'const plain = 1;\n');
-  assert.equal(blocks[6].text, 'def still_open():\n', 'an open block stays plain');
+  assert.equal(blocks[7].text, 'c\n', 'a label that names an inherited property stays plain');
+  // The render path catches a throw and a later redraw hides it, so the lookup itself is checked here.
+  const { codePieces } = await import('../apps/web/src/code-colours.mjs');
+  for (const l of ['constructor', 'toString', '__proto__']) assert.equal(codePieces(l, 'x'), null, l + ' stays plain');
+  assert.equal(blocks[9].text, 'def still_open():\n', 'an open block stays plain');
   for (const k of ['cc-keyword', 'cc-string', 'cc-type', 'cc-punct']) assert.ok(blocks[0].kinds.includes(k), 'ts has ' + k + ': ' + blocks[0].kinds);
   assert.deepEqual(await reply.evaluate((m) => ({
     banned: m.querySelectorAll('script, img, iframe, object, embed, svg').length,
     on: [...m.querySelectorAll('*')].some((el) => [...el.attributes].some((a) => /^on/i.test(a.name))),
     classes: [...new Set([...m.querySelectorAll('pre span')].flatMap((s) => [...s.classList]))].every((c) => /^cc-[a-z]+$/.test(c)),
-    shown: m.querySelectorAll('pre')[5].textContent.includes('<img src=x onerror=window.pwned=1>') && m.querySelectorAll('pre')[5].textContent.includes('<script>'),
+    shown: m.querySelectorAll('pre')[8].textContent.includes('<img src=x onerror=window.pwned=1>') && m.querySelectorAll('pre')[8].textContent.includes('<script>'),
     pwned: window.pwned ?? null,
   })), { banned: 0, on: false, classes: true, shown: true, pwned: null });
   // Each colour, blended onto its block's real background, read in four looks: the default dark look, AMOLED, a light

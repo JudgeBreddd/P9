@@ -96,7 +96,9 @@ export const onCodeColours = fn => listeners.add(fn);
 
 // The pieces of one complete block, or null: language off the list, block too big, or parser not here yet (asked for).
 export function codePieces(lang, code) {
-  const id = LANGS[String(lang).toLowerCase()];
+  // Own keys only: a label such as constructor or __proto__ must not find an inherited value and stay plain.
+  const name = String(lang).toLowerCase();
+  const id = Object.hasOwn(LANGS, name) && LANGS[name];
   if (!id || code.length > MAX) return null;
   if (!ready.has(id)) {
     ready.set(id, null);
