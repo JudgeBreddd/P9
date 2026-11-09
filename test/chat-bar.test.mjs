@@ -72,7 +72,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   assert.equal(await pane.locator('select').count(), 0, 'no selects left in the pane');
   assert.equal(await pane.locator('.composer .bar .hint').count(), 0, 'the hint text is gone while idle');
   assert.deepEqual(await pane.locator('.composer .bar .pills [data-pill]').evaluateAll((l) => l.map((b) => [b.tagName, b.getAttribute('aria-haspopup'), b.getAttribute('aria-label')])),
-    [['BUTTON', 'menu', 'Mode: Auto'], ['BUTTON', 'menu', 'Model: Default (recommended)'], ['BUTTON', 'menu', 'Effort: Medium']]);
+    [['BUTTON', 'menu', 'Agent: Claude'], ['BUTTON', 'menu', 'Mode: Auto'], ['BUTTON', 'menu', 'Model: Default (recommended)'], ['BUTTON', 'menu', 'Effort: Medium']]);
   // Keyboard: Enter on a pill opens its menu (role=menu, menuitemradio items, the current one checked and focused); arrows move;
   // Enter picks and puts focus back on the pill; Escape closes and does the same.
   await pillOf(pane, 'Mode').focus(); await page.keyboard.press('Enter');
@@ -126,7 +126,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   // While the agent works the Steer / Queue / Cancel chip shows beside the pills, which stay.
   await send('long work');
   await pane.locator('.bar [data-when="steer"]').waitFor({ timeout: 10000 });
-  assert.equal(await pane.locator('.bar [data-pill]').count(), 3);
+  assert.equal(await pane.locator('.bar [data-pill]').count(), 4);
   // An open menu stays open, with its focus, while the chat streams (a tool step every 300 ms re-renders the pane).
   await pillOf(pane, 'Effort').click(); await menu.waitFor();
   const steps = () => pane.locator('.hist details[data-ev]').count();
@@ -166,7 +166,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   for (const f of fit) assert.deepEqual([f.oneLine, f.noOverflow, f.sendIn, f.pillsShow], [true, true, true, true], JSON.stringify(fit));
   await shot(page, 'pills-narrow');
   assert.deepEqual(errors, []);
-  console.log('PASS pills: three menu pills in the bar, keyboard and roles as specified, open through streaming, queued mid-turn, one line at 280 px');
+  console.log('PASS pills: four menu pills in the bar, keyboard and roles as specified, open through streaming, queued mid-turn, one line at 280 px');
 });
 
 test('Codex: Plan in the Mode menu is the plan collaboration mode, on top of the sandbox mode picked before; any other mode turns it off; the separate picker is gone', { timeout: 150000 }, async (t) => {
@@ -288,4 +288,72 @@ test('a resumed chat keeps its model, effort and mode after a daemon restart and
   await shot(again.page, 'o32-resumed');
   assert.deepEqual(again.errors, []);
   console.log('PASS resume (desktop): Opus, High and Plan shown and used after a daemon and an app restart');
+});
+
+// O29 (Builder, 2026-11-08): the chat that appears next in the list, made by this window; its pane, once shown.
+const madeNext = async (page, had) => {
+  await page.waitForFunction((had) => [...document.querySelectorAll('#navList .row[data-chat]')].some((x) => !had.includes(x.dataset.chat)), had, { timeout: 15000 });
+  const id = await page.locator('#navList .row[data-chat]').evaluateAll((l, had) => l.map((x) => x.dataset.chat).find((x) => !had.includes(x)), had);
+  const pane = page.locator('#chats .pane[data-id="' + id + '"]');
+  await pane.locator('[data-pill="Mode"]').waitFor({ timeout: 15000 });
+  return { id, pane };
+};
+const rows = (page) => page.locator('#navList .row[data-chat]').evaluateAll((l) => l.map((x) => x.dataset.chat));
+
+// O29: New chat (+) opens on the agent used last on this computer, with that agent's saved mode: after a message in a Codex
+// chat, + then Enter makes a Codex chat in Codex's last mode, and its first message runs in it.
+test('New chat (+) opens on the agent used last here: + then Enter after a Codex chat makes a Codex chat in its saved mode', { timeout: 150000 }, async (t) => {
+  const { page, pane, send, said, idle, errors } = await setup(t, 'agent-last', 'codex');
+  await choose(page, pane, 'Mode', 'Read-only');
+  await pane.locator('[data-pill="Mode"][aria-label="Mode: Read-only"]').waitFor();
+  await send('mode'); await said('mode:read-only'); await idle();
+  const had = await rows(page);
+  await page.click('#newBtn'); await page.locator('#newPop:not([hidden])').waitFor();
+  assert.deepEqual(await page.locator('#newPop .hd').evaluateAll((l) => l.filter((h) => h.offsetParent).map((h) => h.textContent).slice(-2)), ['New Codex', 'New Claude'], 'the last agent\'s section comes first');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.new), 'codex', 'its first row has the focus');
+  await page.keyboard.press('Enter');
+  const made = await madeNext(page, had);
+  assert.deepEqual([await pillValue(made.pane, 'Agent'), await pillValue(made.pane, 'Mode')], ['Codex', 'Read-only'], 'a Codex chat, in Codex\'s saved mode');
+  await made.pane.locator('.composer textarea').fill('mode'); await made.pane.locator('.composer textarea').press('Enter');
+  await made.pane.locator('.hist', { hasText: 'mode:read-only' }).waitFor({ timeout: 20000 });
+  assert.deepEqual(errors, []);
+  console.log('PASS new chat: + opens on the agent used last, Enter starts it in that agent\'s saved mode');
+});
+
+// O29: the Agent pill, first in the bar. In an empty chat, picking the other agent makes the chat that agent's, with its saved
+// defaults (mode, Default model, Default effort). A chat with messages keeps its agent: the other row is disabled and says why.
+test('Agent pill: an empty chat switches agent and takes that agent\'s defaults; a chat with messages keeps its agent', { timeout: 150000 }, async (t) => {
+  const { id, page, pane, errors } = await setup(t, 'agent-pill', 'claude');
+  // Claude's lists are known (the chat's config came), so its Settings defaults can apply.
+  await page.evaluate(() => { localStorage.setItem('p9-model-default:claude', 'haiku'); localStorage.setItem('p9-effort-default:claude', 'high'); localStorage.setItem('p9-mode:claude', 'Plan'); });
+  assert.deepEqual(await pane.locator('.bar [data-pill]').evaluateAll((l) => l.map((b) => b.dataset.pill)), ['Agent', 'Mode', 'Model', 'Effort']);
+  // A chat with messages: Codex is shown but disabled, with the reason; picking it changes nothing.
+  assert.deepEqual(await pillItems(page, pane, 'Agent'), ['Claude ✓', 'Codex']);
+  await pillOf(pane, 'Agent').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
+  assert.equal(await menuItem(page, 'Codex').getAttribute('aria-disabled'), 'true');
+  assert.match(await page.locator('#pillMenu .pm-note').innerText(), /stays on its agent/);
+  await menuItem(page, 'Codex').click({ force: true });
+  assert.equal(await pillValue(pane, 'Agent'), 'Claude', 'still Claude');
+  await page.keyboard.press('Escape');
+  // An empty Codex chat from the New menu: its Agent menu offers Claude with what Claude would start on.
+  let had = await rows(page);
+  await page.click('#newBtn'); await page.locator('#newPop [data-new="codex"]').first().click();
+  const empty = await madeNext(page, had);
+  assert.equal(await pillValue(empty.pane, 'Agent'), 'Codex');
+  await pillOf(empty.pane, 'Agent').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
+  assert.equal(await focused(page), 'Codex', 'the current agent has the focus');
+  assert.equal(await menuItem(page, 'Claude').getAttribute('aria-disabled'), null);
+  assert.equal(await menuItem(page, 'Claude').locator('.muted').innerText(), 'Plan · Haiku · High');
+  await shot(page, 'o29-agent-picker');
+  had = await rows(page);
+  await page.keyboard.press('ArrowUp'); await page.keyboard.press('Enter');
+  const switched = await madeNext(page, had);
+  assert.deepEqual([await pillValue(switched.pane, 'Agent'), await pillValue(switched.pane, 'Mode'), await pillValue(switched.pane, 'Model'), await pillValue(switched.pane, 'Effort')],
+    ['Claude', 'Plan', 'Haiku', 'High'], 'Claude, on Claude\'s defaults');
+  await page.locator('#navList .row[data-chat="' + empty.id + '"]').waitFor({ state: 'detached', timeout: 10000 });
+  assert.ok((await rows(page)).includes(id), 'the chat with messages is still there');
+  await switched.pane.locator('.composer textarea').fill('config'); await switched.pane.locator('.composer textarea').press('Enter');
+  await switched.pane.locator('.hist', { hasText: 'config:model=haiku,effort=high' }).waitFor({ timeout: 20000 });
+  assert.deepEqual(errors, []);
+  console.log('PASS agent pill: first in the bar; an empty chat switches with the agent\'s defaults; a chat with messages keeps its agent');
 });
