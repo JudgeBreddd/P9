@@ -161,11 +161,12 @@ const keepLists = agent => { for (const [k, from] of Object.entries(KEPT)) try {
 // daemon on a remote) goes by name. The chat bar's pills that read them are in chat-view.mjs.
 const pickerKind = p => p.category === 'thought_level' || !p.category && /effort|thought/i.test(p.id + p.name) ? 'effort' : p.category === 'collaboration_mode' || !p.category && /collab/i.test(p.id) ? 'collab' : 'model';
 // Settings > New chats start in: Default model and Default effort per agent, applied to chats this window makes (startDefaults)
-// when the agent still offers them; a chat's own pick never changes them. fresh: ids made here whose 'created' is still to come.
+// when the agent still offers them; a chat's own pick never changes them. fresh: ids made here whose 'created' is still to come,
+// each with its New menu row's model.
 const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
-const fresh = new Set();
-function startDefaults(s) {
-  const m = defaultModel(s.agent); if (m && lastModels[s.agent]?.options.some(o => o.value === m)) s.modelPick = m;
+const fresh = new Map();
+function startDefaults(s, model) {
+  const m = model || defaultModel(s.agent); if (m && lastModels[s.agent]?.options.some(o => o.value === m)) s.modelPick = m; // model: the New menu row's (O44)
   const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
@@ -403,7 +404,7 @@ document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElem
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
-$('#newPop').innerHTML = `<div class="hd eyebrow" id="newInHd" hidden></div><div class="hd eyebrow" id="newFolderHd">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><div id="newAgents"><div data-sec="claude"><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Claude</div><button class="item" data-new="claude" data-model="Opus 5.5">Claude <span class="muted">default model</span></button><button class="item" data-new="claude" data-model="Sonnet 5.5">Claude · Sonnet 5.5</button><button class="item" data-new="claude" data-model="Haiku 5.5">Claude · Haiku 5.5</button></div><div data-sec="codex"><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Codex</div><button class="item" data-new="codex" data-model="gpt-5.1-codex">Codex <span class="muted">default model</span></button><button class="item" data-new="codex" data-model="gpt-5.1-codex-mini">Codex · mini</button></div></div>`;
+$('#newPop').innerHTML = `<div class="hd eyebrow" id="newInHd" hidden></div><div class="hd eyebrow" id="newFolderHd">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><div id="newAgents"><div data-sec="claude"></div><div data-sec="codex"></div></div>`;
 // New chat's folder (Builder, 2026-10-19: "a dropdown with what folder i want to open the chat in"; threat model row 24): the workspace,
 // the main project, the last 5 folders used, or the system folder dialog (main sends back only a folder inside the workspace;
 // ':pick' cannot be a folder, the daemon refuses ':' in paths).
@@ -419,8 +420,15 @@ $('#newFolder').onchange = async e => {
 };
 // O29 (Builder, 2026-11-08): New chat opens on the agent used last on this computer (a chat made or a message sent): its
 // section comes first and its first row has the focus, so + then Enter starts it, with that agent's saved defaults.
-const newPop = popover($('#newBtn'), $('#newPop'), () => { $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
-$('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); });
+// O44: each row starts the model it names. A live P9's rows come from the agent's own list (the last one this window saw),
+// after the row that starts on the defaults; before any list, that row alone. The sample data keeps its fixed names.
+const SAMPLE_MODELS = { claude: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'], codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini'] };
+const row = (a, label, model) => `<button class="item" data-new="${a}"${model ? ` data-model="${esc(model)}"` : ''}>${label}</button>`;
+const newRows = () => { for (const a of Object.keys(names)) $(`#newAgents [data-sec="${a}"]`).innerHTML = `<hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New ${names[a]}</div>`
+  + row(a, `${names[a]} <span class="muted">default model</span>`, !liveChat.on && SAMPLE_MODELS[a][0])
+  + (liveChat.on ? lastModels[a]?.options || [] : SAMPLE_MODELS[a].slice(1).map(v => ({ value: v, name: v }))).map(o => row(a, `${names[a]} · ${esc(o.name)}`, o.value)).join(''); };
+const newPop = popover($('#newBtn'), $('#newPop'), () => { newRows(); $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
+$('#newAgents').onclick = e => { const b = e.target.closest('[data-new]'); if (b) { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); } };
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
@@ -1213,9 +1221,9 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   return r;
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
-liveChat.create = async (agent, folder = '', project = null) => {
+liveChat.create = async (agent, folder = '', project = null, model = '') => {
   const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }), ...(project && { project }) });
-  if (r.status === 201) { const s = S.sessions.find(x => x.id === r.body.conversation); s ? startDefaults(s) : fresh.add(r.body.conversation); }
+  if (r.status === 201) { const s = S.sessions.find(x => x.id === r.body.conversation); if (s) { startDefaults(s, model); renderChats(); } else fresh.set(r.body.conversation, model); } // the pane may be drawn already (its 'created' came first)
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;
 };

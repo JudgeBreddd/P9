@@ -164,7 +164,7 @@ function newSession(agent, model, project = null) {
   outer.usedAgent(agent);
   // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
-  if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project);
+  if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project, model);
   const s = { id: 's-' + Date.now(), agent, title: `${outer.names[agent]} ${outer.S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: outer.startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: outer.M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: outer.M.sessions[0].cwd, events: [] };
   s.project = project; outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
 }
@@ -735,7 +735,7 @@ async function earlier(s) {
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project); if (outer.fresh.delete(s.id)) outer.startDefaults(s); outer.S.sessions.push(s); } return null; }
+  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project); if (outer.fresh.has(s.id)) { outer.startDefaults(s, outer.fresh.get(s.id)); outer.fresh.delete(s.id); } outer.S.sessions.push(s); } return null; }
   const s = into ?? outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!NOT_USE.includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);

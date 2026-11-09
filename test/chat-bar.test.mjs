@@ -358,6 +358,25 @@ test('Agent pill: an empty chat switches agent and takes that agent\'s defaults;
   console.log('PASS agent pill: first in the bar; an empty chat switches with the agent\'s defaults; a chat with messages keeps its agent');
 });
 
+// O44: each New menu row starts the model it names. The rows are the agent's own list (the fake agent offers Default, Opus and
+// Haiku) after the row that starts on the defaults; Codex, whose list this window has not seen, has only that row.
+test('New menu: each row names a model the agent offers, and the chat it starts is on that model', { timeout: 150000 }, async (t) => {
+  const { page, errors } = await setup(t, 'new-menu', 'claude');
+  await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
+  const named = (a) => page.locator(`#newPop [data-sec="${a}"] [data-new]`).evaluateAll((l) => l.map((b) => [b.dataset.model ?? null, b.textContent]));
+  assert.deepEqual(await named('claude'), [[null, 'Claude default model'], ['default', 'Claude · Default (recommended)'], ['opus', 'Claude · Opus'], ['haiku', 'Claude · Haiku']]);
+  assert.deepEqual(await named('codex'), [[null, 'Codex default model']]);
+  await shot(page, 'o44-new-menu');
+  const had = await rows(page);
+  await page.locator('#newPop [data-model="haiku"]').click();
+  const made = await madeNext(page, had);
+  await until(async () => await pillValue(made.pane, 'Model') === 'Haiku', 'the chat shows the row\'s model', 5000);
+  await made.pane.locator('.composer textarea').fill('model'); await made.pane.locator('.composer textarea').press('Enter');
+  await made.pane.locator('.hist', { hasText: 'model:haiku' }).waitFor({ timeout: 20000 });
+  assert.deepEqual(errors, []);
+  console.log('PASS new menu: rows from the agent\'s own list; the row picked is the model the chat runs on');
+});
+
 // O29, release review (2026-11-09): switching an empty chat's agent keeps what was typed and attached, and the new chat takes
 // the old one's place. A 1x1 PNG pasted into the box, as a screenshot is.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
