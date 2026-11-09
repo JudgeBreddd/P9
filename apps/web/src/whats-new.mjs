@@ -2,11 +2,13 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.2',
+  version: '0.1.9-beta.3',
   changes: [
-    'A new look, Event Horizon Azure, is in the Look picker; the default look is unchanged.',
-    'Dev Focus colours JSON, CSS and shell files.',
-    'In Dev Focus the editor turns light with a light look.',
-    'Two quick saves of the connection settings can no longer leave the file half-written.',
+    'Chats live in a left panel with projects, chats and search; it folds to a strip of what is running or waiting.',
+    'The chat tab row is gone; the panel is the switcher, and Ctrl Tab flips to the previous chat.',
+    'New project sets up a project; each project has its own page with its chats and files.',
+    'A chat in a project reads the files added to that project without asking; everything else is still asked.',
+    'Code blocks in a chat are coloured by language, on the desktop and the phone.',
+    'On the phone, chats are listed by project.',
   ],
 };
