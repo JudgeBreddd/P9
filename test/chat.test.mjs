@@ -849,3 +849,29 @@ test('resume: a Codex chat goes back to its own mode, not the one resume sets fi
   assert.equal(seen.filter((e) => e.type === 'mode' && e.conversation === id).at(-1).data.name, 'Read-only', 'the last mode event is the chat\'s');
   console.log('PASS resume (Codex): back in Read-only after the safe mode resume sets first');
 });
+
+// Threat model row 25: a chat last in Full access comes back in it after a restart, even for a message that sends no mode
+// (the phone's 'As set'); one resumed while the agent lock is on runs read-only, the lock's mode.
+test('resume: a chat last in Full access comes back in it for a message with no mode, and the lock still wins', async (t) => {
+  const instance = await start(t);
+  const loose = await create(instance, 'codex'), held = await create(instance, 'codex');
+  let after = 0;
+  for (const id of [loose, held]) {
+    assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode', mode: 'Full access' })).status, 202);
+    after = (await until(instance, said(id, 'mode:agent-full-access'), after)).hit.cursor;
+    await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, after - 1);
+  }
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  assert.equal((await call(second, `/chat/${loose}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const back = (await until(second, (e) => said(loose, 'mode:')(e) && e.cursor > after, 0)).hit;
+  assert.equal(back.data.content.text, 'mode:agent-full-access', 'a message with no mode runs in the chat\'s own Full access');
+  await until(second, (event) => event.type === 'turn-end' && event.conversation === loose, back.cursor - 1);
+  assert.deepEqual((await json(call(second, '/agent-lock', 'POST', { on: true }))).body, { on: true });
+  assert.equal((await call(second, `/chat/${held}/prompt`, 'POST', { text: 'mode' })).status, 202);
+  const { hit: locked, seen } = await until(second, (e) => said(held, 'mode:')(e) && e.cursor > back.cursor, 0);
+  assert.equal(locked.data.content.text, 'mode:read-only', 'the lock wins over the Full access a resume puts back');
+  assert.ok(!seen.some((e) => e.type === 'mode' && e.conversation === held && e.cursor > back.cursor && e.data.mode === 'agent-full-access'), 'resume set Full access under the lock, if only until the prompt');
+  console.log('PASS resume: Full access comes back for a message with no mode; with the lock on, read-only');
+});
