@@ -538,7 +538,10 @@ anything in a work folder: deleting a project removes only its own folder and mo
 locating a moved folder changes only the record. Two projects may use one work folder. A route's project id must be a
 UUID before any path is built; an added file's name is one path part under File protection's rules, saved without
 replacing a name already there or following a link. A chat's project is set only by you (start it in one, or move it);
-it is never taken from the folder it started in. The routes are on both listeners, like the chat routes, and every
+it is never taken from the folder it started in. An In P9 project's chat starts in that project's own `files/` (threat
+model row N1b): the client sends no path, the daemon finds the folder from the chat's project id at every start and
+refuses it if it is a link, and every folder a client names under P9's own (that `files/`, `projects/<id>/`, `state/`,
+another project's `files/`) is still refused in every mode. The routes are on both listeners, like the chat routes, and every
 change carries its operation id. Deleting a chat (from its menu) removes its row and events from the ledger; the memory
 and telemetry databases keep what they recorded from it until their own limits remove it.
 

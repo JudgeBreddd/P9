@@ -40,6 +40,9 @@ async function addNew(folder, name, bytes) {
 
 // home: <ownership>/projects. folderCheck: chat.mjs's "Start in" check (row 24), which resolves to the folder's listing.
 // db, row, emit, stop, recovered: chat.mjs's, for the chats in a project.
+// Step 1b (threat model row N1b): the stored folder of a chat that starts in its In P9 project's own files/. Not a path:
+// ':' is refused in every workspace-relative folder, and it is never absolute, so no client can send it as one.
+export const IN_P9 = ':project-files';
 export function createProjects({ home, workspace, folderCheck, db, row, emit, stop, recovered }) {
   const folderOf = (id) => path.join(home, id);
   const filesOf = (id) => path.join(home, id, 'files');
@@ -64,9 +67,16 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     }
     return out;
   }
-  // Where a chat in this project starts. In P9: the workspace for now, not files/: the "Start in" check refuses P9's own
-  // folders and no new rule is made here (question in the step 1 report).
-  const startFolder = (value) => (value.work.kind === 'p9' ? '' : value.work.folder);
+  // Where a chat in this project starts: its work folder, or for In P9 the marker IN_P9 (step 1b, threat model row N1b).
+  const startFolder = (value) => (value.work.kind === 'p9' ? IN_P9 : value.work.folder);
+  // An IN_P9 chat's folder, found again from its project id at every start: that project's own files/, a real folder with
+  // no link below projects/. null when the chat is no longer in an In P9 project (it then starts in the workspace).
+  async function filesStart(id) {
+    const value = typeof id === 'string' && await record(id);
+    if (!value || value.work.kind !== 'p9') return null;
+    for (const folder of [folderOf(value.id), filesOf(value.id)]) if (!(await lstat(folder)).isDirectory()) throw new Error('unsafe-path');
+    return filesOf(value.id);
+  }
   // A gone or refused work folder is reported, never thrown. AGENTS.md and CLAUDE.md are seen in the listing only.
   async function view(value, full = true) {
     let entries = null;
@@ -198,6 +208,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     },
     record,
     startFolder,
+    filesStart,
     // What the agent gets (N1 chats): the project's instructions and its added files' paths, as one text block before
     // the message. hash names what was sent; prompt() sends it only when it differs from the chat's last message's.
     // The work folder's AGENTS.md or CLAUDE.md is the agent's to read; nothing here opens it.
@@ -263,7 +274,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if (typeof folder !== 'string' || folder.length > 4096) return refused(400, 'request-refused');
       const target = path.resolve(workspace, folder);
       const inside = (value) => { const relative = path.relative(target, path.resolve(workspace, value ?? '')); return !relative || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)); };
-      return { status: 200, conversations: db.prepare('SELECT id, provider, title, folder, project, created FROM conversations ORDER BY created DESC').all().filter((c) => inside(c.folder)) };
+      return { status: 200, conversations: db.prepare('SELECT id, provider, title, folder, project, created FROM conversations ORDER BY created DESC').all().filter((c) => c.folder !== IN_P9 && inside(c.folder)) };
     },
   };
   return { ...store, chats };
