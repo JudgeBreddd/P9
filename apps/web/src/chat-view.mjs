@@ -161,6 +161,7 @@ const show = id => { outer.S.view = null; outer.S.open = [id, ...outer.S.open.fi
 function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
 const untab = id => { outer.S.open = outer.S.open.map(o => o === id ? (outer.S.sessions.find(x => !x.hidden && !outer.S.open.includes(x.id)) || {}).id : o).filter(Boolean); outer.renderTabs(); renderChats(); };
 function newSession(agent, model, project = null) {
+  outer.usedAgent(agent);
   // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
   if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project);
@@ -333,13 +334,25 @@ function setMode(s, m) {
   s.mode = m;
 }
 const PM = { sid: null, kind: null, btn: null, html: '', ac: null }; // the open menu: chat id, Mode | Model | Effort, its pill, its markup, its window listeners
-const pill = (s, kind, label, extra = '') => `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(label)}" title="${kind}: ${esc(label)}"><span class="truncate">${esc(label)}</span>${extra}</button>`;
-const pills = s => pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
+const pill = (s, kind, label, extra = '', pre = '') => `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(label)}" title="${kind}: ${esc(label)}">${pre}<span class="truncate">${esc(label)}</span>${extra}</button>`;
+const agentDot = a => `<span class="dot" data-agent="${esc(a)}"></span>`;
+const pills = s => pill(s, 'Agent', outer.names[s.agent], '', agentDot(s.agent)) + pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
 document.body.insertAdjacentHTML('beforeend', '<div class="pop" id="pillMenu" role="menu" hidden></div>');
 const pmRoot = () => document.getElementById('pillMenu'); // not outer.$: installChat runs before controller.mjs defines $
 const mi = (label, checked, data, disabled) => `<button type="button" class="item" role="menuitemradio" aria-checked="${checked}" ${data}${disabled ? ` aria-disabled="true" title="${esc(disabled)}"` : ''}><span class="truncate">${esc(label)}</span></button>`;
 const radio = (list, now, data) => list.map(o => mi(o.name, o.value === now, `${data} data-val="${esc(o.value)}"`)).join('');
+// O29 (Builder, 2026-11-08): the Agent pill. Each row says what a chat on that agent runs with: this chat's own, or the
+// other agent's start (its saved mode, and the Default model and effort from Settings when it still offers them).
+// A chat with messages keeps its agent (its session is that agent's): the other row is shown, disabled, and says why.
+const started = s => !!(s.sent || s.session || s.queue?.length || s.events.some(e => e.t === 'user'));
+const STAYS = 'This chat has messages, so it stays on its agent. New chat (+) starts one on the other.';
+const startsOn = a => { const m = outer.defaultModel(a), e = outer.defaultEffort(a), p = outer.lastPickers[a]?.find(x => outer.pickerKind(x) === 'effort');
+  return [outer.startMode(a), outer.lastModels[a]?.options.find(o => o.value === m)?.name || 'Default model', p?.options.find(o => o.value === e)?.name].filter(Boolean); };
+const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes).map(a => mi(outer.names[a], a === s.agent, `data-agent="${esc(a)}"`, a !== s.agent && started(s) && STAYS)
+  .replace('<span class="truncate">', '<span class="truncate">' + agentDot(a)).replace(/<\/button>$/, `<span class="muted">${esc((a === s.agent ? [modeShown(s), modelName(s), effortName(s)] : startsOn(a)).join(' · '))}</span></button>`)).join('')
+  + (started(s) ? `<p class="pm-note muted">${STAYS}</p>` : '');
 function pillMenuHtml(s, kind) {
+  if (kind === 'Agent') return agentMenu(s);
   if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + MODE_ORDER[s.agent].map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
   if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`); }
   const m = modelList(s);
@@ -391,10 +404,44 @@ async function pickMode(s, m) {
   if (busy(s)) s.modeNext = m === modeNow(s) ? null : m; else { setMode(s, m); s.modeNext = null; }
   renderChats();
 }
+// O29: an empty chat changes agent by being made again on the other one, in the same folder or project, with that agent's
+// defaults (startDefaults, startMode). Review (2026-11-09): what was typed and attached comes over, and the new chat takes the
+// old one's place: its pane in Split, the chat beside the editor in Dev Focus (SWAP, swapIn; the layout as it was at the pick).
+// The old one is deleted only if the daemon finds it was never sent to (empty, threat model row O29); else the new one goes
+// the same way and the old one stays as it was, and the bar says why.
+const SWAP = new Map(); // the new chat's id -> { from, open, side, done }
+function swapIn(id) {
+  const w = SWAP.get(id), n = outer.S.sessions.find(x => x.id === id);
+  if (!w || !w.done || !n) return !!w; // under way: its 'created' does not show it; this does, once the old one is gone
+  SWAP.delete(id);
+  Object.assign(n, { draft: w.from.draft, images: w.from.images });
+  outer.S.open = w.open.map(x => x === w.from.id ? id : x).filter(x => outer.S.sessions.some(o => o.id === x));
+  if (w.side === w.from.id) outer.S.sideId = id;
+  if (outer.S.modal?.kind === 'chat' && outer.S.modal.id === w.from.id) outer.S.modal.id = id; // opened from the panel in another focus
+  outer.renderTabs(); renderChats();
+  [...document.querySelectorAll(`.pane[data-id="${CSS.escape(id)}"] [data-pill="Agent"]`)].find(b => b.offsetParent)?.focus(); // the one on screen: a pane, or beside the editor
+  return true;
+}
+async function pickAgent(s, a) {
+  if (a === s.agent || started(s)) return;
+  if (!s.live) { outer.usedAgent(a); Object.assign(s, { agent: a, mode: outer.startMode(a), title: `${outer.names[a]} ${outer.S.sessions.filter(x => x.agent === a).length + 1}` }); outer.renderTabs(); return renderChats(); }
+  const w = { from: s, open: [...outer.S.open], side: outer.S.sideId, done: false };
+  const r = await outer.liveChat.create(a, s.project ? '' : s.folder, s.project);
+  if (r.status !== 201) return;
+  const id = r.body.conversation; SWAP.set(id, w);
+  const d = await outer.liveChat.call('deleteChat', { id: s.id, empty: true }, { quiet: true });
+  if (d.status !== 200) {
+    SWAP.delete(id); outer.S.open = w.open.filter(x => outer.S.sessions.some(o => o.id === x)); renderChats();
+    outer.liveChat.call('deleteChat', { id, empty: true });
+    return outer.toast({ kind: 'chat', txt: d.body?.error === 'not-empty' ? `This chat has a message now, so it stays on ${outer.names[s.agent]}.` : `${outer.names[a]} was not started: this chat could not be replaced.`, level: 'warn' }, true);
+  }
+  outer.usedAgent(a); w.done = true; swapIn(id);
+}
 function pillPick(item) {
   const s = outer.S.sessions.find(x => x.id === PM.sid); if (!s || item.getAttribute('aria-disabled') === 'true') return;
   const v = item.dataset.val;
   if (item.dataset.mode) { closePill(); return pickMode(s, item.dataset.mode); }
+  if (item.dataset.agent) { closePill(); return pickAgent(s, item.dataset.agent); }
   if (item.hasAttribute('data-model')) { if (s.live) s.modelPick = v === modelList(s)?.current ? null : v; else s.model = v; }
   else if (item.dataset.pick !== undefined) { const p = pickers(s).find(x => x.id === item.dataset.pick); if (p) setPick(s, p, v); else s.effort = v; }
   closePill(); renderChats();
@@ -790,7 +837,7 @@ async function loadChat() {
       if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
-      if (created) show(ev.conversation);
+      if (created && !swapIn(ev.conversation)) show(ev.conversation);
       // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
       if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
       if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();

@@ -261,13 +261,20 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
     // The chat stops first; then its row and events go, with any sent photo no other chat names (photos are
     // content-addressed, so one may be in several chats). One 'deleted' event tells every window, and the watcher and
     // memory, which drop the chat's rows (O35); it carries what the chat had spent, which stays in the usage totals.
-    async delete(id) {
+    // O29 (threat model row O29): empty: true is the Agent pill's switch, which deletes only a chat never sent to: no user or
+    // held event and no turn under way (its user event is written after the turn starts). Checked before the stop and again
+    // with nothing awaited before its rows go, so a message that lands meanwhile keeps the chat. Without it, as before.
+    async delete(id, body = {}) {
       await recovered;
+      if (!only(body, ['empty']) || (body.empty !== undefined && body.empty !== true)) return refused(400, 'request-refused');
       const conversation = chat(id);
       if (!conversation) return refused(404, 'unknown-conversation');
       if (['moving', 'moved'].includes(conversation.state)) return refused(409, conversation.state);
+      const used = () => row(id)?.state === 'turn' || !!db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type IN ('user', 'held') LIMIT 1").get(id);
+      if (body.empty && used()) return refused(409, 'not-empty');
       const result = await stop(id);
       if (result !== 'stopped') return refused(500, 'chat-not-stopped');
+      if (body.empty && used()) return refused(409, 'not-empty');
       emit(id, 'deleted', { usage: remove(id) });
       return { status: 200, deleted: id };
     },

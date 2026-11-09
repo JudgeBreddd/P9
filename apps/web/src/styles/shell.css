@@ -376,6 +376,10 @@ details.agent-warn code{display:block;margin:4px 0 0 22px;font-size:11.5px;overf
 #pillMenu .item[aria-disabled="true"]{opacity:.5;cursor:default}
 #pillMenu .item .truncate{flex:1}
 #pillMenu hr{margin:6px 0}
+/* O29: the Agent pill and its menu: the agent's dot (d1.css), each row's start in small text, why a started chat stays */
+#pillMenu .item .truncate .dot{display:inline-block;margin-right:8px;vertical-align:1px}
+#pillMenu .item .muted{font-size:11px;white-space:nowrap}
+#pillMenu .pm-note{margin:6px 10px 4px;font-size:11px;line-height:1.4}
 #setDlg .set-defaults{flex-wrap:wrap}.set-pick{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground)}
 .composer .send[data-working]{background:var(--destructive);color:#fff}
 .attach{display:flex;gap:6px;padding:8px 14px 0}

@@ -15,6 +15,6 @@ export const projectRoutes = (uuid) => {
     moveChat: ({ id, project, ...rest }) => uuid(id) && (project === null || uuid(project)) && !Object.keys(rest).length && ['POST', `/chat/${id}/project`, { project }],
     renameChat: ({ id, title, ...rest }) => uuid(id) && typeof title === 'string' && !Object.keys(rest).length && ['POST', `/chat/${id}/rename`, { title }],
     archiveChat: ({ id, archived, ...rest }) => uuid(id) && typeof archived === 'boolean' && !Object.keys(rest).length && ['POST', `/chat/${id}/archive`, { archived }],
-    deleteChat: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['POST', `/chat/${id}/delete`, {}],
+    deleteChat: ({ id, empty, ...rest }) => uuid(id) && (empty === undefined || empty === true) && !Object.keys(rest).length && ['POST', `/chat/${id}/delete`, empty ? { empty } : {}],
   };
 };

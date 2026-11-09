@@ -90,3 +90,26 @@ test('deleting a chat removes its memory, its telemetry and a photo no other cha
   assert.deepEqual(files(), ['own2', 'shared']);
   console.log('PASS O35: delete removed A\'s telemetry, resources and memory rows and its own photo; shared photo, B\'s rows and $3 / 3000 tokens kept, also after a restart');
 });
+
+// O29 (threat model row O29): the Agent pill's switch deletes the old chat with empty: true, and the daemon refuses it when
+// that chat was ever sent to. A plain delete is unchanged.
+test('O29: delete with empty keeps a chat that was sent to, removes one that was not, and a plain delete is unchanged', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const listed = async () => (await call(instance, '/chat')).body.conversations.map((c) => c.id);
+  const A = (await call(instance, '/chat', 'POST', { provider: 'claude' })).body.conversation;
+  const B = (await call(instance, '/chat', 'POST', { provider: 'codex' })).body.conversation;
+  await turn(instance, A, 'a message, so A is not empty');
+  const refused = await call(instance, `/chat/${A}/delete`, 'POST', { empty: true });
+  assert.deepEqual([refused.status, refused.body.error], [409, 'not-empty'], 'a chat with a sent message is refused');
+  assert.ok((await listed()).includes(A), 'and stays listed');
+  assert.ok((await call(instance, `/chat/events?after=0&only=${A}`)).body.events.some((e) => e.type === 'user'), 'with its events');
+  for (const body of [{ empty: 'yes' }, { empty: false }, { empty: true, also: 1 }]) {
+    const r = await call(instance, `/chat/${A}/delete`, 'POST', body);
+    assert.deepEqual([r.status, r.body.error], [400, 'request-refused'], JSON.stringify(body) + ' is refused');
+  }
+  assert.equal((await call(instance, `/chat/${B}/delete`, 'POST', { empty: true })).status, 200, 'a chat never sent to goes');
+  assert.ok(!(await listed()).includes(B));
+  assert.equal((await call(instance, `/chat/${A}/delete`, 'POST', {})).status, 200, 'a plain delete still removes a chat with messages');
+  assert.ok(!(await listed()).includes(A));
+  console.log('PASS O29: empty delete refused 409 for a sent chat, 400 for a bad body, 200 for an empty one; plain delete unchanged');
+});
