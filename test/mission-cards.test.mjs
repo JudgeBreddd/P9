@@ -187,6 +187,17 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     assert.ok(['connect-src', 'img-src', 'style-src-elem'].every((d) => r.v.includes(d)), 'the frame CSP refused fetch, images and CSS: ' + r.v.join(', '));
     assert.equal(hits, 0, 'nothing reached the network server');
     assert.equal(page.url(), 'p9://app/', 'the shell is still P9');
+    if (theme === 'daylight') { // O45 (Builder, 2026-11-09): the window pulls each card's script every 30 s; an answer that did not
+      // change must not draw the window again (that made every card's frame again, and a click on a card then was lost).
+      await page.evaluate(() => { window.__o45 = Date.now(); new MutationObserver(rs => rs.some(r => [...r.removedNodes].some(n => n.nodeName === 'IFRAME' || n.querySelector?.('iframe'))) && (window.__o45 = Date.now()))
+        .observe(document.querySelector('#mdlBody'), { childList: true, subtree: true }); });
+      for (const end = Date.now() + 20000; Date.now() < end && Date.now() - await page.evaluate(() => window.__o45) < 3000; await sleep(200));
+      const frames = () => page.evaluate(() => [...document.querySelectorAll('#mdlBody [data-card] iframe')].map(f => f.dataset.o45 ?? 'new'));
+      await page.evaluate(() => document.querySelectorAll('#mdlBody [data-card] iframe').forEach(f => { f.dataset.o45 = 'kept'; }));
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'six card frames, quiet for 3 s, before the pulls');
+      await sleep(36000); // one 30 s pull at least, and its answers
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a pull with the same answers keeps every card frame');
+    }
     await card('inbox').scrollIntoViewIfNeeded();
     shot('m5-desktop-1280-' + theme, await page.screenshot());
     // A title-bar press opens the button's run window; a confirm button still asks first.

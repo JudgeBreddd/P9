@@ -83,7 +83,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
     '--setenv=DBUS_SESSION_BUS_ADDRESS=' + (process.env.DBUS_SESSION_BUS_ADDRESS ?? '')];
   run('systemd-run', ['--user', '--unit', unit, '--collect', ...properties, ...envArgs, '--', ...daemonArgs]);
   t.after(() => {
-    try { run('systemctl', ['--user', 'stop', unit, hubUnit, 'p9-tmux-' + socket + '.service']); } catch {}
+    try { run('systemctl', ['--user', 'stop', unit, hubUnit, 'p9-tmux-' + socket + '.service', 'p9-tmux-' + socket.replaceAll('-', '\\x2d') + '.slice']); } catch {}
     try { run('tmux', ['-L', socket, 'kill-server'], { env: environment, stdio: 'ignore' }); } catch {}
     try { run('tmux', ['-L', unrelated, 'kill-server'], { env: environment, stdio: 'ignore' }); } catch {}
   });
@@ -102,6 +102,16 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   tmux(socket, ['new-window', '-d', '-t', '=' + sessionName, 'nohup sleep ' + marker + ' >/dev/null 2>&1 & sleep 1']);
   const detached = () => run('pgrep', ['-f', '^sleep ' + marker + '$'], { stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   await waitFor(() => detached(), 'detached pane job');
+  // O43 (Builder, 2026-11-09): tmux moves each new pane into its own tmux-spawn-*.scope just after starting it. The job
+  // above usually forks before that move and so sits in the server's unit; this one waits for the move, so it is in the
+  // pane's scope, which stopping the unit alone did not end (one CI failure at the check after Stop All below).
+  const lateMarker = String(Number(marker) + 1);
+  t.after(() => { try { run('pkill', ['-f', '^sleep (' + marker + '|' + lateMarker + ')$']); } catch {} }); // a failed run leaves neither behind
+  tmux(socket, ['new-window', '-d', '-t', '=' + sessionName,
+    'for i in $(seq 100); do grep -q tmux-spawn- /proc/self/cgroup && break; sleep 0.05; done; nohup sleep ' + lateMarker + ' >/dev/null 2>&1 & sleep 1']);
+  const lateJob = () => run('pgrep', ['-f', '^sleep ' + lateMarker + '$'], { stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  await waitFor(() => lateJob(), 'late detached pane job');
+  assert.match(await readFile('/proc/' + lateJob() + '/cgroup', 'utf8'), /\/tmux-spawn-[^/]+\.scope$/m, 'the late job is in its pane\'s scope');
   const chats = {};
   let cursor = 0;
   for (const provider of ['claude', 'codex']) {
@@ -186,6 +196,7 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   assert.deepEqual(stopResults.map((result) => result.status), [200, 200]);
   assert.ok(!alive(panePid));
   assert.throws(() => detached(), 'a detached pane job survived Stop All');
+  assert.throws(() => lateJob(), 'a job detached in its pane\'s scope survived Stop All');
   let tmuxState;
   try { tmuxState = run('systemctl', ['--user', 'is-active', tmuxUnit]).trim(); } catch (error) { tmuxState = String(error.stdout).trim(); }
   assert.ok(['inactive', 'failed'].includes(tmuxState), 'tmux unit after Stop All: ' + tmuxState);
