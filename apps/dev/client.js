@@ -64,12 +64,15 @@ await initUserConfiguration(JSON.stringify({ 'workbench.colorTheme': 'P9 Prime',
   // since item 23 (Builder, 2026-10-27: "keep them out of P9's file crawler") the tree leaves them out too.
   'files.watcherExclude': heavy, 'search.exclude': heavy, 'files.exclude': heavy, 'search.followSymlinks': false }));
 const theme = registerExtension({ name: 'prime', publisher: 'p9', version: '0.0.1', engines: { vscode: '*' },
-  contributes: { themes: [{ id: 'P9 Prime', label: 'P9 Prime', uiTheme: 'vs-dark', path: './prime-theme.json' }],
+  contributes: { themes: [{ id: 'P9 Prime', label: 'P9 Prime', uiTheme: 'vs-dark', path: './prime-theme.json' },
+    // The shell's Event Horizon Azure look (p9-event-horizon-azure): its own editor colours and syntax colours.
+    { id: 'P9 Event Horizon Azure', label: 'P9 Event Horizon Azure', uiTheme: 'vs-dark', path: './event-horizon-azure-theme.json' }],
     // Defaults, not user settings: initUserConfiguration skips a settings file that already exists, and Alt Z still toggles wrap.
     // files.autoSave: the web workbench defaults to afterDelay, which wrote every edit a second after the last key (Builder, 2026-10-26:
     // "save only on ctrl s or save button"). Off: an edit stays in the editor, with the unsaved dot on its tab, until Save.
     configurationDefaults: { 'editor.wordWrap': 'on', 'files.autoSave': 'off' } } }, ExtensionHostKind.LocalProcess);
 theme.registerFileUrl('./prime-theme.json', new URL('./prime-theme.json', location.href).href);
+theme.registerFileUrl('./event-horizon-azure-theme.json', new URL('./event-horizon-azure-theme.json', location.href).href);
 
 // The guard boundary, installed on the remote file provider's class before the workbench starts, so no instance of it
 // ever runs unguarded. Inside the workspace: reads remember the sha256 of the bytes they got, and writes send the hash the
@@ -248,8 +251,20 @@ button.show();
 document.querySelector('#workbench').inert = false;
 
 // The editor follows the shell's DUWOP look, live: P9 Prime (dark) or Light Modern under the theme's own colours.
+// Event Horizon Azure has a full editor theme of its own, so it is used as it is, with no colours laid over it.
+const AZURE = 'p9-event-horizon-azure';
 const themeService = await getService(IThemeService);
+// setColorTheme looks a name up as the theme's internal id, which a contributed theme's label is not, so the Azure theme
+// is passed as the theme itself, found by its settings name.
+const named = async name => (await themeService.getColorThemes()).find(theme => theme.settingsId === name);
 const followLook = async look => {
+  document.documentElement.dataset.look = look?.theme ?? '';
+  if (look?.theme === AZURE) {
+    await v.workspace.getConfiguration().update('workbench.colorCustomizations', undefined, v.ConfigurationTarget.Global);
+    await themeService.setColorTheme(await named('P9 Event Horizon Azure'), 2);
+    return;
+  }
+  if (themeService.getColorTheme().settingsId === 'P9 Event Horizon Azure') await themeService.setColorTheme(await named('P9 Prime'), 2);
   await themeService.setColorTheme(look?.dark === false ? 'Default Light Modern' : 'P9 Prime', 2);
   if (!look) return;
   const c = look.colors, bg = c.background, card = c.card, fg = c.foreground, dim = c['muted-foreground'], accent = c.primary;
@@ -266,6 +281,10 @@ const followLook = async look => {
     'sideBar.border': c.border, 'panel.border': c.border, 'editorGroup.border': c.border, 'statusBar.border': c.border,
   }, v.ConfigurationTarget.Global);
 };
+// The focused editor's language picks the accent of its cursor, tab line and border (index.html): violet in Markdown, azure in code.
+const markLanguage = editor => { document.documentElement.dataset.lang = editor?.document.languageId === 'markdown' ? 'markdown' : 'code'; };
+markLanguage(v.window.activeTextEditor);
+v.window.onDidChangeActiveTextEditor(markLanguage);
 await followLook(config.look);
 window.p9dev.onLook(look => followLook(look).catch(error => console.error('p9: editor look failed:', error.message)));
 await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
