@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const call = (instance, route, method = 'GET', body) => http({ socketPath: path.join(instance.state, 'daemon.sock'), route, method,
@@ -252,4 +252,40 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   await pane.locator('[data-pill="Model"][aria-label="Model: Haiku"]').waitFor({ timeout: 5000 });
   assert.equal(await pillValue(pane, 'Effort'), 'High');
   console.log('PASS defaults: Default model and effort offered from the lists seen, applied to new chats here only, kept across a restart');
+});
+
+// O32: a chat on Opus, High and Plan is still on them after the daemon restarts and the app restarts (an update does both):
+// the pills show the chat's own, and the next message runs on them. Since then another chat was last put in Manual, so a
+// new chat would start in Manual: this one does not.
+test('a resumed chat keeps its model, effort and mode after a daemon restart and an app restart, and the pills show them', { timeout: 180000 }, async (t) => {
+  const { app, instance, id, pane, page, send, said, idle, errors } = await setup(t, 'resume');
+  const profile = await app.evaluate(({ app }) => app.getPath('userData'));
+  await choose(page, pane, 'Model', 'Opus'); await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Mode', 'Plan');
+  await send('config'); await said('config:model=opus,effort=high,fast=off,sandbox=on'); await idle();
+  await page.evaluate(() => localStorage.setItem('p9-mode:claude', 'Manual'));
+  assert.deepEqual(errors, []);
+  await app.close();
+  instance.child.kill('SIGTERM');
+  await new Promise((resolve) => instance.child.exitCode !== null ? resolve() : instance.child.once('exit', resolve));
+  const second = await restart(t, instance, 'state-2');
+  const again = await launch(t, second, profile);
+  await again.page.locator('#nav .row[data-chat="' + id + '"]').click();
+  const p2 = again.page.locator('.pane[data-id="' + id + '"]');
+  await p2.locator('[data-pill="Model"][aria-label="Model: Opus"]').waitFor({ timeout: 15000 });
+  assert.deepEqual([await pillValue(p2, 'Mode'), await pillValue(p2, 'Effort')], ['Plan', 'High'], 'the pills show the chat\'s own');
+  const type = async (text) => { await p2.locator('.composer textarea').fill(text); await p2.locator('.composer textarea').press('Enter'); };
+  await type('config');
+  await p2.locator('.hist', { hasText: /Resumed natively \(session\/resume\) on Opus/ }).waitFor({ timeout: 20000 });
+  // The agent's replies (.msg.agent): the first config: reply is the one from before the restarts.
+  const replies = (prefix) => p2.locator('.msg.agent').evaluateAll((l, prefix) => l.map((x) => x.textContent).filter((x) => x.includes(prefix)), prefix);
+  await until(async () => (await replies('config:')).length === 2, 'a second config: reply');
+  assert.match((await replies('config:'))[1], /config:model=opus,effort=high,fast=off,sandbox=on/, 'the resumed session runs on Opus and High');
+  await again.page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await type('mode');
+  await until(async () => (await replies('mode:')).length === 1, 'a mode: reply');
+  assert.match((await replies('mode:'))[0], /mode:plan/, 'and in Plan');
+  assert.deepEqual([await pillValue(p2, 'Model'), await pillValue(p2, 'Mode'), await pillValue(p2, 'Effort')], ['Opus', 'Plan', 'High']);
+  await shot(again.page, 'o32-resumed');
+  assert.deepEqual(again.errors, []);
+  console.log('PASS resume (desktop): Opus, High and Plan shown and used after a daemon and an app restart');
 });

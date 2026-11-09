@@ -328,15 +328,41 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     options: o.options.flatMap((x) => Array.isArray(x?.options) ? x.options : [x]).filter((x) => typeof x?.value === 'string' && x.value.length <= 200)
       .slice(0, 50).map((x) => ({ value: x.value, name: String(x.name ?? x.value).slice(0, 200) })) });
   const configOf = (session) => ({ model: session.models, pickers: session.pickers });
-  const models = (session, id, options) => {
+  const models = (session, id, options, tell = true) => {
     const all = (Array.isArray(options) ? options : []).filter((x) => x?.type === 'select' && typeof x.id === 'string' && x.id.length <= 60 && Array.isArray(x.options));
     const o = all.find((x) => x.id === 'model');
     if (!o) return false;
     const { current, options: list } = select(o);
     session.models = { current, options: list };
     session.pickers = all.filter((x) => x.id !== 'model' && PICKERS.includes(x.category)).map(select).filter((x) => x.options.length > 1).slice(0, 6);
-    emit(id, 'config', configOf(session));
+    if (tell) emit(id, 'config', configOf(session));
     return true;
+  };
+  // O32: a session the adapter started for an existing chat is set back to the chat's last model, effort and mode, read from
+  // the chat's own latest config and mode events. The Claude adapter starts a resumed session on the computer's own default
+  // model (the model in its settings.json outranks the transcript's), so a chat on another model came back on that one.
+  // The one place for this: resume calls it, and so must any new session started for an existing chat. A value the agent
+  // no longer offers, or one it refuses, is left; the config event after it says what the session is really on.
+  const lastOf = (id, type) => {
+    const found = db.prepare(`SELECT data FROM events WHERE conversation = ? AND type = ?${type === 'mode' ? " AND COALESCE(json_extract(data, '$.lock'), 0) = 0" : ''} ORDER BY cursor DESC LIMIT 1`).get(id, type);
+    try { return found ? JSON.parse(found.data) : null; } catch { return null; }
+  };
+  // was: read before anything is set on the new session (resume sets Codex's and the lock's mode first, which is an event too).
+  const lastPicks = (id) => ({ config: lastOf(id, 'config'), mode: lastOf(id, 'mode')?.mode });
+  const carry = async (session, conversation, options, { config: was, mode } = lastPicks(conversation.id)) => {
+    const set = async (configId, value) => (await session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId, value }))?.configOptions;
+    const listed = models(session, conversation.id, options, false), model = was?.model?.current;
+    if (listed && typeof model === 'string' && model !== session.models.current && session.models.options.some((o) => o.value === model)) {
+      try { if (!models(session, conversation.id, await set('model', model), false)) session.models.current = model; } catch {}
+    }
+    // After the model, as a prompt does: a model can change the effort list.
+    for (const p of listed && Array.isArray(was?.pickers) ? was.pickers : []) {
+      const o = session.pickers.find((x) => x.id === p?.id);
+      if (!o || p.current === o.current || !o.options.some((x) => x.value === p.current)) continue;
+      try { if (!models(session, conversation.id, await set(o.id, p.current), false)) o.current = p.current; } catch {}
+    }
+    // The lock's own mode wins (set before this); otherwise the mode the chat was last in, if it is one of P9's for this agent.
+    if (!locked && mode !== session.mode && Object.values(MODES[conversation.provider]).includes(mode)) await setMode(session, conversation.provider, mode).catch(() => {});
   };
   const reject = (request) => {
     const option = request.options?.find((o) => o.kind === 'reject_once') ?? request.options?.find((o) => o.kind === 'reject_always');
@@ -534,9 +560,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers }));
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
+        const was = lastPicks(conversation.id);
         if (conversation.provider === 'codex' || locked) await bounded(setMode(session, conversation.provider));
-        emit(conversation.id, 'resumed', { session: conversation.session });
-        models(session, conversation.id, resumed?.configOptions);
+        await bounded(carry(session, conversation, resumed?.configOptions, was));
+        emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: session.models.options.find((o) => o.value === session.models.current)?.name ?? session.models.current }) });
+        if (session.models) emit(conversation.id, 'config', configOf(session));
       } else {
         const created = await bounded(session.agent.newSession({ cwd, mcpServers }));
         session.sessionId = created.sessionId;
