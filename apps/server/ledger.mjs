@@ -20,7 +20,10 @@ export const MIGRATIONS = [`
     CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, login TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL, status INTEGER, body TEXT, at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS operations_login_at ON operations (login, at);`,
   // 2: a chat's folder, workspace-relative ('' is the workspace; threat model row 24).
-  `ALTER TABLE conversations ADD COLUMN folder TEXT NOT NULL DEFAULT '';`];
+  `ALTER TABLE conversations ADD COLUMN folder TEXT NOT NULL DEFAULT '';`,
+  // 3 (N1): a chat's project, the id the user put it in (NULL is a general chat, as every chat before this step), and
+  // its archive flag (archived chats are hidden, not deleted).
+  `ALTER TABLE conversations ADD COLUMN project TEXT; ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`];
 export const SCHEMA = MIGRATIONS.length;
 const backupOf = (file, version) => `${file}.v${version}.bak`;
 const replaceWith = (file, copy) => {

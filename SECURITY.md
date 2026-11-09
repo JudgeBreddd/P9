@@ -526,7 +526,21 @@ view asks for them, the phone needs your passkey session, and P9 deletes the old
 model row 43). Each is stored under the hash of its bytes (folder 0700, file 0600), after the same checks as before:
 PNG, JPEG, GIF or WebP, at most 4 a message and 2 MiB of base64 each. The daemon answers a request for one only when
 that chat's own history names that hash; the file name is built from the hash, never from the request. Deleting a chat
-is not possible, so the 200 MB limit is what removes them. The phone does not show sent photos.
+leaves its photos (one photo may be in several chats), so the 200 MB limit is what removes them. The phone does not show
+sent photos.
+
+## Projects
+
+A project (threat model row N1) is an id P9 makes (a random UUID) and its own folder, `projects/<id>/` beside the ledger
+(0700): the record, the instructions, the files you add and a state folder. The work folder is where its chats start:
+none (In P9), a folder you link, or one new empty folder P9 makes when you ask. P9 never writes, moves or deletes
+anything in a work folder: deleting a project removes only its own folder and moves its chats to the general list;
+locating a moved folder changes only the record. Two projects may use one work folder. A route's project id must be a
+UUID before any path is built; an added file's name is one path part under File protection's rules, saved without
+replacing a name already there or following a link. A chat's project is set only by you (start it in one, or move it);
+it is never taken from the folder it started in. The routes are on both listeners, like the chat routes, and every
+change carries its operation id. Deleting a chat (from its menu) removes its row and events from the ledger; the memory
+and telemetry databases keep what they recorded from it until their own limits remove it.
 
 ## Outbound requests a reader of this file should know about
 
