@@ -540,7 +540,10 @@ test('D8: Codex sign-in shows its one-time code, opens the page on request only,
   await shot('d8-codex-code', page.locator('#welDlg'));
   await body.locator('[data-act="open:codex"]').click();
   await body.getByText('Opened the sign-in page in your browser.').waitFor({ timeout: left() });
-  assert.equal((await readFile(opened, 'utf8')).trim(), 'https://auth.openai.com/codex/device');
+  // Main says opened once it has started the browser, not once the browser ran: the stand-in writes its line a moment later (CI run 42659942070).
+  let line = '';
+  for (let i = 0; i < 50 && !line; i++) { line = (await readFile(opened, 'utf8').catch(() => '')).trim(); if (!line) await wait(100); }
+  assert.equal(line, 'https://auth.openai.com/codex/device');
   await body.locator('[data-act="stop:codex"]').click();
   // A later codex without the flag exits 2 naming it: the step says so and how to sign in instead.
   await writeFile(path.join(instance.workspace, 'fake-login-device'), 'unsupported');
