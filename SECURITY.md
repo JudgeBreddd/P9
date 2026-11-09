@@ -546,6 +546,15 @@ change carries its operation id. Deleting a chat (from its menu) removes its row
 memory and telemetry databases recorded from it, and its photos no other chat uses. What it already spent (tokens and
 cost) stays in the usage totals, carried on the ledger's `deleted` event, so the totals are the same after a restart.
 
+Switching an empty chat's agent (the Agent pill) makes a new chat on the other agent, in the same folder or project, and
+deletes the old one with `{ "empty": true }` (threat model row O29). With it, the daemon deletes only a chat never sent
+to: no `user` or `held` event in its history and no turn running. Otherwise it refuses 409 `not-empty` and the chat stays
+as it was; the check is made before the chat is stopped and again after, with nothing in between that and the delete.
+Any other body than `{}` or `{ "empty": true }` is refused 400. The route is on both listeners like the other chat
+routes, so the desktop and a paired phone (with its passkey session) can call it. It gives no more than the plain
+delete from the chat's menu already does: at most, one chat that was never sent to is gone, and the new chat is in the
+same folder or project.
+
 While a chat is in a project, its agent reads that project's added files without asking you (threat model row N1d:
 putting the chat in the project is the permission): only Claude's read and search tools (Read, Glob, Grep), only paths
 inside that project's own `files/` after links are resolved, answered once each time and never as a lasting rule. The
