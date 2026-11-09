@@ -15,7 +15,7 @@ test('Code colours: ts, python, json and shell blocks coloured in Azure and the 
     + '```py\ndef still_open():';
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text });
-  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  await page.locator(`#nav .row[data-chat="${id}"]`).click();
   const reply = page.locator(`#chats .pane[data-id="${id}"] .msg.agent`).last();
   // The first block loads its parser; the chat redraws once each one arrives.
   await reply.locator('code.language-bash .cc-comment').first().waitFor({ timeout: 15000 });
