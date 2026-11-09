@@ -1,5 +1,5 @@
 // Row I1: Keep P9 running on a remote? Per host, as answered with Do not ask again or set in Settings > Remote: true (its
-// service, with linger) or false (a background daemon while connected, the way VS Code's server runs). A stored choice, no
+// service, with linger) or false (a background daemon that stops itself once idle, idle.mjs). A stored choice, no
 // secret. The choice is applied on the remote at each connect: Yes there in background mode moves P9 to its service, No there
 // on its service moves it to the background daemon (remote.mjs remoteMode). Either one stops the daemon the window uses, so the
 // tunnel drops and connects again on its own.

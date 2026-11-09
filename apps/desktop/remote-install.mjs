@@ -1,5 +1,5 @@
-// Install P9 on a remote that has none (D15a, threat model row 67), the way VS Code Remote-SSH puts its server on a machine
-// at first connect. Since U6, pressing Connect is the yes (main.mjs setUp, threat model row 50 U6); updates stay with server-update.mjs (K1).
+// Install P9 on a remote that has none (D15a, threat model row 67), at the first Connect
+// to it. Since U6, pressing Connect is the yes (main.mjs setUp, threat model row 50 U6); updates stay with server-update.mjs (K1).
 // One fixed script over the user's own ssh (BatchMode: keys or an agent, never a password prompt): it unpacks P9's source
 // into ~/p9 there and runs install.sh --headless. Where an admin is needed it stops with what is missing, why, and the one
 // command (P9_ADMIN lines); the window asks for the admin password and runs it again with that (threat model row I2).

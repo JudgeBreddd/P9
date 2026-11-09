@@ -20,7 +20,7 @@ The first time P9 opens, a setup wizard walks through what it needs. A **Set up*
 One window, three modes. Switch with the buttons at the top of the window.
 
 - **Chat**: agent chats.
-- **Dev**: a VS Code-style editor on your workspace.
+- **Dev**: a code editor on your workspace.
 - **Mission Control**: your scripts as buttons, your apps and pages, and what is waiting on you.
 
 You can turn off modes you don't use: each mode's page in Settings has its own on/off row. At least one stays on. The look you pick applies to every focus mode, Dev Focus included.
@@ -60,7 +60,7 @@ Settings → Security settings → Agent lock. While it's on, agents can read an
 
 ## Dev
 
-A VS Code-style editor (VSCodium's server) on your workspace folder, with its file tree, terminal, extensions from Open VSX, and debugging.
+A code editor (VSCodium's server) on your workspace folder, with its file tree, terminal, extensions from Open VSX, and debugging.
 
 - **Saving.** A file is written only when you press Ctrl+S or Save; the editor no longer writes by itself after you stop typing. A white dot on a tab marks a file you have not saved. A file you open from Chat Focus saves the same way.
 - **Guarded save.** If a file changed on disk after you opened it, P9 won't overwrite it. It shows the conflict and keeps your text as a recovery draft. The README explains how to get a draft back.
@@ -160,7 +160,7 @@ Each focus mode has its own pet settings: on or off, size, and a pet for System,
 
 ## Remote Connect, Send to remote and Send files
 
-Remote Connect points this window at a P9 on another Linux machine (a remote). Chat, Mission Control, the terminal and Dev Focus use the remote's P9 through an ssh tunnel (the way VS Code Remote-SSH works). This computer's own P9 keeps running.
+Remote Connect points this window at a P9 on another Linux machine (a remote). Chat, Mission Control, the terminal and Dev Focus use the remote's P9 through one ssh tunnel that forwards its daemon's socket. This computer's own P9 keeps running.
 
 1. **Pick the machine.** Click the Local/Remote badge in the top bar: its menu lists this computer, each saved remote with whether P9 there is reachable, **Add a machine…**, and, for a saved remote, **Remove**. Settings → Remote Connect has the same list: every `Host` in your `~/.ssh/config`, plus any `Host` name or `user@address` you add, each with **Connect**. The setup wizard's welcome step offers the same.
 2. **Log in.** A key works as with `ssh`. Without one, P9 asks for your password in its own window (from Linux only; Windows needs a key). The password goes to ssh through a pipe and is never saved, logged or put on a command line; the login is kept for 10 idle minutes so you type it once. Afterwards P9 offers **Log in without a password next time** (ticked), which adds a key of P9's own on the remote. If this computer has no ssh program, P9 says `ssh-missing` with how to install it, and **Try again**.

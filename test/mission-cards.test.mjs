@@ -273,11 +273,17 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.reload();
   await phone.click('[data-nav="mission"]');
   await phone.click('#mission [data-open]:has-text("Home")', { timeout: 15000 });
+  await phone.clock.install(); // the tiles' 30 s refresh is then the page's own timer, moved on below
   for (const title of ['Inbox', 'Probe', 'Broken script', 'Throws']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
   await pinbox.frameLocator('iframe').locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
   await phone.locator('#mission dialog[open] [data-tile="broken"] .card-note', { hasText: 'not JSON' }).waitFor({ timeout: 15000 });
   await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
+  // One 30 s refresh brings the card new JSON but never runs it again: its error line must stay.
+  const refreshed = phone.waitForResponse((r) => r.url().includes('/mission/data?id=throws'));
+  await phone.clock.fastForward(30000);
+  await refreshed; await phone.waitForTimeout(300);
+  assert.match(await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note').innerText(), /card boom/, 'the card keeps its error line after a refresh');
   await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note').scrollIntoViewIfNeeded();
   shot('m5-phone', await phone.screenshot());
   assert.equal(hits, 0, 'nothing reached the network server from the phone either');

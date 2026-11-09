@@ -1,5 +1,5 @@
 // Background mode (no user service on this machine; install.sh, threat model row I1): the daemon stops itself, the same stop
-// as SIGTERM, once nobody has used it for `seconds`, as VS Code's server does. Busy: a connection opened since the last look,
+// as SIGTERM, once nobody has used it for `seconds`. Busy: a connection opened since the last look,
 // one still open (the desktop's ssh forward, the phone, a terminal), or a chat mid-turn. A turn holds the stop until it ends.
 export function watchIdle({ seconds, servers, turns, stop, every = Math.min(seconds * 250, 15000) }) {
   let last = Date.now();
