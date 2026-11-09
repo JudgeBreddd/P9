@@ -2,13 +2,11 @@
 // (tag v<version>), which the popup links to. A release updates this list with package.json's version
 // (test/whats-new.test.mjs fails while the two differ); for another version the popup shows only the link.
 export const WHATS_NEW = {
-  version: '0.1.9-beta.3',
+  version: '0.1.9-beta.4',
   changes: [
-    'Chats live in a left panel with projects, chats and search; it folds to a strip of what is running or waiting.',
-    'The chat tab row is gone; the panel is the switcher, and Ctrl Tab flips to the previous chat.',
-    'New project sets up a project; each project has its own page with its chats and files.',
-    'A chat in a project reads the files added to that project without asking; everything else is still asked.',
-    'Code blocks in a chat are coloured by language, on the desktop and the phone.',
-    'On the phone, chats are listed by project.',
+    'The New project window fits a long folder path; Create no longer runs off the edge.',
+    'Moving, renaming or archiving a chat no longer changes when it was last used.',
+    'New project names the chats it offers to add, offers only chats you can see, and says if one could not be added.',
+    'A project row in the panel counts only the chats it lists.',
   ],
 };
