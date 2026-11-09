@@ -784,10 +784,12 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
     }
     if (now.focus === 'dev') {
       const views = () => app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0], z = w.webContents.getZoomFactor(); return w.contentView.children.filter((v) => v.getVisible() && !v.webContents.getURL().startsWith('p9://cards')).map((v) => { const b = v.getBounds(); return [b.x / z, b.y / z, (b.x + b.width) / z, (b.y + b.height) / z]; }); });
-      const over = (v) => v[0] < now.rect[2] && v[2] > now.rect[0] && v[1] < now.rect[3] && v[3] > now.rect[1];
-      let shownViews = await views();
-      for (let i = 0; i < 30 && (!shownViews.length || shownViews.some(over)); i++) { await page.waitForTimeout(100); shownViews = await views(); }
-      assert.ok(shownViews.length && !shownViews.some(over), 'step ' + n + ': the Dev editor covers the card ' + JSON.stringify([now.rect, shownViews]));
+      // The card as it is now, read with each look at the views: the running-chats step above clicks Back and Next, which places
+      // the card again from the emptied row, so the card read at the top of this step can be a few pixels off (10 in CI run 42652069714).
+      let card = (await walkNow()).rect, shownViews = await views();
+      const over = (v) => v[0] < card[2] && v[2] > card[0] && v[1] < card[3] && v[3] > card[1];
+      for (let i = 0; i < 30 && (!shownViews.length || shownViews.some(over)); i++) { await page.waitForTimeout(100); card = (await walkNow()).rect; shownViews = await views(); }
+      assert.ok(shownViews.length && !shownViews.some(over), 'step ' + n + ': the Dev editor covers the card ' + JSON.stringify([card, shownViews]));
     }
     if ([1, 2, 7, 9, 10, 11, 13, 14, 16].includes(n)) await shot(`walkthrough-${n}.png`);
     if (n === 3) { await page.click('#walk [data-walk="1"]'); assert.equal((await walkNow()).n, 2, 'Back'); await page.click('#walk [data-walk="2"]'); }
