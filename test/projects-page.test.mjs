@@ -206,6 +206,9 @@ test('projects: delete leaves the folder, Locate, archive and back, a chat\'s Re
   await page.locator(`#navList .row[data-chat="${b}"]`).waitFor({ timeout: 5000 });
   await menu(a); await page.locator('.lp-menu [data-pjchat=delete]').click();
   await ask.locator('h2', { hasText: 'Delete “Landing copy”?' }).waitFor({ timeout: 5000 });
+  // O35: one sentence says what goes (the chat, what P9 remembered, its photos no other chat uses) and what stays.
+  assert.match(await ask.locator('p').innerText(), /^Deletes the chat, what P9 remembered from it and its photos no other chat uses; its files and what it spent stay\. (It stops first\. )?This can't be undone\.$/);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o35-delete-chat ' + (await ask.screenshot({ type: 'png' })).toString('base64'));
   await ask.locator('[value=yes]').click();
   await until(async () => !(await conv(instance, a)), 'deleted on the daemon');
   await page.locator(`#navList .row[data-chat="${a}"]`).waitFor({ state: 'detached', timeout: 5000 });

@@ -39,11 +39,12 @@ async function addNew(folder, name, bytes) {
 }
 
 // home: <ownership>/projects. folderCheck: chat.mjs's "Start in" check (row 24), which resolves to the folder's listing.
-// db, row, emit, stop, recovered: chat.mjs's, for the chats in a project.
+// db, row, emit, stop, recovered: chat.mjs's, for the chats in a project. remove: chat.mjs's delete of a chat's ledger rows and
+// of its photos no other chat names (O35); it returns what the chat had spent.
 // Step 1b (threat model row N1b): the stored folder of a chat that starts in its In P9 project's own files/. Not a path:
 // ':' is refused in every workspace-relative folder, and it is never absolute, so no client can send it as one.
 export const IN_P9 = ':project-files';
-export function createProjects({ home, workspace, folderCheck, db, row, emit, stop, recovered }) {
+export function createProjects({ home, workspace, folderCheck, db, row, emit, stop, recovered, remove }) {
   const folderOf = (id) => path.join(home, id);
   const filesOf = (id) => path.join(home, id, 'files');
   async function record(id) {
@@ -257,8 +258,9 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       emit(id, 'archived', { archived: body.archived });
       return { status: 200, archived: body.archived };
     },
-    // The chat stops first; then its row and events go, and one 'deleted' event tells every window. Sent photos are
-    // content-addressed and shared, so they stay until the photo store's own size limit takes them.
+    // The chat stops first; then its row and events go, with any sent photo no other chat names (photos are
+    // content-addressed, so one may be in several chats). One 'deleted' event tells every window, and the watcher and
+    // memory, which drop the chat's rows (O35); it carries what the chat had spent, which stays in the usage totals.
     async delete(id) {
       await recovered;
       const conversation = chat(id);
@@ -266,13 +268,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if (['moving', 'moved'].includes(conversation.state)) return refused(409, conversation.state);
       const result = await stop(id);
       if (result !== 'stopped') return refused(500, 'chat-not-stopped');
-      db.exec('BEGIN');
-      try {
-        db.prepare('DELETE FROM events WHERE conversation = ?').run(id);
-        db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
-        db.exec('COMMIT');
-      } catch (error) { db.exec('ROLLBACK'); throw error; }
-      emit(id, 'deleted');
+      emit(id, 'deleted', { usage: remove(id) });
       return { status: 200, deleted: id };
     },
     // The offer to add chats already started in a linked folder: the chats whose folder is it or inside it, any project.
