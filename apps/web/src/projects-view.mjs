@@ -203,7 +203,7 @@ export function installProjects(o, api) {
     if (archived) api.undoToast(`Archived <b>${esc(s.title)}</b>`, () => archiveChat(s, false));
   }
   async function deleteChat(s) {
-    if (!await confirmIt({ title: `Delete “${s.title}”?`, body: `Deletes the chat and everything in it.${s.state === 'running' || s.pending ? ' It stops first.' : ''} This can't be undone.`, ok: 'Delete chat', danger: true })) return;
+    if (!await confirmIt({ title: `Delete “${s.title}”?`, body: `Deletes the chat, what P9 remembered from it and its photos no other chat uses; its files and what it spent stay.${s.state === 'running' || s.pending ? ' It stops first.' : ''} This can't be undone.`, ok: 'Delete chat', danger: true })) return;
     const r = await call('deleteChat', { id: s.id }); if (r.status !== 200) return failed(r);
     o.S.sessions = o.S.sessions.filter(x => x !== s); o.S.open = o.S.open.filter(x => x !== s.id); o.renderTabs(); o.renderChats();
     say(`Deleted ${s.title}.`);

@@ -526,8 +526,8 @@ view asks for them, the phone needs your passkey session, and P9 deletes the old
 model row 43). Each is stored under the hash of its bytes (folder 0700, file 0600), after the same checks as before:
 PNG, JPEG, GIF or WebP, at most 4 a message and 2 MiB of base64 each. The daemon answers a request for one only when
 that chat's own history names that hash; the file name is built from the hash, never from the request. Deleting a chat
-leaves its photos (one photo may be in several chats), so the 200 MB limit is what removes them. The phone does not show
-sent photos.
+deletes each of its photos that no other chat's history names; a photo another chat also sent stays. The phone does not
+show sent photos.
 
 ## Projects
 
@@ -542,8 +542,9 @@ it is never taken from the folder it started in. An In P9 project's chat starts 
 model row N1b): the client sends no path, the daemon finds the folder from the chat's project id at every start and
 refuses it if it is a link, and every folder a client names under P9's own (that `files/`, `projects/<id>/`, `state/`,
 another project's `files/`) is still refused in every mode. The routes are on both listeners, like the chat routes, and every
-change carries its operation id. Deleting a chat (from its menu) removes its row and events from the ledger; the memory
-and telemetry databases keep what they recorded from it until their own limits remove it.
+change carries its operation id. Deleting a chat (from its menu) removes its row and events from the ledger, what the
+memory and telemetry databases recorded from it, and its photos no other chat uses. What it already spent (tokens and
+cost) stays in the usage totals, carried on the ledger's `deleted` event, so the totals are the same after a restart.
 
 While a chat is in a project, its agent reads that project's added files without asking you (threat model row N1d:
 putting the chat in the project is the permission): only Claude's read and search tools (Read, Glob, Grep), only paths
