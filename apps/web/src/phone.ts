@@ -1408,7 +1408,8 @@ const cardJson = new WeakMap<HTMLElement, unknown>();
 async function feedCard(tile: HTMLElement, answer: Json) {
   const note = tile.querySelector<HTMLElement>('.card-note')!, box = tile.querySelector<HTMLElement>('.card-frame')!;
   const send = () => { const frame = box.querySelector('iframe'); if (cardJson.has(tile) && tile.dataset.rendered === 'rendered') frame?.contentWindow?.postMessage({ p9: 'data', json: cardJson.get(tile) }, '*'); };
-  if (answer.json !== undefined) { cardJson.set(tile, answer.json); note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape, 'card');
+  // A card that stopped with an error keeps saying so: the 30 s refresh brings new JSON but never runs the card again.
+  if (answer.json !== undefined) { cardJson.set(tile, answer.json); if (tile.dataset.rendered !== 'error') note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape, 'card');
   if (box.dataset.read) return send();
   box.dataset.read = '1';
   const response = await fetch('/mission/card?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
