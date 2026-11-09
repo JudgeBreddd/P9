@@ -1500,8 +1500,10 @@ export async function createDesktop({ state, open } = {}) {
     const [input] = args;
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== APP_URL || args.length !== 1
         || !input || typeof input.dark !== 'boolean' || !input.colors || Object.keys(input.colors).length !== LOOK_TOKENS.length
-        || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))) throw new Error('ipc-sender-refused');
-    look = { dark: input.dark, colors: Object.fromEntries(LOOK_TOKENS.map(token => [token, input.colors[token]])) };
+        || !LOOK_TOKENS.every(token => /^#[0-9a-f]{8}$/.test(input.colors[token] ?? ''))
+        || (input.theme !== undefined && (typeof input.theme !== 'string' || !/^[a-z0-9-]{0,40}$/.test(input.theme)))) throw new Error('ipc-sender-refused');
+    // theme: the shell's theme id (or ''), so Dev Focus can switch to a theme's own editor theme.
+    look = { dark: input.dark, theme: input.theme ?? '', colors: Object.fromEntries(LOOK_TOKENS.map(token => [token, input.colors[token]])) };
     if (overlay) window.setTitleBarOverlay({ ...overlay, symbolColor: look.colors.foreground.slice(0, 7) });
     devView?.webContents.send('p9dev:look', look);
     cardsView?.webContents.send('p9cards:look', look);

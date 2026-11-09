@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { createAnymouse, NEW_ISSUE, REPO } from '../apps/server/anymouse.mjs';
+import { AZURE, FIXTURE, RGB, contrast } from './azure-fixture.mjs';
 
 const TOKEN = 'ghp_' + 'x'.repeat(36);
 async function fakeGitHub(t, status = 201) {
@@ -524,4 +525,98 @@ test('v0.1.5 cD2 tile icons: picture, then emoji, then the site or program icon,
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => /🧪/.test(document.querySelector('#fMission .ltile[data-launch="Notes"]')?.innerText ?? '') && !document.querySelector('#fMission .ltile[data-launch="Notes"] img'), null, { timeout: 15000 });
   console.log('PASS tile icons: site icon, program icon, picture via the form (asked first), Remove, and the order picture > emoji > automatic > letters');
+});
+
+// ---- O17: Event Horizon Azure in the rendered Markdown (the note preview; agent replies share its .msg.agent styles). Spec § 3:
+// violet headings, azure links, amber inline code on the code-block fill, prose neutral. Fenced code stays one colour: no highlighter.
+test('Event Horizon Azure: the note preview renders the review fixture in the theme, with AMOLED on and off', { timeout: 90000 }, async (t) => {
+  const { mkdir } = await import('node:fs/promises');
+  const home = await mkdtemp(path.join(os.tmpdir(), 'p9-azure-preview-'));
+  const instance = await daemon(t, undefined, false, async (paths) => {
+    const ws = paths.workspace, settings = path.join(paths.directory, 'settings.json'), vault = path.join(paths.directory, 'Vault');
+    for (const dir of ['_waiting', 'hub', 'projects']) await mkdir(path.join(ws, dir), { recursive: true });
+    await writeFile(path.join(ws, 'hub/registry.json'), JSON.stringify({ scripts: [] }));
+    await writeFile(path.join(ws, 'projects/AGENTS.md'), '# Projects\n');
+    await writeFile(path.join(ws, 'space.json'), JSON.stringify({ sections: [{ title: 'Journal', text: 'The notes vault.', notes: 'vault' }] }));
+    await writeFile(settings, JSON.stringify({ waiting: '_waiting', registry: 'hub/registry.json', primary: 'projects/AGENTS.md', space: 'space.json', notes_roots: { vault } }));
+    await mkdir(vault, { recursive: true });
+    await writeFile(path.join(vault, 'README.md'), FIXTURE.md);
+    return { args: ['--settings', settings] };
+  });
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + path.join(home, 'profile')], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const shot = async (name) => {
+    const png = await page.locator('#mdl').screenshot({ type: 'png' });
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64'));
+    if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
+  };
+  await page.locator('#rChat').waitFor();
+  await page.evaluate((id) => { document.getElementById('themeBtn').click(); document.querySelector(`[data-theme-pick="${id}"]`).click(); }, AZURE);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), AZURE);
+  const preview = page.locator('#mdlBody [data-preview]');
+  const open = async () => {
+    await page.click('#rMission');
+    await page.locator('#fMission [data-group="Journal"]').click({ timeout: 15000 });
+    await page.click('#mdlBody [data-notes="vault"]');
+    await page.locator('#mdlBody [data-i]', { hasText: 'README.md' }).click({ timeout: 10000 });
+    await preview.locator('h1').waitFor({ timeout: 10000 });
+  };
+  await open();
+  // Each element's colours and the opaque background behind it, read from the page.
+  const read = () => preview.evaluate((root) => {
+    // The backgrounds from the element up to the first opaque one (DUWOP's are oklch, some translucent), painted in order
+    // on a 1x1 canvas and read back as rgb: the colour actually behind the text.
+    const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    const pixel = () => ctx.getImageData(0, 0, 1, 1).data;
+    const behind = (node) => {
+      const layers = [];
+      for (let n = node; n; n = n.parentElement) {
+        const c = getComputedStyle(n).backgroundColor;
+        ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = '#0000'; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1);
+        const alpha = pixel()[3];
+        if (alpha) layers.push(c);
+        if (alpha === 255) break;
+      }
+      ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 1, 1);
+      for (const c of layers.reverse()) { ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); }
+      const [r, g, b] = pixel();
+      return `rgb(${r}, ${g}, ${b})`;
+    };
+    const of = (selector) => { const node = root.querySelector(selector); if (!node) return null; const css = getComputedStyle(node);
+      return { color: css.color, weight: css.fontWeight, bg: behind(node), fill: css.backgroundColor, line: css.textDecorationLine, border: css.borderLeftColor, top: css.borderTopColor, radius: css.borderTopLeftRadius, look: css.appearance }; };
+    const li = root.querySelector('li');
+    return { h1: of('h1'), h2: of('h2'), p: of('p'), link: of('.link, a'), code: of(':not(pre) > code'), pre: of('pre'), fenced: of('pre code'), quote: of('blockquote'),
+      td: of('td'), box: of('input[type="checkbox"]:checked'), open: of('input[type="checkbox"]:not(:checked)'), marker: li && getComputedStyle(li, '::marker').color };
+  });
+  const check = (look, label) => {
+    console.log(`READ azure preview (${label}): ${JSON.stringify(look)}`);
+    const rows = [];
+    const ratio = (name, floor = 4.5) => { const r = contrast(look[name].color, look[name].bg); rows.push(`${name} ${look[name].color} on ${look[name].bg} ${r}:1`); assert.ok(r >= floor, `${label} ${name}: ${r}:1`); };
+    assert.equal(look.h1.color, RGB.violet); assert.equal(look.h1.weight, '700'); assert.equal(look.h2.color, RGB.violet);
+    assert.equal(look.p.color, RGB.primary, 'prose stays neutral');
+    assert.equal(look.link.color, RGB.azure); assert.equal(look.link.line, 'underline');
+    assert.equal(look.code.color, RGB.amber); assert.equal(look.code.fill, 'rgb(23, 23, 44)'); assert.equal(look.code.radius, '4px');
+    assert.equal(look.pre.fill, 'rgb(23, 23, 44)'); assert.equal(look.fenced.color, RGB.primary, 'fenced code: one colour (no highlighter in the preview)');
+    assert.equal(look.quote.border, RGB.violetDim); assert.equal(look.quote.color, RGB.secondary);
+    assert.equal(look.td.top, RGB.subtle); assert.equal(look.marker, RGB.violetDim);
+    // Drawn by the theme (appearance none), so the computed colours are the painted ones: § 3 mint checked, muted unchecked.
+    if (look.box) { assert.equal(look.box.look, 'none'); assert.equal(look.box.fill, RGB.mint); assert.equal(look.open.top, RGB.muted); assert.equal(look.open.fill, 'rgba(0, 0, 0, 0)'); }
+    for (const name of ['h1', 'p', 'link', 'code', 'fenced', 'quote']) ratio(name);
+    console.log(`PASS azure preview (${label}): ${rows.join(', ')}; task boxes ${look.box ? 'rendered' : 'not rendered by the Markdown renderer'}`);
+  };
+  const amoled = () => page.evaluate(() => document.documentElement.hasAttribute('data-amoled'));
+  await shot('o17-preview-' + ((await amoled()) ? 'amoled' : 'navy'));
+  check(await read(), (await amoled()) ? 'AMOLED on' : 'AMOLED off');
+  // The other AMOLED setting: off, the shell's own navy backgrounds (§ 6 bg.app) show.
+  // Escape closes the theme panel and the note with it, so the note is opened again.
+  await page.evaluate(() => { document.getElementById('themeBtn').click(); document.querySelector('[data-amoled-switch]').click(); });
+  await page.keyboard.press('Escape');
+  if (!(await preview.isVisible())) await open();
+  await shot('o17-preview-' + ((await amoled()) ? 'amoled' : 'navy'));
+  check(await read(), (await amoled()) ? 'AMOLED on' : 'AMOLED off');
+  if (!(await amoled())) assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--background').trim().toLowerCase()), '#080b13');
 });
