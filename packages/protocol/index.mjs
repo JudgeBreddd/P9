@@ -38,3 +38,7 @@ export const partOrder = (order, defaults = PARTS) => {
   const named = Array.isArray(order) ? order.filter((part, index) => defaults.includes(part) && order.indexOf(part) === index) : [];
   return [...named, ...defaults.filter((part) => !named.includes(part))];
 };
+// A chat's last used time (History, the panel, the phone) is its newest event but these: the stops a close, an exit or a
+// restart write, its created event, and the bookkeeping the user does to it (move to a project, rename, archive; Builder,
+// nightly 3: "moving a chat to a project changes the edited last timer").
+export const NOT_USE = Object.freeze(['created', 'stopped', 'closed', 'exited', 'interrupted', 'project', 'renamed', 'archived']);
