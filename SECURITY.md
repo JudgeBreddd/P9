@@ -146,6 +146,7 @@ File protection there as in the workspace. A folder that holds the workspace, th
 is refused. Saves use the same guarded save as workspace files: a note changed on disk since you opened it is never
 overwritten without your say. Rename keeps the note in its folder and refuses a name that exists. The preview shows a
 note's HTML, links and images as text. A paired phone has the same access to the folder as the desktop.
+Chat Focus has a separate read-only exception for a validated In P9 project's files (threat model row MC-18).
 
 ## Mission pages with other schemes
 
@@ -221,10 +222,8 @@ webContents, main frame and exact page URL. getStatus takes no arguments and
 returns only ok/unavailable. mission and chat accept only actions from a fixed
 table with slug- or UUID-shaped IDs (chat may add an operation ID), and map each action to one fixed
 daemon route; the daemon validates every body again. The socket cookie and
-bootstrap file never reach the renderer. No process argv or arbitrary URL crosses the bridge, and the only filesystem paths are workspace-relative ones the daemon
-checks again (since 2026-10-19: the Chat Focus file browser's read-only list and read, threat model row 23, and a new
-chat's folder, row 24; since v0.1.5, paths inside a Mission notes folder named in settings.json, row 34): scripts run by registry ID, files are saved only through the guarded save. The Chat Focus file
-browser cannot write. A chat's folder is where its agent starts, not a sandbox (Codex's own sandbox keeps its writes there;
+bootstrap file never reach the renderer. No process argv or arbitrary URL crosses the bridge. Most paths are workspace-relative and the daemon checks them again (since 2026-10-19: the Chat Focus file browser's read-only list and read, threat model row 23, and a new
+chat's folder, row 24; since v0.1.5, paths inside a Mission notes folder named in settings.json, row 34). For an In P9 project, `projectList`, `projectRead` and `projectImage` send a project UUID and a path inside its files folder (row MC-18). Scripts run by registry ID, files are saved only through the guarded save. In P9 project files open read-only in the Chat Focus file browser. A chat's folder is where its agent starts, not a sandbox (Codex's own sandbox keeps its writes there;
 Claude can still reach the rest of the workspace under its permission rules). The app ships no sample data (GitHub issue #4):
 it lives in `test/sample-data.mjs`, which the packaged build leaves out. The one test-only path is `window.p9.sample`: the desktop
 fills it from that file only when unpackaged and `P9_SAMPLE_DATA=1` is set, answers only the main window, and loads no other
@@ -402,7 +401,8 @@ workspace, home, or P9's state, recovery or ownership folder, or that sits insid
 again on every save. It keeps the folder in memory only: a daemon restart, a workspace change or going back to the
 workspace ends it. Main adds the folder to each save; the page never names it. A save from a page left from an earlier
 folder is refused, never written into the new one. Saves go through the same guarded writer as the workspace (hash
-check, no `..` or links out, File protection's locked names).
+check, no `..` or links out, File protection's locked names). The separate Chat Focus read-only exception for an
+In P9 project's files does not open a Dev Focus folder (row MC-18).
 
 New File and Save As reach the daemon's desktop-only POST /files, which calls the same create-only writer as
 Mission's New idea: it makes a new name and refuses locked names while File protection is on. Once made, the file
@@ -540,8 +540,11 @@ UUID before any path is built; an added file's name is one path part under File 
 replacing a name already there or following a link. A chat's project is set only by you (start it in one, or move it);
 it is never taken from the folder it started in. An In P9 project's chat starts in that project's own `files/` (threat
 model row N1b): the client sends no path, the daemon finds the folder from the chat's project id at every start and
-refuses it if it is a link, and every folder a client names under P9's own (that `files/`, `projects/<id>/`, `state/`,
-another project's `files/`) is still refused in every mode. The routes are on both listeners, like the chat routes, and every
+refuses it if it is a link. Ordinary file and folder routes still refuse P9's own folders in every mode. The desktop's
+Chat Focus list, text and image reads are a narrow exception (threat model row MC-18): the client sends a project UUID
+and a path inside its `files/`; the daemon accepts only an In P9 project, checks its folders and refuses traversal, links
+and locked names. The phone cannot use this exception, and the exception allows no writes. The project routes are on
+both listeners, like the chat routes, and every
 change carries its operation id. Deleting a chat (from its menu) removes its row and events from the ledger, what the
 memory and telemetry databases recorded from it, and its photos no other chat uses. What it already spent (tokens and
 cost) stays in the usage totals, carried on the ledger's `deleted` event, so the totals are the same after a restart.

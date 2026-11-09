@@ -251,12 +251,14 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     const project = c.req.query('project');
     if (project !== undefined) {
       if (c.get('device')) return { status: 404, error: 'not-found' };
-      const root = await chat.projects.filesStart(project).catch(() => null);
+      const root = await chat.projects?.filesStart?.(project)?.catch(() => null);
       return root ? { root, privateRoot: true } : { status: 404, error: 'unknown-project' };
     }
     return c.get('device') ? phoneTarget(c.req.query('root')) : { root: workspace };
   };
-  api.get('/files', async (c) => { const target = await readTarget(c); return target.error ? reply(c, target) : c.json(await readWorkspaceFile(target.root, c.req.query('path'), { privateRoot: target.privateRoot })); });
+  api.get('/files', async (c) => { const target = await readTarget(c); if (target.error) return reply(c, target);
+    try { return c.json(await readWorkspaceFile(target.root, c.req.query('path'), { privateRoot: target.privateRoot })); }
+    catch (error) { if (target.privateRoot && error.message === 'locked-path') return c.json({ error: 'locked-path' }, 400); throw error; } });
   // A workspace image for the Chat Focus file window (rows 23/26/27 adds): GET /files's walk and target, then row 27's size and
   // byte checks; anything else is not-an-image or request-refused, and its bytes stay here.
   api.get('/files/image', async (c) => {

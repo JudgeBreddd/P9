@@ -369,6 +369,7 @@ test('MC-18: In P9 chat lists and opens its project file', { timeout: 90000 }, a
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const p = (await call(instance, '/projects', 'POST', { name: 'Notes', work: { kind: 'p9' } })).project;
   assert.equal((await call(instance, '/projects/' + p.id + '/files', 'POST', { name: 'notes.txt', data: Buffer.from('Project note').toString('base64') })).status, 201);
+  assert.equal((await call(instance, '/projects/' + p.id + '/files', 'POST', { name: 'picture.png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' })).status, 201);
   const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
   await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title Notes chat' }); await ended(instance, chat);
   const { page } = await launch(t, instance);
@@ -380,7 +381,15 @@ test('MC-18: In P9 chat lists and opens its project file', { timeout: 90000 }, a
   await page.locator('#tree [data-lfile]', { hasText: 'notes.txt' }).click();
   await page.locator('#mdlBody textarea').waitFor({ timeout: 10000 });
   assert.equal(await page.locator('#mdlBody textarea').inputValue(), 'Project note');
-  assert.notEqual((await call(instance, '/files?' + new URLSearchParams({ project: p.id, path: '../project.json' }))).status, 200);
+  const traversal = await call(instance, '/files?' + new URLSearchParams({ project: p.id, path: '../project.json' }));
+  assert.equal(traversal.status, 400); assert.equal(traversal.error, 'locked-path');
+  assert.equal((await call(instance, '/files/list?' + new URLSearchParams({ project: '../x', path: '' }))).status, 404);
+  await page.locator('#mdlX').click();
+  await page.locator('#tree [data-lfile]', { hasText: 'picture.png' }).click();
+  await page.locator('#mdlBody img').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdlT').textContent(), 'picture.png');
+  assert.equal(await page.locator('#mdlFoot').innerText(), 'picture.png\nRead-only');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT mc18-image ' + (await page.screenshot({ type: 'png' })).toString('base64'));
   assert.equal((await call(instance, '/files/list?' + new URLSearchParams({ project: randomUUID(), path: '' }))).status, 404);
 });
 

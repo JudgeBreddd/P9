@@ -557,11 +557,11 @@ function liveFileModal(m, body) {
 }
 // An image from the Files pane (rows 23/26/27 adds): read-only; the words and the check are helpers.mjs's, shared with the phone.
 function imageModal(m, body) {
-  outer.$('#mdlT').textContent = m.name;
-  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
+  const project = /^:project-files\/([0-9a-f-]{36})\/(.+)$/.exec(m.name), name = project ? project[2] : m.name;
+  outer.$('#mdlT').textContent = name;
+  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
   if (m.image === undefined) {
     m.image = null;
-    const project = /^:project-files\/([0-9a-f-]{36})\/(.+)$/.exec(m.name);
     window.p9.mission(project ? 'projectImage' : 'image', project ? { project: project[1], path: project[2] } : { path: m.name }).then(r => {
       const src = r.status === 200 && fileImageSrc(r.body);
       m.image = src ? { src } : { error: r.status === 200 ? 'not-an-image' : r.body?.error || String(r.status) };
@@ -570,7 +570,7 @@ function imageModal(m, body) {
   }
   const i = m.image;
   body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
-    : `<div class="file-image"><img src="${i.src}" alt="${esc(m.name)}"></div>`;
+    : `<div class="file-image"><img src="${i.src}" alt="${esc(name)}"></div>`;
 }
 function liveFoot(m) {
   outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.saveBtn(liveKey(m.name))}`;
