@@ -833,8 +833,11 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
   want(json, '{', RGB.secondary); want(json, ':', RGB.secondary); want(json, '"', RGB.secondary);
   const style = await other('style.css', '.panel');
   want(style, 'panel', RGB.violet); want(style, 'color', RGB.azure); want(style, 'width', RGB.azure); want(style, 'var', RGB.azure);
-  want(style, '--p9-text-primary', RGB.blue); want(style, '42', RGB.amber); want(style, '{', RGB.secondary);
-  console.log('NOTE § 4 names no colour for these; they render: ".panel" dot ' + find(style, '.').color + ', unit "px" ' + find(style, 'px').color);
+  want(style, '--p9-text-primary', RGB.blue); want(style, '{', RGB.secondary);
+  // A unit is part of the value (release session, 2026-11-08): px in 42px is amber like its number,
+  // so the editor draws 42px as one amber token. A unit in any other colour splits it and this fails.
+  want(style, '42px', RGB.amber);
+  console.log('NOTE § 4 names no colour for this; it renders: ".panel" dot ' + find(style, '.').color);
   const shell_ = await other('run.sh', 'pnpm');
   want(shell_, 'pnpm', RGB.azure); want(shell_, '--frozen-lockfile', RGB.blue); want(shell_, '"./app"', RGB.amber); want(shell_, '# build', RGB.muted);
   console.log('NOTE § 4 names no colour for a bare argument; "install" renders ' + find(shell_, 'install').color);
@@ -873,11 +876,27 @@ test('Dev Focus: a light look turns the editor light', { skip: process.platform 
     return { light: workbench.classList.contains('vs'), dark: workbench.classList.contains('vs-dark'), background: getComputedStyle(workbench).getPropertyValue('--vscode-editor-background').trim().toLowerCase(),
       keyword: keyword && getComputedStyle(keyword).color };
   });
+  // The status bar's remote item wears the look's accent (primary on primary-foreground), as the buttons do.
+  const remote = () => dev.evaluate(() => {
+    const item = document.getElementById('status.host') ?? document.querySelector('.statusbar-item.remote-kind');
+    if (!item) return null;
+    const probe = document.createElement('div');
+    probe.style.cssText = 'background: var(--vscode-button-background); color: var(--vscode-button-foreground)';
+    document.querySelector('.monaco-workbench').append(probe);
+    const want = { background: getComputedStyle(probe).backgroundColor, color: getComputedStyle(probe).color };
+    probe.remove();
+    const label = item.querySelector('a') ?? item;
+    return { want, got: { background: getComputedStyle(item).backgroundColor, color: getComputedStyle(label).color } };
+  });
   await dev.waitForFunction(() => document.querySelector('.monaco-workbench').classList.contains('vs'), null, { timeout: 15000 }).catch(() => {});
   await sleep(1000);
   await shot(dev, 'o17b-dev-light');
   const got = await read();
   console.log('NOTE light look: ' + JSON.stringify(got));
   assert.deepEqual({ light: got.light, dark: got.dark }, { light: true, dark: false }, 'the editor theme is light: ' + JSON.stringify(got));
+  const status = await remote();
+  console.log('NOTE remote status item: ' + JSON.stringify(status));
+  assert.ok(status, 'the status bar has a remote item');
+  assert.deepEqual(status.got, status.want, 'the remote status item wears the look accent: ' + JSON.stringify(status));
   assert.deepEqual(online(errors), []);
 }));

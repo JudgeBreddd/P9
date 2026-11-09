@@ -146,7 +146,7 @@
     { "scope": ["support.type.property-name.json"], "settings": { "foreground": "#42C7F5" } },
     { "scope": ["entity.name.tag.css", "entity.other.attribute-name.class.css", "entity.other.attribute-name.id.css", "entity.other.attribute-name.pseudo-class.css", "meta.selector.css"], "settings": { "foreground": "#B77AFF" } },
     { "scope": ["support.type.property-name.css"], "settings": { "foreground": "#42C7F5" } },
-    { "scope": ["support.constant.property-value.css", "meta.property-value.css", "constant.other.color.rgb-value.css"], "settings": { "foreground": "#F6BB58" } },
+    { "scope": ["support.constant.property-value.css", "meta.property-value.css", "keyword.other.unit", "constant.other.color.rgb-value.css"], "settings": { "foreground": "#F6BB58" } },
     { "scope": ["variable.css", "variable.argument.css"], "settings": { "foreground": "#7EA9F8" } },
     { "scope": ["entity.name.command.shell", "support.function.builtin.shell"], "settings": { "foreground": "#42C7F5" } },
     { "scope": ["constant.other.option"], "settings": { "foreground": "#7EA9F8" } },

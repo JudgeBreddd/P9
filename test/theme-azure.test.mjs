@@ -52,7 +52,7 @@ const SCOPES = [
   ['keyword.operator.assignment.ts', P['text-secondary']], ['storage.type.function.arrow.ts', P['text-secondary']], ['punctuation.terminator.statement.ts', P['text-secondary']], ['meta.brace.round.ts', P['text-secondary']],
   ['comment.line.double-slash.ts', P['text-muted']], ['punctuation.definition.comment.ts', P['text-muted']], ['invalid.illegal.ts', P['diagnostic-error']],
   ['support.type.property-name.json', P['syntax-azure']], ['support.type.property-name.css', P['syntax-azure']], ['entity.other.attribute-name.class.css', P['syntax-violet']],
-  ['support.constant.property-value.css', P['syntax-amber']], ['variable.css', P['syntax-blue']], ['entity.name.command.shell', P['syntax-azure']], ['constant.other.option', P['syntax-blue']],
+  ['support.constant.property-value.css', P['syntax-amber']], ['keyword.other.unit.px.css', P['syntax-amber']], ['variable.css', P['syntax-blue']], ['entity.name.command.shell', P['syntax-azure']], ['constant.other.option', P['syntax-blue']],
   ['punctuation.definition.heading.markdown', P['syntax-violet'], ''], ['entity.name.section.markdown', P['syntax-violet'], 'bold'], ['markup.heading.markdown', P['syntax-violet'], 'bold'],
   ['markup.bold.markdown', P['text-primary'], 'bold'], ['markup.italic.markdown', P['text-primary'], 'italic'], ['markup.strikethrough.markdown', P['text-secondary'], 'strikethrough'],
   ['punctuation.definition.list.begin.markdown', P['syntax-violet-dim']], ['punctuation.definition.quote.begin.markdown', P['syntax-violet-dim']], ['markup.quote.markdown', P['text-secondary']],

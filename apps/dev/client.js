@@ -269,6 +269,8 @@ const followLook = async look => {
   document.documentElement.dataset.look = look?.theme ?? '';
   if (look?.theme === AZURE) {
     // AMOLED is the only thing that turns the shell's background pure black (duwop.css), so black here means AMOLED on.
+    // ponytail: the look payload (p9:look) carries no AMOLED flag; a look that is pure black without AMOLED would also get
+    // black surfaces here. Add the flag to the payload if such a look ever ships.
     const amoled = /^#000000/.test(look.colors.background);
     await v.workspace.getConfiguration().update('workbench.colorCustomizations', amoled ? surfaces(look.colors.background, look.colors.card) : undefined, v.ConfigurationTarget.Global);
     await themeService.setColorTheme(await named('P9 Event Horizon Azure'), 2);
@@ -286,6 +288,7 @@ const followLook = async look => {
     'input.background': c.muted, 'dropdown.background': c.muted, 'list.activeSelectionBackground': c.accent, 'list.hoverBackground': c.accent,
     'focusBorder': c.ring, 'button.background': accent, 'button.foreground': c['primary-foreground'], 'activityBar.activeBorder': accent,
     'activityBarBadge.background': accent, 'textLink.foreground': accent,
+    'statusBarItem.remoteBackground': accent, 'statusBarItem.remoteForeground': c['primary-foreground'],
     'sideBar.border': c.border, 'panel.border': c.border, 'editorGroup.border': c.border, 'statusBar.border': c.border,
   }, v.ConfigurationTarget.Global);
 };
