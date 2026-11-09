@@ -35,6 +35,9 @@ import '@codingame/monaco-vscode-theme-defaults-default-extension';
 import '@codingame/monaco-vscode-typescript-basics-default-extension';
 import '@codingame/monaco-vscode-python-default-extension';
 import '@codingame/monaco-vscode-markdown-basics-default-extension';
+import '@codingame/monaco-vscode-json-default-extension';
+import '@codingame/monaco-vscode-css-default-extension';
+import '@codingame/monaco-vscode-shellscript-default-extension';
 import EditorWorker from '@codingame/monaco-vscode-editor-api/esm/vs/editor/editor.worker?worker';
 import TextmateWorker from '@codingame/monaco-vscode-textmate-service-override/worker?worker';
 
@@ -251,33 +254,41 @@ button.show();
 document.querySelector('#workbench').inert = false;
 
 // The editor follows the shell's DUWOP look, live: P9 Prime (dark) or Light Modern under the theme's own colours.
-// Event Horizon Azure has a full editor theme of its own, so it is used as it is, with no colours laid over it.
+// Event Horizon Azure has a full editor theme of its own, so it is used as it is, with no colours laid over it, except
+// with AMOLED on: then its surfaces go black like the shell's, as in every other look, and its syntax colours stay.
 const AZURE = 'p9-event-horizon-azure';
 const themeService = await getService(IThemeService);
-// setColorTheme looks a name up as the theme's internal id, which a contributed theme's label is not, so the Azure theme
-// is passed as the theme itself, found by its settings name.
+// setColorTheme looks a name up as the theme's internal id, which a contributed theme's label or settings name is not, so
+// every theme is passed as the theme itself, found by its settings name. Light Modern's is "Light Modern" (theme-defaults 33.0.9).
 const named = async name => (await themeService.getColorThemes()).find(theme => theme.settingsId === name);
+const surfaces = (bg, card) => ({ 'editor.background': bg, 'editorGutter.background': bg, 'tab.activeBackground': bg,
+  'sideBar.background': card, 'sideBarSectionHeader.background': card, 'activityBar.background': card, 'panel.background': card,
+  'statusBar.background': card, 'titleBar.activeBackground': card, 'editorGroupHeader.tabsBackground': card, 'tab.inactiveBackground': card,
+  'editorWidget.background': card });
 const followLook = async look => {
   document.documentElement.dataset.look = look?.theme ?? '';
   if (look?.theme === AZURE) {
-    await v.workspace.getConfiguration().update('workbench.colorCustomizations', undefined, v.ConfigurationTarget.Global);
+    // AMOLED is the only thing that turns the shell's background pure black (duwop.css), so black here means AMOLED on.
+    // ponytail: the look payload (p9:look) carries no AMOLED flag; a look that is pure black without AMOLED would also get
+    // black surfaces here. Add the flag to the payload if such a look ever ships.
+    const amoled = /^#000000/.test(look.colors.background);
+    await v.workspace.getConfiguration().update('workbench.colorCustomizations', amoled ? surfaces(look.colors.background, look.colors.card) : undefined, v.ConfigurationTarget.Global);
     await themeService.setColorTheme(await named('P9 Event Horizon Azure'), 2);
     return;
   }
-  if (themeService.getColorTheme().settingsId === 'P9 Event Horizon Azure') await themeService.setColorTheme(await named('P9 Prime'), 2);
-  await themeService.setColorTheme(look?.dark === false ? 'Default Light Modern' : 'P9 Prime', 2);
+  await themeService.setColorTheme(await named(look?.dark === false ? 'Light Modern' : 'P9 Prime'), 2);
   if (!look) return;
   const c = look.colors, bg = c.background, card = c.card, fg = c.foreground, dim = c['muted-foreground'], accent = c.primary;
-  await v.workspace.getConfiguration().update('workbench.colorCustomizations', {
-    'editor.background': bg, 'editorGutter.background': bg, 'editor.foreground': fg, foreground: fg, descriptionForeground: dim,
+  await v.workspace.getConfiguration().update('workbench.colorCustomizations', { ...surfaces(bg, card),
+    'editor.foreground': fg, foreground: fg, descriptionForeground: dim,
     'editorLineNumber.foreground': dim, 'editorLineNumber.activeForeground': fg, 'editorCursor.foreground': accent,
     'editor.selectionBackground': accent.slice(0, 7) + '40', 'editor.lineHighlightBackground': c.muted.slice(0, 7) + '80',
-    'sideBar.background': card, 'sideBarSectionHeader.background': card, 'activityBar.background': card, 'panel.background': card,
-    'statusBar.background': card, 'statusBar.foreground': dim, 'titleBar.activeBackground': card, 'editorGroupHeader.tabsBackground': card,
-    'tab.inactiveBackground': card, 'tab.activeBackground': bg, 'tab.activeBorderTop': accent, 'editorWidget.background': card,
+    'statusBar.foreground': dim,
+    'tab.activeBorderTop': accent,
     'input.background': c.muted, 'dropdown.background': c.muted, 'list.activeSelectionBackground': c.accent, 'list.hoverBackground': c.accent,
     'focusBorder': c.ring, 'button.background': accent, 'button.foreground': c['primary-foreground'], 'activityBar.activeBorder': accent,
     'activityBarBadge.background': accent, 'textLink.foreground': accent,
+    'statusBarItem.remoteBackground': accent, 'statusBarItem.remoteForeground': c['primary-foreground'],
     'sideBar.border': c.border, 'panel.border': c.border, 'editorGroup.border': c.border, 'statusBar.border': c.border,
   }, v.ConfigurationTarget.Global);
 };

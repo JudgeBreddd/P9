@@ -726,6 +726,9 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
   for (const [name, text] of Object.entries(OTHERS)) await writeFile(path.join(instance.workspace, name), text);
   const css = name => dev.evaluate(name => getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue(name).trim().toLowerCase(), name);
   await shell.evaluate(id => { document.querySelector('#themeBtn').click(); document.querySelector(`[data-theme-pick="${id}"]`).click(); }, AZURE);
+  // AMOLED is on by default. The spec's colours are measured with it off (the navy #0B101B), then once more with it on (black).
+  const amoled = on => shell.evaluate(on => { if (document.documentElement.hasAttribute('data-amoled') !== on) document.querySelector('[data-amoled-switch]').click(); }, on);
+  await amoled(false);
   await dev.waitForFunction(() => getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue('--vscode-editor-background').trim().toLowerCase() === '#0b101b', null, { timeout: 15000 })
     .catch(async () => { await shot(dev, 'o17-dev-no-switch'); assert.fail('the editor did not switch to Event Horizon Azure: background ' + await css('--vscode-editor-background')); });
   assert.equal(await css('--vscode-editorCursor-foreground'), '#42c7f5');
@@ -757,7 +760,7 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
   const bg = 'rgb(11, 16, 27)', rows = [];
   const want = (list, text, colour, extra = {}, nth = 0, floor = 4.5) => {
     const token = find(list, text, nth), ratio = contrast(token.color, bg);
-    rows.push(`${text}=${token.color} ${ratio}:1`);
+    rows.push({ text, color: token.color, floor, ratio });
     assert.equal(token.color, colour, `"${text}" colour`);
     for (const [key, value] of Object.entries(extra)) assert.equal(token[key], value, `"${text}" ${key}`);
     assert.ok(ratio >= floor, `"${text}" contrast ${ratio}:1 is under ${floor}:1`);
@@ -808,7 +811,7 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
   await shot(dev, 'o17-dev-focus-code');
   assert.deepEqual(inMd, { lang: 'markdown', cursor: RGB.violet, width: 2, border: RGB.violetDim, other: RGB.subtle, tab: RGB.violetDim, tabHeight: 2, focused: true });
   assert.deepEqual(inTs, { lang: 'code', cursor: RGB.azure, width: 2, border: RGB.azureDim, other: RGB.subtle, tab: RGB.azureDim, tabHeight: 2, focused: true });
-  // The other languages § 4 names: Python has a grammar in Dev Focus; JSON, CSS and shell have none, so they record what they get.
+  // The other languages § 4 names: Python, JSON, CSS and shell.
   const opened = async (name, first) => {
     await dev.evaluate(name => window.devFocus.open(name), name);
     let list;
@@ -818,11 +821,82 @@ test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fen
   const py = await opened('app.py', 'def');
   want(py, '@cache', RGB.blue); want(py, 'def', RGB.violet); want(py, 'is', RGB.violet); want(py, 'None', RGB.mint); want(py, 'load', RGB.azure); want(py, 'print', RGB.azure); want(py, 'True', RGB.mint); want(py, '"ok"', RGB.amber); want(py, '42', RGB.amber); want(py, '# note', RGB.muted);
   await shot(dev, 'o17-dev-python');
-  for (const name of ['data.json', 'style.css', 'run.sh']) {
-    const list = await opened(name, '{') ?? await tokens(name), language = await dev.evaluate(() => window.devFocus.v.window.activeTextEditor.document.languageId);
-    console.log(`LIMIT ${name} (language ${language}): ${[...new Set(list.map(x => x.color))].length} colour(s): ${list.map(x => x.text + '=' + x.color).join(' | ')}`);
+  // JSON, CSS and shell (O17b: their grammars ship now), each against its § 4 language note. Every token is logged first.
+  const other = async (name, first) => {
+    const list = await opened(name, first) ?? await tokens(name), language = await dev.evaluate(() => window.devFocus.v.window.activeTextEditor.document.languageId);
+    console.log(`TOKENS ${name} (language ${language}): ${list.map(x => x.text + '=' + x.color).join(' | ')}`);
     await shot(dev, 'o17-dev-' + name.replace('.', '-'));
-  }
+    return list;
+  };
+  const json = await other('data.json', '{');
+  want(json, 'name', RGB.azure); want(json, '"p9"', RGB.amber); want(json, '42', RGB.amber); want(json, 'true', RGB.mint); want(json, 'null', RGB.mint);
+  want(json, '{', RGB.secondary); want(json, ':', RGB.secondary); want(json, '"', RGB.secondary);
+  const style = await other('style.css', '.panel');
+  want(style, 'panel', RGB.violet); want(style, 'color', RGB.azure); want(style, 'width', RGB.azure); want(style, 'var', RGB.azure);
+  want(style, '--p9-text-primary', RGB.blue); want(style, '{', RGB.secondary);
+  // A unit is part of the value (release session, 2026-11-08): px in 42px is amber like its number,
+  // so the editor draws 42px as one amber token. A unit in any other colour splits it and this fails.
+  want(style, '42px', RGB.amber);
+  console.log('NOTE § 4 names no colour for this; it renders: ".panel" dot ' + find(style, '.').color);
+  const shell_ = await other('run.sh', 'pnpm');
+  want(shell_, 'pnpm', RGB.azure); want(shell_, '--frozen-lockfile', RGB.blue); want(shell_, '"./app"', RGB.amber); want(shell_, '# build', RGB.muted);
+  console.log('NOTE § 4 names no colour for a bare argument; "install" renders ' + find(shell_, 'install').color);
+  const list = rows => rows.map(row => `${row.text}=${row.color} ${row.ratio}:1`).join(', ');
+  console.log('NOTE contrast on #0B101B: ' + list(rows));
+  // AMOLED on: the editor and its gutter go black with the shell, the side bar takes the shell's card, the syntax colours stay.
+  await amoled(true);
+  await dev.waitForFunction(() => getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue('--vscode-editor-background').trim().toLowerCase().startsWith('#000000'), null, { timeout: 15000 })
+    .catch(async () => { await shot(dev, 'o17b-dev-amoled-no-switch'); assert.fail('AMOLED on: the editor stayed ' + await css('--vscode-editor-background')); });
+  const pyBlack = await opened('app.py', 'def');
+  await sleep(300);
+  const painted = await dev.evaluate(() => ['.editor-group-container.active .monaco-editor-background', '.editor-group-container.active .monaco-editor .margin', '.part.sidebar']
+    .map(selector => { const node = document.querySelector(selector); return node && getComputedStyle(node).backgroundColor; }));
+  await shot(dev, 'o17b-dev-amoled');
+  console.log('NOTE AMOLED painted editor, gutter, side bar: ' + painted.join(' | '));
+  assert.deepEqual(painted.slice(0, 2), ['rgb(0, 0, 0)', 'rgb(0, 0, 0)'], 'AMOLED on: editor and gutter black');
+  assert.notEqual(painted[2], 'rgb(11, 16, 27)', 'AMOLED on: the side bar left the navy');
+  for (const text of ['@cache', 'def', 'None', 'load', '"ok"', '42', '# note']) assert.equal(find(pyBlack, text).color, find(py, text).color, `"${text}" keeps its colour on black`);
+  const black = rows.map(row => ({ ...row, ratio: contrast(row.color, 'rgb(0, 0, 0)') }));
+  for (const row of black) assert.ok(row.ratio >= row.floor, `"${row.text}" contrast on black ${row.ratio}:1 is under ${row.floor}:1`);
   assert.deepEqual(online(errors), []);
-  console.log('PASS Event Horizon Azure in Dev Focus; contrast on #0B101B: ' + rows.join(', '));
+  console.log('PASS Event Horizon Azure in Dev Focus; contrast on #000000: ' + list(black));
+}));
+
+// O17b: a light look (Daylight) puts the editor on its light theme, with the look's colours laid over it. Before the fix
+// the editor kept its dark theme under the light colours: dark-theme syntax on a light page.
+test('Dev Focus: a light look turns the editor light', { skip: process.platform !== 'linux', timeout: 240000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const { instance, shell, dev, errors } = await openDevFocus(t, editor, {});
+  await writeFile(path.join(instance.workspace, 'main.ts'), FIXTURE.ts);
+  await dev.evaluate(() => window.devFocus.open('main.ts'));
+  await shell.evaluate(() => { document.querySelector('#themeBtn').click(); document.querySelector('[data-theme-pick="daylight"]').click(); });
+  const read = () => dev.evaluate(() => {
+    const workbench = document.querySelector('.monaco-workbench'), keyword = [...document.querySelectorAll('.view-line span > span')].find(span => span.textContent === 'import');
+    return { light: workbench.classList.contains('vs'), dark: workbench.classList.contains('vs-dark'), background: getComputedStyle(workbench).getPropertyValue('--vscode-editor-background').trim().toLowerCase(),
+      keyword: keyword && getComputedStyle(keyword).color };
+  });
+  // The status bar's remote item wears the look's accent (primary on primary-foreground), as the buttons do.
+  const remote = () => dev.evaluate(() => {
+    const item = document.getElementById('status.host') ?? document.querySelector('.statusbar-item.remote-kind');
+    if (!item) return null;
+    const probe = document.createElement('div');
+    probe.style.cssText = 'background: var(--vscode-button-background); color: var(--vscode-button-foreground)';
+    document.querySelector('.monaco-workbench').append(probe);
+    const want = { background: getComputedStyle(probe).backgroundColor, color: getComputedStyle(probe).color };
+    probe.remove();
+    const label = item.querySelector('a') ?? item;
+    return { want, got: { background: getComputedStyle(item).backgroundColor, color: getComputedStyle(label).color } };
+  });
+  await dev.waitForFunction(() => document.querySelector('.monaco-workbench').classList.contains('vs'), null, { timeout: 15000 }).catch(() => {});
+  await sleep(1000);
+  await shot(dev, 'o17b-dev-light');
+  const got = await read();
+  console.log('NOTE light look: ' + JSON.stringify(got));
+  assert.deepEqual({ light: got.light, dark: got.dark }, { light: true, dark: false }, 'the editor theme is light: ' + JSON.stringify(got));
+  const status = await remote();
+  console.log('NOTE remote status item: ' + JSON.stringify(status));
+  assert.ok(status, 'the status bar has a remote item');
+  assert.deepEqual(status.got, status.want, 'the remote status item wears the look accent: ' + JSON.stringify(status));
+  assert.deepEqual(online(errors), []);
 }));
