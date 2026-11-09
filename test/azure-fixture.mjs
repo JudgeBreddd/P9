@@ -34,7 +34,7 @@ ${TS}\`\`\`
 | Editor | Ready |
 | Recall | Planned |
 ` };
-// One small file per other language § 4 names, to record what each grammar (or its absence) gives.
+// One small file per other language § 4 names.
 export const OTHERS = {
   'data.json': '{ "name": "p9", "count": 42, "ok": true, "none": null }\n',
   'style.css': '.panel { color: var(--p9-text-primary); width: 42px; }\n',
