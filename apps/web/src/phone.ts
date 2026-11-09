@@ -1408,8 +1408,9 @@ const cardJson = new WeakMap<HTMLElement, unknown>();
 async function feedCard(tile: HTMLElement, answer: Json) {
   const note = tile.querySelector<HTMLElement>('.card-note')!, box = tile.querySelector<HTMLElement>('.card-frame')!;
   const send = () => { const frame = box.querySelector('iframe'); if (cardJson.has(tile) && tile.dataset.rendered === 'rendered') frame?.contentWindow?.postMessage({ p9: 'data', json: cardJson.get(tile) }, '*'); };
-  // A card that stopped with an error keeps saying so: the 30 s refresh brings new JSON but never runs the card again.
-  if (answer.json !== undefined) { cardJson.set(tile, answer.json); if (tile.dataset.rendered !== 'error') note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape, 'card');
+  // A card that stopped with an error keeps saying so: the 30 s refresh brings new JSON but never runs the card again. Its own
+  // flag, since the frame says 'rendered' right after the error (frame/index.html).
+  if (answer.json !== undefined) { cardJson.set(tile, answer.json); if (!tile.dataset.cardError) note.replaceChildren(); } else note.innerHTML = tileHtml(answer, escape, 'card');
   if (box.dataset.read) return send();
   box.dataset.read = '1';
   const response = await fetch('/mission/card?' + new URLSearchParams({ id: tile.dataset.tile! }), { cache: 'no-store' }).catch(() => null);
@@ -1418,7 +1419,7 @@ async function feedCard(tile: HTMLElement, answer: Json) {
   mountCard(box, tile.dataset.card, body.html, { page: '/frame/', base: '/frame/', onState: (kind: string, text: string) => {
     tile.dataset.rendered = kind;
     if (kind === 'rendered') send();
-    if (kind === 'error') note.textContent = 'The card stopped with an error: ' + text;
+    if (kind === 'error') { tile.dataset.cardError = '1'; note.textContent = 'The card stopped with an error: ' + text; }
   } });
 }
 // Onboarding (M4): the shipped guide and templates, fetched once. The phone has no edit form, so Build it yourself is the guide.
