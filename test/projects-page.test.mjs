@@ -337,3 +337,25 @@ test('projects: the offered chat moves in and shows under the project', { timeou
   assert.equal((await call(instance, '/projects')).projects.filter((p) => p.name === 'Site two').length, 1, 'no second project');
   assert.deepEqual(errors.filter((e) => !/unknown-conversation/.test(e)), []);
 });
+
+// The project row's count is the chats it lists: a chat closed before anything was sent (hidden) and an archived chat are
+// in the project on the daemon but not listed, so not counted (nightly 3: the row said one more than it showed).
+test('projects: the project row counts only the chats it lists', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Counted', work: { kind: 'p9' } })).project.id;
+  const make = async (title) => { const id = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p })).conversation;
+    await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'title ' + title }); await ended(instance, id); return id; };
+  const shown = await make('Shown'), archived = await make('Archived');
+  await call(instance, '/chat/' + archived + '/archive', 'POST', { archived: true });
+  const hidden = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p })).conversation;
+  await call(instance, '/chat/' + hidden + '/stop', 'POST', {});
+  assert.equal((await call(instance, '/projects')).projects.find((x) => x.id === p).chats, 3, 'the daemon has three in the project');
+  const { page, errors } = await launch(t, instance);
+  const rows = () => page.evaluate((p) => [...document.querySelectorAll(`#navList [data-zone="${p}"] .row[data-chat]`)].map((r) => r.dataset.chat), p);
+  const count = () => page.locator(`#navList [data-proj="${p}"] .n`).textContent();
+  await until(async () => (await rows()).join() === shown, async () => 'only the sent chat listed ' + JSON.stringify(await rows()));
+  assert.equal(await count(), '1', 'the row counts what it lists');
+  await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await until(async () => (await rows()).join() === shown && await count() === '1', async () => 'after a reload ' + await count());
+  assert.deepEqual(errors, []);
+});
