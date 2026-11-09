@@ -436,13 +436,15 @@ function pane(s, i, bare) {
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
+// The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
 let unseenKept = false;
+outer.keepUnseen = () => { if (unseenKept) try { localStorage.setItem('p9-unseen', JSON.stringify(Object.fromEntries(outer.S.sessions.filter(s => s.failed || s.done).map(s => [s.id, s.failed ? 'failed' : 'done'])))); } catch {} };
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
 function renderChats(only) {
   const ids = outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1);
   const ss = ids.map(id => outer.S.sessions.find(s => s.id === id)).filter(Boolean);
   if (document.hasFocus()) { const seen = [...(outer.S.focus === 'chat' ? ss : []), outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(s => s?.done || s?.failed); seen.forEach(s => { s.done = s.failed = false; }); if (seen.length) outer.renderCards(); }
-  if (unseenKept) try { localStorage.setItem('p9-unseen', JSON.stringify(Object.fromEntries(outer.S.sessions.filter(s => s.failed || s.done).map(s => [s.id, s.failed ? 'failed' : 'done'])))); } catch {}
+  outer.keepUnseen();
   outer.$('#chats').dataset.split = String(outer.S.split && ss.length > 1);
   for (const s of [...ss, outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(x => x.id === outer.S.modal.id)]) if (s?.stub) history(s);
   paint(outer.$('#chats'), ss, only);
@@ -596,7 +598,7 @@ function finished(s) {
   if (s.queue.length) return;
   const onScreen = document.hasFocus() && (outer.S.focus === 'chat' && (outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)).includes(s.id) || outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id === s.id);
   if (onScreen) return;
-  s.done = true;
+  s.done = true; outer.keepUnseen();
   if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(outer.names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); outer.openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
 }
 function turnEnd(s) {
@@ -786,7 +788,7 @@ async function loadChat() {
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       if (created) show(ev.conversation);
       // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
-      if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) f.failed = true; }
+      if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
       if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
       if (ev.type === 'answered') answered_.push(ev.conversation);
       // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).

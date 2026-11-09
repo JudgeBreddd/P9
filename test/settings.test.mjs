@@ -1628,6 +1628,8 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   // Back at the window: opening the chat from the card clears it.
   await page.evaluate(() => { document.hasFocus = () => true; });
   await card.locator('.open').click();
+  // Opened is seen at once, in the marks kept over a restart too (not only once the chat list next redraws).
+  assert.equal(await page.evaluate((id) => JSON.parse(localStorage.getItem('p9-unseen') || '{}')[id], id), undefined, 'opened from its card, still kept as unseen');
   await card.waitFor({ state: 'detached', timeout: 5000 });
   await page.keyboard.press('Escape');
   // A reload replays the turn-end: no card, no notice.

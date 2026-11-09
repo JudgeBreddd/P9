@@ -123,7 +123,7 @@ function renderCards() {
 const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560], sprint: [760, 560] }; // defaults; your resize wins, per type
 const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script', sprint: 'sprint' })[k] || 'list';
 // A chat opens at its newest message (Builder, 2026-10-17: it opened at the first); paint ran while the dialog was closed.
-function openModal(m, card) { const seen = m.kind === 'chat' && outer.S.sessions.find(s => s.id === m.id && s.done); if (seen) seen.done = false; m.card = card || m.card || m.back?.card; if (m.card) outer.S.resume[m.card] = m; outer.S.modal = m; if (m.kind === 'chat') delete outer.view['mdlBody:' + m.id]; outer.renderModal();
+function openModal(m, card) { const seen = m.kind === 'chat' && outer.S.sessions.find(s => s.id === m.id && s.done); if (seen) { seen.done = false; outer.keepUnseen?.(); } m.card = card || m.card || m.back?.card; if (m.card) outer.S.resume[m.card] = m; outer.S.modal = m; if (m.kind === 'chat') delete outer.view['mdlBody:' + m.id]; outer.renderModal();
   if (!outer.mdl.open && outer.S.modal) { outer.mdl.showModal(); raiseToasts(); if (m.kind === 'win') outer.$('#mdlBody').scrollTop = outer.winTop[m.id] || 0; } // a closed dialog ignores scrollTop
   if (m.kind === 'chat') outer.$('#mdlBody .hist')?.scrollTo({ top: 1e6, behavior: 'instant' });
   if (seen) renderCards(); }
