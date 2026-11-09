@@ -60,7 +60,7 @@
   --sidebar: var(--p9-bg-app); --sidebar-accent: var(--p9-bg-line-hover);
 }
 /* Rendered Markdown (file and note previews, agent replies): violet headings, azure links, amber inline code; prose stays
-   neutral. Fenced code stays one colour: the preview has no syntax highlighter. */
+   neutral. Fenced code in a listed language is coloured by styles/code-colours.css (O37). */
 [data-theme="p9-event-horizon-azure"] .msg.agent :is(h1, h2, h3, h4, h5, h6) { color: var(--p9-syntax-violet); font-weight: 700; }
 [data-theme="p9-event-horizon-azure"] .msg.agent :is(a, .link) { color: var(--p9-syntax-azure); text-decoration: underline; }
 [data-theme="p9-event-horizon-azure"] .msg.agent :not(pre) > code { color: var(--p9-syntax-amber); background: var(--p9-bg-code-block); border-radius: 4px; }

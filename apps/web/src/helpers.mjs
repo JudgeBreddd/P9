@@ -1,5 +1,6 @@
 import { Marked } from 'marked';
 import { artifactInfo, artifactChip } from './artifact.mjs';
+import { codePieces } from './code-colours.mjs';
 /* Popover helper: toggles [hidden] on a panel anchored under a button; closes on outside click / Esc. */
 export const popover = (btn, panel, onOpen, signal) => {
   const open = () => { document.querySelectorAll('.pop').forEach(p => { if (p !== panel) p.hidden = true; }); panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); onOpen && onOpen(); };
@@ -108,11 +109,22 @@ export const webLink = href => {
   try { const u = new URL(href); return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password ? u : null; } catch { return null; }
 };
 const textLink = function (t) { return `<span class="link" title="${esc(t.href)}">${this.parser.parseInline(t.tokens)}</span>`; };
-const mdText = { html: t => esc(t.text), image: t => esc(t.text) };
+// O37 (row 18): a fenced block in a listed language is coloured once its closing fence has arrived, so a block still
+// streaming in is drawn plain and is parsed once, not on every update. Every piece of text goes through esc(); the classes
+// come from code-colours.mjs's fixed list. false = marked's own escaped block (unlisted language, not closed, not loaded).
+const colouredCode = t => {
+  const lang = (t.lang || '').match(/^\S*/)[0];
+  const nl = t.raw.indexOf('\n');
+  const closed = nl > 0 && /\n {0,3}(`{3,}|~{3,})[ \t]*\n*$/.test(t.raw.slice(nl));
+  const pieces = lang && closed && codePieces(lang, t.text);
+  if (!pieces) return false;
+  return `<pre><code class="language-${esc(lang)}">${pieces.map(([text, c]) => c ? `<span class="${c}">${esc(text)}</span>` : esc(text)).join('')}\n</code></pre>\n`;
+};
+const mdText = { html: t => esc(t.text), image: t => esc(t.text), code: colouredCode };
 export const md = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText, link: textLink } });
 // Item 19: a fenced block marked as an artifact (artifact.mjs) is a chip that opens it, never the code in place.
 export const mdReply = new Marked({ gfm: true, breaks: true, async: false, renderer: { ...mdText,
-  code(t) { const a = artifactInfo(t.lang); return a ? artifactChip(a, t.text) : false; },
+  code(t) { const a = artifactInfo(t.lang); return a ? artifactChip(a, t.text) : colouredCode(t); },
   link(t) {
     const u = webLink(t.href); if (!u) return textLink.call(this, t);
     const same = [t.href, u.href, u.host, u.href.replace(/^https?:\/\//, '')].includes(t.text.trim());

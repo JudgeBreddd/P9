@@ -2,6 +2,7 @@ import { chatFailed, popover as createPopover, FILE_IMAGE, fileImageError, fileI
 // A choice is [value, label]; the sample data gives plain strings.
 const opt = o => Array.isArray(o) ? o : [o, o];
 import { DUWOP, shareLook } from './theme-picker';
+import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { WALKTHROUGH } from './walkthrough.mjs';
 import { WHATS_NEW } from './whats-new.mjs';
 import { chip, waiting, turnKey, lineDiff } from './composer.mjs';
@@ -88,6 +89,7 @@ export function mountShell({ askAdmin } = {}) {
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
   const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
+  onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
@@ -418,7 +420,7 @@ DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
 // CP5: each code block in a reply gets a Copy button (wire copies the code beside it).
-const mdOf = e => { if (e.mdFor !== e.text) { e.md = copyCode(mdReply.parse(e.text)); e.mdFor = e.text; } return e.md; };
+const mdOf = e => { if (e.mdFor !== e.text || e.mdV !== codeColoursVersion()) { e.md = copyCode(mdReply.parse(e.text)); e.mdFor = e.text; e.mdV = codeColoursVersion(); } return e.md; };
 // CP3: a sent photo comes back from the daemon by hash, once; until then (or once pruned) its tile stays blank.
 const chatImgs = new Map();
 // Panes are rebuilt from S on every change (streaming replies re-render every 18 ms), so the

@@ -1,0 +1,34 @@
+/* O37: colours for fenced code in replies and Markdown previews (classes from code-colours.mjs, threat model row 18).
+   Every look: each colour is a hue mixed into the look's own text colour, so it keeps the look's contrast on light and dark
+   code blocks. Azure: the spec's syntax colours, the same scopes as its Dev Focus editor theme. */
+pre code { --cc-key: var(--primary); --cc-fn: var(--glow2, var(--primary)); --cc-str: oklch(.78 .13 75); --cc-const: oklch(.78 .11 170); }
+pre code .cc-keyword, pre code .cc-heading { --cc: color-mix(in oklch, var(--cc-key) 70%, var(--foreground)); }
+pre code :is(.cc-fn, .cc-type, .cc-meta, .cc-link) { --cc: color-mix(in oklch, var(--cc-fn) 65%, var(--foreground)); }
+pre code .cc-string { --cc: color-mix(in oklch, var(--cc-str) 60%, var(--foreground)); }
+pre code :is(.cc-const, .cc-regex) { --cc: color-mix(in oklch, var(--cc-const) 60%, var(--foreground)); }
+pre code .cc-comment { --cc: var(--muted-foreground); font-style: italic; }
+pre code .cc-punct { --cc: color-mix(in oklch, var(--foreground) 75%, transparent); }
+pre code [class^="cc-"] { color: var(--cc, inherit); }
+/* Light looks: the hues above are light, and a reply's code block on a light look is the page background mixed with 30%
+   black (shell.css .msg.agent pre), a mid grey. Capping lightness at L .30 keeps every token at about 4.9:1 on daylight's
+   block. A browser without relative colours keeps the plain mix. */
+:root:not(.dark) pre code [class^="cc-"] { color: oklch(from var(--cc, currentColor) min(l, .30) c h / alpha); }
+pre code .cc-invalid { --cc: var(--destructive, #e5484d); }
+pre code :is(.cc-heading, .cc-strong) { font-weight: 700; }
+pre code .cc-em { font-style: italic; }
+pre code .cc-strike { text-decoration: line-through; }
+pre code .cc-link { text-decoration: underline; }
+
+[data-theme="p9-event-horizon-azure"] pre code :is(.cc-keyword, .cc-heading) { color: var(--p9-syntax-violet); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-fn { color: var(--p9-syntax-azure); }
+[data-theme="p9-event-horizon-azure"] pre code :is(.cc-type, .cc-meta) { color: var(--p9-syntax-blue); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-string { color: var(--p9-syntax-amber); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-const { color: var(--p9-syntax-mint); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-regex { color: var(--p9-syntax-gold-muted); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-comment { color: var(--p9-text-muted); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-punct { color: var(--p9-text-secondary); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-invalid { color: var(--p9-syntax-red); }
+[data-theme="p9-event-horizon-azure"] pre code .cc-link { color: var(--p9-syntax-azure); }
+[data-theme="p9-event-horizon-azure"] pre :is(.language-md, .language-markdown) .cc-meta { color: var(--p9-syntax-violet-dim); }
+[data-theme="p9-event-horizon-azure"] pre :is(.language-json, .language-css) .cc-prop { color: var(--p9-syntax-azure); }
+[data-theme="p9-event-horizon-azure"] pre .language-css .cc-type { color: var(--p9-syntax-violet); }

@@ -11,6 +11,8 @@ the handlers and security boundary here are new code.
 |---|---|---|
 | hono | 4.13.13 | MIT |
 | marked | 14.0.0 | MIT |
+| @lezer/highlight, @lezer/javascript, @lezer/python, @lezer/json, @lezer/css, @lezer/markdown (build time, bundled into the pages as code colour chunks) | 1.2.5, 1.5.6, 1.1.19, 1.0.3, 1.3.9, 1.8.1 | MIT |
+| @codemirror/legacy-modes (build time, only its shell mode is bundled) | 6.5.5 | MIT |
 | qrcode-generator (build time, bundled into the phone page) | 2.0.4 | MIT |
 | @hono/node-server | 2.1.4 | MIT |
 | astro | 7.4.0 | MIT |
