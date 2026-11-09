@@ -40,8 +40,8 @@ async function setup(t, name, files = []) {
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   const open = async (page) => {
-    await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+    await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+    await page.locator('#nav .row[data-chat="' + id + '"]').click();
     const pane = page.locator('.pane[data-id="' + id + '"]');
     const send = async (text) => { await pane.locator('.composer textarea').click(); await page.keyboard.type(text); await page.keyboard.press('Enter'); };
     return { pane, send, queued: () => pane.locator('.queue .q span').allInnerTexts() };
@@ -124,7 +124,7 @@ test('An agent slow to answer steering (6 s, past the 5 s wait): the message rea
   await chat.send('late');
   await chat.pane.locator('.notice', { hasText: 'This message may not have reached the agent: late' }).waitFor({ timeout: 15000 });
   assert.deepEqual([(await said(instance, id, 'steer-lost')).map((e) => e.data.text), await agentSaid('got:late'), await chat.queued()], [['late'], false, []]);
-  await page.locator('#rBots [data-bot="' + id + '"][data-busy]').waitFor({ timeout: 5000 }); // the turn still shows as running
+  await page.locator('#navList .row[data-chat="' + id + '"] [data-busy]').waitFor({ timeout: 5000 }); // the turn still shows as running
   console.log('PASS slow steering: an answer after 6 s delivered the message once, not queued and sent again at the turn end; a refusal after 6 s showed a notice with the text');
 });
 
@@ -188,7 +188,7 @@ test('Profile: main-thread time idle, with a question open, while a 2,100-event 
   assert.deepEqual(await ring(), want, 'the ring survives the card being re-rendered');
   await chat.pane.locator('[data-decline]').click();
   await until(async () => await ends() === 2, 'declined');
-  out.stream = await measure(page, 0, async () => { await chat.send('stream 700'); await until(async () => await ends() === 3, 'stream turn ended', 120000); await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 30000 }); });
+  out.stream = await measure(page, 0, async () => { await chat.send('stream 700'); await until(async () => await ends() === 3, 'stream turn ended', 120000); await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 30000 }); });
   out.events = (await events(instance, id)).length;
   out.after = await measure(page, 10000);
   out.oneTurnAtLength = await measure(page, 0, async () => { await chat.send('one more'); await until(async () => await ends() === 4, 'one more ended'); });

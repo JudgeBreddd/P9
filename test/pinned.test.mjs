@@ -111,8 +111,8 @@ test('AR1/AR2 strip: the plan and a pinned card sit above the composer, HTML sho
   const page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
   const strip = pane.locator('.bottom .pinned');
   await strip.locator('[data-card="status"]').waitFor({ timeout: 15000 });

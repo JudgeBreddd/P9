@@ -48,8 +48,8 @@ async function open(t, provider, { text = 'hello', done = (e) => e.data?.content
   const page = await app.firstWindow();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
   // The three bars: [percent shown, amber, fill painted] each.
   const bars = () => pane.locator('.meters .meter').evaluateAll((all) => all.slice(0, 3).map((m) => {

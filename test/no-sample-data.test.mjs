@@ -39,7 +39,7 @@ async function open(t, state) {
 }
 const noSamples = async page => {
   assert.equal(await page.evaluate(() => window.p9.sample), null);
-  assert.equal(await page.locator('#tabs .tab').count(), 0, 'no sample chat tabs');
+  assert.equal(await page.locator('#nav [data-chat]').count(), 0, 'no sample chats in the left panel');
   const text = await page.locator('body').innerText();
   for (const m of MARKERS) assert.ok(!text.includes(m), 'page shows sample text: ' + m);
   // Waiting on you is a section widget (faed908): with no space it is not drawn at all; the sample view always drew it.

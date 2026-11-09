@@ -123,7 +123,7 @@ test('D7/D8: Chat Focus "Sign in" opens the agents step with the chat\'s agent; 
     assert.deepEqual(await page.evaluate((b) => window.p9.chat('agentTerminal', b), body), { status: 400, body: { error: 'request-refused' } }, JSON.stringify(body));
   }
 
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: left() });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: left() });
   const pane = page.locator('.pane[data-id="' + id + '"]');
   const signIn = pane.locator('[data-signin]');
   await signIn.waitFor({ timeout: left() });
@@ -410,7 +410,7 @@ test('D17: chat sign-in on an expired login is not a dead end; a URL in the term
   page.on('pageerror', (error) => errors.push(error.message));
   const shot = async (name, what = page) => { await page.waitForTimeout(400); const png = await what.screenshot({ type: 'png' }); if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT ' + name + ' ' + png.toString('base64')); };
 
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: left() });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: left() });
   await page.locator('.pane[data-id="' + id + '"] [data-signin]').click({ timeout: left() });
   await page.waitForFunction(() => document.querySelector('#welDlg').open && document.querySelector('#welT').textContent === 'Sign in to an agent', null, { timeout: left() });
   const body = page.locator('#welBody');

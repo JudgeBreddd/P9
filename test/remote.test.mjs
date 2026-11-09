@@ -8,7 +8,7 @@ import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, restart, http, authenticated, root } from './helpers.mjs';
+import { daemon, restart, http, authenticated, root, openFiles } from './helpers.mjs';
 import { execFile, execFileSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
@@ -164,7 +164,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   await page.locator('#serverBadge', { hasText: 'Remote · test-host' }).waitFor();
   // The files panel has no Send files to remote in Remote mode: the files are the remote's already.
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.locator('#rFiles').click({ timeout: 20000 });
+  await openFiles(page);
   await page.locator('#tree').waitFor({ state: 'visible', timeout: 20000 });
   await page.waitForTimeout(1500);
   if (process.env.CI !== 'true') console.log('P9_SHOT remote-files ' + (await page.screenshot()).toString('base64'));
@@ -808,7 +808,7 @@ test('xfer window: the first-send and conflict prompts ask in words, and a limit
   const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
   const dialog = page.locator('#xferDlg'), title = page.locator('#xferT');
   const send = async () => { await page.click('#xferBtn'); await dialog.waitFor({ timeout: 20000 }); };
-  await page.locator('#rFiles').click({ timeout: 20000 });
+  await openFiles(page);
   await page.locator('#fileScope').waitFor({ state: 'visible', timeout: 20000 });
   await page.selectOption('#fileScope', 'workspace');
   await page.locator('#xferBtn').waitFor({ timeout: 20000 });
@@ -911,7 +911,7 @@ test('xfer window move: the prompt comes before the freeze, the folder goes firs
   const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
   const dialog = page.locator('#xferDlg'), read = (box, name) => readFile(path.join(box.workspace, name), 'utf8');
   const press = async (id) => {
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: 20000 });
+    await page.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: 20000 });
     await page.locator('.pane[data-id="' + id + '"] [data-send-away]').click({ timeout: 20000 });
   };
 
@@ -996,7 +996,7 @@ test('Send to remote from outside the workspace in the window: the same folder n
   const shot = async (name) => { if (process.env.CI !== 'true') console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); };
   const picker = page.locator('#folderDlg');
   const press = async (id) => {
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: 20000 });
+    await page.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: 20000 });
     await page.locator('.pane[data-id="' + id + '"] [data-send-away]').click({ timeout: 20000 });
   };
   const moved = async (id) => {

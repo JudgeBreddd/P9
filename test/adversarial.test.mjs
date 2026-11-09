@@ -129,11 +129,11 @@ test('Phase 12: hostile chat and repository content never run code or reach IPC 
   const app = await launch(t, server);
   const shell = await app.firstWindow();
   const errors = []; shell.on('pageerror', (error) => errors.push(error.message));
-  // Chat: the hostile title in the tab, the hostile prompt and the agent's echo in the transcript, all shown as text.
-  await shell.locator('#tabs .tab').first().waitFor({ timeout: 20000 });
-  await shell.locator('#tabs .tab').first().click();
+  // Chat: the hostile title in its panel row, the hostile prompt and the agent's echo in the transcript, all shown as text.
+  await shell.locator('#navList .row[data-chat]').first().waitFor({ timeout: 20000 });
+  await shell.locator('#navList .row[data-chat]').first().click();
   await shell.waitForFunction((text) => document.body.innerText.split(text).length > 2, HOSTILE, { timeout: 20000 });
-  assert.ok((await shell.locator('#tabs').innerText()).includes('<img src=x'), 'title shown as text');
+  assert.ok((await shell.locator('#navList').innerText()).includes('<img src=x'), 'title shown as text');
   // Mission Control: the hostile main-project name, question title and file name.
   await shell.keyboard.press('Control+3');
   await shell.waitForFunction(() => document.body.innerText.includes('<img src=x onerror'), null, { timeout: 20000 });

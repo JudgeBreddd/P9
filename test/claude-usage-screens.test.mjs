@@ -47,13 +47,13 @@ test('live Claude usage: every desktop Claude chat and Mission Control show the 
   const page = await app.firstWindow();
   // The desktop reads /usage at launch (which starts the poll) and every minute after: the figures arrive within ~60 s.
   for (const id of chats) {
-    await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+    await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+    await page.locator('#nav .row[data-chat="' + id + '"]').click();
     const meters = page.locator('.pane[data-id="' + id + '"] .meters');
     await until(async () => fresh(await meters.innerText().catch(() => '')), 'chat ' + id + ' meters at 37% / 63%', 90000);
     await shot(meters, 'live-usage-chat-' + chats.indexOf(id));
   }
-  // Mission Control covers the tabs, so it comes last.
+  // Mission Control covers the chats, so it comes last.
   const mission = page.locator('#fMission [data-panel="musage"]');
   await page.locator('#rMission').click();
   await until(async () => fresh(await mission.innerText().catch(() => '')), 'Mission Control usage at 37% / 63%', 15000);
@@ -69,7 +69,7 @@ test('live Claude usage: a hidden desktop window stops reading /usage, so the da
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
-  await page.locator('#tabs').waitFor({ state: 'attached', timeout: 15000 });
+  await page.locator('#navList').waitFor({ state: 'attached', timeout: 15000 });
   // Count the page's usage reads in main: the real handler is swapped for one that counts and answers as it would.
   await app.evaluate(({ ipcMain }) => { globalThis.usageReads = 0; ipcMain.removeHandler('p9:usage');
     ipcMain.handle('p9:usage', () => { globalThis.usageReads++; return { status: 503, body: { state: 'unavailable' } }; }); });

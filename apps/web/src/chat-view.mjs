@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
-import { phoneDialogBody } from './phone-link.mjs';
+import { phoneDialogBody } from './phone-link.mjs'; import { LABEL } from './panel.mjs';
 
 export function installChat(outer) {
 const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
@@ -156,21 +156,16 @@ function focus(id) { const s = outer.S.sessions.find(x => x.id === id); if (s?.h
 // The chat shown goes first and the one before it second, so Split has the last two (Builder, 2026-10-19: replacing only
 // the first kept a one-tab start at one open chat, and Split showed one pane).
 const show = id => { outer.S.open = [id, ...outer.S.open.filter(x => x !== id)].slice(0, 2); if (outer.S.files) outer.renderTree(); }; // Current project files follow the chat shown
-function closeTab(id) {
-  const s = outer.S.sessions.find(x => x.id === id);
-  if (s) s.done = false; // closing it is seeing it
-  // The x stops the chat, running or idle, like closing a VS Code terminal tab (Builder, 2026-10-18; owner, 2026-10-25:
-  // "hitting the x is going to make them think they closed it. like stopped it"); History reopens it.
-  if (s?.live) { outer.liveChat.stop(s, true); s.hidden = true; } else outer.S.sessions = outer.S.sessions.filter(x => x.id !== id);
-  untab(id);
-}
+// N1: Stop is final (no Undo): on the chat's row and first in its menu (panel.mjs), and in its header. The chat stays in
+// the panel's list; a message sent to it starts it again.
+function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
 const untab = id => { outer.S.open = outer.S.open.map(o => o === id ? (outer.S.sessions.find(x => !x.hidden && !outer.S.open.includes(x.id)) || {}).id : o).filter(Boolean); outer.renderTabs(); renderChats(); };
-function newSession(agent, model) {
+function newSession(agent, model, project = null) {
   // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
-  if (outer.liveChat.on) return outer.liveChat.create(agent, outer.newFolder);
+  if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project);
   const s = { id: 's-' + Date.now(), agent, title: `${outer.names[agent]} ${outer.S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: outer.startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: outer.M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: outer.M.sessions[0].cwd, events: [] };
-  outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
+  s.project = project; outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
 }
 // U4 on a remote (Builder, 2026-11-02: "no window at all"; "just a normal file picker would be better than clicking the .."):
 // a folder dialog like the system's. A path bar (type or paste, Enter goes there), Up, clickable breadcrumbs, the folder
@@ -412,6 +407,11 @@ pmRoot().onkeydown = e => {
   else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); items[i]?.click(); }
   else if (e.key === 'Tab') closePill(false);
 };
+// N1: where you are, "project › chat title" (the project's name opens it), and the chat tools that were on the rail.
+const crumb = s => { const p = s.project && outer.S.projects?.find(x => x.id === s.project);
+  return `<span class="crumb">${p ? `<button class="cp" data-goproj="${esc(p.id)}" title="Open ${esc(p.name)}">${esc(p.name)}</button>${svg.chev}` : ''}<span class="ct" title="${esc(outer.names[s.agent])}">${esc(s.title)}</span></span>`; };
+const tool = (k, label, keys) => `<button data-slot="button" data-variant="ghost" data-size="icon-sm" data-tool="${k}" title="${label}${keys ? ' (' + keys + ')' : ''}" aria-label="${label}"${k === 'search' ? '' : ` aria-pressed="${!!{ files: outer.S.files, split: outer.S.split, term: outer.S.termOpen?.chat }[k]}"`}>${svg[k]}</button>`;
+const tools = () => `<span class="tools">${tool('files', 'Files')}${tool('search', 'Search files')}${tool('split', 'Split: the last two chats side by side')}${tool('term', 'Terminal', 'Ctrl `')}</span>`;
 function pane(s, i, bare) {
   const working = busy(s);
   // D14: a chat on its way to the server, or gone there, takes no messages here.
@@ -420,27 +420,31 @@ function pane(s, i, bare) {
   const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${outer.names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
     : `<div class="col">${shown(s)}${pending(s)}</div>`;
   return `<section class="pane${i === 0 && outer.S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${outer.hideSteps ? ' data-quiet' : ''}${outer.FX.pull === s.id ? ' data-pulled' : ''} aria-label="${outer.names[s.agent]} chat">
-    <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span><span class="name">${outer.names[s.agent]}</span>
+    <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span>${bare ? `<span class="name">${outer.names[s.agent]}</span>` : crumb(s)}
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${outer.hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${outer.hideSteps ? 'Show steps' : 'Hide steps'}</button>
       ${s.live ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-phone title="Open this chat on your phone">Phone</button>` : ''}
       ${(n => n && !bare ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-chat-files aria-pressed="${outer.side.current()?.slot === 'chat-files' && CF.sid === s.id}" title="Artifacts and files this chat made" aria-label="Artifacts and files (${n})">${svg.files}<span>${n}</span></button>` : '')(s.stub ? 0 : chatItems(s).length)}
-      <span class="state" data-s="${esc(s.state)}">${stateLabel}</span>
+      <span class="state" data-s="${s.pending && s.state === 'running' ? 'needs' : esc(s.state)}">${s.pending && s.state === 'running' ? LABEL.needs : stateLabel}</span>
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !outer.serverInfo?.host
         ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.leaving ? 'disabled ' : s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.leaving ? 'Moving this chat to the remote' : s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(outer.serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
-      ${bare ? '' : `<button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Close" data-close>${svg.x}</button>`}</div>
+      ${bare ? '' : tools()}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
       ${s.queue.length || s.held?.length ? `<div class="queue">${waiting(s)}${s.queue.map((q, j) => `<div class="q"><span>Queued: ${esc(q)}</span><button title="Interrupt and send this now" data-qnow="${j}">${svg.bolt}</button><button title="Remove from the queue" data-qdel="${j}">${svg.x}</button></div>`).join('')}</div>` : ''}
       <div class="composer"><div class="slash" data-slash hidden></div>${s.images?.length ? `<div class="attach">${s.images.map((im, i) => `<span class="att"><img src="data:${im.mimeType};base64,${im.data}" alt="${esc(im.name)}" title="${esc(im.name)}"><button data-unattach="${i}" title="Remove" aria-label="Remove ${esc(im.name)}">×</button></span>`).join('')}</div>` : ''}<textarea placeholder="${s.state === 'moved' ? 'This chat carries on at ' + esc(s.movedTo || 'the remote') + ': open it there (the title-bar badge switches to it)' : s.state === 'moving' || s.leaving ? 'Moving to the remote…' : s.readonly ? 'Resume this conversation to send' : s.state === 'idle' ? 'Start a chat to send' : 'Message ' + outer.names[s.agent] + '…'}" rows="2" ${frozen ? 'disabled' : ''}>${esc(s.draft || '')}</textarea><div class="bar"><span class="pills">${pills(s)}</span>${working && !frozen ? chip() : ''}<span class="spacer"></span><button data-slot="button" data-variant="ghost" data-size="icon-sm" title="Attach image (max 4)" data-attach>${svg.clip}</button><button data-slot="button" data-size="icon-sm" class="send" ${frozen ? 'disabled ' : ''}title="${working ? 'Steer (Enter). Ctrl click interrupts and sends' : 'Send'}" data-send>${svg.send}</button></div></div></div></div>
   </section>`;
 }
+// The unseen marks (done, failed) kept over a restart: every place that changes one calls this, or a reload brings back a card already opened.
+let unseenKept = false;
+outer.keepUnseen = () => { if (unseenKept) try { localStorage.setItem('p9-unseen', JSON.stringify(Object.fromEntries(outer.S.sessions.filter(s => s.failed || s.done).map(s => [s.id, s.failed ? 'failed' : 'done'])))); } catch {} };
 // only: the chat ids a daemon batch touched; the other panes shown are left as they are.
 function renderChats(only) {
   const ids = outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1);
   const ss = ids.map(id => outer.S.sessions.find(s => s.id === id)).filter(Boolean);
-  if (document.hasFocus()) { const seen = [...(outer.S.focus === 'chat' ? ss : []), outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(s => s?.done); seen.forEach(s => { s.done = false; }); if (seen.length) outer.renderCards(); }
+  if (document.hasFocus()) { const seen = [...(outer.S.focus === 'chat' ? ss : []), outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(s => s.id === outer.S.modal.id)].filter(s => s?.done || s?.failed); seen.forEach(s => { s.done = s.failed = false; }); if (seen.length) outer.renderCards(); }
+  outer.keepUnseen();
   outer.$('#chats').dataset.split = String(outer.S.split && ss.length > 1);
   for (const s of [...ss, outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.sessions.find(x => x.id === outer.S.modal.id)]) if (s?.stub) history(s);
   paint(outer.$('#chats'), ss, only);
@@ -539,11 +543,10 @@ function paint(root, ss, only) {
       s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
     };
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); outer.renderTabs(); renderChats(); };
-    const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); };
+    const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => stopChat(s);
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); outer.renderTabs(); renderChats(); };
     const cf = p.querySelector('[data-chat-files]'); if (cf) cf.onclick = () => outer.side.current()?.slot === 'chat-files' && CF.sid === s.id ? outer.side.close('chat-files') : openChatFiles(s.id);
     p.querySelector('[data-steps]').onclick = () => { outer.hideSteps = !outer.hideSteps; localStorage.setItem('p9-hide-steps', outer.hideSteps ? '1' : '0'); renderChats(); };
-    const cl = p.querySelector('[data-close]'); if (cl) cl.onclick = () => closeTab(s.id);
     const ph = p.querySelector('[data-phone]'); if (ph) ph.onclick = () => continueOnPhone(s);
   });
 }
@@ -595,7 +598,7 @@ function finished(s) {
   if (s.queue.length) return;
   const onScreen = document.hasFocus() && (outer.S.focus === 'chat' && (outer.S.split ? outer.S.open.slice(0, 2) : outer.S.open.slice(0, 1)).includes(s.id) || outer.mdl.open && outer.S.modal?.kind === 'chat' && outer.S.modal.id === s.id);
   if (onScreen) return;
-  s.done = true;
+  s.done = true; outer.keepUnseen();
   if (!document.hasFocus() && typeof Notification === 'function') { const n = new Notification(outer.names[s.agent] + ' finished', { body: s.title }); n.onclick = () => { window.focus(); outer.openModal({ kind: 'chat', id: s.id }, 'done' + s.id); }; }
 }
 function turnEnd(s) {
@@ -646,7 +649,7 @@ const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c =>
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
 const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return Array.isArray(q) ? q.filter(t => typeof t === 'string') : []; } catch { return []; } };
-const liveSession = (id, provider, title, folder, created) => ({ id, agent: provider, title, model: chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
+const liveSession = (id, provider, title, folder, created, project = null) => ({ id, agent: provider, title, project, model: chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
 // E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
 function history(s, until = outer.liveChat.cursor) {
@@ -685,7 +688,7 @@ async function earlier(s) {
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at); if (outer.fresh.delete(s.id)) outer.startDefaults(s); outer.S.sessions.push(s); } return null; }
+  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project); if (outer.fresh.delete(s.id)) outer.startDefaults(s); outer.S.sessions.push(s); } return null; }
   const s = into ?? outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
@@ -747,6 +750,11 @@ function applyChat(ev, into) {
     case 'steer-lost': notice('This message may not have reached the agent: ' + d.text); break;
     case 'turn-end': settle(); s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
     case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
+    // N1: the daemon's word on a chat's project, title, archive and removal, for every window (apps/server/projects.mjs).
+    case 'project': s.project = d.project ?? null; break;
+    case 'renamed': s.title = d.title; break;
+    case 'archived': s.archived = !!d.archived; break;
+    case 'deleted': if (!into) { outer.S.sessions = outer.S.sessions.filter(x => x !== s); outer.S.open = outer.S.open.filter(x => x !== s.id); } break;
     case 'exited': settle(); s.state = 'stopped'; notice('The agent process exited' + (d.code != null ? ' (code ' + d.code + ')' : '') + '. Send again to resume.'); break;
     case 'stopped': settle(); s.state = 'stopped'; notice(d.result === 'stopped' ? 'Stopped. Everything this session started has ended.' : 'Stop could not confirm that everything ended.'); break;
     case 'interrupted': settle(); s.state = 'stopped'; notice('Interrupted: the P9 daemon restarted mid-turn. Send again to resume.');
@@ -771,7 +779,7 @@ async function loadChat() {
     if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; await new Promise(res => outer.setTimeout(res, outer.liveChat.on ? 2000 : 5000)); continue; }
     if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); }
     // A tail can leave out a chat's created event, so its tab comes from the list.
-    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push(liveSession(c.id, c.provider, c.title, c.folder, c.created));
+    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project), archived: c.archived });
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
@@ -779,6 +787,9 @@ async function loadChat() {
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
       if (created) show(ev.conversation);
+      // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
+      if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
+      if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();
       if (ev.type === 'answered') answered_.push(ev.conversation);
       // CP1: a held message taken back goes into the box, as typed (not on replay: the box keeps its own draft).
       // ponytail: its images are not returned; attach them again.
@@ -794,7 +805,13 @@ async function loadChat() {
       replaying = false;
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
-      outer.S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created), state: c.state, stub: true, sent: c.sent, used: c.used }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      outer.S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project), state: c.state, stub: true, sent: c.sent, used: c.used }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out).
+      for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; } }
+      outer.loadProjects?.();
+      // N1: a result not seen yet (unread or failed) stays unseen over a restart; renderChats saves the list from now on.
+      try { const u = JSON.parse(localStorage.getItem('p9-unseen') || '{}'); for (const x of outer.S.sessions) if (u[x.id]) x[u[x.id]] = true; } catch {}
+      unseenKept = true;
       // A chat closed here before 0.1.5 that never started stops now, so other windows drop it too; a running one keeps
       // running (the phone may have resumed it) and gets its tab back.
       for (const s of outer.S.sessions) { s.hidden = s.state === 'stopped' || s.state === 'moved'; if (outer.closedChats.has(s.id) && s.state === 'idle') { s.hidden = true; outer.liveChat.stop(s, true); } }
@@ -809,5 +826,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, keepBox, focus, show, closeTab, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
+  return { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
 }

@@ -87,14 +87,6 @@ function petHome(p, cv, r, b) {
   return [(beside ? c.left - 8 - w / 2 : c.left + w / 2) - b.left, (beside ? b.top - h / 2 : c.top - h / 2 - 4) - b.top];
 }
 const petBox = p => p.querySelector('.composer')?.getBoundingClientRect();
-// Running chats not waiting on you, as robot heads in the rail (Builder, 2026-10-17); a click opens the chat. Waiting ones stay cards.
-function renderBots() {
-  // D10: each head carries its chat's number (its place among the tabs) and the title, so several look different.
-  const bots = outer.S.sessions.filter(s => s.state === 'running' && !s.pending), say = s => outer.names[s.agent] + ' · ' + (outer.busy(s) ? 'working' : 'idle');
-  const num = s => outer.S.sessions.filter(x => !x.hidden).findIndex(x => x.id === s.id) + 1, label = s => (num(s) ? '#' + num(s) + ' ' : '') + s.title + ' · ' + say(s);
-  outer.setHTML(outer.$('#rBots'), bots.map(s => `<button data-slot="button" data-variant="ghost" data-size="icon" class="bot" data-bot="${esc(s.id)}" data-agent="${esc(s.agent)}"${num(s) ? ` data-n="${num(s)}"` : ''}${outer.busy(s) ? ' data-busy' : ''} title="${esc(label(s))}" aria-label="${esc(label(s))}">${svg.bot}</button>`).join(''));
-  outer.$('#rBots').querySelectorAll('[data-bot]').forEach(b => b.onclick = () => { const k = 'run' + b.dataset.bot; openModal(outer.S.resume[k] || { kind: 'chat', id: b.dataset.bot }, k); });
-}
 // The x and the body of a card: from the card itself, or from the Dev Focus overlay (main passes the clicked card's key).
 function cardAct(c, what) {
   if (!c) return;
@@ -114,7 +106,7 @@ function cardsOverlay() {
   outer.lastCards = json; window.p9.cards(next).catch(() => { outer.lastCards = ''; });
 }
 function renderCards() {
-  renderIndicator(); renderBots();
+  renderIndicator();
   const cards = outer.cardList();
   outer.morph(outer.$('#cards'), cards.map(c => `<article class="card${c.halo ? ' fx-halo' : ''}" data-key="${esc(c.key)}"><button class="open">${c.n ? `<span class="n">${esc(c.n)}</span>` : `<span class="dot" data-agent="${esc(c.agent)}" data-live></span>`}<span class="truncate">${esc(c.title)}</span><span class="sub truncate">${esc(c.sub)}</span></button><button class="x" title="Snooze to the Notification Center">${svg.x}</button></article>`).join(''));
   outer.$('#cards').querySelectorAll('.card').forEach((el, i) => {
@@ -131,7 +123,7 @@ function renderCards() {
 const sizes = { chat: [760, 620], list: [520, 460], review: [720, 640], file: [760, 560], script: [680, 560], sprint: [760, 560] }; // defaults; your resize wins, per type
 const groupOf = k => ({ chat: 'chat', review: 'review', inbox: 'review', file: 'file', script: 'script', sprint: 'sprint' })[k] || 'list';
 // A chat opens at its newest message (Builder, 2026-10-17: it opened at the first); paint ran while the dialog was closed.
-function openModal(m, card) { const seen = m.kind === 'chat' && outer.S.sessions.find(s => s.id === m.id && s.done); if (seen) seen.done = false; m.card = card || m.card || m.back?.card; if (m.card) outer.S.resume[m.card] = m; outer.S.modal = m; if (m.kind === 'chat') delete outer.view['mdlBody:' + m.id]; outer.renderModal();
+function openModal(m, card) { const seen = m.kind === 'chat' && outer.S.sessions.find(s => s.id === m.id && s.done); if (seen) { seen.done = false; outer.keepUnseen?.(); } m.card = card || m.card || m.back?.card; if (m.card) outer.S.resume[m.card] = m; outer.S.modal = m; if (m.kind === 'chat') delete outer.view['mdlBody:' + m.id]; outer.renderModal();
   if (!outer.mdl.open && outer.S.modal) { outer.mdl.showModal(); raiseToasts(); if (m.kind === 'win') outer.$('#mdlBody').scrollTop = outer.winTop[m.id] || 0; } // a closed dialog ignores scrollTop
   if (m.kind === 'chat') outer.$('#mdlBody .hist')?.scrollTo({ top: 1e6, behavior: 'instant' });
   if (seen) renderCards(); }

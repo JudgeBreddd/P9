@@ -7,7 +7,7 @@ import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/pro
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, root } from './helpers.mjs';
+import { daemon, root, openFiles } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const skip = process.platform === 'win32' ? 'Unix sockets and sh' : false;
@@ -40,7 +40,7 @@ test('D7: Server mode Chat Focus editor: Save and Ctrl+S reach the server file; 
   await page.setViewportSize({ width: 1300, height: 860 }).catch(() => {});
   await page.locator('#serverBadge', { hasText: 'test-host' }).waitFor({ timeout: 20000 });
   const disk = () => readFile(path.join(remote.workspace, 'proj/notes.md'), 'utf8');
-  await page.click('#rFiles');
+  await openFiles(page);
   await page.locator('#tree [data-lfile="proj/notes.md"]').click({ timeout: 15000 });
   await page.waitForFunction(() => document.querySelector('#mdlBody textarea')?.value === 'on the server\n', null, { timeout: 8000 });
 

@@ -41,7 +41,7 @@ test('D20: after connecting, slow and failed requests show no layer and no note;
   const page = await app.firstWindow();
   const label = page.locator('#daemonStatus');
   await label.filter({ hasText: 'Connected to test-host' }).waitFor({ timeout: 30000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: 15000 });
   const pane = page.locator('.pane[data-id="' + id + '"]'), box = pane.locator('.composer textarea');
   await box.click(); await page.keyboard.type('A long draft that must survive');
   // Nothing in the background shows for 6 s (a 2 s health limit, retried every second): no layer, no note, the label stays.

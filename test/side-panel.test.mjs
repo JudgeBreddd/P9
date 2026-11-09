@@ -56,7 +56,10 @@ const mid = b => ({ x: b.x + b.width / 2, y: b.y + 250 });
 
 test('side panel: the drag bar, slots, narrow mode, the editor view beside it, swap, toggle, cards over the view, the Chat split bar (A/B)', { timeout: 240000 }, async (t) => {
   const { app, page, reset, native, box, shot, drag, size, frames } = await launch(t);
-  const goDev = async () => { await page.click('#rDev'); if (await page.evaluate(() => window.__side.current()?.slot !== 'dan-chat')) await page.click('#sideToggle'); await page.locator('#side').waitFor(); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat'); };
+  const goDev = async () => { await page.click('#rDev'); if (await page.evaluate(() => window.__side.current()?.slot !== 'dan-chat')) await page.click('#sideToggle'); await page.locator('#side').waitFor(); await page.waitForFunction(() => window.__side.current()?.slot === 'dan-chat');
+    // The left panel shrinks to its strip with a short animation; the side panel takes its width again once that ends.
+    await page.waitForFunction(() => { const n = document.querySelector("#nav"); return n.getBoundingClientRect().width < 50 && !n.getAnimations().length; }, null, { timeout: 5000 });
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); };
 
   await t.test('1. dragBar: the bar drags the panel, the width survives a reload, ArrowLeft adds 24, a drag past the end stops at the end', async () => {
     await reset(); await goDev();
@@ -202,7 +205,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
   });
 
   await t.test('8. Chat Focus: the split bar drags (and ArrowRight adds 24), and the pane beside keeps room', async () => {
-    await reset(); await page.click('#rSplit');
+    await reset(); await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
     await page.waitForFunction(() => document.querySelector('#chats').dataset.split === 'true');
     await shot('chat-split-opened');
     const panes = () => page.locator('#chats > .pane').evaluateAll(p => p.map(x => Math.round(x.getBoundingClientRect().width)));
@@ -250,7 +253,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     }
     // Two chats side by side: both boxes show and the artifact ends above them.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
-    await page.click('#rSplit'); await page.waitForFunction(() => document.querySelector('#chats').dataset.split === 'true');
+    await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 }); await page.waitForFunction(() => document.querySelector('#chats').dataset.split === 'true');
     await page.evaluate(() => window.__side.open('artifact', { title: 'Artifact', mode: 'full', render: b => { b.textContent = 'artifact'; } }));
     await page.waitForFunction(() => document.querySelector('.stage').dataset.sideMode === 'full'); await frames();
     const boxes = page.locator('#chats > .pane textarea'), tops = [], side = await box('#side');

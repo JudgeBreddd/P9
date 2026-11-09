@@ -143,7 +143,7 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     await page.locator('#mdlBody .mlist button').first().click(); assert.equal(await page.locator('#mdlBody textarea').inputValue(), 'skipped with a note'); await page.keyboard.press('Escape');
     console.log('PASS phase4 D10-3 and D10-6: five reviews, skipped draft retained, one save removed, reopen restores item/draft/caret');
 
-    await page.click('#rFiles'); await page.click('#tree [data-file="plan.md"]');
+    await page.locator('#chats > .pane').first().locator('[data-tool=files]').click({ timeout: 10000 }); await page.click('#tree [data-file="plan.md"]');
     await page.locator('#mdlEd').fill((await page.locator('#mdlEd').inputValue()) + '\n- [ ] grew into a real task');
     await page.locator('#mdlEd').evaluate(t => { t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
     const selection = await page.locator('#mdlEd').evaluate(t => t.selectionStart); await page.click('#mdlPrimary');
@@ -170,15 +170,17 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
     }
     console.log('PASS phase4 D10-7: all focus modes fit 1280x720; cards and Notification Center stay visible');
     await focus('chat');
-    for (let index = 0; index < 4; index++) {
-      await page.click('#histBtn');
-      await page.locator('#histPop [data-open]').nth(index).click();
+    // The left panel replaced History: every listed chat opens in Chat Focus without errors; the stopped one offers Resume.
+    const listed = await page.locator('#navList .row[data-chat]').evaluateAll((rows) => rows.map((r) => r.dataset.chat));
+    assert.ok(listed.length >= 4, 'the sample chats are listed: ' + JSON.stringify(listed));
+    for (const id of listed) {
+      await page.locator(`#navList .row[data-chat="${id}"]`).click();
+      await page.locator(`#chats > .pane[data-id="${id}"]`).waitFor({ timeout: 5000 });
       assert.deepEqual(errors, []);
-      assert.equal(await page.locator('#histPop').isVisible(), false);
-      assert.equal(await page.locator('#chats [data-resume]').count(), 1);
-      assert.match(await page.locator('#chats').innerText(), /Older events are not shown/);
     }
-    console.log('PASS phase4 History: every entry renders conversation and Resume without errors, then closes the picker');
+    await page.locator('#navList .row[data-chat="s-codex-2"]').click();
+    await page.locator('#chats > .pane[data-id="s-codex-2"] [data-resume]').waitFor({ timeout: 5000 });
+    console.log('PASS phase4 panel: every listed chat opens in Chat Focus without errors; the stopped one offers Resume');
     // Copy output after a script run puts exactly that output on the clipboard; the page still cannot read it (threat model row 19).
     const saved = await application.evaluate(({ clipboard }) => clipboard.readText()); // the desktop's real clipboard, put back below
     try {
@@ -194,13 +196,15 @@ test('Phase 4: real sandboxed Electron, bridge boundary and approved shell accep
       await page.click('#mdlX');
     } finally { await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), saved); }
     // Floating terminal: dragging the title bar moves it exactly with the cursor and selects nothing; the corner resizes it.
-    await focus('chat'); await page.keyboard.press('Control+Backquote');
+    // The page is narrower beside the left panel, so the drag stays short of its left edge, where the terminal stops.
+    await focus('chat'); await page.waitForFunction(() => !document.querySelector('#nav').getAnimations().length, null, { timeout: 5000 }); // the panel widens back with a short animation, moving the page under the terminal
+    await page.keyboard.press('Control+Backquote');
     const wasFloat = await page.locator('#dock.float').count(); if (!wasFloat) await page.click('#dFloat');
     const dockBox = () => page.locator('#dock').boundingBox();
     const d0 = await dockBox(), grab = [d0.x + 60, d0.y + 12];
-    await page.mouse.move(...grab); await page.mouse.down(); await page.mouse.move(grab[0] - 150, grab[1] + 40, { steps: 8 }); await page.mouse.move(grab[0] - 200, grab[1] + 60, { steps: 4 }); await page.mouse.up();
+    await page.mouse.move(...grab); await page.mouse.down(); await page.mouse.move(grab[0] - 75, grab[1] + 40, { steps: 8 }); await page.mouse.move(grab[0] - 100, grab[1] + 60, { steps: 4 }); await page.mouse.up();
     const d1 = await dockBox();
-    assert.deepEqual([Math.round(d1.x - d0.x), Math.round(d1.y - d0.y), await page.evaluate(() => getSelection().toString())], [-200, 60, ''], 'moves with the cursor, selects nothing');
+    assert.deepEqual([Math.round(d1.x - d0.x), Math.round(d1.y - d0.y), await page.evaluate(() => getSelection().toString())], [-100, 60, ''], 'moves with the cursor, selects nothing');
     await page.mouse.move(d1.x + d1.width - 3, d1.y + d1.height - 3); await page.mouse.down(); await page.mouse.move(d1.x + d1.width + 117, d1.y + d1.height + 77, { steps: 6 }); await page.mouse.up();
     const d2 = await dockBox();
     assert.deepEqual([Math.round(d2.width - d1.width), Math.round(d2.height - d1.height)], [120, 80], 'the corner resizes it');
@@ -708,21 +712,27 @@ test('First launch D4: a waiting item says who it waits on, from the owner\'s ow
   assert.equal(await reopen(''), 'needs you');
 });
 
-test('First launch D10: two running chats are told apart by number and title', { timeout: 90000 }, async (t) => {
+test('First launch D10: two running chats are told apart by title, in the panel and on its strip', { timeout: 90000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const { page, shot } = await openFirst(t, instance);
+  const ids = [];
   for (const text of ['first chat', 'second chat']) {
     const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
     await call(instance, `/chat/${id}/prompt`, 'POST', { text });
-    await page.locator(`#rBots [data-bot="${id}"]`).waitFor({ timeout: 20000 });
+    await page.locator(`#navList .rowwrap[data-live] .row[data-chat="${id}"]`).waitFor({ timeout: 20000 });
+    ids.push(id);
   }
-  const heads = await page.locator('#rBots [data-bot]').evaluateAll((all) => all.map((b) => [b.dataset.n, b.title, b.getAttribute('aria-label')]));
-  assert.equal(heads.length, 2);
-  assert.deepEqual(heads.map((h) => h[0]).sort(), ['1', '2']);
-  for (const [n, title, label] of heads) { assert.match(title, new RegExp('^#' + n + ' .+ · (Claude|Codex) · (working|idle)$')); assert.equal(label, title); }
-  assert.notEqual(heads[0][1], heads[1][1], 'the two heads read differently');
+  const titles = await Promise.all(ids.map((id) => page.locator(`#navList .row[data-chat="${id}"] .t`).innerText()));
+  assert.notEqual(titles[0], titles[1], 'the two rows read differently');
+  // Collapsed (Ctrl B), the panel is the strip: one robot head per running chat, its label the chat's title and state.
   await page.click('#rChat');
-  await shot('rail-robot-heads', page.locator('.rail'));
+  await page.keyboard.press('Control+b');
+  await page.locator('#nav[data-collapsed]').waitFor({ timeout: 5000 });
+  const heads = await page.locator('#rBots .bot').evaluateAll((all) => all.map((b) => [b.dataset.chat, b.getAttribute('aria-label')]));
+  assert.deepEqual(heads.map((h) => h[0]).sort(), [...ids].sort());
+  for (const [, label] of heads) assert.match(label, /^.+ · (Running|Waiting on you|Finished, not read yet|Failed|Idle)$/);
+  assert.notEqual(heads[0][1], heads[1][1], 'the two heads read differently');
+  await shot('strip-robot-heads', page.locator('#nav'));
 });
 
 // Items 24 and 25 (specs/move-progress-events.md check 4): the window draws main's p9:move stream over the moving chat,
@@ -737,7 +747,7 @@ test('Send to server: the black hole and bar follow p9:move; Cancel goes to main
   const { app, page, shot } = await openFirst(t, instance);
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'move me' });
-  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  await page.locator(`#nav .row[data-chat="${id}"]`).click();
   const pane = page.locator(`.pane[data-id="${id}"]`);
   await pane.waitFor();
   await app.evaluate(({ ipcMain }) => {
@@ -834,7 +844,7 @@ test('Send to remote: a notice from the first press, the button and message box 
   const { app, page } = await openFirst(t, instance);
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' });
-  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  await page.locator(`#nav .row[data-chat="${id}"]`).click();
   const pane = page.locator(`.pane[data-id="${id}"]`), button = pane.locator('[data-send-away]'), box = pane.locator('.composer textarea');
   await button.waitFor({ timeout: 20000 });
   await page.waitForFunction((i) => !document.querySelector(`.pane[data-id="${i}"] [data-send-away]`).disabled, id, { timeout: 20000 });
