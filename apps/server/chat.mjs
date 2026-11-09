@@ -772,9 +772,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       setState(id, 'turn');
       const note = movedNote(db, id); // read before this message's own user event
       // N1: the project's instructions and added files, when this chat has not been sent this exact text since its last
-      // message named a project note (first message, moved in, or changed). projectNote names what was current.
+      // message named a project note (first message, moved in, or changed). projectNote names what was current. A steered
+      // message (steer) carries none and is skipped, or one steer would resend the whole note (step 1c).
       const project = await projects.note(conversation).catch(() => null);
-      const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
+      const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
       emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }) }); // hash and type only: events stay small
