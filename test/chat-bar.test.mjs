@@ -357,3 +357,71 @@ test('Agent pill: an empty chat switches agent and takes that agent\'s defaults;
   assert.deepEqual(errors, []);
   console.log('PASS agent pill: first in the bar; an empty chat switches with the agent\'s defaults; a chat with messages keeps its agent');
 });
+
+// O29, release review (2026-11-09): switching an empty chat's agent keeps what was typed and attached, and the new chat takes
+// the old one's place. A 1x1 PNG pasted into the box, as a screenshot is.
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const paste = (box, b64) => box.evaluate((ta, b64) => {
+  const data = new DataTransfer(); data.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'shot.png', { type: 'image/png' }));
+  ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+}, b64);
+const panes = (page, where = '#chats') => page.locator(where + ' .pane[data-id]').evaluateAll((l) => l.map((x) => x.dataset.id));
+// An empty Codex chat from the New menu, then the chat with messages shown again: the open chats are [chat with messages, empty].
+async function emptyBeside(page, id) {
+  const had = await rows(page);
+  await page.click('#newBtn'); await page.locator('#newPop [data-new="codex"]').first().click();
+  const empty = await madeNext(page, had);
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
+  return empty.id;
+}
+const switchTo = async (page, pane, agent) => { const had = await rows(page); await choose(page, pane, 'Agent', agent); return had; };
+
+test('Agent pill switch in Split: the empty chat in the second pane keeps its typed text and photo and stays in the second pane', { timeout: 150000 }, async (t) => {
+  const { id, page, errors } = await setup(t, 'agent-swap-split', 'claude');
+  const E = await emptyBeside(page, id);
+  await page.locator('#chats .pane[data-id="' + id + '"] [data-tool="split"]').click();
+  await page.locator('#chats .pane[data-id="' + E + '"] [data-pill="Agent"]').waitFor();
+  assert.deepEqual(await panes(page), [id, E], 'Split: the chat with messages first, the empty one second');
+  const empty = page.locator('#chats .pane[data-id="' + E + '"]');
+  await empty.locator('.composer textarea').fill('a draft that must come along');
+  await paste(empty.locator('.composer textarea'), PNG);
+  await empty.locator('.attach .att').waitFor();
+  const had = await switchTo(page, empty, 'Claude');
+  const made = await madeNext(page, had);
+  await page.locator('#navList .row[data-chat="' + E + '"]').waitFor({ state: 'detached', timeout: 10000 });
+  await page.waitForFunction(([a, b]) => [...document.querySelectorAll('#chats .pane[data-id]')].map((x) => x.dataset.id).join() === a + ',' + b, [id, made.id], { timeout: 10000 }).catch(() => {});
+  assert.deepEqual(await panes(page), [id, made.id], 'the new chat is in the second pane; the first is unchanged');
+  assert.equal(await pillValue(made.pane, 'Agent'), 'Claude');
+  assert.equal(await made.pane.locator('.composer textarea').inputValue(), 'a draft that must come along', 'the typed text came along');
+  assert.equal(await made.pane.locator('.attach .att').count(), 1, 'and the photo');
+  assert.equal(await focused(page), 'Agent: Claude', 'the new chat\'s Agent pill has the focus');
+  await shot(page, 'o29-swap-split');
+  assert.deepEqual(errors, []);
+  console.log('PASS agent switch (Split): draft and photo kept, the new chat in the second pane, the first unchanged');
+});
+
+test('Agent pill switch in Dev Focus: the empty chat beside the editor is replaced there, and Chat Focus keeps its first pane', { timeout: 150000 }, async (t) => {
+  const { id, instance, page, errors } = await setup(t, 'agent-swap-dev', 'claude');
+  // Dev Focus folds the chat list to its strip, so the daemon's list says which chats there are.
+  const daemonList = async () => (await call(instance, '/chat')).conversations.map((c) => c.id);
+  const E = await emptyBeside(page, id);
+  await page.click('#rDev');
+  if (!(await page.locator('#sideChats').isVisible())) await page.click('#sideToggle');
+  await page.locator('#sidePick').waitFor();
+  await page.selectOption('#sidePick', E);
+  const side = page.locator('#sideChats .pane[data-id="' + E + '"]');
+  await side.locator('[data-pill="Agent"]').waitFor();
+  const had = await daemonList();
+  await choose(page, side, 'Agent', 'Claude');
+  await until(async () => (await daemonList()).some((x) => !had.includes(x)), 'a new chat (menu hidden: ' + await page.evaluate(() => document.querySelector('#pillMenu').hidden) + ')');
+  const made = (await daemonList()).find((x) => !had.includes(x));
+  await until(async () => !(await daemonList()).includes(E), 'the empty chat deleted');
+  await page.locator('#sideChats .pane[data-id="' + made + '"] [data-pill="Agent"][aria-label="Agent: Claude"]').waitFor({ timeout: 10000 }).catch(() => {});
+  assert.deepEqual(await panes(page, '#sideChats'), [made], 'the new chat is the one beside the editor');
+  await shot(page, 'o29-swap-dev');
+  await page.click('#rChat');
+  await page.locator('#chats .pane[data-id]').first().waitFor();
+  assert.equal((await panes(page))[0], id, 'Chat Focus still shows the chat with messages first');
+  assert.deepEqual(errors, []);
+  console.log('PASS agent switch (Dev Focus): the new chat beside the editor, Chat Focus\'s first pane unchanged');
+});

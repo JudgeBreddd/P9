@@ -404,15 +404,38 @@ async function pickMode(s, m) {
   if (busy(s)) s.modeNext = m === modeNow(s) ? null : m; else { setMode(s, m); s.modeNext = null; }
   renderChats();
 }
-// O29: an empty chat changes agent by being made again on the other one, in the same folder or project: the new chat starts
-// with that agent's defaults (startDefaults, startMode) and its 'created' shows it first; this one is then deleted. It never
-// started an agent (create only writes its row, chat.mjs), so nothing is lost but its row.
+// O29: an empty chat changes agent by being made again on the other one, in the same folder or project, with that agent's
+// defaults (startDefaults, startMode). Review (2026-11-09): what was typed and attached comes over, and the new chat takes the
+// old one's place: its pane in Split, the chat beside the editor in Dev Focus (SWAP, swapIn; the layout as it was at the pick).
+// The old one is deleted only if the daemon finds it was never sent to (empty, threat model row O29); else the new one goes
+// the same way and the old one stays as it was, and the bar says why.
+const SWAP = new Map(); // the new chat's id -> { from, open, side, done }
+function swapIn(id) {
+  const w = SWAP.get(id), n = outer.S.sessions.find(x => x.id === id);
+  if (!w || !w.done || !n) return !!w; // under way: its 'created' does not show it; this does, once the old one is gone
+  SWAP.delete(id);
+  Object.assign(n, { draft: w.from.draft, images: w.from.images });
+  outer.S.open = w.open.map(x => x === w.from.id ? id : x).filter(x => outer.S.sessions.some(o => o.id === x));
+  if (w.side === w.from.id) outer.S.sideId = id;
+  if (outer.S.modal?.kind === 'chat' && outer.S.modal.id === w.from.id) outer.S.modal.id = id; // opened from the panel in another focus
+  outer.renderTabs(); renderChats();
+  [...document.querySelectorAll(`.pane[data-id="${CSS.escape(id)}"] [data-pill="Agent"]`)].find(b => b.offsetParent)?.focus(); // the one on screen: a pane, or beside the editor
+  return true;
+}
 async function pickAgent(s, a) {
   if (a === s.agent || started(s)) return;
-  outer.usedAgent(a);
-  if (!s.live) { Object.assign(s, { agent: a, mode: outer.startMode(a), title: `${outer.names[a]} ${outer.S.sessions.filter(x => x.agent === a).length + 1}` }); outer.renderTabs(); return renderChats(); }
+  if (!s.live) { outer.usedAgent(a); Object.assign(s, { agent: a, mode: outer.startMode(a), title: `${outer.names[a]} ${outer.S.sessions.filter(x => x.agent === a).length + 1}` }); outer.renderTabs(); return renderChats(); }
+  const w = { from: s, open: [...outer.S.open], side: outer.S.sideId, done: false };
   const r = await outer.liveChat.create(a, s.project ? '' : s.folder, s.project);
-  if (r.status === 201) outer.liveChat.call('deleteChat', { id: s.id });
+  if (r.status !== 201) return;
+  const id = r.body.conversation; SWAP.set(id, w);
+  const d = await outer.liveChat.call('deleteChat', { id: s.id, empty: true }, { quiet: true });
+  if (d.status !== 200) {
+    SWAP.delete(id); outer.S.open = w.open.filter(x => outer.S.sessions.some(o => o.id === x)); renderChats();
+    outer.liveChat.call('deleteChat', { id, empty: true });
+    return outer.toast({ kind: 'chat', txt: d.body?.error === 'not-empty' ? `This chat has a message now, so it stays on ${outer.names[s.agent]}.` : `${outer.names[a]} was not started: this chat could not be replaced.`, level: 'warn' }, true);
+  }
+  outer.usedAgent(a); w.done = true; swapIn(id);
 }
 function pillPick(item) {
   const s = outer.S.sessions.find(x => x.id === PM.sid); if (!s || item.getAttribute('aria-disabled') === 'true') return;
@@ -814,7 +837,7 @@ async function loadChat() {
       if (stub) try { await history(stub, ev.cursor - 1); } catch (e) { console.error('chat history', e); }
       // A malformed stored event is skipped, never thrown: it would fail again on every replay.
       let end = null; try { end = applyChat(ev); } catch { end = null; } if (end) ended.push(end);
-      if (created) show(ev.conversation);
+      if (created && !swapIn(ev.conversation)) show(ev.conversation);
       // N1: failed (a red cross on the row and the strip) until it is seen; never from a replay, which is history.
       if (!replaying && (ev.type === 'error' || (ev.type === 'exited' && ev.data?.code))) { const f = outer.S.sessions.find(x => x.id === ev.conversation); if (f) { f.failed = true; outer.keepUnseen(); } }
       if (!replaying && (ev.type === 'project' || ev.type === 'deleted' || (ev.type === 'created' && ev.data?.project))) outer.loadProjects?.();

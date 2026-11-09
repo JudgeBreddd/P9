@@ -517,7 +517,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   api.post('/chat/:id/project', async (c) => reply(c, await chat.projects.chats.move(c.req.param('id'), await json(c))));
   api.post('/chat/:id/rename', async (c) => reply(c, chat.projects.chats.rename(c.req.param('id'), await json(c))));
   api.post('/chat/:id/archive', async (c) => reply(c, chat.projects.chats.archive(c.req.param('id'), await json(c))));
-  api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'))));
+  api.post('/chat/:id/delete', async (c) => reply(c, await chat.projects.chats.delete(c.req.param('id'), await json(c))));
   api.get('/chat/:id/images/:hash', (c) => reply(c, chat.image(c.req.param('id'), c.req.param('hash'))));
   api.get('/terminals', async (c) => {
     try { return c.json({ terminals: await terminals.list() }); } catch (error) {
