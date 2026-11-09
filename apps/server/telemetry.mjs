@@ -32,7 +32,7 @@ const CODES = ['agent-error', 'exited', 'config-failed', ...new Set(ERRORS.map((
 const USAGE = [['inputTokens', 'input_tokens'], ['outputTokens', 'output_tokens'], ['cachedReadTokens', 'cached_read_tokens'],
   ['cachedWriteTokens', 'cached_write_tokens'], ['thoughtTokens', 'thought_tokens'], ['totalTokens', 'total_tokens']];
 const ENDS = new Set(['turn-end', 'error', 'exited', 'interrupted']);
-const RELEVANT = new Set([...ENDS, 'user', 'update', 'config', 'created', 'approval', 'question', 'answered']);
+const RELEVANT = new Set([...ENDS, 'user', 'update', 'config', 'created', 'approval', 'question', 'answered', 'deleted']);
 const UUID = /^[0-9a-f-]{36}$/;
 const ALIAS = /^[A-Za-z0-9._:[\]-]{1,64}$/;
 const list = (values) => values.map((value) => "'" + value + "'").join(', ');
@@ -113,7 +113,7 @@ export function project(event) {
       const known = ERRORS.find(([start]) => message.startsWith(start));
       return { ...base, code: known ? known[1] : / could not be set; nothing was sent\.$/.test(message) ? 'config-failed' : 'agent-error' };
     }
-    default: return base; // exited, interrupted
+    default: return base; // exited, interrupted, deleted
   }
 }
 
@@ -126,6 +126,8 @@ export const freshState = () => ({ cursor: 0, conversations: new Map() });
 export function derive(state, event) {
   if (!event || event.cursor <= state.cursor) return [];
   state.cursor = event.cursor;
+  // O35: the chat was deleted; the worker removes its rows (forget), and derive forgets it.
+  if (event.type === 'deleted') { state.conversations.delete(event.conversation); return []; }
   let chat = state.conversations.get(event.conversation);
   if (!chat) state.conversations.set(event.conversation, chat = { provider: null, folder: null, model: null, turns: 0, open: null });
   const turn = chat.open;
@@ -261,6 +263,9 @@ export function startTelemetry({ ledgerFile, file, samplesFile = path.join(path.
   let worker = null;
   const waiters = [];
   const measuring = new Map(); // conversation -> the open turn's measurement
+  // O35: chats deleted while this daemon runs. A turn's resource row is read after its end (the stop before a delete), so
+  // one can come in after the chat's rows were removed: it is dropped. ponytail: one id per delete, kept until the daemon stops.
+  const gone = new Set();
   const inflight = new Set(); // cgroup reads not finished yet
   const settle = () => { if (!busy && !pending) for (const resolve of waiters.splice(0)) resolve(); };
   const send = () => {
@@ -337,6 +342,7 @@ export function startTelemetry({ ledgerFile, file, samplesFile = path.join(path.
       const cpu = row.cpu_usec !== null, peak = row.mem_peak_bytes !== null;
       row.availability = cpu && peak ? 'measured' : cpu ? 'cpu-only' : peak ? 'peak-only' : 'unavailable';
       row.reason = cpu && peak ? null : (cpu ? peakReason : cpuReason ?? peakReason) ?? 'read-failed';
+      if (gone.has(measure.conversation)) return;
       resources.push(row);
       pending = true; send();
     })().catch(() => { counts.resourceErrors += 1; });
@@ -370,10 +376,11 @@ export function startTelemetry({ ledgerFile, file, samplesFile = path.join(path.
         let projected;
         try { projected = project(event); } catch { return; }
         if (!projected) return;
+        if (projected.type === 'deleted') gone.add(projected.conversation);
         try { measure(projected); } catch { counts.resourceErrors += 1; }
         if (queue.length >= cap) { counts.droppedEvents += 1; gap = true; } // the worker catches up from the ledger instead
         else { queue.push(projected); counts.maxQueue = Math.max(counts.maxQueue, queue.length); }
-        if (ENDS.has(projected.type)) { pending = true; send(); }
+        if (ENDS.has(projected.type) || projected.type === 'deleted') { pending = true; send(); }
       } finally { mainNs += process.hrtime.bigint() - began; }
     },
     stats: () => ({ ...counts.workerStats, droppedEvents: counts.droppedEvents, maxQueue: counts.maxQueue, queued: queue.length, cap,
@@ -433,13 +440,25 @@ function sqliteFile(file, version, tables, aside, stats, errorKey, onOpen) {
 
 function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, clockMs }) {
   const stats = { rowsWritten: 0, droppedRows: 0, setAside: [], replayedEvents: 0, lastError: null,
-    resourcesWritten: 0, droppedResources: 0, ignoredResources: 0, samplesWritten: 0, droppedSamples: 0, gaps: 0, samplesSetAside: [], samplesError: null };
+    rowsForgotten: 0, resourcesWritten: 0, droppedResources: 0, ignoredResources: 0, samplesWritten: 0, droppedSamples: 0, gaps: 0, samplesSetAside: [], samplesError: null };
   let insert = null;
   let state = freshState();
   let ledger = null;
   const turns = sqliteFile(file, SCHEMA, TABLES, stats.setAside, stats, 'lastError', (db) => {
     insert = db.prepare('INSERT OR IGNORE INTO turns (' + COLUMNS.join(', ') + ') VALUES (' + COLUMNS.map(() => '?').join(', ') + ')');
   });
+  // O35: a deleted chat's turns, and their resource rows in the samples file. After the batch's own rows, so none is left
+  // behind; on every replay too, so rows a failed write or an older daemon left are removed at the next start.
+  const forget = (events) => {
+    const ids = events.filter((event) => event?.type === 'deleted').map((event) => event.conversation);
+    if (!ids.length || !turns.opened()) return;
+    try {
+      const list = JSON.stringify(ids), keys = turns.db.prepare('SELECT key FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').all(list).map((row) => row.key);
+      // The turns stay until their resource rows are gone: the keys are how the next start finds those.
+      if (keys.length && !inSamples(keys.length, 'droppedResources', () => statements.unresource.run(JSON.stringify(keys)))) return;
+      stats.rowsForgotten += Number(turns.db.prepare('DELETE FROM turns WHERE conversation IN (SELECT value FROM json_each(?))').run(list).changes);
+    } catch (error) { stats.lastError = error.errstr ?? error.message; }
+  };
   const write = (rows) => {
     if (!rows.length) return;
     if (!turns.opened()) { stats.droppedRows += rows.length; return; }
@@ -476,6 +495,7 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
         for (const event of events) { rows.push(...derive(state, project(event))); state.cursor = Math.max(state.cursor, Number(event.cursor)); }
         stats.replayedEvents += events.length;
         write(rows);
+        forget(events);
       }
     } catch (error) { stats.lastError = error.errstr ?? error.message; }
   };
@@ -491,16 +511,18 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
       partial: db.prepare('UPDATE resources SET partial = 1 WHERE start_at < ? AND end_at > ?'),
       sample: db.prepare('INSERT INTO samples (at, daemon_cpu_usec, daemon_mem_bytes, slice_cpu_usec, slice_mem_bytes, ledger_bytes, telemetry_bytes) VALUES (?, ?, ?, ?, ?, ?, ?)'),
       self: db.prepare('INSERT INTO self (start_at, end_at, worker_cpu_usec, main_usec) VALUES (?, ?, ?, ?)'),
+      unresource: db.prepare('DELETE FROM resources WHERE turn_key IN (SELECT value FROM json_each(?))'),
     };
   });
   const inSamples = (count, drop, work) => {
-    if (!samples.opened()) { stats[drop] += count; return; }
-    try { samples.db.exec('BEGIN IMMEDIATE'); work(); samples.db.exec('COMMIT'); }
+    if (!samples.opened()) { stats[drop] += count; return false; }
+    try { samples.db.exec('BEGIN IMMEDIATE'); work(); samples.db.exec('COMMIT'); return true; }
     catch (error) {
       stats.samplesError = error.errstr ?? error.message;
       try { if (samples.db?.isTransaction) samples.db.exec('ROLLBACK'); } catch {}
       if (samples.corrupt(error) && stats.samplesSetAside.length < 5) samples.setAside();
       stats[drop] += count;
+      return false;
     }
   };
   const writeResources = (rows) => {
@@ -538,9 +560,9 @@ function runWorker({ ledgerFile, file, samplesFile, delayMs, cgroup, sampleMs, c
   parentPort.postMessage(stats);
   parentPort.on('message', ({ events, gap, resources, ticks, mainUs }) => {
     since.main += mainUs ?? 0;
+    writeResources(resources); // first, so a deleted chat's last resource row in this batch goes with its turns below
     if (gap) catchUp(); // events were dropped from the queue: the ledger has them all
-    else { const rows = []; for (const event of events) rows.push(...derive(state, event)); write(rows); }
-    writeResources(resources);
+    else { const rows = []; for (const event of events) rows.push(...derive(state, event)); write(rows); forget(events); }
     for (const at of ticks ?? []) tick(at);
     parentPort.postMessage(stats);
   });

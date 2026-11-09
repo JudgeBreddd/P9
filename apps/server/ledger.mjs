@@ -123,8 +123,16 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     of: db.prepare('SELECT cursor, conversation, type, data, at FROM events WHERE cursor > ? AND cursor <= ? AND conversation IN (SELECT value FROM json_each(?)) ORDER BY cursor LIMIT ?'),
     // E5: only rows after the last fold, and only updates that can be usage (or are malformed: those count as discarded).
     // Agent chunks, images included, are skipped in SQL instead of parsed. JSON.stringify never escapes 'usage_update'.
+    // O35: a deleted chat's 'deleted' event carries what it had spent, so the totals keep it once its own rows are gone.
     usage: db.prepare("SELECT e.cursor, e.conversation, e.type, c.provider, e.data, e.at FROM events e LEFT JOIN conversations c ON c.id = e.conversation"
-      + " WHERE e.cursor > ? AND (e.type = 'turn-end' OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
+      + " WHERE e.cursor > ? AND (e.type IN ('turn-end', 'deleted') OR e.type = 'update' AND (instr(e.data, 'usage_update') > 0 OR NOT json_valid(e.data))) ORDER BY e.cursor"),
+    spent: db.prepare("SELECT cursor, conversation, type, NULL AS provider, data, at FROM events WHERE conversation = ?"
+      + " AND (type = 'turn-end' OR type = 'update' AND (instr(data, 'usage_update') > 0 OR NOT json_valid(data))) ORDER BY cursor"),
+    // O35: the photo hashes a chat's messages name (sent, steered or held), and which of those any other event still names.
+    photos: db.prepare("SELECT DISTINCT i.value ->> '$.hash' AS hash FROM events e, json_each(CASE WHEN json_valid(e.data) THEN e.data ELSE '{}' END, '$.images') i"
+      + " WHERE e.conversation = ? AND e.type IN ('user', 'held')"),
+    named: db.prepare("SELECT DISTINCT i.value ->> '$.hash' AS hash FROM events e, json_each(CASE WHEN json_valid(e.data) THEN e.data ELSE '{}' END, '$.images') i"
+      + " WHERE e.type IN ('user', 'held') AND i.value ->> '$.hash' IN (SELECT value FROM json_each(?))"),
     // P20, the tail read: a chat's events newest first, with only what a block count needs (malformed data reads as none).
     back: db.prepare("SELECT cursor, type, CASE WHEN json_valid(data) THEN json_extract(data, '$.sessionUpdate') END AS u,"
       + " CASE WHEN json_valid(data) THEN json_extract(data, '$.stopReason') END AS r FROM events WHERE conversation = ? AND cursor <= ? ORDER BY cursor DESC LIMIT ?"),
@@ -136,8 +144,48 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     begin: db.prepare("INSERT INTO operations (id, login, fingerprint, state, at) VALUES (?, ?, ?, 'running', ?)"),
     finish: db.prepare("UPDATE operations SET state = 'done', status = ?, body = ? WHERE id = ?"),
   };
-  const fold = { cursor: 0, totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }, contexts: new Map(), costs: new Map(),
-    latest: 0, discarded: 0, samples: 0, claudeLive: null };
+  const fresh = () => ({ cursor: 0, totals: { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }, contexts: new Map(), costs: new Map(),
+    latest: 0, discarded: 0, samples: 0, claudeLive: null });
+  let fold = fresh();
+  const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
+  // What the adapters send (ACP, checked against claude-agent-acp 0.88.0): token counts per turn in the prompt
+  // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the
+  // session's running total, so each conversation counts its latest cost once. add folds one row into a fold.
+  const count = (value) => value === undefined || value === null || (Number.isSafeInteger(value) && value >= 0);
+  const add = (into, row) => {
+    into.cursor = row.cursor;
+    let data;
+    try { data = JSON.parse(row.data); } catch { into.discarded += 1; return; }
+    if (row.type === 'deleted') {
+      // O35: spent stays spent. The chat's own fold, taken as it was deleted; its context meter goes with it.
+      const spent = data?.usage;
+      if (!spent || !SPENT.every((key) => Number.isFinite(spent[key]) && spent[key] >= 0)) return;
+      into.totals.inputTokens += spent.inputTokens; into.totals.outputTokens += spent.outputTokens; into.totals.cachedTokens += spent.cachedTokens;
+      into.samples += spent.samples; into.discarded += spent.discarded;
+      if (spent.costUsd) into.costs.set(row.conversation, spent.costUsd);
+      into.latest = Math.max(into.latest, spent.latest);
+      return;
+    }
+    if (row.type === 'turn-end') {
+      const usage = data?.usage;
+      if (usage === undefined) return;
+      if (!usage || !['inputTokens', 'outputTokens', 'cachedReadTokens'].every((key) => count(usage[key]))) { into.discarded += 1; return; }
+      into.totals.inputTokens += usage.inputTokens ?? 0; into.totals.outputTokens += usage.outputTokens ?? 0;
+      into.totals.cachedTokens += usage.cachedReadTokens ?? 0; into.samples += 1;
+    } else {
+      if (data?.sessionUpdate !== 'usage_update') return;
+      // claude-agent-acp 0.88.0 attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
+      const windows = data._meta?.['_claude/rateLimit']?.unifiedWindows;
+      if (windows && typeof windows === 'object') into.claudeLive = { windows, at: row.at };
+      const context = Number.isSafeInteger(data.used) && data.used >= 0 && Number.isSafeInteger(data.size) && data.size > 0 && data.used <= data.size;
+      const cost = data.cost === undefined || data.cost === null
+        || data.cost.currency === 'USD' && Number.isFinite(data.cost.amount) && data.cost.amount >= 0;
+      if (!context || !cost) { into.discarded += 1; return; }
+      into.contexts.set(row.conversation, { conversation: row.conversation, provider: row.provider ?? 'unknown', used: data.used, size: data.size });
+      if (data.cost) into.costs.set(row.conversation, data.cost.amount);
+    }
+    into.latest = Math.max(into.latest, row.at);
+  };
   return {
     db,
     append(conversation, type, data) {
@@ -187,44 +235,39 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       }
       return { events: events.map(parsed).sort((a, b) => a.cursor - b.cursor), cursor: top, more };
     },
-    // What the adapters send (ACP, checked against claude-agent-acp 0.88.0): token counts per turn in the prompt
-    // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the
-    // session's running total, so each conversation counts its latest cost once.
-    // Events are append-only, so the fold so far is kept and each call reads only the rows after it (E5).
+    // Events are append-only, so the fold so far is kept and each call reads only the rows after it (E5). A delete
+    // starts it again (remove).
     usage() {
-      const count = (value) => value === undefined || value === null || (Number.isSafeInteger(value) && value >= 0);
-      const { totals, contexts, costs } = fold;
-      let { latest, discarded, samples, claudeLive } = fold;
-      for (const row of statements.usage.all(fold.cursor)) {
-        fold.cursor = row.cursor;
-        let data;
-        try { data = JSON.parse(row.data); } catch { discarded += 1; continue; }
-        if (row.type === 'turn-end') {
-          const usage = data?.usage;
-          if (usage === undefined) continue;
-          if (!usage || !['inputTokens', 'outputTokens', 'cachedReadTokens'].every((key) => count(usage[key]))) { discarded += 1; continue; }
-          totals.inputTokens += usage.inputTokens ?? 0; totals.outputTokens += usage.outputTokens ?? 0;
-          totals.cachedTokens += usage.cachedReadTokens ?? 0; samples += 1;
-        } else {
-          if (data?.sessionUpdate !== 'usage_update') continue;
-          // claude-agent-acp 0.88.0 attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
-          const windows = data._meta?.['_claude/rateLimit']?.unifiedWindows;
-          if (windows && typeof windows === 'object') claudeLive = { windows, at: row.at };
-          const context = Number.isSafeInteger(data.used) && data.used >= 0 && Number.isSafeInteger(data.size) && data.size > 0 && data.used <= data.size;
-          const cost = data.cost === undefined || data.cost === null
-            || data.cost.currency === 'USD' && Number.isFinite(data.cost.amount) && data.cost.amount >= 0;
-          if (!context || !cost) { discarded += 1; continue; }
-          contexts.set(row.conversation, { conversation: row.conversation, provider: row.provider ?? 'unknown', used: data.used, size: data.size });
-          if (data.cost) costs.set(row.conversation, data.cost.amount);
-        }
-        latest = Math.max(latest, row.at);
-      }
-      Object.assign(fold, { latest, discarded, samples, claudeLive });
+      for (const row of statements.usage.all(fold.cursor)) add(fold, row);
+      const { totals, contexts, costs, latest, samples, discarded, claudeLive } = fold;
       let costUsd = 0;
       for (const amount of costs.values()) costUsd += amount;
       const any = samples || contexts.size;
       return { state: any ? (Date.now() - latest > 15 * 60 * 1000 ? 'stale' : 'recorded') : 'unavailable',
         updatedAt: latest || null, samples, discarded, totals: { ...totals, costUsd }, contexts: [...contexts.values()], claudeLive };
+    },
+    // O35: a chat's events and row go in one transaction. Returned: what it had spent (its own fold, for the 'deleted'
+    // event the caller appends next) and the photo hashes it named that no other event names now. The fold starts
+    // again, so the totals are made from the same rows a restart reads.
+    // ponytail: the refold reads every usage row once per delete; an incremental subtraction if deletes ever get frequent.
+    remove(id) {
+      const own = fresh();
+      for (const row of statements.spent.all(id)) add(own, row);
+      const { totals, samples, discarded, latest } = own;
+      let costUsd = 0;
+      for (const amount of own.costs.values()) costUsd += amount;
+      const hashes = statements.photos.all(id).map((row) => row.hash).filter((hash) => typeof hash === 'string');
+      let unused;
+      db.exec('BEGIN');
+      try {
+        db.prepare('DELETE FROM events WHERE conversation = ?').run(id);
+        db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+        const still = new Set(statements.named.all(JSON.stringify(hashes)).map((row) => row.hash));
+        unused = hashes.filter((hash) => !still.has(hash));
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
+      fold = fresh();
+      return { usage: { ...totals, costUsd, samples, discarded, latest }, unused };
     },
     operation: (id) => statements.operation.get(id),
     recent: (login, since) => statements.recent.get(login, since).n,

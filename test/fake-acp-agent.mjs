@@ -259,6 +259,14 @@ const connection = new acp.AgentSideConnection(() => ({
       }, 1500);
       return { stopReason: 'end_turn' };
     }
+    // "spend <n>": a turn that cost n dollars and n thousand input tokens, as the real adapters report it (O35's usage test).
+    const spend = /^spend (\d+)/.exec(text);
+    if (spend) {
+      const n = Number(spend[1]);
+      await connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'usage_update', used: 10, size: 1000, cost: { amount: n, currency: 'USD' } } });
+      await say('spent ' + n);
+      return { stopReason: 'end_turn', usage: { inputTokens: n * 1000, outputTokens: n * 100, cachedReadTokens: n * 10, totalTokens: n * 1110 } };
+    }
     // "limits <n>": the turn ends at once; a second later, with no prompt open, the agent reports its context and plan
     // use at n%. As Claude it carries the adapter's _claude/rateLimit window figures (a fraction); Codex has none (its
     // limits are in its session log).

@@ -3,7 +3,7 @@
 // agent-first-workspace (_engine/acp-connection.ts, os-process.ts, provider-service.ts, 2026-10-09); the adapter
 // versions and the rules followed here are pinned in contracts.md.
 import { execFile } from 'node:child_process';
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir, realpath, rename, rmdir, unlink } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -240,7 +240,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   let closing = false; // set by shutdown: no adapter may start after its cleanup snapshot
   // CP3 (threat model row 43): a sent photo is kept as <ownership>/images/<sha256>.<ext>, so the chat can show it again; the
-  // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. A deleted chat (N1) leaves them: one photo may be in several chats.
+  // ledger keeps only [{hash, type}]. Over 200 MB, the oldest go first. A deleted chat takes the ones no other chat names (O35).
+  // keep() runs in the same tick as the append that names the photo, so a delete in between cannot take it.
   // Item 26: not the state folder. On Linux that is the unit's RuntimeDirectory (RAM), emptied each time the daemon stops.
   const imageDir = (ownership || state) && path.join(ownership || state, 'images');
   const keep = (images) => images.map(({ mimeType, data }) => {
@@ -623,7 +624,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is delivered,
     // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
-    const user = { ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }) };
+    const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }) });
     const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: blocks(body.text, images),
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
@@ -633,11 +634,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // twice. Shown as sent but unconfirmed; a later refusal says so with the text, so it never vanishes silently.
       const lost = () => emit(id, 'steer-lost', { text: body.text });
       request.then((late) => { if (!delivered(late)) lost(); }, lost);
-      emit(id, 'user', { ...user, unconfirmed: true });
+      emit(id, 'user', { ...user(), unconfirmed: true });
       return { status: 202, steered: true, unconfirmed: true };
     }
     if (!delivered(result)) return refused(409, 'turn-running');
-    emit(id, 'user', user);
+    emit(id, 'user', user());
     // CP8: Codex started a turn of its own that P9 never prompted, so no end comes for it. ponytail: it is taken as
     // ended after 10 s with no update from the agent; a long silent tool call ends it early (the next update shows anyway).
     if (result.outcome === 'startedNewTurn' && !session.ghost) session.ghost = setTimeout(() => {
@@ -697,7 +698,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
 
   // N1: projects in <ownership>/projects (not the state folder, which is RAM on Linux; Item 26).
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
-    stop: (id) => stopConversation(id), recovered });
+    stop: (id) => stopConversation(id), recovered, remove: (id) => {
+      const { usage, unused } = ledger.remove(id);
+      if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
+      return usage;
+    } });
   const api = {
     login: loginRoutes,
     // The watcher (telemetry.mjs) reads a live chat's CPU and peak memory from its systemd scope: the unit, or null.

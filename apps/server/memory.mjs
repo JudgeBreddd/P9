@@ -17,11 +17,12 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import SECRETS from './secret-rules.mjs';
 
 export const SCHEMA = 2; // PRAGMA user_version of memory.db; another value is set aside and rebuilt
-export const CAPTURE = 2; // bump when capture() changes what it writes: the next start rebuilds from the ledger
+export const CAPTURE = 3; // bump when capture() changes what it writes: the next start rebuilds from the ledger
+// 3 (O35): a deleted chat's rows go. The rebuild also clears the rows of chats deleted before, whose events are gone.
 export const MEMORY_CONVERSATION = '00000000-0000-4000-8000-000000000000'; // the ledger's conversation for memory's own events
 export const RULES = createHash('sha256').update(JSON.stringify(SECRETS)).digest('hex').slice(0, 12); // the scanner rules version
 const ENDS = new Set(['turn-end', 'error', 'exited', 'interrupted']);
-const TYPES = ['created', 'user', 'update', 'memory', 'project', ...ENDS];
+const TYPES = ['created', 'user', 'update', 'memory', 'project', 'deleted', ...ENDS];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // --- Secret scan: gitleaks' semantics (keywords first, the secret group or first non-empty group, entropy, allowlists) ---
@@ -144,6 +145,8 @@ export function capture(state, row, ctx) {
     return out;
   }
   if (!UUID.test(String(row.conversation))) return [];
+  // O35: the chat was deleted (its own events are gone from the ledger): what memory.db holds from it goes too.
+  if (row.type === 'deleted') { state.conversations.delete(row.conversation); return [{ cursor, deleteChat: row.conversation }]; }
   let chat = state.conversations.get(row.conversation);
   if (!chat) state.conversations.set(row.conversation, chat = { provider: null, cwd: ctx.workspace, project: null, open: null });
   const turn = chat.open;
@@ -417,7 +420,7 @@ export function startMemory({ ledgerFile, file, workspace, always = false }) {
     worker.on('exit', (code) => { if (worker) dead('exit ' + code); });
   } catch (error) { dead(error); }
   return {
-    push(event) { if (worker && (ENDS.has(event?.type) || event?.type === 'memory')) { counts.wakes += 1; pending = true; send(); } },
+    push(event) { if (worker && (ENDS.has(event?.type) || event?.type === 'memory' || event?.type === 'deleted')) { counts.wakes += 1; pending = true; send(); } },
     stats: () => ({ ...counts.workerStats, workerError: counts.workerError, wakes: counts.wakes }),
     // Resolves once the worker has read the ledger to its end and written (or dropped) what it found. Tests and shutdown.
     idle() { pending = true; const done = new Promise((resolve) => waiters.push(resolve)); send(); return done; },
@@ -500,6 +503,9 @@ function runWorker({ ledgerFile, file, workspace, always }) {
       chat: db.prepare('SELECT * FROM records WHERE conversation = ? ORDER BY key'),
       chatProjects: db.prepare('SELECT DISTINCT project FROM items WHERE conversation = ?'),
       unitems: db.prepare('DELETE FROM items WHERE conversation = ?'),
+      unshareChat: db.prepare('DELETE FROM shared WHERE key IN (SELECT key FROM records WHERE conversation = ?)'),
+      unrecord: db.prepare('DELETE FROM records WHERE conversation = ?'),
+      unstale: db.prepare('DELETE FROM stale WHERE conversation = ?'),
       undropped: db.prepare('DELETE FROM dropped WHERE conversation = ?'),
       item: db.prepare('INSERT INTO items (conversation, kind, claim, anchors, from_cursor, to_cursor, project, cross, private, weight, source, valid_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
       drop: db.prepare('INSERT INTO dropped (conversation, kind, claim, reason, cursor) VALUES (?, ?, ?, ?, ?)'),
@@ -514,6 +520,10 @@ function runWorker({ ledgerFile, file, workspace, always }) {
       done: db.prepare("UPDATE meta SET value = ? WHERE key = 'done'"),
     };
   });
+  const reclose = (project) => {
+    sql.reopen.run(project);
+    for (const [id, to] of closures(sql.projectItems.all(project).map((row) => ({ ...row, anchors: JSON.parse(row.anchors) })))) sql.close.run(to, id);
+  };
   const apply = (outputs, through) => {
     let forgot = false;
     for (const output of outputs) {
@@ -529,6 +539,12 @@ function runWorker({ ledgerFile, file, workspace, always }) {
         if (chat) sql.stale.run(chat.conversation);
         stats.forgotten += Number(sql.forget.run(output.forget).changes);
         sql.unshare.run(output.forget);
+        forgot = true;
+      } else if (output.deleteChat) {
+        // O35: every row the chat left, and the closures of the projects its items were in (as compileStale).
+        const id = output.deleteChat, projects = sql.chatProjects.all(id).map((row) => row.project);
+        sql.unshareChat.run(id); sql.unrecord.run(id); sql.unitems.run(id); sql.undropped.run(id); sql.unstale.run(id);
+        for (const project of projects) reclose(project);
         forgot = true;
       } else if (output.private) {
         // A folder turned private: its earlier turns leave the shared index too.
@@ -567,10 +583,7 @@ function runWorker({ ledgerFile, file, workspace, always }) {
         }
         for (const d of dropped) sql.drop.run(conversation, d.kind, d.claim, d.reason, d.cursor);
       }
-      for (const project of projects) {
-        sql.reopen.run(project);
-        for (const [id, to] of closures(sql.projectItems.all(project).map((row) => ({ ...row, anchors: JSON.parse(row.anchors) })))) sql.close.run(to, id);
-      }
+      for (const project of projects) reclose(project);
       sql.fresh.run();
       store.db.exec('COMMIT');
       stats.compiled += chats.length;
@@ -608,7 +621,8 @@ function runWorker({ ledgerFile, file, workspace, always }) {
         const rows = page.all(state.cursor);
         if (!rows.length) break;
         const outputs = [];
-        for (const row of rows) for (const output of capture(state, row, ctx)) if (output.cursor > done) outputs.push(output);
+        // A delete with no memory.db has nothing to remove, and must not create one while capture is off.
+        for (const row of rows) for (const output of capture(state, row, ctx)) if (output.cursor > done && !(output.deleteChat && !store.db && !existsSync(file))) outputs.push(output);
         stats.replayedEvents += rows.length;
         if (outputs.length && !write(outputs, state.cursor)) { state = freshState(); break; } // dropped: the next pass starts over
       }
