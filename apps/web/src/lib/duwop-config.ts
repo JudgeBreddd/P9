@@ -4,6 +4,7 @@
 import { commandCenter } from "./command-center";
 import { gods } from "./gods";
 import { aphrodite } from "./aphrodite";
+import { eventHorizonAzure } from "./event-horizon-azure";
 import type { Look, Theme } from "./theme";
 
 export const duwopConfig: {
@@ -23,6 +24,6 @@ export const duwopConfig: {
   storageKey: "p9-look",
   defaultLook: { theme: "event-horizon-prime", effects: ["underglow", "motion", "shine"], amoled: true, font: "spacegrotesk" },
   themes: "all",  // Builder, 2026-10-19: "add the rest of the duwop themes"
-  extraThemes: [...commandCenter, ...gods, ...aphrodite],
+  extraThemes: [...commandCenter, ...gods, ...aphrodite, ...eventHorizonAzure],
   loadFonts: false,
 };

@@ -722,8 +722,8 @@ test('DUWOP themes: every core, Command Center, Gods and Aphrodite theme is offe
   const remote = []; page.on('request', (r) => { if (!/^(p9|data|blob):/.test(r.url())) remote.push(r.url()); });
   await page.locator('#rChat').waitFor();
   const ids = await page.locator('[data-theme-pick]').evaluateAll((buttons) => buttons.map((b) => b.dataset.themePick));
-  assert.equal(ids.length, 27, ids.join());
-  for (const id of ['duskwood', 'outrun', '8bit', 'daylight', 'linen', 'redline', 'olympus', 'hades', 'ra', 'aphrodite-blue', 'aphrodite-charcoal']) assert.ok(ids.includes(id), id);
+  assert.equal(ids.length, 28, ids.join());
+  for (const id of ['duskwood', 'outrun', '8bit', 'daylight', 'linen', 'redline', 'olympus', 'hades', 'ra', 'aphrodite-blue', 'aphrodite-charcoal', 'p9-event-horizon-azure']) assert.ok(ids.includes(id), id);
   const looks = new Map(), missing = [];
   for (const id of ids) {
     await page.click('#themeBtn'); await page.click(`[data-theme-pick="${id}"]`); await page.keyboard.press('Escape');
@@ -757,9 +757,9 @@ test('Look picker: DUWOP Appearance cards, each painted in its own theme, plus A
     const css = getComputedStyle(c), dot = getComputedStyle(c.querySelector('.dots i'));
     return { id: c.dataset.themePick, bg: css.backgroundColor, dot: dot.backgroundColor, primary: css.getPropertyValue('--primary').trim(), name: c.querySelector('b').textContent, note: c.querySelector('small').textContent };
   }));
-  assert.equal(cards.length, 27);
+  assert.equal(cards.length, 28);
   assert.ok(cards.every((c) => c.name && c.note), 'every card has a name and a note');
-  assert.equal(new Set(cards.map((c) => c.bg + c.dot)).size, 27, 'every card is painted in its own colours');
+  assert.equal(new Set(cards.map((c) => c.bg + c.dot)).size, 28, 'every card is painted in its own colours');
   for (const id of ['outrun', 'redline', 'olympus', 'daylight']) {
     await page.click(`[data-theme-pick="${id}"]`);
     assert.equal(await html('--primary'), cards.find((c) => c.id === id).primary, `${id}: the card shows the colour the page gets`);

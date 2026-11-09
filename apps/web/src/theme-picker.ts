@@ -1,7 +1,7 @@
 import { applyLook, loadLook, lookForTheme, allowedThemes, allThemes, allEffects, fonts, isDark, paletteVars, rollPalette, onLookChange, type Look } from './lib/theme';
 
 // The look's colours as #rrggbbaa for the Dev Focus editor, which cannot read the oklch tokens: each one is painted on a
-// 1x1 canvas and read back. Sent to main on every change (desktop only; the phone has no window.p9.look).
+// 1x1 canvas and read back, with the theme id (a theme with its own editor theme uses it). Sent to main on every change (desktop only; the phone has no window.p9.look).
 const EDITOR_TOKENS = ['background', 'foreground', 'card', 'primary', 'primary-foreground', 'muted', 'muted-foreground', 'accent', 'border', 'ring'];
 function editorLook() {
   const css = getComputedStyle(document.documentElement), ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
@@ -9,7 +9,7 @@ function editorLook() {
     ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = '#000'; ctx.fillStyle = css.getPropertyValue('--' + token).trim(); ctx.fillRect(0, 0, 1, 1);
     return '#' + [...ctx.getImageData(0, 0, 1, 1).data].map(n => n.toString(16).padStart(2, '0')).join('');
   };
-  return { dark: document.documentElement.classList.contains('dark'), colors: Object.fromEntries(EDITOR_TOKENS.map(token => [token, hex(token)])) };
+  return { dark: document.documentElement.classList.contains('dark'), theme: document.documentElement.dataset.theme ?? '', colors: Object.fromEntries(EDITOR_TOKENS.map(token => [token, hex(token)])) };
 }
 export function shareLook(signal: AbortSignal) {
   const p9 = (window as any).p9;

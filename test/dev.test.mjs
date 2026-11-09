@@ -9,6 +9,7 @@ import { _electron } from '@playwright/test';
 import { root, daemon } from './helpers.mjs';
 import { sddl, userSid } from './win-acl.mjs';
 import { editorFor } from './editor-fixture.mjs';
+import { AZURE, FIXTURE, OTHERS, RGB, contrast } from './azure-fixture.mjs';
 import { startEditorHost, stopEditorHost, hostWritable, openInCode, EDITOR_DIR, EDITOR_COMMIT } from '../apps/desktop/editor-host.mjs';
 import { SLICE } from '../apps/server/process-tree.mjs';
 
@@ -713,4 +714,115 @@ test('D11: Dev Focus saves only on Ctrl+S or Save; the tab shows a white dot whi
   for (let i = 0; i < 60 && (await readFile(plain, 'utf8')) === 'typed before\n'; i++) await sleep(250);
   assert.equal(await readFile(plain, 'utf8'), 'again typed before\n', 'Save writes the edit');
   assert.deepEqual(online(errors), []);
+}));
+
+// ---- O17: Event Horizon Azure in Dev Focus (spec §§ 3-5, 8, 9). The colours are read from the rendered editor, not the theme file.
+test('Event Horizon Azure: Dev Focus paints the review fixture in the theme; fenced TypeScript matches main.ts; cursor and focus accents follow the language', { skip: process.platform !== 'linux', timeout: 300000 }, logged(async t => {
+  const editor = await editorFor();
+  if (!editor) return t.skip('needs the editor server (P9_EDITOR_HOST, or the fixtures reh.tar.gz)');
+  const { instance, shell, dev, errors } = await openDevFocus(t, editor, {});
+  await writeFile(path.join(instance.workspace, 'README.md'), FIXTURE.md);
+  await writeFile(path.join(instance.workspace, 'main.ts'), FIXTURE.ts);
+  for (const [name, text] of Object.entries(OTHERS)) await writeFile(path.join(instance.workspace, name), text);
+  const css = name => dev.evaluate(name => getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue(name).trim().toLowerCase(), name);
+  await shell.evaluate(id => { document.querySelector('#themeBtn').click(); document.querySelector(`[data-theme-pick="${id}"]`).click(); }, AZURE);
+  await dev.waitForFunction(() => getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue('--vscode-editor-background').trim().toLowerCase() === '#0b101b', null, { timeout: 15000 })
+    .catch(async () => { await shot(dev, 'o17-dev-no-switch'); assert.fail('the editor did not switch to Event Horizon Azure: background ' + await css('--vscode-editor-background')); });
+  assert.equal(await css('--vscode-editorCursor-foreground'), '#42c7f5');
+  // README.md on the left, main.ts beside it (spec § 9: side-by-side source editors).
+  await dev.evaluate(async () => {
+    const { v, root } = window.devFocus, file = name => v.Uri.joinPath(v.Uri.parse(root.toString()), name);
+    await v.window.showTextDocument(await v.workspace.openTextDocument(file('README.md')), { viewColumn: v.ViewColumn.One, preview: false });
+    await v.window.showTextDocument(await v.workspace.openTextDocument(file('main.ts')), { viewColumn: v.ViewColumn.Two, preview: false });
+  });
+  // Every rendered token of the group showing `name`: its text and computed colour, weight, style and decoration.
+  const tokens = name => dev.evaluate(name => {
+    const group = [...document.querySelectorAll('.editor-group-container')].find(g => g.querySelector('.tab.active')?.textContent.includes(name));
+    if (!group) return null;
+    return [...group.querySelectorAll('.view-line span > span')].map(span => {
+      const css = getComputedStyle(span);
+      return { text: span.textContent.replace(/\u00a0/g, ' ').trim(), color: css.color, weight: css.fontWeight, style: css.fontStyle, line: css.textDecorationLine };
+    }).filter(token => token.text);
+  }, name);
+  // Markdown word-wraps in the split, so one source run can reach the page as consecutive tokens on two visual lines
+  // (seen: "https://" + "example.com/docs"). A token is found by its own text, or else as the first of consecutive tokens
+  // that look exactly the same and together spell the text.
+  const same = (a, b) => a.color === b.color && a.weight === b.weight && a.style === b.style && a.line === b.line;
+  const bare = text => text.replace(/\s+/g, '');
+  const spelled = (list, i, text) => { let got = ''; for (let j = i; j < list.length && same(list[j], list[i]); j++) { got += bare(list[j].text); if (got === bare(text)) return true; if (!bare(text).startsWith(got)) return false; } return false; };
+  const find = (list, text, nth = 0) => (list.filter(token => token.text === text)[nth] ?? list.filter((token, i) => spelled(list, i, text))[nth])
+    ?? assert.fail(`no rendered token "${text}" (nth ${nth}): ${list.map(token => token.text).join(' | ')}`);
+  let md, ts;
+  for (let i = 0; i < 60 && !(md?.some(token => token.text === 'import') && ts?.some(token => token.text === 'import')); i++) { await sleep(250); [md, ts] = [await tokens('README.md'), await tokens('main.ts')]; }
+  const bg = 'rgb(11, 16, 27)', rows = [];
+  const want = (list, text, colour, extra = {}, nth = 0, floor = 4.5) => {
+    const token = find(list, text, nth), ratio = contrast(token.color, bg);
+    rows.push(`${text}=${token.color} ${ratio}:1`);
+    assert.equal(token.color, colour, `"${text}" colour`);
+    for (const [key, value] of Object.entries(extra)) assert.equal(token[key], value, `"${text}" ${key}`);
+    assert.ok(ratio >= floor, `"${text}" contrast ${ratio}:1 is under ${floor}:1`);
+  };
+  await shot(dev, 'o17-dev-fixture-side-by-side');
+  console.log('NOTE Markdown word wrap: ' + await dev.evaluate(() => window.devFocus.v.workspace.getConfiguration('editor', { languageId: 'markdown' }).get('wordWrap')));
+  // § 3 Markdown source.
+  want(md, '#', RGB.violet, { weight: '400' });
+  want(md, 'P9 — Agent Workspace', RGB.violet, { weight: '700' });
+  want(md, 'AI-assisted', RGB.primary, { weight: '700' });
+  want(md, 'A unified, high-performance workspace for', RGB.primary, { weight: '400' });
+  want(md, '-', RGB.violetDim, {}, 0, 3);
+  want(md, '>', RGB.violetDim, {}, 0, 3);
+  want(md, 'developer guide', RGB.azure);
+  want(md, 'https://example.com/docs', RGB.blue);
+  want(md, '`pnpm dev`', RGB.amber); // inline code, backticks included
+  want(md, '```', RGB.violetDim, {}, 0, 3);
+  want(md, 'ts', RGB.blue);
+  // § 4 inside the fence, and the same token in main.ts: the same colour (§ 8: fenced TypeScript like an opened .ts file).
+  const code = [['import', RGB.violet], ['interface', RGB.violet], ['const', RGB.violet], ['Health', RGB.blue], ['get', RGB.azure], ['json', RGB.azure],
+    ["'hono'", RGB.amber], ["'1.0.0'", RGB.amber], ['true', RGB.mint], ['=>', RGB.secondary], ['healthy', RGB.primary]];
+  for (const [text, colour] of code) { want(md, text, colour); want(ts, text, colour); }
+  console.log('NOTE new Hono() renders ' + find(ts, 'Hono', 1).color + ' (the grammar decides whether a constructor call is a type or a call)');
+  // The fixture's lower half: the table pipes (§ 3: muted). Task boxes have no scope in the Markdown grammar: recorded, not coloured.
+  await dev.evaluate(() => { const { v } = window.devFocus, editor = v.window.visibleTextEditors.find(e => e.document.fileName.endsWith('README.md')), last = editor.document.lineCount - 1; editor.revealRange(new v.Range(last, 0, last, 0)); });
+  await sleep(500);
+  md = await tokens('README.md');
+  want(md, '|', RGB.muted);
+  want(md, 'Editor', RGB.primary);
+  console.log('LIMIT task boxes have no Markdown grammar scope; "[x]" renders as ' + (md.find(token => token.text.includes('[x]'))?.color ?? '(scrolled off)'));
+  // § 5: the cursor, the active tab's 2px line and the focused group's 1px border are violet in Markdown and azure in code;
+  // the other group keeps the quiet border.
+  const focus = name => dev.evaluate(async name => {
+    const { v } = window.devFocus, editor = v.window.visibleTextEditors.find(e => e.document.fileName.endsWith(name));
+    const shown = await v.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false });
+    // The token checks above scroll the file; an off-screen cursor is not drawn (width 0), so bring it back into view.
+    shown.revealRange(shown.selection, v.TextEditorRevealType.AtTop);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const groups = [...document.querySelectorAll('.editor-group-container')], mine = groups.find(g => g.querySelector('.tab.active')?.textContent.includes(name)), other = groups.find(g => g !== mine);
+    const cursor = mine.querySelector('.cursor'), line = mine.querySelector('.tab.active > .tab-border-top-container');
+    return { lang: document.documentElement.dataset.lang, cursor: getComputedStyle(cursor).backgroundColor, width: cursor.getBoundingClientRect().width,
+      border: getComputedStyle(mine).outlineColor, other: getComputedStyle(other).outlineColor, tab: getComputedStyle(line).backgroundColor, tabHeight: line.getBoundingClientRect().height,
+      focused: mine.contains(document.activeElement) };
+  }, name);
+  const inMd = await focus('README.md');
+  await shot(dev, 'o17-dev-focus-markdown');
+  const inTs = await focus('main.ts');
+  await shot(dev, 'o17-dev-focus-code');
+  assert.deepEqual(inMd, { lang: 'markdown', cursor: RGB.violet, width: 2, border: RGB.violetDim, other: RGB.subtle, tab: RGB.violetDim, tabHeight: 2, focused: true });
+  assert.deepEqual(inTs, { lang: 'code', cursor: RGB.azure, width: 2, border: RGB.azureDim, other: RGB.subtle, tab: RGB.azureDim, tabHeight: 2, focused: true });
+  // The other languages § 4 names: Python has a grammar in Dev Focus; JSON, CSS and shell have none, so they record what they get.
+  const opened = async (name, first) => {
+    await dev.evaluate(name => window.devFocus.open(name), name);
+    let list;
+    for (let i = 0; i < 40 && !list?.some(token => token.text === first); i++) { await sleep(250); list = await tokens(name); }
+    return list;
+  };
+  const py = await opened('app.py', 'def');
+  want(py, '@cache', RGB.blue); want(py, 'def', RGB.violet); want(py, 'is', RGB.violet); want(py, 'None', RGB.mint); want(py, 'load', RGB.azure); want(py, 'print', RGB.azure); want(py, 'True', RGB.mint); want(py, '"ok"', RGB.amber); want(py, '42', RGB.amber); want(py, '# note', RGB.muted);
+  await shot(dev, 'o17-dev-python');
+  for (const name of ['data.json', 'style.css', 'run.sh']) {
+    const list = await opened(name, '{') ?? await tokens(name), language = await dev.evaluate(() => window.devFocus.v.window.activeTextEditor.document.languageId);
+    console.log(`LIMIT ${name} (language ${language}): ${[...new Set(list.map(x => x.color))].length} colour(s): ${list.map(x => x.text + '=' + x.color).join(' | ')}`);
+    await shot(dev, 'o17-dev-' + name.replace('.', '-'));
+  }
+  assert.deepEqual(online(errors), []);
+  console.log('PASS Event Horizon Azure in Dev Focus; contrast on #0B101B: ' + rows.join(', '));
 }));

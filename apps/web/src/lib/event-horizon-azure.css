@@ -1,0 +1,83 @@
+/* Event Horizon Azure (p9-event-horizon-azure), dark only. The --p9-* properties are the theme's palette; the DUWOP
+   tokens below are set from them, so the palette is the one source of colour. Specificity follows Aphrodite so core
+   neutral-generation rules cannot tint the surfaces. */
+[data-theme="p9-event-horizon-azure"] {
+  --p9-bg-app: #080B13;
+  --p9-bg-editor: #0B101B;
+  --p9-bg-panel: #101727;
+  --p9-bg-elevated: #172037;
+  --p9-bg-code-block: #17172C;
+  --p9-bg-line-hover: #141D2E;
+
+  --p9-border-subtle: #283348;
+  --p9-border-active-violet: #8A63D6;
+  --p9-border-active-azure: #399BD8;
+
+  --p9-text-primary: #DCE5F1;
+  --p9-text-secondary: #A4B1C6;
+  --p9-text-muted: #75839A;
+  --p9-text-on-accent: #080B13;
+
+  --p9-syntax-violet: #B77AFF;
+  --p9-syntax-violet-dim: #8A63D6;
+  --p9-syntax-azure: #42C7F5;
+  --p9-syntax-azure-dim: #399BD8;
+  --p9-syntax-blue: #7EA9F8;
+  --p9-syntax-amber: #F6BB58;
+  --p9-syntax-mint: #63D9BD;
+  --p9-syntax-red: #F17F94;
+  --p9-syntax-gold-muted: #D7AF77;
+
+  --p9-selection: #56478C70;
+  --p9-selection-inactive: #3A456354;
+  --p9-search-match: #F6BB5840;
+  --p9-search-current: #F6BB5870;
+  --p9-focus-ring: #7EA9F8;
+
+  --p9-diagnostic-error: #F17F94;
+  --p9-diagnostic-warning: #F6BB58;
+  --p9-diagnostic-info: #42C7F5;
+  --p9-diagnostic-success: #63D9BD;
+  --p9-diff-added-bg: #163B33;
+  --p9-diff-removed-bg: #3A1F2A;
+}
+.dark[data-theme="p9-event-horizon-azure"] {
+  --nh: 255; --nc: .02; --primary: var(--p9-syntax-violet); --glow2: var(--p9-syntax-azure);
+}
+.dark.dark.dark[data-theme="p9-event-horizon-azure"] {
+  --foreground: var(--p9-text-primary); --muted-foreground: var(--p9-text-secondary);
+  --border: var(--p9-border-subtle); --input: var(--p9-border-subtle); --ring: var(--p9-focus-ring);
+  --primary-foreground: var(--p9-text-on-accent); --success: var(--p9-diagnostic-success); --destructive: var(--p9-diagnostic-error);
+  --card-foreground: var(--foreground); --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground); --accent-foreground: var(--foreground);
+  --sidebar-foreground: var(--foreground); --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent-foreground: var(--foreground); --sidebar-border: var(--border); --sidebar-ring: var(--ring);
+}
+.dark.dark[data-theme="p9-event-horizon-azure"]:not([data-amoled]) {
+  --background: var(--p9-bg-app); --card: var(--p9-bg-panel); --popover: var(--p9-bg-elevated);
+  --muted: var(--p9-bg-elevated); --secondary: var(--p9-bg-elevated); --accent: var(--p9-bg-line-hover);
+  --sidebar: var(--p9-bg-app); --sidebar-accent: var(--p9-bg-line-hover);
+}
+/* Rendered Markdown (file and note previews, agent replies): violet headings, azure links, amber inline code; prose stays
+   neutral. Fenced code stays one colour: the preview has no syntax highlighter. */
+[data-theme="p9-event-horizon-azure"] .msg.agent :is(h1, h2, h3, h4, h5, h6) { color: var(--p9-syntax-violet); font-weight: 700; }
+[data-theme="p9-event-horizon-azure"] .msg.agent :is(a, .link) { color: var(--p9-syntax-azure); text-decoration: underline; }
+[data-theme="p9-event-horizon-azure"] .msg.agent :not(pre) > code { color: var(--p9-syntax-amber); background: var(--p9-bg-code-block); border-radius: 4px; }
+[data-theme="p9-event-horizon-azure"] .msg.agent pre { background: var(--p9-bg-code-block); border-color: var(--p9-border-subtle); }
+[data-theme="p9-event-horizon-azure"] .msg.agent pre code { color: var(--p9-text-primary); }
+[data-theme="p9-event-horizon-azure"] .msg.agent blockquote { border-left-color: var(--p9-syntax-violet-dim); color: var(--p9-text-secondary); }
+[data-theme="p9-event-horizon-azure"] .msg.agent :is(th, td) { border-color: var(--p9-border-subtle); }
+[data-theme="p9-event-horizon-azure"] .msg.agent hr { border: 0; border-top: 1px solid var(--p9-border-subtle); }
+[data-theme="p9-event-horizon-azure"] .msg.agent li::marker { color: var(--p9-syntax-violet-dim); }
+[data-theme="p9-event-horizon-azure"] .msg.agent del { color: var(--p9-text-secondary); }
+/* Task boxes are drawn here, not left to accent-color: the preview's boxes are disabled, and a disabled box ignores
+   accent-color and draws grey. Mint when checked, a muted outline when not; the box shape stays. */
+[data-theme="p9-event-horizon-azure"] .msg.agent input[type="checkbox"] {
+  appearance: none; width: 13px; height: 13px; margin: 0 6px 0 0; vertical-align: -2px; display: inline-grid; place-content: center;
+  border: 1.5px solid var(--p9-text-muted); border-radius: 3px; background: transparent;
+}
+[data-theme="p9-event-horizon-azure"] .msg.agent input[type="checkbox"]:checked { background: var(--p9-syntax-mint); border-color: var(--p9-syntax-mint); }
+[data-theme="p9-event-horizon-azure"] .msg.agent input[type="checkbox"]:checked::before {
+  content: ''; width: 6px; height: 3px; border: solid var(--p9-bg-app); border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg);
+}

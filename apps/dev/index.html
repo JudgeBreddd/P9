@@ -5,7 +5,15 @@
 <title>P9 Dev Focus</title>
 <style>html,body{height:100%;margin:0;overflow:hidden;background:#05070e;color:#dce4f2;font:14px system-ui}#workbench{height:100%;width:100%}#status{position:fixed;inset:auto 0 0 0;padding:8px 12px}#status:empty{display:none}
 /* The unsaved dot on a tab is white on a dark theme (the theme's tab colour would make it teal on the active tab), as in VS Code. */
-.monaco-workbench.vs-dark .tab.dirty .tab-actions .action-label{color:#fff!important}</style>
+.monaco-workbench.vs-dark .tab.dirty .tab-actions .action-label{color:#fff!important}
+/* Event Horizon Azure (client.js sets data-look and data-lang): violet in Markdown, azure in code, for the cursor, the active
+   tab's 2px line and the 1px border of the editor that has the keyboard. Other editors keep the quiet border. */
+html[data-look="p9-event-horizon-azure"]{--p9-cursor:#42C7F5;--p9-active:#399BD8}
+html[data-look="p9-event-horizon-azure"][data-lang="markdown"]{--p9-cursor:#B77AFF;--p9-active:#8A63D6}
+html[data-look="p9-event-horizon-azure"] .monaco-editor .cursor{background-color:var(--p9-cursor)!important;border-color:var(--p9-cursor)!important}
+html[data-look="p9-event-horizon-azure"] .editor-group-container{outline:1px solid #283348;outline-offset:-1px}
+html[data-look="p9-event-horizon-azure"] .editor-group-container.active:focus-within{outline-color:var(--p9-active)}
+html[data-look="p9-event-horizon-azure"] .editor-group-container.active:focus-within .tab.active>.tab-border-top-container{background-color:var(--p9-active)!important;height:2px!important}</style>
 </head>
 <body>
 <div id="workbench" inert></div>
