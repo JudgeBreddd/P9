@@ -16,7 +16,7 @@ export const PANEL_ICONS = {
   alert: ic('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/>'),
 };
 const I = PANEL_ICONS;
-export const LABEL = { running: 'Running', needs: 'Needs you', unread: 'Finished, not read yet', failed: 'Failed' };
+export const LABEL = { running: 'Running', needs: 'Waiting on you', unread: 'Finished, not read yet', failed: 'Failed' };
 // A chat's state for its row and its strip icon: waiting for an answer, failed, finished and unread, running (busy pulses), or none.
 export const stateOf = (s, busy) => s.pending ? 'needs' : s.failed ? 'failed' : s.done && !busy ? 'unread' : s.state === 'running' ? 'running' : '';
 // The strip: every live chat (running or waiting for an answer), then every chat whose result is not seen yet (unread or failed),

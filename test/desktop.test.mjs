@@ -730,7 +730,7 @@ test('First launch D10: two running chats are told apart by title, in the panel 
   await page.locator('#nav[data-collapsed]').waitFor({ timeout: 5000 });
   const heads = await page.locator('#rBots .bot').evaluateAll((all) => all.map((b) => [b.dataset.chat, b.getAttribute('aria-label')]));
   assert.deepEqual(heads.map((h) => h[0]).sort(), [...ids].sort());
-  for (const [, label] of heads) assert.match(label, /^.+ · (Running|Needs you|Finished, not read yet|Failed|Idle)$/);
+  for (const [, label] of heads) assert.match(label, /^.+ · (Running|Waiting on you|Finished, not read yet|Failed|Idle)$/);
   assert.notEqual(heads[0][1], heads[1][1], 'the two heads read differently');
   await shot('strip-robot-heads', page.locator('#nav'));
 });
