@@ -20,6 +20,7 @@ import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
 import { createMove, movedNote } from './move.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
+import { NOT_USE } from '../../packages/protocol/index.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -751,11 +752,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return { status: 200, on: locked };
     },
     // Most recently used first, for the desktop's History and the phone (owner, 2026-10-25). used: the chat's newest event,
-    // not counting the stops a close, an exit or a daemon restart write, nor the created event (its time is a later Date.now()
+    // not counting NOT_USE (protocol): the stops a close, an exit or a restart write, a move, rename or archive, nor the created event (its time is a later Date.now()
     // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived,
-        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN ('created', 'stopped', 'closed', 'exited', 'interrupted') ORDER BY cursor DESC LIMIT 1), created) AS used,
+        COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
           AND a.cursor > COALESCE((SELECT cursor FROM events WHERE conversation = c.id AND type IN ('turn-end', 'interrupted', 'exited', 'stopped', 'closed', 'error') ORDER BY cursor DESC LIMIT 1), 0)

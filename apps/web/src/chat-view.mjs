@@ -3,7 +3,7 @@ import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.
 import { esc, copy, limitLine, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
-import { phoneDialogBody } from './phone-link.mjs'; import { LABEL } from './panel.mjs';
+import { phoneDialogBody } from './phone-link.mjs'; import { LABEL } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
 
 export function installChat(outer) {
 const ART = { state: null, mode: 'panel', pins: new Set() }; // pins: chat id + title the user pinned; the agent re-sending it keeps the pin (O27)
@@ -691,7 +691,7 @@ function applyChat(ev, into) {
   if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project); if (outer.fresh.delete(s.id)) outer.startDefaults(s); outer.S.sessions.push(s); } return null; }
   const s = into ?? outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
-  if (!['stopped', 'closed', 'exited', 'interrupted'].includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
+  if (!NOT_USE.includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {

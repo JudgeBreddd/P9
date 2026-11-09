@@ -211,3 +211,129 @@ test('projects: delete leaves the folder, Locate, archive and back, a chat\'s Re
   await page.locator(`#navList .row[data-chat="${a}"]`).waitFor({ state: 'detached', timeout: 5000 });
   assert.deepEqual(errors, []);
 });
+
+// Nightly 3 (Builder, 2026-11-09): "new prject gets cut off". A long linked path must not widen the New project dialog:
+// nothing scrolls sideways and Create stays inside the dialog, in a small window and a desktop one.
+test('projects: the New project dialog fits a long folder path', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const long = path.join('personal-projects', 'a-folder-with-a-rather-long-name-for-this-check', 'and-another-long-part-under-it', 'event-horizon-app');
+  await mkdir(path.join(instance.workspace, long), { recursive: true });
+  const c = (await call(instance, '/chat', 'POST', { provider: 'claude', folder: long })).conversation;
+  assert.ok(c);
+  const { app, page, errors, pickNext } = await launch(t, instance);
+  await page.locator('#navList [data-newproj]').first().click();
+  const dlg = page.locator('#pjNew');
+  await dlg.waitFor({ state: 'visible', timeout: 5000 });
+  await dlg.locator('input[name=name]').fill('P9 - Event Horizon');
+  await dlg.locator('#pjW2').check();
+  await pickNext(path.join(instance.workspace, long));
+  await dlg.locator('[data-pick=linked]').click();
+  await dlg.locator('.found', { hasText: '1 chat was started in this folder' }).waitFor({ timeout: 5000 });
+  for (const width of [540, 1280]) {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setMinimumSize(320, 400));
+    await page.setViewportSize({ width, height: 760 });
+    await until(async () => Math.abs(await page.evaluate(() => window.innerWidth) - width) <= 20, async () => `window ${width} wide (is ${await page.evaluate(() => window.innerWidth)})`, 5000);
+    const m = await page.evaluate(() => { const d = document.querySelector('#pjNew'), r = d.getBoundingClientRect(), b = d.querySelector('[type=submit]').getBoundingClientRect();
+      return { scroll: d.scrollWidth, client: d.clientWidth, formScroll: d.querySelector('form').scrollWidth, formClient: d.querySelector('form').clientWidth, right: r.right, createRight: b.right, createLeft: b.left, left: r.left }; });
+    if (process.env.P9_EVIDENCE) await page.screenshot({ path: path.join(process.env.P9_EVIDENCE, `nightly3-new-project-${width}.png`) });
+    assert.ok(m.scroll <= m.client && m.formScroll <= m.formClient, `${width} wide: the dialog scrolls sideways ${JSON.stringify(m)}`);
+    assert.ok(m.createLeft >= m.left && m.createRight <= m.right, `${width} wide: Create is outside the dialog ${JSON.stringify(m)}`);
+  }
+  assert.deepEqual(errors, []);
+});
+
+// Nightly 3: "moving a chat to a project changes the edited last timer". Only a message or a turn is activity: a move,
+// a rename and an archive leave a chat's last-used time (and so its place in the list) alone, live and after a reload.
+test('projects: move, rename and archive do not count as use', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const make = async (text) => { const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+    await call(instance, '/chat/' + id + '/prompt', 'POST', { text }); await ended(instance, id); return id; };
+  const older = await make('title Older'), newer = await make('title Newer');
+  const used = async (id) => (await conv(instance, id)).used;
+  const before = await used(older);
+  const p = (await call(instance, '/projects', 'POST', { name: 'Kept', work: { kind: 'p9' } })).project.id;
+  const { page, errors } = await launch(t, instance);
+  const order = (zone) => page.evaluate((zone) => [...document.querySelectorAll(`#navList [data-zone="${zone}"] .row[data-chat]`)].map((r) => r.dataset.chat), zone);
+  await until(async () => (await order('')).join() === [newer, older].join(), 'newest first in Chats');
+  await call(instance, '/chat/' + older + '/rename', 'POST', { title: 'Older renamed' });
+  await page.locator(`#navList .row[data-chat="${older}"]`, { hasText: 'Older renamed' }).waitFor({ timeout: 10000 });
+  await call(instance, '/chat/' + older + '/archive', 'POST', { archived: true });
+  await page.locator(`#navList .row[data-chat="${older}"]`).waitFor({ state: 'detached', timeout: 10000 });
+  await call(instance, '/chat/' + older + '/archive', 'POST', { archived: false });
+  await page.locator(`#navList .row[data-chat="${older}"]`).waitFor({ timeout: 10000 });
+  assert.deepEqual(await order(''), [newer, older], 'a rename and an archive keep the place');
+  for (const id of [newer, older]) { await call(instance, '/chat/' + id + '/project', 'POST', { project: p }); await until(async () => (await zoneOf(page, id)) === p, 'moved in'); }
+  assert.deepEqual(await order(p), [newer, older], 'a move keeps the place');
+  assert.equal(await used(older), before, 'the daemon\'s last used time is unchanged');
+  await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await until(async () => (await order(p)).join() === [newer, older].join(), async () => 'after a reload ' + JSON.stringify(await order(p)));
+  assert.deepEqual(errors, []);
+});
+
+// Nightly 3: "new prject detected chats made in that prject but didnt move the chat like it offered to". His steps: a
+// chat started in a folder from the app, then New project, In a folder I already have, that folder, tick, Create. The
+// chat shows under the project in the panel, also after a reload; a chat that can't be moved is named in the dialog.
+test('projects: the offered chat moves in and shows under the project', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  await mkdir(path.join(instance.workspace, 'site'), { recursive: true });
+  const other = (await call(instance, '/projects', 'POST', { name: 'Other', work: { kind: 'p9' } })).project.id;
+  // His real case: a chat opened in that folder and stopped before anything was sent. The panel hides it, so the offer
+  // must not count it (on nightly 3 it was the one chat offered, and it moved out of sight).
+  const ghost = (await call(instance, '/chat', 'POST', { provider: 'claude', folder: 'site' })).conversation;
+  await call(instance, '/chat/' + ghost + '/stop', 'POST', {});
+  const { page, errors, pickNext } = await launch(t, instance);
+  // Builder has projects closed in the panel: the open/closed choice is kept.
+  await page.locator(`#navList [data-toggle="${other}"]`).click();
+  await page.locator(`#navList [data-proj="${other}"][aria-expanded=false]`).waitFor({ timeout: 5000 });
+  await page.click('#newBtn'); await page.locator('#newFolder').waitFor();
+  await pickNext(path.join(instance.workspace, 'site'));
+  await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
+  await page.waitForFunction(() => document.querySelector('#newFolder').value === 'site', null, { timeout: 5000 });
+  await page.locator('#newPop [data-new="claude"]').first().click();
+  await page.locator('.pane .welcome', { hasText: 'site' }).waitFor({ timeout: 10000 });
+  const chat = (await call(instance, '/chat')).conversations.find((c) => c.folder === 'site').id;
+  await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title Site notes' }); await ended(instance, chat);
+
+  const dlg = page.locator('#pjNew');
+  const start = async (name) => {
+    await page.locator('#navList [data-newproj]').first().click();
+    await dlg.waitFor({ state: 'visible', timeout: 5000 });
+    await dlg.locator('input[name=name]').fill(name);
+    await dlg.locator('#pjW2').check();
+    await pickNext(path.join(instance.workspace, 'site'));
+    await dlg.locator('[data-pick=linked]').click();
+  };
+  await start('Site');
+  await dlg.locator('.found', { hasText: '1 chat was started in this folder: “Site notes”. Add it to the project?' }).waitFor({ timeout: 5000 });
+  await dlg.locator('#pjAdopt').check();
+  await dlg.locator('button[type=submit]').click();
+  await page.locator('#projPage h1', { hasText: 'Site' }).waitFor({ timeout: 10000 });
+  const site = (await project(instance, 'Site')).id;
+  assert.equal((await conv(instance, chat)).project, site, 'moved on the daemon');
+  assert.equal((await conv(instance, ghost)).project, null, 'the hidden chat was not offered');
+  await until(async () => (await zoneOf(page, chat)) === site, async () => 'the chat under the project in the panel (' + await zoneOf(page, chat) + ')');
+  await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
+  await until(async () => (await zoneOf(page, chat)) === site, async () => 'after a reload, under the project (' + await zoneOf(page, chat) + ')');
+
+  // A chat that goes between the offer and Create (here: deleted) is named in the dialog, not dropped in silence.
+  await call(instance, '/chat/' + chat + '/project', 'POST', { project: null });
+  const second = (await call(instance, '/chat', 'POST', { provider: 'claude', folder: 'site' })).conversation;
+  await call(instance, '/chat/' + second + '/prompt', 'POST', { text: 'title Second' }); await ended(instance, second);
+  for (const name of ['Third', 'Fourth']) { const id = (await call(instance, '/chat', 'POST', { provider: 'claude', folder: 'site' })).conversation; await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'title ' + name }); await ended(instance, id); }
+  await start('Site two');
+  // Newest first, up to three named, then the count of the rest.
+  await dlg.locator('.found', { hasText: '4 chats were started in this folder: “Fourth”, “Third”, “Second” and 1 more. Add them to the project?' }).waitFor({ timeout: 5000 });
+  await call(instance, '/chat/' + second + '/delete', 'POST', {});
+  await dlg.locator('#pjAdopt').check();
+  await dlg.locator('button[type=submit]').click();
+  await dlg.locator('.err', { hasText: '“Site two” is made, but 1 chat could not be added. That chat is no longer there.' }).waitFor({ timeout: 10000 });
+  assert.equal(await dlg.locator('.err').textContent(), '“Site two” is made, but 1 chat could not be added. That chat is no longer there.', 'no drag hint for a chat that is gone');
+  assert.equal(await page.locator('.toast', { hasText: 'moveChat' }).count(), 0, 'the dialog says it once, no raw toast');
+  assert.equal((await call(instance, '/chat')).conversations.filter((c) => c.project && c.folder === 'site').length, 3, 'the three that could move, moved');
+  const two = (await project(instance, 'Site two')).id;
+  assert.equal((await conv(instance, chat)).project, two, 'the one that could move, moved');
+  await dlg.locator('button[type=submit]', { hasText: 'Open the project' }).click();
+  await page.locator('#projPage h1', { hasText: 'Site two' }).waitFor({ timeout: 10000 });
+  assert.equal((await call(instance, '/projects')).projects.filter((p) => p.name === 'Site two').length, 1, 'no second project');
+  assert.deepEqual(errors.filter((e) => !/unknown-conversation/.test(e)), []);
+});

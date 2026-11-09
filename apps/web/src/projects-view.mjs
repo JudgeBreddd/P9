@@ -7,7 +7,7 @@ import { svg, esc } from './helpers.mjs';
 import { PANEL_ICONS, LABEL, listedChats, stateOf } from './panel.mjs';
 
 const ERR = { 'folder-exists': 'A folder with that name is already there. Change the name or the parent.', 'folder-refused': 'P9 can\'t use that folder. Pick another.',
-  'file-exists': 'A file with that name is already added.', 'too-many-files': 'This project has the most files it can hold (200).', 'request-refused': 'P9 refused that. Check the name and try again.' };
+  'file-exists': 'A file with that name is already added.', 'too-many-files': 'This project has the most files it can hold (200).', 'request-refused': 'P9 refused that. Check the name and try again.', 'unknown-conversation': 'That chat is no longer there.' };
 const where = f => f === '' ? 'Workspace' : f;
 const slug = s => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
 const size = n => n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
@@ -17,7 +17,7 @@ const fmt = t => { if (!t) return ''; const m = Math.floor((Date.now() - t) / 60
 
 export function installProjects(o, api) {
   const I = PANEL_ICONS, $ = s => document.querySelector(s), page = $('#projPage'), chats = $('#chats');
-  const call = (action, body) => o.liveChat.call(action, body);
+  const call = (action, body, opts) => o.liveChat.call(action, body, opts);
   const find = id => o.S.sessions.find(s => s.id === id);
   // cur: the shown project as GET /projects/<id> gives it (instructions, files, agentFiles, sharedWith).
   let cur = null, edit = false, saveT = 0;
@@ -228,7 +228,7 @@ export function installProjects(o, api) {
     </fieldset>
     <p class="err" role="alert" hidden></p>
     <div class="btns"><button type="button" data-slot="button" data-variant="ghost" data-cancel>Cancel</button><button data-slot="button" data-variant="default" type="submit">Create project</button></div></form>`;
-  const form = dlg.querySelector('form'), F = form.elements, D = { linked: undefined, parent: '', started: [] };
+  const form = dlg.querySelector('form'), F = form.elements, D = { linked: undefined, parent: '', started: [], made: null };
   const err = t => { const p = form.querySelector('.err'); p.textContent = t || ''; p.hidden = !t; };
   const paths = () => {
     form.querySelector('[data-show=linked]').textContent = D.linked === undefined ? '' : where(D.linked);
@@ -239,10 +239,16 @@ export function installProjects(o, api) {
     // Two projects may share one folder; the dialog names the others (N1 spec).
     const others = (o.S.projects || []).filter(p => p.work.kind !== 'p9' && p.work.folder === f), sh = form.querySelector('.shared');
     sh.hidden = !others.length; sh.textContent = others.length ? `${others.map(p => p.name).join(', ')} already use${others.length > 1 ? '' : 's'} this folder. Two projects can share one.` : '';
-    // The offer to add the chats already started there: only chats in no project, and never ticked for you.
-    const r = await call('startedIn', { folder: f }); D.started = r.status === 200 ? r.body.conversations.filter(c => !c.project).map(c => c.id) : [];
+    // The offer to add the chats already started there: only chats in no project that the panel lists, never ticked for you.
+    // Nightly 3: the daemon also counts a chat closed before anything was sent, which the panel hides; moving it moved
+    // nothing Builder could see.
+    const shown = new Set(listedChats(o.S.sessions).map(s => s.id));
+    const r = await call('startedIn', { folder: f }), offer = r.status === 200 ? r.body.conversations.filter(c => !c.project && shown.has(c.id)) : [];
+    D.started = offer.map(c => c.id);
     const fd = form.querySelector('.found'), n = D.started.length; fd.hidden = !n; F.adopt.checked = false;
-    fd.querySelector('label').textContent = `${n} chat${n > 1 ? 's were' : ' was'} started in this folder. Add ${n > 1 ? 'them' : 'it'} to the project?`;
+    // Named, newest first, so you can see what will move (Builder: "it didn't tell me" which chat): up to 3, then "and N more".
+    const t = offer.map(c => `“${c.title || 'Untitled chat'}”`), names = n > 3 ? `${t.slice(0, 3).join(', ')} and ${n - 3} more` : n > 1 ? `${t.slice(0, -1).join(', ')} and ${t[n - 1]}` : t[0];
+    fd.querySelector('label').textContent = `${n} chat${n > 1 ? 's were' : ' was'} started in this folder: ${names}. Add ${n > 1 ? 'them' : 'it'} to the project?`;
   }
   form.addEventListener('click', async e => {
     if (e.target.closest('[data-cancel]')) return dlg.close();
@@ -253,18 +259,25 @@ export function installProjects(o, api) {
   F.name.addEventListener('input', paths);
   form.addEventListener('change', e => { if (e.target.name === 'where') err(); });
   form.addEventListener('submit', async e => {
-    e.preventDefault(); const name = F.name.value.trim(), w = F.where.value;
+    e.preventDefault(); if (D.made) { dlg.close(); return openProject(D.made); }
+    const name = F.name.value.trim(), w = F.where.value;
     if (!name) { err('Give the project a name.'); return F.name.focus(); }
     if (w === 'linked' && D.linked === undefined) { err('Pick the folder first.'); return form.querySelector('[data-pick=linked]').focus(); }
     const work = w === 'p9' ? { kind: 'p9' } : w === 'linked' ? { kind: 'linked', folder: D.linked } : { kind: 'new', parent: D.parent, name: slug(name) };
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     const r = await call('createProject', { name, about: F.about.value.trim(), work }).finally(() => { btn.disabled = false; });
     if (r.status !== 201) return err(ERR[r.body?.error] || 'P9 could not make the project (' + (r.body?.error || r.status) + ').');
-    if (w === 'linked' && F.adopt.checked) for (const id of D.started) { const m = await call('moveChat', { id, project: r.body.project.id }); const s = find(id); if (m.status === 200 && s) s.project = r.body.project.id; }
-    dlg.close(); await o.loadProjects(); openProject(r.body.project.id);
+    // A chat that can't be moved (gone since the offer) is named here, not dropped in silence; Create becomes Open.
+    const made = r.body.project.id; let left = 0, why;
+    if (w === 'linked' && F.adopt.checked) for (const id of D.started) { const m = await call('moveChat', { id, project: made }, { quiet: true }); const s = find(id);
+      if (m.status === 200) { if (s) s.project = made; } else { left++; why = m.body?.error || m.status; } }
+    await o.loadProjects();
+    if (left) { D.made = made; btn.textContent = 'Open the project';
+      return err(`“${name}” is made, but ${left} chat${left > 1 ? 's' : ''} could not be added. ${ERR[why] || 'P9 refused the move (' + why + ').'}${why === 'unknown-conversation' ? '' : ` Drag ${left > 1 ? 'them' : 'it'} onto the project in the panel.`}`); }
+    dlg.close(); openProject(made);
   });
   function newProject() {
-    api.closeMenu(); form.reset(); err(); Object.assign(D, { linked: undefined, parent: '', started: [] });
+    api.closeMenu(); form.reset(); err(); Object.assign(D, { linked: undefined, parent: '', started: [], made: null }); form.querySelector('[type=submit]').textContent = 'Create project';
     form.querySelector('.shared').hidden = form.querySelector('.found').hidden = true; paths();
     dlg.showModal(); F.name.focus();
   }

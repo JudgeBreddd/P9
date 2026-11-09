@@ -69,6 +69,9 @@
 
 /* ---- The New project dialog and the questions (Rename chat, Delete) ---- */
 dialog.pj-dlg{max-width:min(540px,calc(100vw - 40px))}
+/* A long folder path must not widen the dialog (nightly 3): grid and flex items and a fieldset default to their min-content
+   width, which the path's nowrap makes the whole path; at 0 they take the dialog's width and the path ellipsizes. */
+.pj-dlg :is(form>*,.opt>*,.sub>*){min-width:0}
 .pj-dlg form{display:grid;gap:14px;padding:22px}
 .pj-dlg h2{margin:0;font-size:18px;font-weight:650}
 .pj-dlg form>label{display:grid;gap:5px;font-size:12.5px;color:var(--muted-foreground)}
