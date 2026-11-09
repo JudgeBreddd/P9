@@ -260,12 +260,15 @@ test("a chat's agent reads its own project's added files without being asked; no
   assert.equal(await perm({ name: 'Glob', kind: 'search', rawInput: { pattern: '*.md', path: files(a) } }), 'auto', 'nor a glob');
   assert.equal(await perm({ name: 'Glob', kind: 'search', rawInput: { pattern: '../**', path: files(a) } }), 'asked', 'a glob that climbs out is asked');
   assert.equal(await perm({ name: 'Grep', kind: 'search', rawInput: { pattern: 'mine' } }), 'asked', 'a search with no path (the cwd) is asked');
+  for (const pattern of ['{/etc/*,x}', '{x,~/y}', '{x,\\\\host\\y}'])
+    assert.equal(await perm({ name: 'Glob', kind: 'search', rawInput: { pattern, path: files(a) } }), 'asked', `a glob with an absolute part in braces is asked: ${pattern}`);
   assert.equal(await perm(read(path.join(files(b), 'other.md'))), 'asked', "a read in another project's files is asked");
   assert.equal(await perm(read(path.join(home(instance), a, 'project.json'))), 'asked', 'the project folder itself is asked');
   // An existing file: a new one is asked anyway (its path cannot be resolved), which would hide a missing tool check.
   assert.equal(await perm({ name: 'Write', kind: 'edit', title: 'Write notes.md', rawInput: { file_path: own, content: 'x' },
     locations: [{ path: own }] }), 'asked', 'a write in its own files is asked');
   assert.equal(await perm({ name: 'Bash', kind: 'execute', rawInput: { command: 'cat ' + own } }), 'asked', 'a command that reads is asked');
+  assert.equal(await perm({ name: 'constructor', kind: 'read', rawInput: { file_path: own }, locations: [{ path: own }] }), 'asked', 'a tool named constructor is asked');
   await symlink(path.join(instance.workspace, 'secret.txt'), path.join(files(a), 'out.md'));
   assert.equal(await perm(read(path.join(files(a), 'out.md'))), 'asked', 'a link in its files pointing outside is asked');
   assert.equal(await perm({ name: 'Grep', kind: 'search', rawInput: { pattern: 'outside', path: files(a) } }), 'asked', 'a search over a folder holding a link is asked');
