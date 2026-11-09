@@ -1,5 +1,5 @@
 // Small pure helpers of the desktop shell, kept out of main.mjs so a test can load them without Electron.
-// The right-click menu, as VS Code and Chrome show it: in a text box Cut, Copy, Paste, Select All (a misspelled word adds its
+// The right-click menu: in a text box Cut, Copy, Paste, Select All (a misspelled word adds its
 // suggestions on top); on selected text Copy; on an image Copy Image, on a link Copy Link Address (016 cC: both were missing);
 // elsewhere nothing, so the page's own handlers see the click. copyImage/copyLink come from main.mjs (webContents, clipboard).
 export function contextMenu({ isEditable, selectionText, editFlags = {}, misspelledWord, dictionarySuggestions = [], mediaType, hasImageContents, linkURL }, replace, learn, { copyImage, copyLink } = {}) {

@@ -1,5 +1,5 @@
-// Server mode (threat model row 50): the window talks to a P9 daemon on another machine through the user's own ssh, the way
-// VS Code Remote-SSH does. One `ssh -N` forwards the server daemon's Unix socket, and its Dev Focus editor's (editor.sock), to
+// Server mode (threat model row 50): the window talks to a P9 daemon on another machine through the user's own ssh.
+// One `ssh -N` forwards the server daemon's Unix socket, and its Dev Focus editor's (editor.sock), to
 // sockets in an owner-only folder here; that folder also gets the server's desktop.json, socket path rewritten, so every daemonRequest(state, ...) works unchanged.
 // ssh is run with fixed argv (no shell here) and BatchMode: keys or an agent only, never a password prompt. A remote with no
 // key gets one login with the password (ssh-login.mjs, threat model row 78); every call here then rides it (ControlPath).
@@ -178,8 +178,8 @@ export function restartServer(host, ssh = 'ssh') {
 // editor: false leaves the editor forward off (the move's tunnel has no use for it).
 // onDrop runs when the tunnel ends without close() (lid closed, network gone, server restarted); the caller reconnects.
 // signal: aborted when P9 quits, so a forward still waiting for /health is ended too, never left running on its own.
-// tcp (Windows): ssh forwards a loopback port to each server socket (Windows OpenSSH has no local Unix socket forward, so
-// VS Code Remote-SSH uses ports there too) and a relay here carries socketPath's connections to it. Any local process can
+// tcp (Windows): ssh forwards a loopback port to each server socket (Windows OpenSSH has no local Unix socket forward)
+// and a relay here carries socketPath's connections to it. Any local process can
 // reach the port; the server daemon's cookie still guards every route (threat model row 50, Windows).
 export async function connectServer({ host, ssh = 'ssh', runtime = process.env.XDG_RUNTIME_DIR || os.tmpdir(), editor = true, onDrop = () => {}, signal, tcp = WINDOWS }) {
   if (typeof host !== 'string' || !HOST.test(host)) throw new Error('server-host-refused');

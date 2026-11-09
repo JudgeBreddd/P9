@@ -335,8 +335,8 @@ the launcher and those copies; the rest of your state in `%LOCALAPPDATA%\P9` sta
   to P9 itself. Select text and press *Add comment*, collect several, and *Send N comments* sends them back
   as one message that quotes each. Details: [docs/guide.md](docs/guide.md#artifacts).
 - **A second machine (Remote Connect).** The Local/Remote badge in the top bar, or Settings > Remote
-  Connect, makes this window work on another Linux machine's P9 over an ssh tunnel (the way VS Code
-  Remote-SSH works), Dev Focus included. If P9 is not running there, Connect starts it, or installs a small
+  Connect, makes this window work on another Linux machine's P9 through one ssh tunnel that forwards
+  that P9's socket, Dev Focus included. If P9 is not running there, Connect starts it, or installs a small
   one in `~/.local/share/p9/remote` (no source checkout), and then asks once: **Temporary** (stops a few
   minutes after you disconnect) or **Always on** (installs the full P9 there and keeps it running; this may
   need the remote's admin password once, typed into P9's own window). The small one has no Mission Control;

@@ -123,7 +123,7 @@ test('Setup wizard card 1: says what connecting offers, and connects to a new re
   for (let back = 0; back < 4 && (await page.locator('#welT').textContent()) !== 'Welcome to Event Horizon'; back++) await page.locator('#welFoot [data-act="back"]').click();
   const card = await page.locator('#welBody').innerText();
   assert.match(card, /Work on a remote over ssh\?/);
-  assert.match(card, /kept running, so your phone and this desktop reach it any time, or only while you are connected, the way VS Code Remote-SSH works/);
+  assert.match(card, /kept running, so your phone and this desktop reach it any time, or only while you are connected\. A remote/);
   assert.doesNotMatch(card, /server/i);
   assert.doesNotMatch(card, /Four checks|Mission Control/, 'c21 item 8: the starter-files check is gone');
   await both(page, 'ssh-wizard-card1', page.locator('#welDlg'));

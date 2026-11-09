@@ -113,7 +113,7 @@ select::picker(select){margin-top:4px;padding:4px;border:1px solid var(--border)
 select option{padding:5px 10px 5px 6px;border-radius:6px;font-size:12.5px}
 select option:hover,select option:focus-visible{background:var(--accent);outline:none}
 select option::checkmark{color:var(--primary)}
-/* Mission lists tinted like code: Builder's VS Code theme, Catppuccin Mocha */
+/* Mission lists tinted like code: Builder's editor theme, Catppuccin Mocha */
 #fMission .kind,#fMission .tint,#mdl .panel .kind,#mdl .panel .tint{color:var(--tint)}
 #fMission .plist .mono b,#mdl .panel .plist .mono b{color:var(--tint)}
 /* Dev Focus mock: Explorer | editor; editor tabs live in the top bar like chat tabs */

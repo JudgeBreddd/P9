@@ -1,5 +1,5 @@
-// The Windows terminal backend (issue #11 bug 1): a pseudo console (ConPTY, the Windows 10 1809+ API VS Code's
-// terminal also uses) driven through node:ffi, so the daemon bundle gains no native addon and no installer files.
+// The Windows terminal backend (issue #11 bug 1): a pseudo console (ConPTY, the Windows 10 1809+
+// API) driven through node:ffi, so the daemon bundle gains no native addon and no installer files.
 // Each terminal is one shell in its own Job Object (Stop ends what it started) attached to a pseudo console whose
 // input and output are two named pipes this file creates and Node reads and writes as ordinary async sockets.
 // ponytail: node:ffi is experimental in Node 26; the FFI calls here are synchronous but none of them waits on I/O.
