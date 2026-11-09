@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
-import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open, realpath } from 'node:fs/promises';
+import { readdir, readFile as readAsset, writeFile, rename, stat, access, mkdir, open, realpath, link, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { constants as fsConstants, existsSync, realpathSync } from 'node:fs';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -319,13 +319,18 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     // Fresh-install finding 2 (threat model row 17): Mission's first request with no settings file writes {} once, create-only and
     // owner-only, so Mission starts empty at its onboarding card. No workspace file is made. A file deleted after settings
     // loaded is not written again (the last good settings stay, as below), and an existing file is never opened for writing.
-    // One write for the daemon's life: Mission's first requests arrive together, and one that read the new file before
-    // its {} was in it would see an empty, invalid file.
+    // One write for the daemon's life, and it lands whole (O4b): {} goes into a temp file that link() then names, so no
+    // reader (another request, /setup, another process) ever sees the name with an empty file behind it. link() fails
+    // with EEXIST rather than replacing, so a file someone made meanwhile is kept.
+    // ponytail: needs hard links where settings.json lives (ext4, NTFS, APFS have them). On a filesystem without them
+    // (vfat, some FUSE mounts) no file is made and Mission answers settings-missing until the user saves settings.
     if (firstRun && text === undefined && !settings && settingsText === undefined) {
       firstWrite ??= (async () => {
         await mkdir(path.dirname(settingsFile), { recursive: true, mode: 0o700 }).catch(() => {});
-        const file = await open(settingsFile, 'wx', 0o600).catch(() => null);
-        if (file) { try { await file.writeFile('{}\n'); await file.sync(); } finally { await file.close(); } }
+        const temporary = settingsFile + '.' + randomUUID() + '.new', file = await open(temporary, 'wx', 0o600).catch(() => null);
+        if (!file) return;
+        try { try { await file.writeFile('{}\n'); await file.sync(); } finally { await file.close(); } await link(temporary, settingsFile).catch(() => {}); }
+        finally { await unlink(temporary).catch(() => {}); }
       })().catch(() => {});
       await firstWrite;
       text = await readAsset(settingsFile, 'utf8').catch(() => undefined);

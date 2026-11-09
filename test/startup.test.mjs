@@ -7,12 +7,17 @@ import { fixture, root, daemon, restart, http, authenticated } from './helpers.m
 import { once } from 'node:events';
 import { hash } from '../packages/files/index.mjs';
 
+// How long a second daemon may take to start and refuse (O4b). It loads the whole daemon first. The refusal alone took
+// 286-352 ms in the dev space; on GitHub's Linux runners the whole test took 860 ms when it passed and 1,943 ms when a
+// refusal went past the old 1 s limit (2026-11-09).
+const REFUSAL_MS = 5000;
+
 test('different XDG state homes cannot bypass the home-directory daemon lock', async (t) => {
   const first = await daemon(t);
   const second = spawnSync(process.execPath, ['--import', './test/home-fixture.mjs', 'apps/server/main.mjs',
     '--workspace', first.workspace, '--state', path.join(first.directory, 'second-state'), '--recovery', first.recovery],
   { cwd: root, env: { PATH: process.env.PATH, P9_TEST_HOME: first.directory,
-    XDG_STATE_HOME: path.join(first.directory, 'different-xdg') }, encoding: 'utf8', timeout: 1000 });
+    XDG_STATE_HOME: path.join(first.directory, 'different-xdg') }, encoding: 'utf8', timeout: REFUSAL_MS });
   assert.equal(second.status, 1, second.stderr);
   assert.match(second.stderr, /daemon-already-running/);
 });
@@ -23,7 +28,7 @@ test('one daemon per user state home refuses nested and disjoint workspace roots
     await mkdir(workspace);
     const second = spawnSync(process.execPath, ['--import', './test/home-fixture.mjs', 'apps/server/main.mjs', '--workspace', workspace,
       '--state', path.join(first.directory, 'second-state'), '--recovery', first.recovery],
-    { cwd: root, env: { PATH: process.env.PATH, P9_TEST_HOME: first.directory, XDG_STATE_HOME: first.directory }, encoding: 'utf8', timeout: 1000 });
+    { cwd: root, env: { PATH: process.env.PATH, P9_TEST_HOME: first.directory, XDG_STATE_HOME: first.directory }, encoding: 'utf8', timeout: REFUSAL_MS });
     assert.equal(second.status, 1, second.stderr);
     assert.match(second.stderr, /daemon-already-running/);
   }

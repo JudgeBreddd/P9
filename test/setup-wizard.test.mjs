@@ -5,6 +5,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
@@ -573,4 +575,30 @@ test('Setup wizard: Mission writes its own empty settings file on first run, and
   await rm(file);
   assert.equal((await call(instance, '/mission')).status, 200, 'the last good settings stay');
   await assert.rejects(stat(file), 'not written again after it loaded');
+});
+
+// O4b: the first-run write lands whole. A reader racing it (another process, or /setup while Mission's first request
+// loads the file) never sees an empty settings.json, and /setup never says a file is there but not loaded.
+test('Setup wizard: the first-run settings file is never seen empty, and /setup never reports it present but not loaded', { timeout: 60000 }, async (t) => {
+  const instance = await daemon(t);
+  const file = settingsPath(instance.directory), stop = new Int32Array(new SharedArrayBuffer(4));
+  // A thread that reads the file as fast as it can, from before the first request until after the last. It says
+  // 'ready' from inside its loop's first pass, and no request goes out before that: a late-starting thread on a busy
+  // machine would otherwise miss the write (or see nothing at all).
+  const reader = new Worker(`const { readFileSync } = require('node:fs'); const { workerData: [file, stop], parentPort } = require('node:worker_threads');
+    let reads = 0, empty = 0, said = false;
+    while (!Atomics.load(stop, 0)) { try { if (readFileSync(file, 'utf8') === '') empty++; reads++; } catch {} if (!said) { said = true; parentPort.postMessage('ready'); } }
+    parentPort.postMessage({ reads, empty });`, { eval: true, workerData: [file, stop] });
+  assert.deepEqual(await once(reader, 'message'), ['ready']);
+  await assert.rejects(stat(file), 'no settings file before the first request, so the reader is there for its creation');
+  const seen = once(reader, 'message').then(([counts]) => counts);
+  const routes = ['/mission', ...Array.from({ length: 30 }, (_, i) => i % 10 ? '/setup' : '/mission')];
+  const replies = await Promise.all(routes.map((route) => call(instance, route)));
+  Atomics.store(stop, 0, 1);
+  const { reads, empty } = await seen;
+  assert.ok(reads > 0, 'the reader saw the file');
+  assert.equal(empty, 0, `the reader saw an empty settings.json ${empty} of ${reads} reads`);
+  const of = (route) => replies.filter((_, i) => routes[i] === route);
+  assert.deepEqual(of('/mission').map((r) => [r.status, r.body.error]).filter(([status]) => status !== 200), [], 'every Mission request answered');
+  assert.equal(of('/setup').filter((r) => r.body.settingsPresent && !r.body.settings).length, 0, '/setup said present but not loaded');
 });
