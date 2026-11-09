@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { _electron } from '@playwright/test';
-import { daemon, http, authenticated, root, versionSeen } from './helpers.mjs';
+import { daemon, http, authenticated, root, versionSeen, openFiles } from './helpers.mjs';
 import { REPO } from '../apps/server/anymouse.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
@@ -264,8 +264,8 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   // Codex works: its pet runs in the top bar beside Claude's.
   const codex = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await call(instance, `/chat/${codex}/prompt`, 'POST', { text: 'slow' });
-  // Busy shows as its robot head in the rail or its in-chat pet running (chat open).
-  const codexBusy = ([id, want]) => want === !!(document.querySelector(`#rBots [data-bot="${id}"]`)?.hasAttribute('data-busy') || document.querySelector(`.pane[data-id="${id}"] canvas.pet[data-rows="7"]`));
+  // Busy shows as the working mark on its panel row or its in-chat pet running (chat open).
+  const codexBusy = ([id, want]) => want === !!(document.querySelector(`#navList .row[data-chat="${id}"] [data-busy]`) || document.querySelector(`.pane[data-id="${id}"] canvas.pet[data-rows="7"]`));
   await page.waitForFunction(codexBusy, [codex, true], { timeout: 15000 });
   assert.equal(await topPets(), 'good-pet:3,4,other-pet:7', 'a working agent runs in the top bar');
   await call(instance, `/chat/${codex}/cancel`, 'POST', {});
@@ -317,7 +317,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   const hostile = '\n# Plan\n\n- **one**\n- two\n\n```js\nlet a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2"> <iframe src="https://example.com"></iframe>\n\n[click](javascript:window.pwned=3) <https://example.com> ![x](https://example.com/x.png)'
     + ' [github.com](https://docs.example.test/p) [d](data:text/html,hi) [f](file:///etc/passwd) [r](/chat) [u](https://u:p@a.example.test/)';
   await call(instance, `/chat/${md}/prompt`, 'POST', { text: hostile });
-  await page.locator(`#tabs .tab[data-id="${md}"]`).click();
+  await page.locator(`#nav .row[data-chat="${md}"]`).click();
   const reply = page.locator(`#chats .pane[data-id="${md}"] .msg.agent`).last();
   await reply.locator('table').waitFor({ timeout: 15000 });
   assert.deepEqual(await reply.evaluate((m) => [...m.querySelectorAll('a')].map((a) => [a.getAttribute('href'), a.target, a.rel, a.textContent, a.nextElementSibling?.matches('.link-host') ? a.nextElementSibling.textContent : null])),
@@ -421,14 +421,16 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   for (const _ of [0, 1]) await pane.locator('.attach [data-unattach="0"]').click();
   await box.fill('');
 
-  // Sessions on load: a stopped chat and one whose tab was closed stay off the tabs after a restart, in History.
+  // Sessions on load: a chat stopped before any message is not listed after a restart; a stopped chat that was sent is.
   const stopped = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, `/chat/${stopped}/stop`, 'POST');
-  // Its robot head opens the chat modal at the newest message, not the first (Builder, 2026-10-17).
-  const hist = page.locator('#mdlBody .pane .hist');
+  // Opened from its panel row, the chat shows its newest message, not the first (Builder, 2026-10-17).
+  const hist = page.locator(`#chats .pane[data-id="${md}"] .hist`);
   for (const time of ['first', 'again']) {
-    await page.locator(`#rBots [data-bot="${md}"]`).click();
-    await hist.locator('table').waitFor();
+    await page.locator(`#navList .row[data-chat="${id}"]`).click();
+    await page.locator(`#chats .pane[data-id="${id}"]`).waitFor({ timeout: 10000 });
+    await page.locator(`#navList .row[data-chat="${md}"]`).click();
+    await hist.locator('table').waitFor({ timeout: 10000 });
     assert.deepEqual(await hist.evaluate((h) => [h.scrollHeight > h.clientHeight + 100, h.scrollHeight - h.scrollTop - h.clientHeight < 24]), [true, true], 'opens at the bottom: ' + time);
     if (time === 'again') { // a reply arriving while it is open keeps it on the newest message
       await shot('modal-reopen.png');
@@ -437,19 +439,16 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
       await page.waitForTimeout(200);
       assert.equal(await hist.evaluate((h) => h.scrollHeight - h.scrollTop - h.clientHeight < 24), true, 'stays pinned on a new reply');
     }
-    await page.click('#mdlX'); await page.locator('#mdl').waitFor({ state: 'hidden' });
   }
-  // History names a chat the way its tab does (the agent's title), not by its first message (P9 0.1.6).
+  // The panel row names a chat by the agent's title, not by its first message (P9 0.1.6).
   await call(instance, `/chat/${md}/prompt`, 'POST', { text: 'title Named by the agent' });
-  await page.locator(`#tabs .tab[data-id="${md}"]`, { hasText: 'Named by the agent' }).waitFor({ timeout: 15000 });
+  await page.locator(`#nav .row[data-chat="${md}"]`, { hasText: 'Named by the agent' }).waitFor({ timeout: 15000 });
   // Read before the restart: a restarted chat is a stub with no messages, which hides the difference.
-  await page.click('#histBtn');
-  assert.match(await page.locator('#histPop .item', { has: page.locator(`[data-open="${md}"]`) }).innerText(), /^Named by the agent/, 'History row = tab title, not the first message');
-  await page.keyboard.press('Escape');
-  // Its x stops it (Builder, 2026-10-18: "same as vs code"), so its robot head goes too.
-  await page.locator(`#tabs .tab[data-id="${md}"] .close`).click();
-  await page.locator(`#tabs .tab[data-id="${md}"]`).waitFor({ state: 'detached' });
-  await page.locator(`#rBots [data-bot="${md}"]`).waitFor({ state: 'detached', timeout: 15000 });
+  assert.match(await page.locator(`#navList .row[data-chat="${md}"] .t`).innerText(), /^Named by the agent/, 'row title = the agent\'s title, not the first message');
+  // The Stop on its row stops it; a chat that was sent keeps its row.
+  await page.locator(`#navList .rstop[data-stop="${md}"]`).click({ timeout: 10000 });
+  await page.locator(`#navList .rstop[data-stop="${md}"]`).waitFor({ state: 'detached', timeout: 15000 });
+  assert.equal(await page.locator(`#navList .row[data-chat="${md}"]`).count(), 1, 'a stopped chat that was sent stays listed');
 
   // The chat pet's spot is kept across a restart; the settings file no longer holds one shared spot.
   await app.close();
@@ -457,18 +456,18 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.deepEqual(JSON.parse(await readFile(path.join(profile, 'p9-settings.json'), 'utf8')).pet.chat, look(true, { system: 'dotdot', claude: 'good-pet', codex: 'other-pet' }));
   assert.deepEqual(await petSpots(), { ['mdlBody:' + codex]: dragged });
   await page.waitForFunction(() => document.querySelectorAll('#indPets canvas').length === 2, null, { timeout: 15000 });
-  const tabs = () => page.evaluate(() => [...document.querySelectorAll('#tabs .tab')].map((t) => t.dataset.id).sort());
-  assert.deepEqual(await tabs(), [id, codex].sort(), 'stopped and closed chats get no tab');
-  await page.click('#histBtn');
-  // A chat no message was sent in is not in History.
-  assert.equal(await page.locator('#histPop [data-open]').count(), 3);
-  assert.equal(await page.locator(`#histPop [data-open="${stopped}"]`).count(), 0);
-  await page.locator(`#histPop [data-open="${md}"]`).click();
-  assert.deepEqual(await tabs(), [id, codex, md].sort(), 'History opens a closed chat again');
-  await page.locator(`#tabs .tab[data-id="${md}"] .close`).click();
+  const rows = () => page.evaluate(() => [...document.querySelectorAll('#navList .row[data-chat]')].map((t) => t.dataset.chat).sort());
+  // A chat no message was sent in is not listed once stopped; the stopped chat that was sent is, and opens again.
+  await page.locator(`#navList .row[data-chat="${md}"]`).waitFor({ timeout: 15000 });
+  assert.deepEqual(await rows(), [id, codex, md].sort(), 'the sent chats are listed, the stopped unsent one is not');
+  await page.locator(`#navList .row[data-chat="${md}"]`).click();
+  await page.locator(`#chats .pane[data-id="${md}"]`).waitFor({ timeout: 10000 });
   await shot('pets-after-restart.png');
-  // Split view: each of the two panes shows its own agent's pet.
-  await page.click('#rSplit');
+  // Split view: each of the two panes shows its own agent's pet (the Codex chat and the Claude one, opened last).
+  await page.locator(`#navList .row[data-chat="${codex}"]`).click();
+  await page.locator(`#navList .row[data-chat="${id}"]`).click();
+  await page.locator(`#chats .pane[data-id="${id}"]`).waitFor({ timeout: 10000 });
+  await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
   await page.waitForFunction(() => document.querySelectorAll('#chats .pane canvas.pet').length === 2, null, { timeout: 15000 });
   assert.equal(await page.evaluate(() => [...document.querySelectorAll('#chats .pane')].map((p) => p.getAttribute('aria-label') + ':' + p.querySelector('canvas.pet').dataset.petName).sort().join()), 'Claude chat:good-pet,Codex chat:other-pet');
   await drawn('#chats .pane canvas.pet');
@@ -488,7 +487,7 @@ test('Pets: crafted folders refused; each waiting agent and each chat shows its 
   assert.notDeepEqual(petsMoved[0].at, petsAt[0].at, 'the dragged pet moved');
   assert.deepEqual(petsMoved[1].at, petsAt[1].at, 'the other chat pet stayed put');
   await shot('pets-split-dragged.png');
-  await page.click('#rSplit');
+  await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
   // Dev's pets here are refused names, so the spinner. Chat with pets turned off loses its chat pets but keeps the top-bar
   // pets (Builder, 2026-10-18: "No. Keep it on. I like it.").
   await page.keyboard.press('Control+2');
@@ -1103,7 +1102,8 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   // An item already waiting at start goes to the bell, not the stack.
   assert.equal(await page.locator('#cards [data-key^="reviews:"]').count(), 0);
   assert.match(await center(), /1 item in _tyler\/\nwaiting/);
-  const turn = async (id, text) => { await call(instance, `/chat/${id}/prompt`, 'POST', { text }); await page.locator(`#rBots [data-bot="${id}"]:not([data-busy])`).waitFor({ timeout: 15000 }); };
+  // A turn's end is read from the panel's strip: it is drawn in every focus, the list only while the panel is open.
+  const turn = async (id, text) => { await call(instance, `/chat/${id}/prompt`, 'POST', { text }); await page.locator(`#rBots .bot[data-chat="${id}"]:not([data-busy])`).waitFor({ state: 'attached', timeout: 15000 }); };
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   // A chat that writes a _tyler/ item: the item gets a card when the turn ends.
   await writeFile(path.join(instance.workspace, '_tyler/new-question.md'), '# Made by the chat\n\nA.\n');
@@ -1111,7 +1111,7 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   const card = page.locator('#cards [data-key^="reviews:"]');
   await card.waitFor({ timeout: 10000 });
   assert.match(await card.innerText(), /1\s*1 item needs you/);
-  assert.equal(await page.locator(`#rBots [data-bot="${id}"]`).getAttribute('data-agent'), 'claude', 'the running chat is a robot head');
+  assert.equal(await page.locator(`#navList .rowwrap[data-live] .row[data-chat="${id}"] .dot`).getAttribute('data-agent'), 'claude', 'the running chat is a live row in the panel');
   // Replied (Builder: the chat card never went away): no card for the chat itself, only the _tyler/ one.
   assert.equal(await page.locator('#cards .card:not([data-key="welcome"])').count(), 1);
   await shot('cards-new-item.png');
@@ -1155,12 +1155,12 @@ test('Cards: no rebuild per event, old _tyler/ items wait in the bell, a chat-ma
   assert.equal(await readFile(path.join(instance.workspace, '_tyler/qa-lines.md'), 'utf8'), noLine);
   await page.keyboard.press('Escape');
   await page.click('#rChat');
-  // The tab's x stops the chat, like VS Code (Builder, 2026-10-18: two robot heads for one open tab): its robot head goes.
-  await page.locator('#tabs .tab[data-id="' + id + '"] .close').click();
-  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ state: 'detached', timeout: 15000 });
+  // The Stop on the chat's panel row stops it (the tab's x is gone); the row loses its Stop.
+  await page.locator('#navList .rstop[data-stop="' + id + '"]').click({ timeout: 10000 });
+  await page.locator('#navList .rstop[data-stop="' + id + '"]').waitFor({ state: 'detached', timeout: 15000 });
   let state; for (let i = 0; i < 50 && state !== 'stopped'; i++, await new Promise((r) => setTimeout(r, 200))) state = (await call(instance, '/chat')).conversations.find((c) => c.id === id)?.state;
-  assert.equal(state, 'stopped', 'closing the tab left the chat running');
-  console.log('PASS cards: old item quiet in the bell, chat-made item carded at turn end, card kept across events, Skip clears it, chat is a robot head, x stops it');
+  assert.equal(state, 'stopped', 'the row Stop left the chat running');
+  console.log('PASS cards: old item quiet in the bell, chat-made item carded at turn end, card kept across events, Skip clears it, chat is a live row, its row Stop stops it');
 });
 
 test('Models and slash commands: the Model pill lists the agent\'s own models, typing / lists its commands, a picked model reaches the agent', { timeout: 120000 }, async (t) => {
@@ -1174,8 +1174,8 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   await page.locator('#rChat').waitFor();
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
-  await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
   // 0.1.8: the Model pill in the message bar lists the agent's models under its name, then Fast mode under its own (no submenus).
   await pane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
@@ -1199,15 +1199,15 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   assert.equal(await ta.inputValue(), '/compact ');
   assert.equal(await menu.isHidden(), true, 'menu closes once a space follows the name');
   await ta.fill('');
-  // Flashing (Builder, 2026-10-18): a turn updates the pane and its tab in place; rebuilt ones restart every animation.
-  await pane.evaluate((el) => { el.kept = 'yes'; }); await page.locator('#tabs .tab[data-id="' + id + '"]').evaluate((el) => { el.kept = 'yes'; });
+  // Flashing (Builder, 2026-10-18): a turn updates the pane and its panel row in place; rebuilt ones restart every animation.
+  await pane.evaluate((el) => { el.kept = 'yes'; }); await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => { el.kept = 'yes'; });
   await choose(page, pane, 'Model', 'Opus');
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the pick at once');
   await ta.click(); await page.keyboard.type('model'); await page.keyboard.press('Enter');
   await pane.getByText('model:opus').waitFor({ timeout: 15000 });
-  await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
+  await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the model now in use');
-  assert.deepEqual([await pane.evaluate((el) => el.kept), await page.locator('#tabs .tab[data-id="' + id + '"]').evaluate((el) => el.kept)], ['yes', 'yes'], 'pane or tab rebuilt by the turn');
+  assert.deepEqual([await pane.evaluate((el) => el.kept), await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => el.kept)], ['yes', 'yes'], 'pane or row rebuilt by the turn');
   // Effort and the other agent settings (Builder, 2026-10-18: "wire all of them"; threat model row 22): the agent's own lists, picked values reach it.
   assert.equal(await pillValue(pane, 'Effort'), 'Medium');
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium ✓', 'High']);
@@ -1215,12 +1215,12 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
   await ta.click(); await page.keyboard.type('config'); await page.keyboard.press('Enter');
   await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 });
-  await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
+  await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   assert.equal(await pillValue(pane, 'Effort'), 'High', 'the pill shows the effort now in use');
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On ✓', 'Off'], 'the menu shows the fast mode now in use');
   if (process.env.P9_EVIDENCE) await pane.locator('.composer .bar').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'pickers.png') });
   // Split shows the last two chats opened (Builder, 2026-10-19: one chat open, then a new one, and Split showed one pane).
-  await page.click('#rSplit');
+  await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
   const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await page.waitForFunction(([a, b]) => document.querySelector('#chats').dataset.split === 'true' && [...document.querySelectorAll('#chats .pane')].map((p) => p.dataset.id).join() === b + ',' + a, [id, second], { timeout: 15000 });
   // The new chat's title is painted as a gradient clipped to its text, so the paint stops at the heading's box: the text's
@@ -1239,7 +1239,7 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
 
 // Builder, 2026-10-19: "When creating a new chat, a dropdown with what folder i want to open the chat in would be great."
 // Threat model row 24: Choose folder... is the system dialog in main (stubbed here); only a folder inside the workspace comes back.
-test('Chat tabs: each tab shows the name the agent gave the chat, its dot in the agent\'s colour (Claude orange, Codex blue)', { timeout: 120000 }, async (t) => {
+test('Chat rows: each chat\'s panel row shows the name the agent gave the chat, its dot in the agent\'s colour (Claude orange, Codex blue)', { timeout: 120000 }, async (t) => {
   // Builder, 2026-10-19: "have the tabs at the top for each chat show the chats name. color the dot the color of the agent (claude orange, codex blue)"
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-tabs-')), 'profile');
@@ -1253,14 +1253,14 @@ test('Chat tabs: each tab shows the name the agent gave the chat, its dot in the
   const codex = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await call(instance, '/chat/' + claude + '/prompt', 'POST', { text: 'title Fix the login bug' });
   await call(instance, '/chat/' + codex + '/prompt', 'POST', { text: 'hello' });
-  const tab = (id) => page.locator('#tabs .tab[data-id="' + id + '"]');
+  const tab = (id) => page.locator('#navList .row[data-chat="' + id + '"]');
   await tab(claude).getByText('Fix the login bug').waitFor({ timeout: 15000 });
   await tab(codex).waitFor({ timeout: 15000 });
-  assert.equal(await tab(codex).innerText(), 'Codex', 'no name sent yet: the agent\'s name');
+  assert.equal(await tab(codex).locator('.t').innerText(), 'Codex', 'no name sent yet: the agent\'s name');
   const dot = (id) => tab(id).locator('.dot').evaluate((el) => getComputedStyle(el).backgroundColor);
   assert.deepEqual([await dot(claude), await dot(codex)], ['rgb(217, 119, 87)', 'rgb(59, 130, 246)']);
-  if (process.env.P9_EVIDENCE) await page.locator('.topbar').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'chat-tabs.png') });
-  console.log('PASS chat tabs: "Fix the login bug" on the Claude tab, Codex unnamed, dots orange and blue');
+  if (process.env.P9_EVIDENCE) await page.locator('#nav').screenshot({ path: path.join(process.env.P9_EVIDENCE, 'chat-rows.png') });
+  console.log('PASS chat rows: "Fix the login bug" on the Claude row, Codex unnamed, dots orange and blue');
 });
 
 test('Agent images: a generated image and a reply\'s image show at their real size; an image known only by its address is never loaded (threat model row 26)', { timeout: 120000 }, async (t) => {
@@ -1276,7 +1276,7 @@ test('Agent images: a generated image and a reply\'s image show at their real si
   await page.locator('#rChat').waitFor();
   const codex = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
   await call(instance, '/chat/' + codex + '/prompt', 'POST', { text: 'images' });
-  await page.locator('#tabs .tab[data-id="' + codex + '"]').click();
+  await page.locator('#nav .row[data-chat="' + codex + '"]').click();
   const pane = page.locator('#chats .pane[data-id="' + codex + '"]');
   await pane.locator('.msg.agent .agent-imgs img').waitFor({ timeout: 15000 });
   await page.waitForFunction((id) => [...document.querySelectorAll(`#chats .pane[data-id="${id}"] .agent-imgs img`)].every((i) => i.complete && i.naturalWidth), codex);
@@ -1321,7 +1321,7 @@ test('Loosened modes: Full access and Bypass permissions warn in red first; Canc
   let { app, page } = await launch();
   const chat = async (provider) => {
     const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
-    await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+    await page.locator(`#nav .row[data-chat="${id}"]`).click();
     const pane = page.locator(`#chats .pane[data-id="${id}"]`);
     await pane.locator('[data-pill="Mode"]').waitFor();
     return pane;
@@ -1392,7 +1392,7 @@ test('D2: Settings > New chats start in sets each agent\'s starting mode; the lo
   await page.locator('#rChat').waitFor();
   const chat = async (provider) => {
     const id = (await call(instance, '/chat', 'POST', { provider })).conversation;
-    await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+    await page.locator(`#nav .row[data-chat="${id}"]`).click();
     const pane = page.locator(`#chats .pane[data-id="${id}"]`);
     await pane.locator('[data-pill="Mode"]').waitFor();
     return pane;
@@ -1476,7 +1476,7 @@ test('Security settings: one switch per restriction; Unrestricted mode asks once
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-security-unrestricted ' + (await page.locator('#setDlg').screenshot()).toString('base64'));
   await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 });
   const id = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
-  await page.locator(`#tabs .tab[data-id="${id}"]`).click();
+  await page.locator(`#nav .row[data-chat="${id}"]`).click();
   const mode = page.locator(`#chats .pane[data-id="${id}"] [data-pill="Mode"]`);
   await mode.waitFor();
   assert.equal(await mode.getAttribute('aria-label'), 'Mode: Full access');
@@ -1569,8 +1569,8 @@ test('Chat file browser: each scope lists its real folder, a file opens in the e
     await page.waitForFunction(() => !document.querySelector('#tree').textContent.includes('Loading'), null, { timeout: 5000 });
     return page.locator('#tree button').allInnerTexts(); };
   const scope = async (label, where) => { await page.locator('#fileScope').selectOption({ label }); return listed(where); };
-  await page.click('#rFiles');
-  // Current project with no chat shown is the main project; folders come first and open in place.
+  // Files is a chat pane's tool: a new chat starts in the main project, so Current project lists it; folders come first and open in place.
+  await openFiles(page);
   const names = () => page.locator('#tree button span.truncate').allInnerTexts();
   await listed('proj'); assert.deepEqual(await names(), ['sub', 'notes.md'], 'main project');
   await page.locator('#tree [data-ldir="proj/sub"]').click();
@@ -1633,7 +1633,7 @@ test('Turn finished: a live turn-end nobody watches makes one notice (P9 words o
   // A reload replays the turn-end: no card, no notice.
   // Still in the background from the first script on, so only the replay guard stops it.
   await page.addInitScript(background);
-  await page.reload(); await page.locator('#tabs .tab[data-id="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.reload(); await page.locator('#nav .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   await page.waitForTimeout(1500);
   assert.deepEqual([await page.locator('#cards [data-key^="done:"]').count(), await page.evaluate(() => window.__notes)], [0, []], 'replayed turn-end made a card or notice');
   console.log('PASS turn finished: 1 notice with P9 words only, 1 card, opening clears it, replay makes none');
@@ -1654,7 +1654,7 @@ test('Interrupt and send: a queued message sent with the bolt, or Ctrl+Enter, re
   await page.locator('#rChat').waitFor();
   const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('#chats .pane[data-id="' + id + '"]'), box = pane.locator('.composer textarea');
   const agentSaid = (text) => pane.locator('.msg.agent', { hasText: text }).last().waitFor({ timeout: 15000 });
   await agentSaid('echo:hello');
@@ -1905,17 +1905,16 @@ test('Speed (E2): a reply in one chat rebuilds only its own pane; launch replays
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
-  await page.locator('#tabs .tab[data-id="' + a + '"]').waitFor({ timeout: 60000 });
+  await page.locator('#nav .row[data-chat="' + a + '"]').waitFor({ timeout: 60000 });
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor();
   const launch = Date.now() - t0;
-  // Read before anything opens it: a stopped chat's History row has only its name until its history loads.
-  await page.click('#histBtn');
-  const row = await page.locator('#histPop .item', { has: page.locator('[data-open="' + stopped[0] + '"]') }).innerText();
-  await page.keyboard.press('Escape');
+  // A stopped chat is not replayed at launch: opened later, its pane first says it is loading (watched from now on).
+  await page.evaluate((id) => { window.__stub = false; new MutationObserver(() => { if (document.querySelector(`#chats .pane[data-id="${id}"] .welcome`)?.textContent.includes('Loading this chat')) window.__stub = true; })
+    .observe(document.querySelector('#chats'), { childList: true, subtree: true, characterData: true }); }, stopped[0]);
 
   const b = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
-  await page.locator('#tabs .tab[data-id="' + b + '"]').click();
-  await page.click('#rSplit');
+  await page.locator('#nav .row[data-chat="' + b + '"]').click();
+  await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
   await page.waitForFunction((ids) => [...document.querySelectorAll('#chats > .pane')].map((p) => p.dataset.id).sort().join() === ids, [a, b].sort().join(), { timeout: 15000 });
   // Every pane build goes through a template's innerHTML (morph, and paint's per-pane path): count whose pane it holds.
   await page.evaluate(([a, b]) => {
@@ -1937,12 +1936,11 @@ test('Speed (E2): a reply in one chat rebuilds only its own pane; launch replays
     + (work / m.b).toFixed(1) + ' ms per update; one full redraw of both panes ' + full.toFixed(1) + ' ms');
   assert.ok(m.b > 0, 'the streaming chat was drawn');
   assert.equal(m.a, 0, 'a reply in one chat rebuilt the other pane');
-  assert.doesNotMatch(row, /message/, 'a stopped chat was replayed at launch');
-  // Opening it from History loads it.
-  await page.click('#histBtn');
-  await page.locator('#histPop [data-open="' + stopped[0] + '"]').click();
+  // Opening it from its panel row loads it.
+  await page.locator('#navList .row[data-chat="' + stopped[0] + '"]').click({ timeout: 10000 });
   await page.locator('#chats .pane[data-id="' + stopped[0] + '"]').getByText('All steps done.').first().waitFor({ timeout: 15000 });
-  console.log('PASS E2: only the changed pane is rebuilt; 24 stopped chats not replayed at launch, one loads when opened from History');
+  assert.equal(await page.evaluate(() => window.__stub), true, 'a stopped chat was replayed at launch');
+  console.log('PASS E2: only the changed pane is rebuilt; 24 stopped chats not replayed at launch, one loads when opened from its panel row');
 });
 
 test('Speed (E2): a listed chat the bridge will not narrow to still goes live, by replaying everything', { timeout: 120000 }, async (t) => {
@@ -1961,7 +1959,7 @@ test('Speed (E2): a listed chat the bridge will not narrow to still goes live, b
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 30000 });
-  await page.locator('#tabs .tab[data-id="' + real + '"]').waitFor();
+  await page.locator('#nav .row[data-chat="' + real + '"]').waitFor();
   console.log('PASS E2 fallback: a chat ID the bridge refuses for only= falls back to the full replay; the desktop went live');
 });
 

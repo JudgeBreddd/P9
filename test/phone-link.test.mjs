@@ -38,8 +38,8 @@ async function window(t, provider, remote) {
   const proc = app.process();
   t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
   const page = await app.firstWindow();
-  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   return { id, page, instance, pane: page.locator('.pane[data-id="' + id + '"]') };
 }
 

@@ -24,6 +24,7 @@ import { PARTS, partOrder } from '../../../packages/protocol/index.mjs';
 import { artifactView, artifactsIn, chipArtifact, mountCard, KIND_NAMES } from './artifact.mjs';
 import { installMission } from './mission-view.mjs';
 import { installChat } from './chat-view.mjs';
+import { installPanel } from './panel.mjs';
 import { installSettings } from './settings-view.mjs';
 import { installCards } from './cards-modal.mjs';
 import { installFiles } from './files-view.mjs';
@@ -61,7 +62,7 @@ export function mountShell({ askAdmin } = {}) {
     get observe() { return observe; }, get openModal() { return openModal; }, get opt() { return opt; }, get petCanvas() { return petCanvas; },
     get petLook() { return petLook; }, get petMode() { return petMode; }, set petMode(v) { petMode = v; }, get petSpots() { return petSpots; },
     get petTimer() { return petTimer; }, set petTimer(v) { petTimer = v; }, get pets() { return pets; }, set pets(v) { pets = v; },
-    get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; },
+    get pickRemoteFolder() { return pickRemoteFolder; }, get popover() { return popover; }, get openPal() { return openPal; }, get placeDev() { return placeDev; }, get newPop() { return newPop; }, get loadProjects() { return panel.loadProjects; },
     get queueSoon() { return queueSoon; }, get queueTimer() { return queueTimer; }, set queueTimer(v) { queueTimer = v; },
     get renderCards() { return renderCards; }, get renderChats() { return renderChats; }, get renderMission() { return renderMission; },
     get renderModal() { return renderModal; }, get renderSideChat() { return renderSideChat; }, get renderTabs() { return renderTabs; },
@@ -86,7 +87,7 @@ export function mountShell({ askAdmin } = {}) {
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, closeTab, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
+  const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
   const { saveSettings, applySettings, settingsAt, renderSettings, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
@@ -225,14 +226,12 @@ Object.assign(svg, {
   bell: ic('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
   bot: ic('<path d="M12 4v3"/><circle cx="12" cy="3" r="1"/><rect x="4" y="7" width="16" height="13" rx="3"/><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/><path d="M9.5 17h5M2 12v3M22 12v3"/>'),
 });
-for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rSearch','search'],['rFiles','files'],['rSplit','split'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x'],['sideToggle','chat']]) $('#'+id).innerHTML = svg[k];
+for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x'],['sideToggle','chat']]) $('#'+id).insertAdjacentHTML('afterbegin', svg[k]); // afterbegin: the panel's labels stay
 
-/* ---------- tabs ---------- */
+/* ---------- the left panel (panel.mjs): the chat switcher, in place of the tab row, History and the rail's robot heads ---------- */
+const panel = installPanel(outer, { focus, stopChat, busy });
 function renderTabs() {
-  morph($('#tabs'), S.sessions.filter(s => !s.hidden).map(s => `<button class="tab" role="tab" data-id="${esc(s.id)}" data-state="${esc(s.state)}" aria-selected="${S.open.slice(0, S.split ? 2 : 1).includes(s.id)}"><span class="dot" data-agent="${esc(s.agent)}"></span><span>${esc(s.title)}</span>${s.pending ? '<span class="attn" title="Needs you"></span>' : ''}<span class="close" title="Close tab">${svg.x}</span></button>`).join(''));
-  $('#tabs').querySelectorAll('.tab').forEach(t => {
-    t.onclick = e => { if (e.target.closest('.close')) { closeTab(t.dataset.id); return; } focus(t.dataset.id); };
-  });
+  panel.renderPanel();
   $('#runCount').textContent = S.sessions.filter(s => s.state === 'running').length + ' running';
   renderCards();
 }
@@ -244,7 +243,7 @@ function cardList(all) {
   const cards = [];
   if (asks.length) cards.push({ key: 'asks:' + asks.map(s => s.id + s.pending).join(), halo: true, n: asks.length, title: asks.length === 1 ? names[asks[0].agent] + ' needs you' : asks.length + ' agents need you', sub: asks.map(s => s.title).join(' · '), open: asks.length === 1 ? { kind: 'chat', id: asks[0].id } : { kind: 'asks' } });
   // Only _tyler/ items that arrive while the app is open get a card (Builder, 2026-10-17); the ones already there, and the ones
-  // he skips, wait quietly in the Notification Center. Running chats are robot heads in the rail (renderBots).
+  // he skips, wait quietly in the Notification Center. Running chats are robot heads in the panel (panel.mjs).
   const fresh = S.reviews.filter(r => !S.quiet.has(r.file)), old = S.reviews.length - fresh.length;
   if (fresh.length) cards.push({ key: 'reviews:' + fresh.map(r => r.file).join(), halo: true, n: fresh.length, title: fresh.length === 1 ? '1 item needs you' : fresh.length + ' items need you', sub: (live.waiting || 'waiting') + '/ · ' + fresh[0].proj, open: fresh.length === 1 ? { kind: 'review', i: S.reviews.indexOf(fresh[0]) } : { kind: 'reviews' } });
   if (old) cards.push({ key: 'waiting', quiet: true, n: old, title: (old === 1 ? '1 item' : old + ' items') + ' in ' + (live.waiting || 'waiting') + '/' /* the user's own folder name (settings.waiting) */, sub: 'waiting', open: { kind: 'reviews' } });
@@ -296,7 +295,7 @@ window.p9?.onCardAct?.(({ key, action }) => cardAct(cardList().find(c => c.key =
 const mdl = $('#mdl');
 let lastEdit = null;
 addEventListener('focusout', e => { const t = e.target; if (t.matches?.('textarea, input[type=text]') && !t.closest('dialog')) lastEdit = { pane: t.closest('.pane')?.dataset.id, id: t.id, sel: [t.selectionStart, t.selectionEnd] }; });
-addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .rail') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
+addEventListener('focusin', e => { if (!e.target.closest('dialog, .cards, .toasts, .lpanel') && !e.target.matches('textarea, input[type=text]')) lastEdit = null; });
 function renderModal() {
   const m = S.modal, body = $('#mdlBody'), g = groupOf(m.kind);
   if (mdl.dataset.group !== g) {
@@ -399,7 +398,7 @@ document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElem
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
-$('#newPop').innerHTML = `<div class="hd eyebrow">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Claude</div><button class="item" data-new="claude" data-model="Opus 5.5">Claude <span class="muted">default model</span></button><button class="item" data-new="claude" data-model="Sonnet 5.5">Claude · Sonnet 5.5</button><button class="item" data-new="claude" data-model="Haiku 5.5">Claude · Haiku 5.5</button><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Codex</div><button class="item" data-new="codex" data-model="gpt-5.1-codex">Codex <span class="muted">default model</span></button><button class="item" data-new="codex" data-model="gpt-5.1-codex-mini">Codex · mini</button>`;
+$('#newPop').innerHTML = `<div class="hd eyebrow" id="newInHd" hidden></div><div class="hd eyebrow" id="newFolderHd">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Claude</div><button class="item" data-new="claude" data-model="Opus 5.5">Claude <span class="muted">default model</span></button><button class="item" data-new="claude" data-model="Sonnet 5.5">Claude · Sonnet 5.5</button><button class="item" data-new="claude" data-model="Haiku 5.5">Claude · Haiku 5.5</button><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Codex</div><button class="item" data-new="codex" data-model="gpt-5.1-codex">Codex <span class="muted">default model</span></button><button class="item" data-new="codex" data-model="gpt-5.1-codex-mini">Codex · mini</button>`;
 // New chat's folder (Builder, 2026-10-19: "a dropdown with what folder i want to open the chat in"; threat model row 24): the workspace,
 // the main project, the last 5 folders used, or the system folder dialog (main sends back only a folder inside the workspace;
 // ':pick' cannot be a folder, the daemon refuses ':' in paths).
@@ -413,15 +412,8 @@ $('#newFolder').onchange = async e => {
   else if (picked === null) toast({ kind: 'chat', txt: 'Pick a folder inside the workspace.', level: 'warn' }, true);
   renderNewFolder();
 };
-const newPop = popover($('#newBtn'), $('#newPop'), renderNewFolder);
-$('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model); newPop.close(); });
-// History: with the daemon, every live chat a message was sent in, most recently used first (owner, 2026-10-25; Open
-// gives it a tab again); without it, the sample list.
-const when = at => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const liveHistory = () => S.sessions.filter(s => s.sent).sort((a, b) => (b.used || b.created) - (a.used || a.created)).map(s => { const asks = s.events.filter(e => e.t === 'user'); return `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(s.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(s.title || asks[0]?.text)}</div><div class="xs muted">${names[s.agent]}${s.used || s.created ? ' · ' + esc(when(s.used || s.created)) : ''} · ${esc(s.state)}${s.stub ? '' : ` · ${asks.length} message${asks.length === 1 ? '' : 's'}`}${s.hidden ? '' : ' · in a tab'}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(s.id)}" style="margin-left:auto">Open</button></div>`; }).join('') || '<p class="sm muted" style="margin:6px 9px">No chats yet.</p>';
-const renderHistory = () => $('#histPop').innerHTML = `<p class="sm muted" style="margin:6px 9px 10px">Close the window or quit the UI and sessions keep running. History stays here; Resume continues the provider's native session.</p>` + (liveChat.on ? liveHistory() : M.history.map(h => `<div class="item" style="cursor:default"><span class="dot" data-agent="${esc(h.agent)}"></span><div style="min-width:0"><div class="truncate">${esc(h.title)}</div><div class="xs muted">${esc(h.when)} · ${esc(h.events)} events · ${esc(h.id)}</div></div><button data-slot="button" data-variant="outline" data-size="sm" data-open="${esc(h.id)}" style="margin-left:auto">Open</button></div>`).join(''));
-const histPop = popover($('#histBtn'), $('#histPop'), renderHistory);
-$('#histPop').onclick = e => { const b = e.target.closest('[data-open]'); if (!b) return; if (liveChat.on) { focus(b.dataset.open); histPop.close(); return; } const h = M.history.find(x => x.id === b.dataset.open); const s = { id: 'h-' + h.id, agent: h.agent, title: h.title, model: h.agent === 'claude' ? 'Opus 5.5' : 'gpt-5.1-codex', mode: 'Manual', queue: [], effort: 'Medium', state: 'stopped', readonly: true, pending: null, context: {used: 61000, size: 200000}, limits: M.sessions[0].limits, cacheMin: null, cwd: M.sessions[0].cwd, events: [{t:'notice', text:`Older events are not shown; this view holds the latest 2,000 of ${esc(h.events)}.`}, {t:'user', text:'Finish the Phase 9 fixes and rerun the suite.', when: h.when}, {t:'tool', status:'completed', title:'Shell: pnpm test', output:'ℹ tests 51\nℹ pass 51\nℹ fail 0'}, {t:'agent', text:'Suite green. The History popover now closes on Open and the narrow toolbar scrolls instead of clipping.'}] }; if (!S.sessions.find(x => x.id === s.id)) S.sessions.push(s); show(s.id); renderTabs(); renderChats(); histPop.close(); };
+const newPop = popover($('#newBtn'), $('#newPop'), () => { panel.newAt($('#newBtn')); renderNewFolder(); }); // N1: placed beside its button (panel.mjs)
+$('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); });
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
@@ -626,11 +618,12 @@ function devPrimary(name) {
 }
 $('#fileSearch').oninput = renderTree;
 
-/* ---------- rail + dock ---------- */
-$('#rFiles').onclick = () => { S.files = !S.files; $('#files').hidden = !S.files; $('#rFiles').setAttribute('aria-pressed', S.files); if (S.files && live.on) { files.dirs = {}; renderTree(); } };
-$('#rSplit').onclick = () => { S.split = !S.split; if (S.split && S.open.length < 2) { const s = S.sessions.findLast(x => !x.hidden && !S.open.includes(x.id)); if (s) S.open.push(s.id); } $('#rSplit').setAttribute('aria-pressed', S.split); renderTabs(); renderChats(); };
-$('#rTerm').onclick = () => toggleTerm();
-$('#rSearch').onclick = () => { if (!S.files) $('#rFiles').click(); $('#fileSearch').focus(); };
+/* ---------- chat tools (each pane's header: files, split, search, terminal; the terminal also on the panel's foot) ---------- */
+const pressed = (k, v) => document.querySelectorAll(`[data-tool=${k}]`).forEach(b => b.setAttribute('aria-pressed', String(v)));
+const toggleFiles = () => { S.files = !S.files; $('#files').hidden = !S.files; pressed('files', S.files); if (S.files && live.on) { files.dirs = {}; renderTree(); } };
+const toggleSplit = () => { S.split = !S.split; if (S.split && S.open.length < 2) { const s = S.sessions.findLast(x => !x.hidden && !S.open.includes(x.id)); if (s) S.open.push(s.id); } pressed('split', S.split); renderTabs(); renderChats(); };
+const TOOLS = { files: toggleFiles, split: toggleSplit, term: () => toggleTerm(), search: () => { if (!S.files) toggleFiles(); $('#fileSearch').focus(); } };
+addEventListener('click', e => { const b = e.target.closest?.('[data-tool]'); if (b && TOOLS[b.dataset.tool]) TOOLS[b.dataset.tool](); });
 // One shared shell; each focus remembers whether it shows it and how (Builder 2026-10-14):
 // Dev opens it as a drawer, Chat and Mission as a pop-out. dFloat flips the mode for that focus.
 // Dev Focus docks it only: the editor is a separate view drawn above this page, so a floating terminal went behind it.
@@ -639,7 +632,7 @@ function showTerm() {
   if (dock.classList.contains('float') && !float) dock.style.height = dock.style.width = dock.style.left = dock.style.top = dock.style.translate = '';
   dock.hidden = !open; dock.classList.toggle('float', float);
   $('#dFloat').hidden = f === 'dev';
-  $('#rTerm').setAttribute('aria-pressed', open);
+  pressed('term', open);
   if (open && dockTerm && !dockTerm.open) openDock();
 }
 // A terminal the daemon just made (Hand off, the wizard's agent commands): the dock opens on it.
@@ -667,6 +660,7 @@ function setFocus(f, stay = false) {
   document.querySelectorAll('.fpane').forEach(p => { const on = p.dataset.focus === f; p.classList.toggle('on', on); p.inert = !on; });
   document.querySelector('.shell').dataset.focus = f;
   document.querySelectorAll('[data-focus-btn]').forEach(b => b.setAttribute('aria-pressed', b.dataset.focusBtn === f));
+  panel.renderPanel(); // full in Chat Focus, the strip elsewhere
   renderIndicator(); // each focus has its own pets
   $('#focusTitle').textContent = focusNames[f];
   showTerm();
@@ -872,12 +866,14 @@ const maintain = {
     if (r.error) toast({ kind: 'not rebuilt', txt: 'Could not rebuild P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: 'bad' }, true);
   },
 };
-const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', () => $('#rSplit').click()], ['Browse files', () => $('#rSearch').click()], ['Toggle files pane', () => $('#rFiles').click()], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
+const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
 let palSel = 0;
 // U8: no Mission commands on a slim Temporary remote, which has no Mission Control, or while Mission is off in Settings.
 const MISSION_CMDS = new Set(['Mission Control', 'Refresh Mission']);
-function renderPal() { const q = $('#palIn').value.toLowerCase(); const list = cmds.filter(c => c[0].toLowerCase().includes(q) && ((!serverInfo?.slim && settings.focus.mission !== false) || !MISSION_CMDS.has(c[0]))); palSel = Math.min(palSel, Math.max(0, list.length - 1)); $('#palList').innerHTML = list.map((c, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${cmds.indexOf(c)}">${svg.bolt.replace('<svg', '<svg width="14" height="14"')}${esc(c[0])}${i === palSel ? '<kbd>↵</kbd>' : ''}</li>`).join('') || '<li class="muted">No matching command</li>'; $('#palList').querySelectorAll('li[data-i]').forEach(li => li.onclick = () => run(+li.dataset.i)); }
-function run(i) { $('#palette').close(); cmds[i][1](); }
+// N1 point 5: Ctrl K also jumps to a chat or a project (panel.jumps: [label, run, icon, hint]); run() indexes this list.
+let palRows = [];
+function renderPal() { const q = $('#palIn').value.toLowerCase(); palRows = [...cmds.filter(c => c[0].toLowerCase().includes(q) && ((!serverInfo?.slim && settings.focus.mission !== false) || !MISSION_CMDS.has(c[0]))), ...panel.jumps(q)]; palSel = Math.min(palSel, Math.max(0, palRows.length - 1)); $('#palList').innerHTML = palRows.map((c, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${i}">${c[2] || svg.bolt.replace('<svg', '<svg width="14" height="14"')}${esc(c[0])}${c[3] ? `<small>${esc(c[3])}</small>` : ''}${i === palSel ? '<kbd>↵</kbd>' : ''}</li>`).join('') || '<li class="muted">Nothing matches</li>'; $('#palList').querySelectorAll('li[data-i]').forEach(li => li.onclick = () => run(+li.dataset.i)); }
+function run(i) { $('#palette').close(); palRows[i][1](); }
 function openPal() { $('#palIn').value = ''; palSel = 0; renderPal(); $('#palette').showModal(); $('#palIn').focus(); }
 $('#rCmd').onclick = openPal;
 $('#palIn').oninput = () => { palSel = 0; renderPal(); };
@@ -1209,8 +1205,9 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   if (r.status >= 400 && !quiet && !$('#connecting')?.open && !(action === 'prompt' && r.body?.error === 'turn-running') && !(action === 'cancel' && r.body?.error === 'no-turn')) toast({ kind: 'chat', txt: chatFailed(action, r.body, Date.now() - start) ?? 'Chat ' + action + ': ' + (r.body?.error || r.status), level: 'bad' }, true);
   return r;
 };
-liveChat.create = async (agent, folder = '') => {
-  const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }) });
+// N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
+liveChat.create = async (agent, folder = '', project = null) => {
+  const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }), ...(project && { project }) });
   if (r.status === 201) { const s = S.sessions.find(x => x.id === r.body.conversation); s ? startDefaults(s) : fresh.add(r.body.conversation); }
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;

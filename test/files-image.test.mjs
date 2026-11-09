@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { _electron } from '@playwright/test';
-import { daemon, root } from './helpers.mjs';
+import { daemon, root, openFiles } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 // A real 64x48 PNG: a diagonal two-colour gradient, so the screenshot shows the image itself.
@@ -63,7 +63,7 @@ test('Chat Focus Files pane: a workspace image shows read-only through GET /file
   assert.deepEqual(await ask({ path: 1 }), { status: 400, body: { error: 'request-refused' } }, 'main sends only a string path');
 
   // The window: the image itself, whole, read-only (no editor, no Save), in a dark and a light theme; a fake one says why.
-  await page.click('#rFiles');
+  await openFiles(page);
   await page.locator('#tree [data-ldir="proj/pics"]').click({ timeout: 8000 });
   await page.locator('#tree [data-lfile="proj/pics/dot.png"]').waitFor({ timeout: 8000 });
   for (const theme of ['event-horizon-prime', 'daylight']) {

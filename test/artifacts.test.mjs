@@ -334,6 +334,10 @@ test('artifacts: with an artifact panel open the notification cards sit below it
 // GET /files. Real Electron against a real daemon and the fake agent ("edit <name>" writes the file as Claude's adapter
 // reports it; any other prompt comes back as "echo:<text>", so an artifact block comes back as an artifact).
 // A daemon with the fake agent and a chat in proj, and the desktop on it (the chat files tests).
+// The notification cards float over the right end of the side panel's rows (the wider left panel left it narrower), so a row
+// is clicked near its left end, where a user would see it.
+const pick = row => row.click({ position: { x: 24, y: 12 }, timeout: 10000 });
+
 async function chatDesktop(t, prompts) {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   const instance = await daemon(t, undefined, false, async ({ workspace }) => {
@@ -366,8 +370,8 @@ async function chatDesktop(t, prompts) {
     if (process.env.P9_SCREENSHOTS) { await mkdir(process.env.P9_SCREENSHOTS, { recursive: true }); await writeFile(path.join(process.env.P9_SCREENSHOTS, name + '.png'), png); }
   };
   const show = async () => {
-    await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+    await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+    await page.locator('#nav .row[data-chat="' + id + '"]').click();
     const pane = page.locator('.pane[data-id="' + id + '"]'), button = pane.locator('.ptool [data-chat-files]');
     await button.waitFor({ timeout: 15000 });
     return { pane, button };
@@ -399,7 +403,7 @@ test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an
   assert.equal(await button.getAttribute('aria-pressed'), 'true');
   await shot('chat-files-artifacts-tab');
   // The artifact opens as its chip does.
-  await items.nth(0).click();
+  await pick(items.nth(0));
   assert.equal(await (await frame()).locator('h1').textContent(), 'Shipped');
   await page.locator('#side [data-art-mode]', { hasText: 'Back to list' }).click();
   // Changes: the two files, newest first, no artifact.
@@ -412,7 +416,7 @@ test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an
   assert.equal(await page.evaluate(id => localStorage.getItem('p9-chat-files:' + id), id), 'changes', 'the tab is remembered');
   await shot('chat-files-changes-tab');
   // An edited file: its diff, as text in the sandboxed frame, nothing to type into and nothing to apply.
-  await items.nth(0).click();
+  await pick(items.nth(0));
   await page.locator('#side .art-bar .art-title', { hasText: 'proj/notes.md' }).waitFor({ timeout: 8000 });
   let f = await frame();
   assert.equal(await page.locator('#side .art-frame').getAttribute('sandbox'), 'allow-scripts');
@@ -424,7 +428,7 @@ test('artifacts: the chat files panel has an Artifacts tab and a Changes tab; an
   await shot('chat-files-diff');
   // A file whose edit call carried no diff says so.
   await page.locator('#side [data-art-mode]', { hasText: 'Back to list' }).click();
-  await items.nth(1).click();
+  await pick(items.nth(1));
   await page.locator('#side .art-bar .art-title', { hasText: 'proj/made.md' }).waitFor({ timeout: 8000 });
   f = await frame();
   assert.equal((await f.locator('pre').textContent()).trim(), 'No diff was recorded for this edit.');
@@ -453,13 +457,14 @@ test('artifacts: a chat\'s artifact is still listed after it compacts and the wi
   assert.equal(await items.count(), 1);
   assert.match(await items.nth(0).textContent(), /^MarkdownRelease notesArtifact$/);
   await shot('chat-files-after-compact');
-  await items.nth(0).click();
+  await pick(items.nth(0));
   assert.equal(await (await frame()).locator('h1').textContent(), 'Shipped');
 });
 
-// O26-O28 (0.1.9): the chat's artifact list and the panel artifact's life. Sample data; two chats in tabs.
-const tabIds = page => page.locator('#tabs .tab').evaluateAll(els => els.map(e => e.dataset.id));
-const showChat = async (page, id) => { await page.click(`#tabs .tab[data-id="${id}"]`); await page.waitForFunction(id => document.querySelector(`#chats .pane[data-id="${id}"]`), id, { timeout: 5000 }); };
+// O26-O28 (0.1.9): the chat's artifact list and the panel artifact's life. Sample data; two chats in the left panel.
+// The shown chat first (the one a reply goes to), then the other listed chats.
+const chatIds = page => page.evaluate(() => [...new Set([...[...document.querySelectorAll('#chats > .pane[data-id]')].map(e => e.dataset.id), ...[...document.querySelectorAll('#navList .row[data-chat]')].map(e => e.dataset.chat)])]);
+const showChat = async (page, id) => { await page.click(`#nav .row[data-chat="${id}"]`); await page.waitForFunction(id => document.querySelector(`#chats .pane[data-id="${id}"]`), id, { timeout: 5000 }); };
 
 test('artifacts (O26): the list shows one row per title, opening the newest version; the older ones are reachable from it', { timeout: 90000 }, async (t) => {
   const { page, shot, reply, rendered } = await launch(t);
@@ -469,14 +474,14 @@ test('artifacts (O26): the list shows one row per title, opening the newest vers
   await reply(`${F}markdown artifact P9 checklist\n# Two\n${F}`);
   await reply(`${F}markdown artifact Other notes\n# Other\n${F}`);
   await page.evaluate(() => window.__side.close('artifact'));
-  const [id] = await tabIds(page);
+  const [id] = await chatIds(page);
   await page.locator(`#chats .pane[data-id="${id}"] [data-chat-files]`).click();
   const items = page.locator('#side .cf-item');
   await items.first().waitFor({ timeout: 8000 });
   const rows = (await items.allTextContents()).filter(r => /P9 checklist/.test(r));
   assert.deepEqual(rows, ['MarkdownP9 checklistArtifact · 2 versions'], 'one row for the title, with its two different versions');
   await shot('o26-artifact-list');
-  await items.filter({ hasText: 'P9 checklist' }).click();
+  await pick(items.filter({ hasText: 'P9 checklist' }));
   const head = () => (rendered().then(f => f.locator('h1').textContent()));
   assert.equal(await head(), 'Two', 'opens the newest version');
   assert.match(await page.locator('#side .stitle').textContent(), /P9 checklist · version 2 of 2/);
@@ -492,7 +497,7 @@ test('artifacts (O26): the list shows one row per title, opening the newest vers
   await page.locator(`#chats .pane[data-id="${id}"] [data-chat-files]`).click();
   await page.locator('#side .cf-tabs').waitFor({ timeout: 8000 });
   assert.deepEqual((await items.allTextContents()).filter(r => /P9 checklist/.test(r)), ['MarkdownP9 checklistArtifact · 2 versions'], 'a re-sent older version: still one row');
-  await items.filter({ hasText: 'P9 checklist' }).click();
+  await pick(items.filter({ hasText: 'P9 checklist' }));
   assert.equal(await head(), 'One');
   assert.match(await page.locator('#side .stitle').textContent(), /version 2 of 2/);
 });
@@ -500,7 +505,7 @@ test('artifacts (O26): the list shows one row per title, opening the newest vers
 test('artifacts (O27): a panel artifact stays open while its chat is in view; the user\'s Pin button pins it', { timeout: 90000 }, async (t) => {
   const { page, shot, reply } = await launch(t);
   const mode = () => page.evaluate(() => window.__side.current());
-  const [a, b] = await tabIds(page);
+  const [a, b] = await chatIds(page);
   assert.ok(b, 'two sample chats');
   await showChat(page, a);
   await reply(`${F}html artifact Panel stays\n<h1>Panel</h1>\n${F}`);
@@ -531,7 +536,7 @@ test('artifacts (O27): a panel artifact stays open while its chat is in view; th
 test('artifacts (O28): a pinned artifact shows only in its own chat: hidden in another, back on return', { timeout: 90000 }, async (t) => {
   const { page, shot, reply } = await launch(t);
   const mode = () => page.evaluate(() => window.__side.current());
-  const [a, b] = await tabIds(page);
+  const [a, b] = await chatIds(page);
   await showChat(page, a);
   await reply(`${F}html artifact pinned Mine only\n<h1>Mine</h1>\n${F}`);
   assert.deepEqual(await mode(), { slot: 'artifact', mode: 'pinned' });

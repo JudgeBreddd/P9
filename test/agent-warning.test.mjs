@@ -49,7 +49,7 @@ test('Agent warnings, desktop: a grey line above the reply, not in it; its i say
   const page = await app.firstWindow();
   await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1400, 900));
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   await page.locator('.msg.agent', { hasText: REPLY }).waitFor({ timeout: 15000 });
   await opened(page);
   assert.deepEqual(await read(page, '.msg.agent'), WANT);

@@ -56,10 +56,10 @@ async function setup(t, name, provider = 'claude') {
   await call(instance, '/chat/' + id + '/prompt', 'POST', { text: 'hello' });
   await until(async () => (await events(instance, id)).some((e) => e.type === 'turn-end'), 'hello answered');
   const { app, page, errors } = await launch(t, instance, profile);
-  await page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
-  const idle = () => page.locator('#rBots [data-bot="' + id + '"]:not([data-busy])').waitFor({ timeout: 15000 });
+  const idle = () => page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   const send = async (text) => { await pane.locator('.composer textarea').click(); await page.keyboard.type(text); await page.keyboard.press('Enter'); };
   const said = (text) => pane.locator('.hist', { hasText: text }).waitFor({ timeout: 15000 });
   return { app, instance, id, page, pane, send, said, idle, errors };
@@ -148,11 +148,11 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   await send('mode'); await said('mode:plan'); await idle();
   // The narrowest pane P9 allows (the split bar's 280 px) in a small window: the row stays one line, the send arrow in view, nothing overflows.
   const second = (await call(instance, '/chat', 'POST', { provider: 'codex' })).conversation;
-  await page.locator('#tabs .tab[data-id="' + second + '"]').waitFor({ timeout: 10000 });
+  await page.locator('#nav .row[data-chat="' + second + '"]').waitFor({ timeout: 10000 });
   // Under 721 px the split folds to one pane (shell.css), so 760 is the smallest window with two; the split bar's floor is 280 px.
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.unmaximize(); w.setContentSize(760, 600); });
   await page.waitForFunction(() => innerWidth <= 800, null, { timeout: 5000 });
-  await page.click('#rSplit');
+  await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 5000 }); // Split is in the pane header now
   await page.locator('#chats[data-split="true"] .pane').nth(1).waitFor({ timeout: 10000 });
   await page.evaluate(() => document.querySelector('#chats').style.setProperty('--split-l', '280px'));
   await page.waitForTimeout(400);
@@ -205,7 +205,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   // One Claude chat: its config brings Claude's lists; Codex's are still unknown.
   const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + first + '/prompt', 'POST', { text: 'hello' });
-  await page.locator('#tabs .tab[data-id="' + first + '"]').click();
+  await page.locator('#nav .row[data-chat="' + first + '"]').click();
   await page.locator('.pane[data-id="' + first + '"] [data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 15000 });
   await settings();
   assert.deepEqual([await options('[data-default-model="claude"]'), await options('[data-default-effort="claude"]'), await options('[data-default-model="codex"]')],
@@ -214,11 +214,11 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   await closeSettings();
   // A new chat from the New button starts with them before any message, and its first prompt carries them.
   const fresh = async () => {
-    const had = await page.locator('#tabs .tab').evaluateAll((l) => l.map((x) => x.dataset.id));
+    const had = await page.locator('#navList .row[data-chat]').evaluateAll((l) => l.map((x) => x.dataset.chat));
     await page.click('#newBtn'); await page.locator('#newPop [data-new="claude"]').first().click();
-    await page.waitForFunction((had) => [...document.querySelectorAll('#tabs .tab')].some((x) => !had.includes(x.dataset.id)), had, { timeout: 15000 });
-    const id = await page.locator('#tabs .tab').evaluateAll((l, had) => l.map((x) => x.dataset.id).find((x) => !had.includes(x)), had);
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+    await page.waitForFunction((had) => [...document.querySelectorAll('#navList .row[data-chat]')].some((x) => !had.includes(x.dataset.chat)), had, { timeout: 15000 });
+    const id = await page.locator('#navList .row[data-chat]').evaluateAll((l, had) => l.map((x) => x.dataset.chat).find((x) => !had.includes(x)), had);
+    await page.locator('#nav .row[data-chat="' + id + '"]').click();
     const pane = page.locator('#chats .pane[data-id="' + id + '"]');
     await pane.locator('[data-pill="Model"]').waitFor();
     return pane;
@@ -236,7 +236,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   const other = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + other + '/prompt', 'POST', { text: 'hello' });
   await until(async () => (await events(instance, other)).some((e) => e.type === 'turn-end'), 'the other chat answered');
-  await page.locator('#tabs .tab[data-id="' + other + '"]').click();
+  await page.locator('#nav .row[data-chat="' + other + '"]').click();
   const otherPane = page.locator('.pane[data-id="' + other + '"]');
   await otherPane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
   assert.equal(await pillValue(otherPane, 'Effort'), 'Medium');

@@ -25,7 +25,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       const reviews = page.locator('#cards [data-key^="reviews:"] .open');
       await reviews.click(); await page.locator('#mdlBody .mlist button').first().click();
       const title = await page.locator('#mdlT').innerText();
-      await page.click('#mdlX'); await page.click('#rFiles'); await page.click('#tree [data-file="plan.md"]');
+      await page.click('#mdlX'); await page.locator('#chats > .pane').first().locator('[data-tool=files]').click({ timeout: 10000 }); await page.click('#tree [data-file="plan.md"]');
       await page.click('#mdlX'); await reviews.click();
       assert.equal(await page.locator('#mdlT').innerText(), title);
       assert.equal(await page.locator('#mdlBody [data-answer]').count(), 1);
@@ -93,7 +93,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       const answer = (sample) => app.evaluate(({ ipcMain }, s) => { ipcMain.removeAllListeners('p9:sample'); ipcMain.on('p9:sample', e => { e.returnValue = s; }); }, sample);
       await answer(injected);
       try {
-        await reset(); await page.click('#rFiles');
+        await reset(); await page.locator('#chats > .pane').first().locator('[data-tool=files]').click({ timeout: 10000 });
         assert.equal(await page.locator('[data-p9-injected]').count(), 0);
         const file = page.locator('#tree [data-file]').filter({ hasText: payload + '.md' });
         assert.equal(await file.getAttribute('data-file'), payload + '.md');
@@ -141,7 +141,8 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       await page.click('#mdlX');
     });
     await t.test('docking the terminal clears the width a popout resize left behind', async () => {
-      await reset(); await page.click('#rTerm');
+      await reset(); // a chat is shown, so the terminal is the chat header's tool (the panel's own is for when no chat is)
+      await page.locator('#chats > .pane').first().locator('[data-tool=term]').click({ timeout: 10000 });
       const dock = page.locator('#dock'); await dock.waitFor();
       const stage = await page.locator('#dock').evaluate(e => e.parentElement.getBoundingClientRect().width);
       if (!(await dock.evaluate(e => e.classList.contains('float')))) await page.click('#dFloat');

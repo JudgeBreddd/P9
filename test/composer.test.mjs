@@ -40,8 +40,8 @@ async function setup(t, name, { provider = 'claude', files = [] } = {}) {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => message.type() === 'error' && errors.push(message.text()));
-  await page.locator('#rBots [data-bot="' + id + '"]').waitFor({ timeout: 15000 });
-  await page.locator('#tabs .tab[data-id="' + id + '"]').click();
+  await page.locator('#navList .rowwrap[data-live] .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
   const type = async (text) => { await pane.locator('.composer textarea').click(); await page.keyboard.type(text); };
   const send = async (text) => { await type(text); await page.keyboard.press('Enter'); };
@@ -205,7 +205,7 @@ for (const provider of ['claude', 'codex']) {
     await until(async () => (await thumb()).loaded, 'the thumbnail loaded', 10000);
     assert.deepEqual(await thumb(), want);
     await page.reload();
-    await page.locator('#tabs .tab[data-id="' + id + '"]').click({ timeout: 15000 });
+    await page.locator('#nav .row[data-chat="' + id + '"]').click({ timeout: 15000 });
     await until(async () => (await thumb().catch(() => ({}))).loaded, 'the thumbnail loaded again after the reload', 15000);
     assert.deepEqual(await thumb(), want);
     console.log('PASS CP3 ' + provider + ': the photo showed above its message from the daemon\'s copy, before and after a reload');

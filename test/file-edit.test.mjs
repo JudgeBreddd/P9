@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { _electron } from '@playwright/test';
-import { daemon, root } from './helpers.mjs';
+import { daemon, root, openFiles } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const long = Array.from({ length: 120 }, (_, i) => 'line ' + (i + 1)).join('\n') + '\n';
@@ -48,7 +48,7 @@ test('Chat Focus file modal: edit and Save through the guarded PUT /files, a cha
     await page.waitForFunction((n) => document.querySelector('#mdlT')?.textContent === n && document.querySelector('#mdlBody textarea')?.value.length > 0, name, { timeout: 8000 });
   };
   const ask = (action, payload) => page.evaluate(([a, p]) => window.p9.mission(a, p), [action, payload]);
-  await page.click('#rFiles');
+  await openFiles(page);
   await page.locator('#tree .where', { hasText: 'proj' }).waitFor({ timeout: 5000 });
 
   // 1. It opens as the editor, and Save writes the file through the daemon.

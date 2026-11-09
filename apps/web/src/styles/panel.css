@@ -1,0 +1,230 @@
+/* N1: the left panel (panel.mjs), its menu, toast, drag ghost and the strip's title card; the chat pane's crumb and tools.
+   Theme tokens only: the panel sits on --background (black in the dark look, builder-look.css) and takes each look's
+   accent. Every class is scoped under .lpanel or an lp- name: the themes carry unscoped .list, .empty, .needs and .muted. */
+
+.lpanel{--pw:272px;--cw:48px;--ease:cubic-bezier(.2,.8,.2,1);position:relative;width:var(--pw);min-height:0;min-width:0;overflow:hidden;display:flex;flex-direction:column;
+  border-right:1px solid var(--border);background:var(--background);transition:width .22s var(--ease)}
+.lpanel[data-collapsed]{width:var(--cw)}
+.lpanel svg{width:16px;height:16px;flex:none}
+.lpanel [data-slot="button"][data-size="icon-sm"]{width:32px;height:32px}
+.lpanel .grow{flex:1}
+.lpanel kbd{font:inherit;font-size:10.5px;padding:1px 5px;border:1px solid var(--border);border-radius:4px;color:var(--muted-foreground)}
+:is(.lpanel,.lp-menu,.lp-toast,.ptool .crumb) :is(button,input):focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+
+/* Narrow windows (under 1000 px): the strip holds its column; the full panel opens over the chat when asked. */
+.body[data-narrow]{grid-template-columns:48px minmax(0,1fr)}
+.body[data-narrow]>.stage{grid-column:2}
+.body[data-narrow]>.lpanel{position:absolute;z-index:45;left:0;top:0;bottom:0}
+.lpanel[data-overlay]{box-shadow:18px 0 44px -14px rgb(0 0 0/.55)}
+
+/* Width: the grip on the panel's right edge (drag, or arrow keys when focused). */
+.lpanel .p-grip{position:absolute;top:0;right:-3px;bottom:0;width:6px;cursor:col-resize;z-index:2}
+.lpanel .p-grip:hover,.lpanel .p-grip:focus-visible{background:color-mix(in oklch,var(--primary) 40%,transparent);outline:0}
+.lpanel[data-collapsed] .p-grip{display:none}
+
+/* Top: the focus switch is the one boxed control. Settings may hide a focus ([hidden]); the rest share the width. */
+.lpanel .p-top{padding:10px 10px 8px}
+.lpanel .seg{display:flex;gap:2px;padding:3px;border-radius:calc(var(--radius) - 2px);background:color-mix(in oklch,var(--foreground) 7%,transparent)}
+.lpanel .seg button{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:0 6px;border:0;border-radius:calc(var(--radius) - 4px);background:none;color:var(--muted-foreground);font:inherit;font-size:12.5px;cursor:pointer;transition:background .15s,color .15s}
+.lpanel .seg button[hidden]{display:none}
+.lpanel .seg button:hover{color:var(--foreground)}
+.lpanel .seg button[aria-pressed="true"]{background:color-mix(in oklch,var(--primary) 20%,transparent);color:var(--foreground)}
+.lpanel .seg button[aria-pressed="true"] svg{color:var(--primary)}
+.lpanel .seg svg{width:15px;height:15px}
+.lpanel .seg span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Search: a quiet filled field; a border only on focus. */
+.lpanel .p-find{display:flex;align-items:center;padding:0 10px 6px}
+.lpanel .find{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border:1px solid transparent;border-radius:calc(var(--radius) - 2px);
+  background:color-mix(in oklch,var(--foreground) 6%,transparent);color:var(--muted-foreground);cursor:text;transition:border-color .15s,background .15s}
+.lpanel .find:focus-within{border-color:color-mix(in oklch,var(--ring) 70%,transparent);background:transparent}
+.lpanel .find input:focus-visible{outline:0}
+.lpanel .find svg{width:14px;height:14px}
+.lpanel .find input{all:unset;flex:1;min-width:0;font-size:13px;color:var(--foreground)}
+.lpanel .find input::placeholder{color:var(--muted-foreground)}
+#stripSearch{display:none}
+
+/* New chat: the one filled button. */
+.lpanel .acts{padding:0 10px 2px}
+#newBtn{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 10px;border:0;border-radius:calc(var(--radius) - 2px);cursor:pointer;
+  background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--foreground);font:inherit;font-size:13px;font-weight:500;transition:background .15s}
+#newBtn:hover,#newBtn[aria-expanded="true"]{background:color-mix(in oklch,var(--primary) 24%,transparent)}
+#newBtn svg{color:var(--primary);width:15px;height:15px}
+
+/* ---- The list ---- */
+.lpanel .p-list{flex:1;min-height:0;overflow:auto;padding:0 6px 12px;scrollbar-width:thin;scrollbar-color:color-mix(in oklch,var(--foreground) 18%,transparent) transparent}
+.lpanel .sh{display:flex;align-items:center;margin:16px 4px 4px 8px;height:22px}
+.lpanel h3{margin:0;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground);display:flex;align-items:center;gap:6px;border-radius:6px;flex:1}
+.lpanel h3 .n{font-weight:400;letter-spacing:0}
+.lpanel h3[data-drop]{color:var(--foreground)}
+.lpanel .hadd{width:22px;height:22px;display:grid;place-items:center;border:0;border-radius:6px;background:none;color:var(--muted-foreground);cursor:pointer}
+.lpanel .hadd:hover{background:var(--accent);color:var(--foreground)}
+.lpanel .hadd svg{width:14px;height:14px}
+.lpanel .pempty{margin:2px 8px 4px;font-size:12.5px;line-height:1.5;color:var(--muted-foreground)}
+.lpanel .pempty p{margin:0 0 8px}
+.lpanel .pempty button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--border);border-radius:calc(var(--radius) - 4px);background:none;color:var(--foreground);font:inherit;font-size:12.5px;cursor:pointer}
+.lpanel .pempty button:hover{background:var(--accent)}
+.lpanel .pempty svg{width:14px;height:14px}
+.lpanel .none{margin:0;padding:10px 10px 4px;color:var(--muted-foreground);font-size:12.5px}
+
+.lpanel .rowwrap{position:relative}
+.lpanel .row{position:relative;display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:calc(var(--radius) - 4px);font-size:13px;color:var(--foreground);text-align:left;background:none;border:0;cursor:pointer;min-width:0;touch-action:pan-y}
+.lpanel .row:hover{background:var(--accent)}
+.lpanel .row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lpanel .row[data-s="unread"] .t{font-weight:600}
+.lpanel .row .n{font-size:11px;color:var(--muted-foreground);min-width:16px;text-align:right;font-variant-numeric:tabular-nums}
+/* The tail: the state mark in the time's place; the time on hover and focus (Builder's build fix 1). One width, so titles line up. */
+.lpanel .row .tail{flex:none;width:40px;display:flex;justify-content:flex-end;align-items:center}
+.lpanel .row .when{white-space:nowrap;font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.lpanel .tail[data-mark] .when{display:none}
+.lpanel .rowwrap:is(:hover,:focus-within) .tail[data-mark] .mk{display:none}
+.lpanel .rowwrap:is(:hover,:focus-within) .tail[data-mark] .when{display:inline}
+/* The chat on screen: a 2 px bar at the row's left edge. */
+.lpanel .row[aria-current="true"]{background:color-mix(in oklch,var(--primary) 11%,transparent)}
+.lpanel .row[aria-current="true"]::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:2px;background:var(--primary)}
+[data-theme=event-horizon-prime] .lpanel .row[aria-current="true"]::before{background:linear-gradient(180deg,var(--primary),var(--amber,var(--primary)),var(--glow2,var(--primary)))}
+.lpanel .row .chev{display:inline-grid;transition:transform .15s;color:var(--muted-foreground)}
+.lpanel .row .chev svg{width:13px;height:13px}
+.lpanel .row[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.lpanel .row.proj .t{font-weight:600}
+.lpanel .row .fold{display:inline-grid;color:var(--muted-foreground)}
+.lpanel .row .fold svg{width:15px;height:15px}
+.lpanel .row.proj[data-missing] .fold{color:var(--warn)}
+.lpanel .kids{margin-left:14px;padding-left:6px;border-left:1px solid var(--border)}
+.lpanel .kids .row{font-size:12.5px;padding:5px 8px}
+.lpanel .row.showmore{color:var(--muted-foreground);font-size:12px;padding-left:23px}
+.lpanel .row.showmore:hover{color:var(--foreground)}
+.lpanel mark{background:color-mix(in oklch,var(--primary) 35%,transparent);color:inherit;border-radius:3px}
+
+/* Row states, by shape as well as colour; the left dot stays the agent's colour (d1.css .dot). */
+.lpanel .mk{flex:none;display:inline-grid;place-items:center;width:14px;height:14px}
+.lpanel .mk svg{width:13px;height:13px}
+/* Running is a ring, unread a filled dot: told apart by shape, not only colour. */
+.lpanel .mk-run::before{content:"";width:8px;height:8px;box-sizing:border-box;border-radius:50%;border:2px solid var(--ok);grid-area:1/1}
+.lpanel .mk-run[data-busy]::after{content:"";width:13px;height:13px;border-radius:50%;border:1px solid var(--ok);grid-area:1/1;animation:lp-pulse 1.8s var(--ease) infinite}
+@keyframes lp-pulse{from{opacity:.9;transform:scale(.5)}to{opacity:0;transform:scale(1.15)}}
+.lpanel .mk-unread::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--foreground)}
+.lpanel .mk-needs{color:var(--warn)}
+.lpanel .mk-failed{color:var(--destructive)}
+.lpanel .mk-failed svg{stroke-width:3;width:12px;height:12px}
+
+/* On a row: Stop (live chats), ⋯ (chats), + (projects); shown on hover and on focus, over the tail. */
+.lpanel :is(.more,.padd,.rstop){position:absolute;top:50%;translate:0 -50%;width:24px;height:24px;display:grid;place-items:center;border:0;border-radius:6px;background:var(--accent);color:var(--muted-foreground);cursor:pointer;opacity:0}
+.lpanel :is(.more,.padd){right:4px}
+.lpanel .rstop{right:30px}
+.lpanel :is(.more,.padd) svg{width:15px;height:15px}
+.lpanel .rstop svg{width:12px;height:12px}
+.lpanel :is(.more,.padd,.rstop):hover{color:var(--foreground);background:color-mix(in oklch,var(--foreground) 12%,transparent)}
+.lpanel .rstop:hover{color:var(--destructive)}
+.lpanel .rowwrap:is(:hover,:focus-within) :is(.more,.padd,.rstop),.lpanel .more[aria-expanded="true"]{opacity:1}
+/* Build fix 1: on a chat row the time stays in view, moved left of the buttons; a project row's count gives way to its +. */
+.lpanel .rowwrap:is(:hover,:focus-within) .proj .tail{visibility:hidden}
+.lpanel .rowwrap:is(:hover,:focus-within) .row:not(.proj) .tail,.lpanel .rowwrap:has(.more[aria-expanded="true"]) .tail{margin-right:26px}
+.lpanel .rowwrap[data-live]:is(:hover,:focus-within) .row .tail,.lpanel .rowwrap[data-live]:has(.more[aria-expanded="true"]) .tail{margin-right:52px}
+.lpanel .rowwrap:has(.more[aria-expanded="true"]) .row{background:var(--accent)}
+@media (hover:none){.lpanel :is(.more,.padd,.rstop){opacity:1}.lpanel .tail{visibility:hidden}}
+
+/* Drag a chat onto a project or onto Chats. */
+body.lp-dragging{cursor:grabbing;user-select:none}
+.lpanel .row[data-dragging]{opacity:.35}
+.lpanel [data-drop]{outline:1px solid color-mix(in oklch,var(--primary) 70%,transparent);outline-offset:-1px;background:color-mix(in oklch,var(--primary) 18%,transparent)}
+.lp-ghost{position:fixed;z-index:80;pointer-events:none;display:grid;gap:3px;max-width:250px;padding:8px 11px;border:1px solid color-mix(in oklch,var(--primary) 45%,var(--border));border-radius:var(--radius);background:var(--popover);color:var(--popover-foreground,var(--foreground));
+  box-shadow:0 14px 32px -6px rgb(0 0 0/.45);font-size:12.5px;transform:translate(14px,10px) rotate(-1.5deg)}
+.lp-ghost .t{display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lp-ghost .to{font-size:11px;color:var(--muted-foreground)}
+.lp-ghost .to b{color:var(--foreground);font-weight:600}
+@keyframes lp-landed{from{background:color-mix(in oklch,var(--primary) 34%,transparent)}to{background:transparent}}
+.lpanel .row[data-moved]{animation:lp-landed 1.8s var(--ease)}
+
+/* The strip (collapsed, Dev, Mission, narrow): live and unseen chats as agent heads, the state mark in the corner.
+   Builder's build fix 2: the mark is 18 px with a 15 px glyph (the mock's was 12), so the hand and the cross read apart. */
+.lpanel .bots{display:none;flex-direction:column;align-items:center;gap:4px;min-height:0;overflow-y:auto;scrollbar-width:none}
+.lpanel .bot{position:relative;flex:none;width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:8px;background:none;cursor:pointer}
+.lpanel .bot:hover{background:var(--accent)}
+.lpanel .bot svg{width:20px;height:20px}
+.lpanel .bot[aria-current="true"]{background:color-mix(in oklch,var(--primary) 14%,transparent)}
+.lpanel .bot[data-busy]>svg{animation:lp-work 1.2s ease-in-out infinite}
+@keyframes lp-work{50%{transform:translateY(-2px)}}
+.lpanel .bot .bm{position:absolute;top:-1px;right:-1px;width:18px;height:18px;display:grid;place-items:center;border-radius:50%;background:var(--background)}
+.lpanel .bot .bm:empty::before{content:"";width:8px;height:8px;border-radius:50%}
+.lpanel .bot .bm svg{width:15px;height:15px}
+.lpanel .bot[data-s=""] .bm{display:none}
+.lpanel .bot[data-s="running"] .bm::before{width:9px;height:9px;box-sizing:border-box;border:2px solid var(--ok)}
+.lpanel .bot[data-s="unread"] .bm::before{background:var(--foreground)}
+.lpanel .bot[data-s="needs"] .bm{color:var(--warn)}
+.lpanel .bot[data-s="failed"] .bm{color:var(--destructive)}
+.lpanel .bot[data-s="failed"] .bm svg{stroke-width:3.5;width:13px;height:13px}
+.lp-tip{position:fixed;z-index:72;display:grid;gap:2px;max-width:260px;padding:6px 10px;translate:0 -50%;border:1px solid var(--border);border-radius:calc(var(--radius) - 2px);background:var(--popover);color:var(--popover-foreground,var(--foreground));
+  box-shadow:0 10px 28px -6px rgb(0 0 0/.4);font-size:12.5px;pointer-events:none}
+.lp-tip[hidden]{display:none}
+.lp-tip b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lp-tip span{font-size:11.5px;color:var(--muted-foreground)}
+
+/* Foot: the bell, Commands, the terminal and collapse. */
+.lpanel .p-foot{display:flex;align-items:center;gap:2px;padding:6px 8px;border-top:1px solid var(--border)}
+.lpanel .p-foot .cmd{gap:8px;height:32px;padding:0 8px;color:var(--muted-foreground);font-size:12.5px}
+.lpanel .bell{position:relative}
+.lpanel .bell b{position:absolute;top:3px;right:3px;min-width:14px;height:14px;padding:0 3px;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:9.5px;line-height:14px;font-weight:600}
+.lpanel .bell b:empty{display:none}
+.lpanel .p-foot [aria-pressed="true"]{color:var(--primary);background:color-mix(in oklch,var(--primary) 12%,transparent)}
+#collapse[hidden]{display:none}
+/* With a chat on screen in Chat Focus, its pane's header has the terminal button; the foot's stands in otherwise. */
+.shell[data-focus="chat"] .lpanel:not([data-nochat]) #rTerm{display:none}
+
+/* The strip: 48 px, icons only. */
+.lpanel[data-collapsed] .p-top{padding:8px 6px}
+.lpanel[data-collapsed] .seg{flex-direction:column}
+.lpanel[data-collapsed] .seg button{flex:none;height:30px;padding:0}
+.lpanel[data-collapsed] :is(.seg span,.find,.p-list,.p-foot .cmd span,.p-foot kbd,#newBtn span){display:none}
+.lpanel[data-collapsed] .p-find{padding:0 0 2px;justify-content:center}
+.lpanel[data-collapsed] #stripSearch{display:inline-flex}
+.lpanel[data-collapsed] .acts{display:flex;justify-content:center;padding:0 0 4px}
+.lpanel[data-collapsed] #newBtn{width:32px;padding:0;justify-content:center}
+.lpanel[data-collapsed] .bots{display:flex;flex:1;margin:4px 8px 0;padding-top:8px;border-top:1px solid var(--border)}
+.lpanel[data-collapsed] .p-foot{flex-direction:column;padding:6px 0}
+.lpanel[data-collapsed] .p-foot .grow{display:none}
+.lpanel[data-collapsed] .p-foot .cmd{width:32px;padding:0;justify-content:center}
+.walk-at.bots:empty{display:flex}
+
+/* ---- Row menu and the Undo toast ---- */
+.lp-menu{position:fixed;z-index:70;min-width:220px;max-width:280px;padding:4px;border:1px solid var(--border);border-radius:var(--radius);background:var(--popover);color:var(--popover-foreground,var(--foreground));box-shadow:0 12px 32px -4px rgb(0 0 0/.4)}
+.lp-menu button{display:flex;align-items:center;width:100%;padding:7px 10px;border-radius:calc(var(--radius) - 4px);font:inherit;font-size:13px;background:none;border:0;color:inherit;text-align:left;cursor:pointer;gap:9px}
+.lp-menu button:hover:not(:disabled),.lp-menu button:focus-visible{background:var(--accent)}
+.lp-menu button:disabled{cursor:default;color:var(--muted-foreground)}
+.lp-menu button svg{width:15px;height:15px;flex:none;color:var(--muted-foreground)}
+.lp-menu button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lp-menu .mck{margin-left:auto;display:inline-grid}
+.lp-menu .mck svg{color:var(--primary);width:14px;height:14px}
+.lp-menu .lbl{font-size:11px;color:var(--muted-foreground);padding:7px 10px 3px}
+.lp-menu .sep{height:1px;margin:4px 2px;background:var(--border)}
+.lp-menu .note{font-size:11.5px;line-height:1.45;color:var(--muted-foreground);padding:5px 10px 6px}
+.lp-menu .danger,.lp-menu .danger svg{color:var(--destructive)}
+.lp-toast{position:fixed;left:12px;bottom:84px;z-index:75;display:flex;align-items:center;gap:10px;max-width:280px;padding:7px 6px 7px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--popover);color:var(--popover-foreground,var(--foreground));box-shadow:0 12px 32px -4px rgb(0 0 0/.4);font-size:12.5px;animation:lp-toastin .22s var(--ease,ease-out)}
+.lp-toast span{min-width:0}
+@keyframes lp-toastin{from{opacity:0;translate:0 6px}}
+
+/* Ctrl K: chats and projects in the palette, beside the commands. */
+#palette li .dot{margin:0 3px}
+#palette li small{margin-left:auto;font-size:11.5px;color:var(--muted-foreground);white-space:nowrap}
+#palette li small+kbd{margin-left:8px}
+
+/* ---- The chat pane: where you are (project › chat) and its tools, in place of the agent name. ---- */
+/* The crumb clips instead of spilling over the buttons after it; the project name gives way first. */
+.ptool{container-type:inline-size}
+.ptool .crumb{display:flex;align-items:center;gap:4px;min-width:16ch;overflow:hidden;font-size:13px;margin-right:4px}
+.ptool .crumb .cp{border:0;background:none;color:var(--muted-foreground);font:inherit;padding:2px 6px;margin-left:-4px;border-radius:6px;cursor:pointer;white-space:nowrap;flex:0 4 auto;min-width:4ch;overflow:hidden;text-overflow:ellipsis}
+.ptool .crumb .cp:hover{color:var(--foreground);background:var(--accent)}
+.ptool .crumb svg{width:12px;height:12px;color:var(--muted-foreground);flex:none}
+.ptool .crumb .ct{font-weight:600;flex:0 1 auto;min-width:6ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px}
+/* A narrow pane (split, 960 wide) drops the project name, which the panel shows, so the title keeps its room. */
+/* The header scrolls sideways when full (as before); the tools stay pinned at its right end so split never hides them.
+   In a narrow pane the Running label also goes: the live dot before the title says it. */
+@container (max-width:720px){.ptool .crumb .cp,.ptool .crumb>svg,.ptool .state[data-s="running"]{display:none}.ptool .state[data-s="running"]+[data-stop]{margin-left:auto}}
+.ptool .tools{position:sticky;right:-10px;display:flex;align-items:center;gap:2px;margin-left:2px;padding:0 10px 0 8px;margin-right:-10px;border-left:1px solid var(--border);background:var(--background);box-shadow:-14px 0 12px -6px var(--background)}
+.ptool .tools [data-slot="button"]{width:28px;height:28px}
+.ptool .tools svg{width:15px;height:15px}
+.ptool .tools [aria-pressed="true"]{background:var(--accent);color:var(--foreground)}
+.ptool .state[data-s="needs"]{color:var(--warn)}
+.ptool .state[data-s="failed"]{color:var(--destructive)}
+
+@media (prefers-reduced-motion:reduce){.lpanel .mk-run::after,.lpanel .row[data-moved],.lpanel .bot[data-busy]>svg,.lp-toast{animation:none}.lpanel{transition:none}}
