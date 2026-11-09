@@ -2,7 +2,13 @@
 import { esc } from './helpers.mjs';
 
 export function installFiles(outer) {
-const fileRoot = () => ({ project: () => outer.S.sessions.find(x => x.id === outer.S.open[0])?.folder || outer.live.primary?.path || '', workspace: () => '',
+// MC-18 (N1 point 11): Current project is the project page's work folder, else the shown chat's project's, else the chat's own
+// folder as before. In P9 (no path from the daemon) and a chat's ':project-files' marker are not workspace folders: the main project.
+const projectRoot = () => { const v = outer.S.view, s = outer.S.sessions.find(x => x.id === outer.S.open[0]), id = v?.kind === 'project' ? v.id : !v && s?.project;
+  // id is false on the Archived page, and false?.work does not stop the chain: no project there.
+  const p = id ? outer.S.projects?.find(x => x.id === id) : null; if (p?.work.folder != null) return p.work.folder;
+  return (!(v?.kind === 'project') && s?.folder && !s.folder.startsWith(':') && s.folder) || outer.live.primary?.path || ''; };
+const fileRoot = () => ({ project: projectRoot, workspace: () => '',
   needs: () => outer.live.waitDir, ideas: () => '_ideas' })[outer.files.scope]();
 async function loadDir(dir) {
   outer.files.dirs[dir] = 'loading';

@@ -5,6 +5,7 @@
 // menu, drag onto a project, the strip's title card, Ctrl B and Ctrl Tab. State lives on the sessions (controller's S).
 import { svg, esc, dragBar } from './helpers.mjs';
 import { agentIcon } from './agent-icons.mjs';
+import { installProjects } from './projects-view.mjs';
 
 const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
 export const PANEL_ICONS = {
@@ -70,6 +71,9 @@ export function installPanel(o, { focus, stopChat, busy }) {
     }).join('');
     if (!q || general.length) h += `<div data-zone=""><div class="sh"><h3>Chats <span class="n">${general.length || ''}</span></h3></div>${general.map(chatRow).join('')}</div>`;
     if (q && !groups.length && !general.length) h = `<p class="none">Nothing matches “${esc(P.q)}”.</p>`;
+    // Archived projects and chats: one row at the end, to their page (projects-view.mjs), where Unarchive puts one back.
+    const na = (o.S.projects || []).filter(p => p.archived).length + o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden)).length;
+    if (!q && na && o.openArchived) h += `<button class="row arch" data-archived aria-current="${o.S.view?.kind === 'archived' && o.S.focus === 'chat'}"><span class="t">Archived</span><span class="n">${na}</span></button>`;
     o.morph(list, h);
   }
   // Builder's build fix 2: the strip's marks are bigger than the mock's 12 px (panel.css .bm), so the hand and the cross read apart.
@@ -91,6 +95,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (!shut) renderList();
     renderStrip();
     if (P.moved) setTimeout(() => { P.moved = null; });
+    o.renderPage?.(); // the project page or the chats (projects-view.mjs)
   }
   const setCollapsed = v => { P.collapsed = v; key('p9-panel-collapsed', v ? '1' : undefined); renderPanel(); o.placeDev?.(); };
   const toggle = () => { if (P.narrow) { P.overlay = !P.overlay; renderPanel(); } else setCollapsed(!P.collapsed); };
@@ -198,6 +203,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     if (pr) { P.overlay = false; return o.openProject(pr.dataset.proj); }
     const ni = t.closest('[data-newin]'); if (ni) return newChatIn(ni.dataset.newin, ni);
     if (t.closest('[data-newproj]')) return o.newProject?.();
+    if (t.closest('[data-archived]')) { P.overlay = false; return o.openArchived(); }
     const c = t.closest('[data-chat]'); if (c) return openChat(c.dataset.chat);
     if (t.closest('#collapse')) return toggle();
     if (t.closest('#stripSearch')) return o.openPal();
@@ -255,5 +261,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   addEventListener('click', e => { const b = e.target.closest?.('[data-goproj]'); if (!b) return; const id = b.dataset.goproj;
     if (o.openProject) return o.openProject(id);
     setOpen(id, true); if (P.collapsed) setCollapsed(false); else if (P.narrow) P.overlay = true; renderPanel(); list.querySelector(`[data-proj="${CSS.escape(id)}"]`)?.focus(); }, { signal: o.lifetime.signal });
-  return { renderPanel, jumps, openChat, move, setOpen, newAt, loadProjects, panel: P };
+  const api = { renderPanel, jumps, openChat, move, setOpen, newAt, loadProjects, closeMenu, openMenu, undoToast, panel: P };
+  installProjects(o, api); // N1 points 9 and 10: the project page, New project, a chat's Rename, Archive and Delete
+  return api;
 }

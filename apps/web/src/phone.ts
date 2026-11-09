@@ -1,6 +1,6 @@
 import { basicSetup, EditorView } from 'codemirror';
 import { limitLine, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
-import { pinned, applyCard } from './pinned.mjs';
+import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
@@ -174,7 +174,7 @@ let loads = Promise.resolve();
 const loadChat = () => loads = loads.then(readChat);
 async function readChat() {
   try {
-    const list = await request('/chat'); state.conversations = list.conversations ?? [];
+    const [list] = await Promise.all([request('/chat'), loadPhoneProjects(request)]); state.conversations = list.conversations ?? [];
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
@@ -454,7 +454,7 @@ function renderList() {
     return `<button type="button" class="row" data-chat="${escape(id)}" data-run="${run}"><i class="dot ${escape(item.provider)}"></i><span class="t"><b>${escape(item.title || item.provider)}</b><small>${escape(second)}</small></span><time>${escape(clock(item.used ?? item.created))}</time></button>`;
   };
   const section = (label: string, items: Json[]) => items.length ? `<h2 class="sec">${label}</h2>${items.map(row).join('')}` : '';
-  const html = section('Open', state.conversations.filter(isOpen)) + section('History', state.conversations.filter((item) => !isOpen(item) && item.sent))
+  const html = phoneSections(state.conversations, (item: Json) => isOpen(item) || !!item.sent, section) // N1 point 12: by project (phone-projects.mjs)
     || '<div class="empty">No chats yet. Tap + to start one.</div>';
   if (html !== listSig) { listSig = html; one('#chatList').innerHTML = html; }
 }
@@ -614,7 +614,7 @@ async function listen() {
       if (state.events.length === held) continue;
       // A chat made, used, stopped or closed anywhere moves in the picker.
       // A stub's row reads its state from the list, so a turn's end or a question asked or answered lists again too.
-      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; fillPicker(); }
+      if (state.events.slice(held).some((event) => ['created', 'user', 'stopped', 'closed', 'turn-end', 'interrupted', 'exited', 'error', 'approval', 'question', 'answered', 'project', 'renamed', 'archived', 'deleted'].includes(String(event.type)))) { state.conversations = (await request('/chat')).conversations ?? []; await loadPhoneProjects(request); fillPicker(); }
       render();
     }
     catch { await pause(3000); }
