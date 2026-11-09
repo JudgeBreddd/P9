@@ -258,3 +258,22 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(await page.locator('#pinned .plan li').count(), 3);
   });
 }
+
+// O37 (threat model row 18): the phone colours a reply's complete code blocks too, and leaves an unknown language plain.
+test('Code colours on the phone: a ts, python, json and shell reply coloured in Azure; an unknown language stays plain', { timeout: 120000 }, async (t) => {
+  const { page } = await phoneOn(t);
+  await newChat(page, 'claude');
+  const fence = (lang, code) => '```' + lang + '\n' + code + '\n```\n\n';
+  await page.fill('#prompt', 'Four blocks:\n\n' + fence('ts', 'const n: number = 42; // note\nfunction f(x: string) { return "s"; }') + fence('python', 'def f(x):\n    return True')
+    + fence('json', '{"a": 1, "ok": null}') + fence('sh', 'pnpm install "./app"  # build') + fence('zz', 'plain = 1'));
+  await page.click('#composer button');
+  const reply = page.locator('#events article[data-kind=agent]').last();
+  await reply.locator('code.language-sh .cc-comment').first().waitFor({ timeout: 15000 });
+  await reply.locator('code.language-json .cc-const').first().waitFor({ timeout: 15000 });
+  await page.evaluate(() => { const h = document.documentElement; h.classList.add('dark'); h.dataset.theme = 'p9-event-horizon-azure'; });
+  const seen = await reply.evaluate((m) => [...m.querySelectorAll('pre code')].map((c) => [c.className, c.querySelectorAll('span').length > 0]));
+  assert.deepEqual(seen, [['language-ts', true], ['language-python', true], ['language-json', true], ['language-sh', true], ['language-zz', false]]);
+  assert.equal(await reply.locator('code.language-ts .cc-keyword').first().evaluate((s) => getComputedStyle(s).color), 'rgb(183, 122, 255)');
+  await page.waitForTimeout(300);
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-code-colours-azure ' + (await page.screenshot()).toString('base64'));
+});

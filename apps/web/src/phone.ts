@@ -3,6 +3,7 @@ import { limitLine, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, 
 import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
+import { codeColoursVersion, onCodeColours } from './code-colours.mjs';
 import { MAINTENANCE } from './maintenance.mjs';
 import { SECURITY, warnsLoose, setWarnsLoose, setStarts, unrestricted } from './security.mjs';
 import { missionKeys, missionShown, missionValue } from './mission-files.mjs';
@@ -397,7 +398,7 @@ function itemsOf(blocks: Block[]) {
       const run = blocks.slice(i, j + 1);
       out.push({ key: 'g' + i, sig: JSON.stringify(run), html: () => `<article data-kind="group" data-status="${run.some((block) => block.status === 'in_progress' || block.status === 'pending') ? 'in_progress' : 'completed'}"><details><summary><span class="st"></span><span class="t">Ran ${run.length} tools</span></summary>${run.map((block) => toolRow(block, false)).join('')}</details>${agentImgs(run.flatMap((block) => block.images ?? []), 'the agent')}</article>` });
       i = j;
-    } else { const block = blocks[i]; out.push({ key: 'b' + i, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join(''), html: () => blockHtml(block) }); }
+    } else { const block = blocks[i]; out.push({ key: 'b' + i, sig: JSON.stringify(block) + (block.sent ?? []).map((hash) => sentCache.get(hash) ? 1 : 0).join('') + codeColoursVersion(), html: () => blockHtml(block) }); }
   }
   return out;
 }
@@ -487,6 +488,7 @@ function route(id: string) {
 }
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
 function back() { if (pushed) window.history.back(); else { window.history.replaceState(null, '', location.pathname + location.search); route(''); } }
+onCodeColours(() => render()); // O37: a parser arrived; the version in each block's sig redraws its blocks once
 function render() {
   if (!openId) return renderList();
   const picked = openId;

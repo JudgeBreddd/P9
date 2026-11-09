@@ -1,3 +1,85 @@
+// O37 (threat model row 18): a complete fenced block in a listed language is coloured, in every look; an unknown
+// language, a block still open and markup inside a block stay plain escaped text.
+test('Code colours: ts, python, json and shell blocks coloured in Azure and the other looks, readable; unknown language, open block and markup stay text', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const profile = path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-code-')), 'profile');
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  await page.locator('#rChat').waitFor();
+  const fence = (lang, code) => '```' + lang + '\n' + code.replace(/\n$/, '') + '\n```\n\n';
+  const text = '\nFour blocks:\n\n' + fence('ts', FIXTURE.ts) + fence('python', OTHERS['app.py']) + fence('json', OTHERS['data.json']) + fence('bash', OTHERS['run.sh'])
+    + fence('zz', 'const plain = 1;') + fence('constructor', 'a') + fence('toString', 'b') + fence('__proto__', 'c') + fence('ts', 'const x = "<img src=x onerror=window.pwned=1>"; // </code></pre><script>window.pwned = 2</script>')
+    + '```py\ndef still_open():';
+  const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text });
+  await page.locator(`#nav .row[data-chat="${id}"]`).click();
+  const reply = page.locator(`#chats .pane[data-id="${id}"] .msg.agent`).last();
+  // The first block loads its parser; the chat redraws once each one arrives.
+  await reply.locator('code.language-bash .cc-comment').first().waitFor({ timeout: 15000 });
+  await reply.locator('code.language-json .cc-prop').first().waitFor({ timeout: 15000 });
+  const blocks = await reply.evaluate((m) => [...m.querySelectorAll('pre')].map((pre) => {
+    const code = pre.querySelector('code');
+    return { lang: code.className, spans: code.querySelectorAll('span').length, copy: !!pre.querySelector('[data-copycode]'), text: code.textContent,
+      kinds: [...new Set([...code.querySelectorAll('span')].map((s) => s.className))].sort() };
+  }));
+  assert.deepEqual(blocks.map((b) => [b.lang, b.spans > 0, b.copy]), [['language-ts', true, true], ['language-python', true, true], ['language-json', true, true],
+    ['language-bash', true, true], ['language-zz', false, true], ['language-constructor', false, true], ['language-toString', false, true],
+    ['language-__proto__', false, true], ['language-ts', true, true], ['language-py', false, true]]);
+  // The text in each block is the code exactly as sent (colouring adds spans, never characters).
+  assert.equal(blocks[0].text, FIXTURE.ts);
+  assert.equal(blocks[2].text, OTHERS['data.json']);
+  assert.equal(blocks[4].text, 'const plain = 1;\n');
+  assert.equal(blocks[7].text, 'c\n', 'a label that names an inherited property stays plain');
+  // The render path catches a throw and a later redraw hides it, so the lookup itself is checked here.
+  const { codePieces } = await import('../apps/web/src/code-colours.mjs');
+  for (const l of ['constructor', 'toString', '__proto__']) assert.equal(codePieces(l, 'x'), null, l + ' stays plain');
+  assert.equal(blocks[9].text, 'def still_open():\n', 'an open block stays plain');
+  for (const k of ['cc-keyword', 'cc-string', 'cc-type', 'cc-punct']) assert.ok(blocks[0].kinds.includes(k), 'ts has ' + k + ': ' + blocks[0].kinds);
+  assert.deepEqual(await reply.evaluate((m) => ({
+    banned: m.querySelectorAll('script, img, iframe, object, embed, svg').length,
+    on: [...m.querySelectorAll('*')].some((el) => [...el.attributes].some((a) => /^on/i.test(a.name))),
+    classes: [...new Set([...m.querySelectorAll('pre span')].flatMap((s) => [...s.classList]))].every((c) => /^cc-[a-z]+$/.test(c)),
+    shown: m.querySelectorAll('pre')[8].textContent.includes('<img src=x onerror=window.pwned=1>') && m.querySelectorAll('pre')[8].textContent.includes('<script>'),
+    pwned: window.pwned ?? null,
+  })), { banned: 0, on: false, classes: true, shown: true, pwned: null });
+  // Each colour, blended onto its block's real background, read in four looks: the default dark look, AMOLED, a light
+  // look and Azure (Azure's colours are the spec's).
+  const read = () => reply.evaluate((m) => {
+    const px = (colour, under) => { const c = document.createElement('canvas').getContext('2d', { willReadFrequently: true }); c.fillStyle = under || '#000'; c.fillRect(0, 0, 1, 1); c.fillStyle = colour; c.fillRect(0, 0, 1, 1); return [...c.getImageData(0, 0, 1, 1).data].slice(0, 3); };
+    const lum = (rgb) => { const [r, g, b] = rgb.map((v) => v / 255).map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const out = {};
+    for (const pre of m.querySelectorAll('pre')) {
+      const bg = px(getComputedStyle(pre).backgroundColor, getComputedStyle(document.body).backgroundColor);
+      for (const span of pre.querySelectorAll('code span')) {
+        const fg = px(getComputedStyle(span).color, 'rgb(' + bg + ')'), [x, y] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+        const ratio = Math.round(((x + 0.05) / (y + 0.05)) * 100) / 100;
+        if (!(span.className in out) || ratio < out[span.className].ratio) out[span.className] = { ratio, rgb: 'rgb(' + fg.join(', ') + ')' };
+      }
+    }
+    return out;
+  });
+  const shot = async (name) => { if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(300); console.log('P9_SHOT ' + name + ' ' + (await reply.screenshot()).toString('base64')); } };
+  const looks = {};
+  looks.default = await read(); await shot('code-colours-default');
+  await page.evaluate(() => document.documentElement.setAttribute('data-amoled', '')); looks.amoled = await read();
+  await page.evaluate(() => { const h = document.documentElement; h.removeAttribute('data-amoled'); h.classList.remove('dark'); h.dataset.theme = 'daylight'; });
+  looks.daylight = await read(); await shot('code-colours-daylight');
+  await page.evaluate((azure) => { const h = document.documentElement; h.classList.add('dark'); h.dataset.theme = azure; }, AZURE);
+  looks.azure = await read(); await shot('code-colours-azure');
+  console.log('CONTRAST ' + JSON.stringify(looks));
+  const azure = Object.fromEntries(Object.entries(looks.azure).map(([k, v]) => [k, v.rgb]));
+  assert.deepEqual([azure['cc-keyword'], azure['cc-fn'], azure['cc-string'], azure['cc-const'], azure['cc-comment']],
+    ['rgb(183, 122, 255)', 'rgb(66, 199, 245)', 'rgb(246, 187, 88)', 'rgb(99, 217, 189)', 'rgb(117, 131, 154)']);
+  // Readable: code text at least 4.5:1 on its block; comments and punctuation, muted on purpose, at least 3:1.
+  for (const [look, kinds] of Object.entries(looks)) for (const [kind, { ratio }] of Object.entries(kinds)) {
+    assert.ok(ratio >= (/cc-comment|cc-punct/.test(kind) ? 3 : 4.5), `${look} ${kind} ${ratio}:1`);
+  }
+  console.log('PASS code colours: 4 coloured blocks plus an unknown language, open block and markup as text; contrast ' + Object.entries(looks).map(([l, k]) => l + ' min ' + Math.min(...Object.values(k).map((v) => v.ratio))).join(', '));
+});
+
 // Phase 18 row 2: the Settings page. Threat model row 15 case 4 (the settings IPC refuses any other shape and leaves the
 // file alone) plus each setting surviving an app restart; the agent lock goes through the real daemon.
 import test from 'node:test';
@@ -10,6 +92,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron } from '@playwright/test';
 import { daemon, http, authenticated, root, versionSeen, openFiles } from './helpers.mjs';
 import { REPO } from '../apps/server/anymouse.mjs';
+import { AZURE, FIXTURE, OTHERS } from './azure-fixture.mjs';
 
 const look = (on, roles = {}) => ({ on, size: 48, claude: null, codex: null, system: null, top: null, pane: null, ...roles });
 const PETS = { chat: look(true), dev: look(false), mission: look(false) };

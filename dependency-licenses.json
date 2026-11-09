@@ -358,6 +358,13 @@
     }
   },
   {
+    "name": "@codemirror/legacy-modes@6.5.5",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "05c6130cda97e7600ca91427a41e8a065efcf82365fc0293e7de80faec494c07"
+    }
+  },
+  {
     "name": "@codemirror/lint@6.9.7",
     "license": "MIT",
     "files": {
@@ -930,6 +937,13 @@
     }
   },
   {
+    "name": "@lezer/css@1.3.9",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "568902fb66eaf1f11750e966b33fd7b5d7c618e65af09f35ef843635bcf5f1ba"
+    }
+  },
+  {
     "name": "@lezer/highlight@1.2.5",
     "license": "MIT",
     "files": {
@@ -937,10 +951,38 @@
     }
   },
   {
+    "name": "@lezer/javascript@1.5.6",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "568902fb66eaf1f11750e966b33fd7b5d7c618e65af09f35ef843635bcf5f1ba"
+    }
+  },
+  {
+    "name": "@lezer/json@1.0.3",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "7e744ae18ef84389d576469a5781172b0d50b7981111109f6da7cbc6b4188288"
+    }
+  },
+  {
     "name": "@lezer/lr@1.4.11",
     "license": "MIT",
     "files": {
       "LICENSE": "568902fb66eaf1f11750e966b33fd7b5d7c618e65af09f35ef843635bcf5f1ba"
+    }
+  },
+  {
+    "name": "@lezer/markdown@1.8.1",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "54bd812a6d334e0c438b78a43cea74b67e882739fd3450115ddc7c52be5706c1"
+    }
+  },
+  {
+    "name": "@lezer/python@1.1.19",
+    "license": "MIT",
+    "files": {
+      "LICENSE": "54bd812a6d334e0c438b78a43cea74b67e882739fd3450115ddc7c52be5706c1"
     }
   },
   {
