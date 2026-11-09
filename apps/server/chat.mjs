@@ -19,7 +19,7 @@ import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
 import { createMove, movedNote } from './move.mjs';
-import { createProjects } from './projects.mjs';
+import { createProjects, IN_P9 } from './projects.mjs';
 
 const run = promisify(execFile);
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -274,6 +274,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const folderCheck = (folder) => (path.isAbsolute(folder) ? (loose() ? listDirectory(path.resolve(folder), '') :Promise.reject(new Error('unsafe-path'))) : listDirectory(workspace, folder));
   const folderThere = (folder) => folderCheck(folder).then(() => true, () => false);
   const folderPath = (folder) => path.resolve(workspace, folder ?? '');
+  // Where a chat starts, checked at every start (row 24). IN_P9 (N1b): its project's own files/, from the project id, never
+  // a path a client sent; a chat no longer in an In P9 project starts in the workspace.
+  const startOf = async (conversation) => {
+    if (conversation.folder === IN_P9) return await projects.filesStart(conversation.project) ?? (await folderCheck(''), folderPath(''));
+    await folderCheck(conversation.folder ?? '');
+    return folderPath(conversation.folder);
+  };
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
   const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
     .then((result) => { session.mode = value; emit(session.id, 'mode', { mode: value, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === value) ?? value, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
@@ -488,8 +495,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.window = await bounded(Promise.resolve(sizing));
       const init = await bounded(session.agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }));
       // The chat's folder, checked again at every start like a file path (threat model row 24): a folder since swapped for a link fails.
-      await bounded(folderCheck(conversation.folder ?? ''));
-      const cwd = folderPath(conversation.folder);
+      const cwd = await bounded(startOf(conversation));
       session.capabilities = init.agentCapabilities ?? {};
       session.steering = init._meta?.steering?.supported === true;
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
@@ -738,7 +744,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           || (body.project !== undefined && !project))
         return refused(400, 'request-refused');
       const folder = body.folder ?? (project ? projects.startFolder(project) : '');
-      if (typeof folder !== 'string' || !await folderThere(folder)) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
+      const there = () => (body.folder === undefined ? startOf({ folder, project: project?.id }).then(() => true, () => false) : folderThere(folder));
+      if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
       const id = randomUUID(), title = body.title?.trim() || (body.provider === 'claude' ? 'Claude' : 'Codex');
       db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project) VALUES (?, ?, ?, 'idle', ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null);
       emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }) });
@@ -884,11 +891,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const conversation = ID.test(id) && row(id);
       if (!conversation) return refused(404, 'unknown-conversation');
       if (conversation.provider !== 'claude' || !ID.test(conversation.session ?? '') || ['moving', 'moved'].includes(conversation.state)) return refused(409, 'handoff-unavailable');
-      if (!await folderThere(conversation.folder ?? '')) return refused(409, 'folder-unavailable');
+      const cwd = await startOf(conversation).catch(() => null);
+      if (!cwd) return refused(409, 'folder-unavailable');
       const result = await stopConversation(id);
       if (result !== 'stopped') return { status: 500, result };
       emit(id, 'handed-off', { session: conversation.session });
-      return { status: 200, session: conversation.session, cwd: folderPath(conversation.folder),
+      return { status: 200, session: conversation.session, cwd,
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
     stopAll,

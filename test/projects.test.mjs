@@ -135,8 +135,8 @@ test('a new folder is made empty, a taken name is refused; In P9 has no work fol
   assert.equal(p9.status, 201, p9.text);
   assert.deepEqual(p9.body.project.work, { kind: 'p9', folder: null });
   const chat = (await call(instance, '/chat', 'POST', { provider: 'codex', project: p9.body.project.id })).body.conversation;
-  assert.equal((await list(instance)).find((c) => c.id === chat).folder, '', 'an In P9 chat starts in the workspace (step 1 question)');
-  console.log('PASS new folder: made empty, taken name 409, bad names 400, In P9 project chat starts in the workspace');
+  assert.equal((await list(instance)).find((c) => c.id === chat).folder, ':project-files', "an In P9 chat starts in its project's files (step 1b)");
+  console.log('PASS new folder: made empty, taken name 409, bad names 400, In P9 project chat marked to start in its files');
 });
 
 test('added files: ../, a separator, a link already there, an existing name and a locked name are refused', { timeout: 120000 }, async (t) => {
@@ -160,6 +160,64 @@ test('added files: ../, a separator, a link already there, an existing name and 
   assert.equal((await call(instance, `/projects/${id}/files/remove`, 'POST', { name: 'one.txt' })).status, 200);
   assert.deepEqual((await call(instance, `/projects/${id}`)).body.project.files, []);
   console.log('PASS added files: ../, separator, .., .env 400; existing name and planted link 409; link target and existing file unchanged');
+});
+
+// Step 1b (threat model row N1b): an In P9 project's chat starts in that project's own files/, found from its project id.
+// No client can name a folder under P9's own: not files/, not projects/<id>/, not state/, not another project's files/, not
+// a link to one, in either mode. files/ swapped for a link is refused at the next start.
+test("an In P9 project's chat starts and resumes in its own files folder; no client-sent folder reaches P9's", { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  const make = async (name) => (await call(instance, '/projects', 'POST', { name, work: { kind: 'p9' } })).body.project.id;
+  const a = await make('Notes'), b = await make('Other');
+  const files = (id) => path.join(home(instance), id, 'files');
+  const replies = async (id) => {
+    const events = (await call(instance, `/chat/events?after=0&only=${id}`)).body.events ?? [];
+    return { said: events.filter((e) => e.type === 'update' && e.data.content?.text?.startsWith('cwd:')).map((e) => e.data.content.text),
+      ends: events.filter((e) => e.type === 'turn-end').length };
+  };
+  const ask = async (id) => {
+    const before = (await replies(id)).said.length;
+    assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 202);
+    for (let i = 0; i < 100; i++) {
+      const { said, ends } = await replies(id);
+      if (said.length > before && ends >= said.length) return said.at(-1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('no cwd reply');
+  };
+  const chat = await call(instance, '/chat', 'POST', { provider: 'claude', project: a });
+  assert.equal(chat.status, 201, chat.text);
+  const id = chat.body.conversation;
+  assert.equal(await ask(id), 'cwd:new:' + files(a), "a new chat starts in its project's files");
+  assert.equal((await call(instance, `/chat/${id}/stop`, 'POST')).status, 200);
+  assert.equal(await ask(id), 'cwd:resume:' + files(a), 'and resumes there');
+  await symlink(files(a), path.join(instance.workspace, 'to-files'));
+  const refusedFolders = [path.join(home(instance), a), files(b), path.join(home(instance), a, 'state'), files(a), home(instance), ':project-files', 'to-files'];
+  for (const mode of ['protected', 'unrestricted']) {
+    if (mode === 'unrestricted') assert.equal(JSON.parse((await call(instance, '/file-protection', 'POST', { on: false })).text).on, false);
+    for (const folder of refusedFolders) {
+      assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder })).status, 400, `${mode}: ${folder} refused`);
+      assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', project: a, folder })).status, 400, `${mode}, in a project: ${folder} refused`);
+    }
+    const again = (await call(instance, '/chat', 'POST', { provider: 'codex', project: a })).body.conversation;
+    assert.equal(await ask(again), 'cwd:new:' + files(a), `${mode}: the rule holds, the client sent no path`);
+  }
+  await call(instance, '/file-protection', 'POST', { on: true });
+  assert.equal((await call(instance, '/chat/started-in?folder=')).body.conversations.length, 0, 'an In P9 chat is not "started in" the workspace');
+  // Moved into another In P9 project: that project's files. Moved out: the workspace.
+  assert.equal((await call(instance, `/chat/${id}/project`, 'POST', { project: b })).status, 200);
+  assert.equal((await call(instance, `/chat/${id}/stop`, 'POST')).status, 200);
+  assert.equal(await ask(id), 'cwd:resume:' + files(b), 'moved: the new project\'s files');
+  assert.equal((await call(instance, `/chat/${id}/project`, 'POST', { project: null })).status, 200);
+  assert.equal((await call(instance, `/chat/${id}/stop`, 'POST')).status, 200);
+  assert.equal(await ask(id), 'cwd:resume:' + instance.workspace, 'moved out: the workspace');
+  // files/ swapped for a link: refused at the next start.
+  assert.equal((await call(instance, `/chat/${id}/project`, 'POST', { project: a })).status, 200);
+  assert.equal((await call(instance, `/chat/${id}/stop`, 'POST')).status, 200);
+  await rename(files(a), files(a) + '-real');
+  await symlink(instance.workspace, files(a));
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'cwd' })).status, 502, 'files/ as a link is refused');
+  console.log("PASS In P9: starts and resumes in its files, follows a move, refuses every client-sent P9 folder in both modes and a linked files/");
 });
 
 test('a project id that is not a UUID is refused on every route', { timeout: 120000 }, async (t) => {
