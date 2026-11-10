@@ -138,7 +138,7 @@ within three minutes. Anyone logged in to P9 sees these sections, including full
 
 ## Mission notes
 
-A Mission space section can show a notes folder outside the workspace, such as an Obsidian vault (threat model row 34).
+A Mission space section can show a notes folder outside the workspace, such as a notes vault (threat model row 34).
 The folder must be listed by name in `notes_roots` in settings.json, which P9 never writes, and named by a section;
 the page and the phone send only that name and a path inside the folder. P9 opens only `.md` files, refuses `..`,
 absolute paths, names starting with a dot (`.obsidian`, `.git`) and links that lead out of the folder, and applies
