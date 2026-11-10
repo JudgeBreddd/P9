@@ -314,8 +314,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return { outcome: { outcome: 'selected', optionId: allow.optionId } };
   };
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
-  const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
-    .then((result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
+  const setMode = (session, provider, value = modeFor(provider), tell = true) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
+    .then((result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; if (tell) emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
   // The chat's Mode picker, sent with each desktop prompt (Builder, 2026-10-17: Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   const MODES = { claude: { Auto: 'auto', Manual: 'default', Plan: 'plan', 'Accept edits': 'acceptEdits', 'Bypass permissions': 'bypassPermissions' },
@@ -563,7 +563,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
         const was = lastPicks(conversation.id);
-        if (conversation.provider === 'codex' || locked) await bounded(setMode(session, conversation.provider));
+        await bounded(setMode(session, conversation.provider, undefined, conversation.provider === 'codex' || locked));
         await bounded(carry(session, conversation, resumed?.configOptions, was));
         const label = (item) => item?.options?.find((o) => o.value === item.current)?.name ?? item?.current ?? 'unknown';
         const changes = [];
@@ -581,8 +581,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         const created = await bounded(session.agent.newSession({ cwd, mcpServers }));
         session.sessionId = created.sessionId;
         db.prepare('UPDATE conversations SET session = ? WHERE id = ?').run(session.sessionId, conversation.id);
-        // contracts.md rule 2: Codex starts in workspace-write, not the adapter's auto-approving default.
-        if (conversation.provider === 'codex' || locked) await bounded(setMode(session, conversation.provider));
+        // contracts.md rule 2: P9 picks the starting mode, not the adapter (claude-agent-acp 0.104.1 starts in auto, 0.88.0 in default).
+        // Claude's is quiet, as the adapter's own start was: the window's picked mode comes with the first prompt.
+        await bounded(setMode(session, conversation.provider, undefined, conversation.provider === 'codex' || locked));
         emit(conversation.id, 'connected', { session: session.sessionId });
         models(session, conversation.id, created.configOptions);
       }

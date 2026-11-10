@@ -1,27 +1,33 @@
 // Turns a raw recording (acp-record.mjs) into test/fixtures/acp/<provider>.json: drops _auth/* account notices,
-// replaces the available-command list, replaces the scratch workspace with /workspace and the home directory with ~,
+// replaces the available-command list, replaces the scratch workspace with /workspace and the repo with /p9, its folder with /scratch, the home directory with ~,
 // redacts email addresses, and drops account metadata (_meta: rate limits and models, cost, usage) and plugin-provided
 // agent options (values with a colon), which carry Builder's own plugins.
 // Usage: node test/acp-sanitize.mjs <provider> <raw.jsonl> <scratch workspace dir>
 //        node test/acp-sanitize.mjs <provider> --fixture   (re-scrub the committed fixture)
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 
 const [provider, raw, scratch] = process.argv.slice(2);
 const pkg = provider === 'claude' ? 'claude-agent-acp' : 'codex-acp';
 const target = new URL(`./fixtures/acp/${provider}.json`, import.meta.url);
 const DROP = new Set(['_meta', 'cost', 'usage', 'model_usage']);
+// The relay's command is the node P9 runs on, a full path on the recording machine: kept as plain "node".
+const command = (key, item) => key === 'command' && typeof item === 'string' && /[\\/]node(\.exe)?$/.test(item) ? 'node' : item;
 function scrub(value) {
   if (Array.isArray(value)) return value.filter((item) => !(typeof item?.value === 'string' && item.value.includes(':'))).map(scrub);
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !DROP.has(key)).map(([key, item]) => [key, scrub(item)]));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !DROP.has(key)).map(([key, item]) => [key, scrub(command(key, item))]));
 }
 let fixture;
 if (raw === '--fixture') {
   fixture = JSON.parse(readFileSync(target, 'utf8'));
 } else {
   const version = JSON.parse(readFileSync(new URL(`../node_modules/@agentclientprotocol/${pkg}/package.json`, import.meta.url), 'utf8')).version;
-  const clean = (text) => text.split(scratch).join('/workspace').split(os.homedir()).join('~')
+  // The P9 checkout the relay ran from (any path ending in apps/server/) and the scratch daemon's folder name this
+  // computer's layout: both go too.
+  const clean = (text) => text.split(scratch).join('/workspace').split(path.dirname(scratch)).join('/scratch')
+    .replace(/[^"\s]*\/(apps\/server\/)/g, '/p9/$1').split(os.homedir()).join('~')
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, 'user@example.invalid');
   const lines = readFileSync(raw, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
     .map(({ dir, line }) => ({ dir, msg: JSON.parse(clean(line)) }))

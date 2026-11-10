@@ -98,6 +98,24 @@ test('approvals and questions are answered only with options and fields the agen
   console.log('PASS chat answers: unknown option 400, unknown request 404, unknown field 400; allow and colour reached the agent; busy 409; cancel; codex agent (Auto review)');
 });
 
+// contracts.md rule 2 for Claude (O51): claude-agent-acp 0.104.1 starts a session in auto, which approves on its own.
+// A prompt that names no mode (the phone, the API) must still run in Manual, on a new chat and on a resumed one.
+// The fake starts every process 'unset', so only the daemon setting the mode makes this pass.
+test('a Claude chat starts and resumes in Manual when a prompt names no mode', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
+  const fresh = await until(instance, said(id, 'mode:'));
+  assert.equal(fresh.hit.data.content.text, 'mode:default', 'new chat');
+  await until(instance, (event) => event.type === 'turn-end' && event.conversation === id, fresh.cursor - 1);
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  const second = await restart(t, instance, 'state-2');
+  await call(second, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
+  assert.equal((await until(second, said(id, 'mode:'))).hit.data.content.text, 'mode:default', 'resumed chat');
+  console.log('PASS claude mode-less prompts run in Manual, new and resumed');
+});
+
 // Threat model row 15's Required cases 1-2 (desktop side; case 3's phone half is in phone.test.mjs).
 test('agent lock: no-write mode for new and running sessions, permission requests rejected by the daemon, kept across a restart', async (t) => {
   const instance = await start(t);

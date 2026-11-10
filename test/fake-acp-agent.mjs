@@ -144,7 +144,9 @@ const connection = new acp.AgentSideConnection(() => ({
   },
   async closeSession() { if (existsSync('slow-close')) await new Promise((resolve) => setTimeout(resolve, 2000)); return {}; },
   async setSessionConfigOption(params) {
-    if (cwd.startsWith('resume:') && existsSync(path.join(folder, 'refuse-resume-settings'))) throw new Error('restore refused');
+    // Refuses putting the chat's old settings back; P9's own safe start mode (Manual) still goes through, since P9 fails the
+    // start rather than run a Claude chat in the adapter's auto.
+    if (cwd.startsWith('resume:') && existsSync(path.join(folder, 'refuse-resume-settings')) && !(params.configId === 'mode' && params.value === 'default')) throw new Error('restore refused');
     if (params.configId === 'model') { if (!['default', 'opus', 'haiku'].includes(params.value)) throw new Error('unknown model'); model = params.value; }
     else if (Object.hasOwn(picked, params.configId)) { picked[params.configId] = String(params.value); } else mode = String(params.value);
     return { configOptions: configOptions() };
@@ -340,7 +342,7 @@ const connection = new acp.AgentSideConnection(() => ({
       await say('permission:' + (result.outcome.outcome === 'selected' ? result.outcome.optionId : 'cancelled'));
       return { stopReason: 'end_turn' };
     }
-    // perm-json <toolCall>: a permission request in claude-agent-acp 0.88.0's real shape (its options as recorded in
+    // perm-json <toolCall>: a permission request in claude-agent-acp's real shape (0.88.0 and 0.104.1 alike) (its options as recorded in
     // test/fixtures/acp/claude.json), for step 1d's own-project reads.
     if (text.startsWith('perm-json ')) {
       const result = await connection.requestPermission({ sessionId, toolCall: { toolCallId: 'perm-' + Date.now(), status: 'pending', ...JSON.parse(text.slice(10)) },

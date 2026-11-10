@@ -148,7 +148,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
     latest: 0, discarded: 0, samples: 0, claudeLive: null });
   let fold = fresh();
   const SPENT = ['inputTokens', 'outputTokens', 'cachedTokens', 'costUsd', 'samples', 'discarded', 'latest'];
-  // What the adapters send (ACP, checked against claude-agent-acp 0.88.0): token counts per turn in the prompt
+  // What the adapters send (ACP, checked against claude-agent-acp 0.88.0 and 0.104.1): token counts per turn in the prompt
   // reply's usage (stored on turn-end), and usage_update {used, size, cost: {amount, currency}} where cost is the
   // session's running total, so each conversation counts its latest cost once. add folds one row into a fold.
   const count = (value) => value === undefined || value === null || (Number.isSafeInteger(value) && value >= 0);
@@ -174,7 +174,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       into.totals.cachedTokens += usage.cachedReadTokens ?? 0; into.samples += 1;
     } else {
       if (data?.sessionUpdate !== 'usage_update') return;
-      // claude-agent-acp 0.88.0 attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
+      // claude-agent-acp (0.88.0 to 0.104.1, its v1 path) attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
       const windows = data._meta?.['_claude/rateLimit']?.unifiedWindows;
       if (windows && typeof windows === 'object') into.claudeLive = { windows, at: row.at };
       const context = Number.isSafeInteger(data.used) && data.used >= 0 && Number.isSafeInteger(data.size) && data.size > 0 && data.used <= data.size;

@@ -9,7 +9,7 @@ re-checked in P9 on 2026-10-16 by the recorded turns in `test/fixtures/acp/`.
 | Package | Version | License | Role |
 |---|---|---|---|
 | `@agentclientprotocol/sdk` | 1.8.0 | Apache-2.0 | `ClientSideConnection`, `ndJsonStream`, schema types. ACP protocol version 1 |
-| `@agentclientprotocol/claude-agent-acp` | 0.88.0 | Apache-2.0 | Claude adapter; brings `@anthropic-ai/claude-agent-sdk` 0.3.293 and its bundled Claude Code binary |
+| `@agentclientprotocol/claude-agent-acp` | 0.104.1 | Apache-2.0 | Claude adapter; brings `@anthropic-ai/claude-agent-sdk` 0.3.322 and its bundled Claude Code binary |
 | `@agentclientprotocol/codex-acp` | 2.1.1 | Apache-2.0 | Codex adapter; brings `@openai/codex` 0.159.3 |
 
 All three are exact pins in `package.json`. Upgrading one is a deliberate change: record new fixtures
@@ -32,7 +32,9 @@ reach it.
    adapter's four modes by their own names: `read-only`, `workspace-write`, `agent`,
    `agent-full-access` (no sandbox, never asks; threat model row 25). Claude adds `bypassPermissions`.
    The agent lock overrides all of them.
-   On resume (0.1.9 O32), Codex is set to `agent` first, or the lock's mode when the lock is on. Then
+   Claude sessions start in `mode = default` (Manual), set by P9: claude-agent-acp 0.104.1 starts its own
+   sessions in `auto`, 0.88.0 in `default` (0.1.9 O51).
+   On resume (0.1.9 O32), Codex is set to `agent` and Claude to `default` first, or the lock's mode when the lock is on. Then
    `carry()` puts back the chat's last mode that was not the lock's, so a chat last in `agent-full-access`
    or `bypassPermissions` comes back in it, with no new warning (threat model row 25). With the lock on,
    the mode is left alone. If setting the mode back fails, the chat stays on the mode set first.
