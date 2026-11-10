@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { MEMORY_CONVERSATION as MEM } from '../apps/server/memory.mjs';
@@ -19,11 +20,12 @@ const until = async (check, what, ms = 20000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((resolve) => setTimeout(resolve, 200))) if (await check()) return;
   throw new Error('timed out: ' + what);
 };
-// One read of a daemon's database, opened read-only and closed again; a file not there yet reads as no rows.
+// One read of a daemon's database, opened read-only and closed again. A file not there yet, or made but without
+// its table yet ("no such table", CI 2026-11-10 on PR 59), reads as no rows; any other error still throws.
 const rows = (file, sql, ...args) => {
   if (!existsSync(file)) return [];
   const db = new DatabaseSync(file, { readOnly: true });
-  try { return db.prepare(sql).all(...args); } finally { db.close(); }
+  try { return db.prepare(sql).all(...args); } catch (e) { if (/no such table/.test(e.message)) return []; throw e; } finally { db.close(); }
 };
 async function turn(instance, id, text, images) {
   assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text, ...(images && { images }) })).status, 202);
@@ -112,4 +114,14 @@ test('O29: delete with empty keeps a chat that was sent to, removes one that was
   assert.equal((await call(instance, `/chat/${A}/delete`, 'POST', {})).status, 200, 'a plain delete still removes a chat with messages');
   assert.ok(!(await listed()).includes(A));
   console.log('PASS O29: empty delete refused 409 for a sent chat, 400 for a bad body, 200 for an empty one; plain delete unchanged');
+});
+
+test('a database made before its table reads as no rows until the table is there; other errors still throw', async () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), 'chat-delete-')), 'telemetry.db');
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA user_version = 1'); // the file exists and has no tables, as the daemon leaves it for a moment
+  setTimeout(() => db.exec("CREATE TABLE turns (conversation TEXT); INSERT INTO turns VALUES ('A')"), 600);
+  await until(() => rows(file, 'SELECT * FROM turns WHERE conversation = ?', 'A').length, 'the row once the table exists', 5000);
+  assert.throws(() => rows(file, 'SELECT * FROM turns WHERE nope = 1'), /no such column/);
+  db.close();
 });
