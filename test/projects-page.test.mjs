@@ -412,3 +412,25 @@ test('MC-18: switching chats switches the In P9 project files both ways', { time
     assert.equal(await page.locator('#tree [data-lfile]').count(), 1);
   }
 });
+
+test('project New chat stays clickable with notification cards at narrow widths', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const id = (await call(instance, '/projects', 'POST', { name: 'Garden', work: { kind: 'p9' } })).project.id;
+  const { page, errors } = await launch(t, instance);
+  await page.locator('#cards .card').first().waitFor({ timeout: 15000 });
+  await page.locator(`#navList [data-proj="${id}"]`).click();
+  await page.locator('#projPage h1', { hasText: 'Garden' }).waitFor({ timeout: 10000 });
+  for (const width of [960, 720]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(600);
+    const button = page.locator('#projPage [data-pj=new]');
+    const box = await button.boundingBox();
+    assert.ok(box && box.x >= 0 && box.x + box.width <= width, 'button fits within viewport');
+    const png = await page.screenshot({ type: 'png' });
+    if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT o49-' + width + ' ' + png.toString('base64'));
+    await button.click({ timeout: 5000 });
+    await page.locator('#newPop [data-new]').first().waitFor({ state: 'visible', timeout: 5000 });
+    await page.keyboard.press('Escape');
+  }
+  assert.deepEqual(errors, []);
+});
