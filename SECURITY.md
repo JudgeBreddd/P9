@@ -580,6 +580,25 @@ daemon finds the folder from the chat's project at every request; another projec
 before, the agent lock still refuses everything, and taking the chat out of the project ends it. Each such answer is
 kept as an `auto-allowed` event in the chat. Codex is unchanged: its sandbox reads without asking in every mode.
 
+## Repository checks
+
+`.github/workflows/no-local-paths.yaml` runs `scripts/no-local-paths.mjs` on every pull request. It reads the
+PR description, each commit's message and each commit's added lines, and fails on a place on a maintainer's
+machine (a home folder, a working copy outside the repo, private notes, a test run id). It only reads: the
+workflow has `contents: read` and writes nothing back but its own run summary.
+
+- **The one allowed kind of home path.** Places that are the same on every machine pass: P9's install folder, the
+  default workspace by itself (never a folder inside it), and the named dot folders of the tools P9 works with. Any
+  other home path, including another dot folder or a folder inside the workspace, fails.
+
+- **The `NO_LOCAL_PATHS_TERMS` secret.** Machine and account names cannot be written in a public file, so they
+  are a repository secret, passed to that one step as an environment variable. The script matches them and never
+  prints the list; a hit shows the offending line, which is the leak it stops. A PR from this repository fails
+  when the secret is missing. A PR from a fork gets no secrets from GitHub, so its run checks paths only and says
+  "Personal names: not checked" in the result instead of passing quietly.
+- **Limit:** the check stops a path before merge. A path already pushed stays in GitHub's history of that PR
+  (its old commits and description edits) until a maintainer removes it there.
+
 ## Outbound requests a reader of this file should know about
 
 Things P9 does that reach the network or a host outside your machine, each covered
