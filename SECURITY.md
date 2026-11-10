@@ -319,6 +319,11 @@ enrollment mutation; a missing or different Origin is 403.
 - **Phone first read (threat model row 47).** On opening, the phone reads only the chats that are still running; a
   stopped chat loads when you pick it. The daemon takes at most 100 chat IDs in that read and refuses any that are
   not chat IDs; the phone then falls back to its full read. It never returns more than the phone could read before.
+- **Phone service worker.** It keeps and serves only the build's hashed `/_astro/` files; the page, sign-in, API
+  answers and anything with a query go to the network untouched, so nothing signed-in is cached. A page it does not
+  control (one opened while it was starting, or a hard reload) asks it to take over with a `claim` message. Only a
+  page of P9's own origin can send that, and taking over changes only where that page's `/_astro/` files come from,
+  so a forged `claim` gains nothing.
 
 What an agent or a terminal can do with what it can see: P9 gives children no session
 cookie, CSRF token or desktop cookie (the allowlisted environment), and the remote port

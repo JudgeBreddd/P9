@@ -8,6 +8,9 @@ self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()))
 self.addEventListener('activate', (event) => event.waitUntil(caches.keys()
   .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
   .then(() => self.clients.claim())));
+// The page asks for this when it is not controlled (it opened while this worker activated, or a hard reload). Taking
+// over a page changes only where its /_astro/ files come from.
+self.addEventListener('message', (event) => { if (event.data === 'claim') event.waitUntil(self.clients.claim()); });
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== location.origin || url.search || !/^\/_astro\/[A-Za-z0-9_.-]+$/.test(url.pathname)) return;

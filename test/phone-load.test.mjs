@@ -50,3 +50,15 @@ test('P1: the phone reads its app files once; a reload or a new login reads none
   assert.ok(first.appKb > 100, 'the first load reads the app');
   for (const later of [loaded, again, relogin]) assert.equal(later.appKb, 0, later.name + ' reads no app file again');
 });
+
+// A page the worker did not take over: an open while the worker was still activating missed its clients.claim() and
+// stayed uncontrolled (CI, 2026-11-10, phone-speed's wait for the worker). A hard reload makes that state on purpose.
+test('a phone page the service worker did not take over asks it to', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  const { page } = await phone(t, server);
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 20000 });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Page.reload', { ignoreCache: true });
+  await page.waitForFunction(() => performance.getEntriesByType('navigation')[0]?.type === 'reload' && document.readyState === 'complete', null, { timeout: 20000 });
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 10000 });
+});
