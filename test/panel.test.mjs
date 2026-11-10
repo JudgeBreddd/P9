@@ -137,7 +137,7 @@ test('open chats keep their place and Stop follows the row during a reorder', { 
   };
   const a = await make('Alpha'), b = await make('Beta'), c = await make('Gamma');
   for (const id of [a, b, c]) await call(instance, `/chat/${id}/stop`, 'POST', {});
-  const { page, errors } = await launch(t, instance);
+  let { app, page, errors, profile } = await launch(t, instance);
   const rows = () => page.locator('#navList [data-zone=""] .row[data-chat]').evaluateAll((els) => els.map((el) => el.dataset.chat));
   const send = (id) => call(instance, `/chat/${id}/prompt`, 'POST', { text: 'slow' });
   await call(instance, `/chat/${a}/prompt`, 'POST', { text: 'background quiet' }); await ended(instance, a, 2);
@@ -147,6 +147,9 @@ test('open chats keep their place and Stop follows the row during a reorder', { 
   await until(async () => (await call(instance, `/chat/events?after=0&only=${a}`)).events.some(e => e.type === 'update' && e.data.toolCallId === 'bg-1'), 'Alpha emits background activity');
   await page.waitForTimeout(1000);
   assert.deepEqual((await rows()).slice(0, 3), [a, b, c], 'new activity does not move Alpha');
+  await app.close();
+  ({ app, page, errors, profile } = await launch(t, instance, profile));
+  await until(async () => (await rows()).slice(0, 3).join() === [a, b, c].join(), 'open order survives a window restart');
   await page.keyboard.press('Control+b');
   await until(async () => (await page.locator('#rBots .bot').evaluateAll((els) => els.map((el) => el.dataset.chat))).slice(0, 3).join() === [a, b, c].join(), 'strip keeps the same open order');
   await call(instance, `/chat/${a}/stop`, 'POST', {});

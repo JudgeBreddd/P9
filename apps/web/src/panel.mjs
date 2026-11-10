@@ -44,7 +44,8 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const shown = () => o.S.focus === 'chat' ? o.S.open.slice(0, o.S.split ? 2 : 1) : [];
   const live = s => s.state === 'running' || !!s.pending;
   const working = s => s.state !== 'stopped';
-  const positions = new Map(); let nextPosition = 0;
+  const savedOrder = (() => { try { const value = JSON.parse(localStorage.getItem('p9-panel-open-order') || '[]'); return Array.isArray(value) ? value.filter(x => Array.isArray(x) && typeof x[0] === 'string' && Number.isSafeInteger(x[1]?.order)) : []; } catch { return []; } })();
+  const positions = new Map(savedOrder); let nextPosition = Math.max(-1, ...savedOrder.map(([, value]) => value.order)) + 1;
   const ordered = sessions => {
     for (const s of [...sessions].sort((a, b) => when(a) - when(b))) {
       const active = working(s), before = positions.get(s.id);
@@ -123,8 +124,9 @@ export function installPanel(o, { focus, stopChat, busy }) {
   }
   function renderPanel() {
     const known = new Set(o.S.sessions.map(s => s.id));
-    for (const id of positions.keys()) if (!known.has(id)) positions.delete(id);
+    if (o.liveChat.on) for (const id of positions.keys()) if (!known.has(id)) positions.delete(id);
     ordered(o.S.sessions);
+    if (o.liveChat.on) try { localStorage.setItem('p9-panel-open-order', JSON.stringify([...positions].filter(([, value]) => value.active))); } catch {}
     const shut = stripped();
     nav.toggleAttribute('data-collapsed', shut);
     nav.toggleAttribute('data-overlay', P.narrow && P.overlay && o.S.focus === 'chat');
