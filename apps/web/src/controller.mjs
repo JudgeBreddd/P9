@@ -51,7 +51,7 @@ export function mountShell({ askAdmin } = {}) {
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
     get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get keepLists() { return keepLists; },
     get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get defaultEffort() { return defaultEffort; },
-    get fresh() { return fresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
+    get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
     get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
@@ -161,11 +161,19 @@ const keepLists = agent => { for (const [k, from] of Object.entries(KEPT)) try {
 // daemon on a remote) goes by name. The chat bar's pills that read them are in chat-view.mjs.
 const pickerKind = p => p.category === 'thought_level' || !p.category && /effort|thought/i.test(p.id + p.name) ? 'effort' : p.category === 'collaboration_mode' || !p.category && /collab/i.test(p.id) ? 'collab' : 'model';
 // Settings > New chats start in: Default model and Default effort per agent, applied to chats this window makes (startDefaults)
-// when the agent still offers them; a chat's own pick never changes them. fresh: ids made here whose 'created' is still to come.
+// when the agent still offers them; a chat's own pick never changes them. fresh: the chats this window is creating, each
+// { agent, model: its New menu row's, op: the create's operation ID, id once known }. The daemon sends 'created' (carrying op)
+// before it answers the create, so claimFresh runs from whichever comes first and applies the pick once; a pick made in the chat
+// after that is never overwritten. Only op or id match: another window's chat, or this window's creates out of order, never take
+// it (O44 review). A daemon without op in 'created' leaves it to the reply.
 const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
-const fresh = new Set();
-function startDefaults(s) {
-  const m = defaultModel(s.agent); if (m && lastModels[s.agent]?.options.some(o => o.value === m)) s.modelPick = m;
+const fresh = [];
+function claimFresh(s, op) {
+  const i = fresh.findIndex(f => f.id === s.id || op && f.op === op); if (i < 0) return;
+  const [f] = fresh.splice(i, 1); f.id = s.id; startDefaults(s, f.model);
+}
+function startDefaults(s, model) {
+  const m = [model, defaultModel(s.agent)].find(v => v && lastModels[s.agent]?.options.some(o => o.value === v)); if (m) s.modelPick = m; // model: the New menu row's (O44); one no longer offered falls back
   const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
@@ -403,7 +411,7 @@ document.addEventListener('close', e => { if (e.target instanceof HTMLDialogElem
 const closedChats = new Set(JSON.parse(localStorage.getItem('eh-closed-chats') || '[]'));
 // Hide steps (Builder, 2026-10-18: "where is the button to hide the commands and thinking output?"): one switch for every chat, kept across restarts.
 let hideSteps = localStorage.getItem('p9-hide-steps') === '1';
-$('#newPop').innerHTML = `<div class="hd eyebrow" id="newInHd" hidden></div><div class="hd eyebrow" id="newFolderHd">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><div id="newAgents"><div data-sec="claude"><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Claude</div><button class="item" data-new="claude" data-model="Opus 5.5">Claude <span class="muted">default model</span></button><button class="item" data-new="claude" data-model="Sonnet 5.5">Claude · Sonnet 5.5</button><button class="item" data-new="claude" data-model="Haiku 5.5">Claude · Haiku 5.5</button></div><div data-sec="codex"><hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New Codex</div><button class="item" data-new="codex" data-model="gpt-5.1-codex">Codex <span class="muted">default model</span></button><button class="item" data-new="codex" data-model="gpt-5.1-codex-mini">Codex · mini</button></div></div>`;
+$('#newPop').innerHTML = `<div class="hd eyebrow" id="newInHd" hidden></div><div class="hd eyebrow" id="newFolderHd">Start in</div><select data-slot="select" aria-label="Start in" id="newFolder" style="margin:0 9px 6px;width:calc(100% - 18px)"></select><div id="newAgents"><div data-sec="claude"></div><div data-sec="codex"></div></div>`;
 // New chat's folder (Builder, 2026-10-19: "a dropdown with what folder i want to open the chat in"; threat model row 24): the workspace,
 // the main project, the last 5 folders used, or the system folder dialog (main sends back only a folder inside the workspace;
 // ':pick' cannot be a folder, the daemon refuses ':' in paths).
@@ -419,8 +427,15 @@ $('#newFolder').onchange = async e => {
 };
 // O29 (Builder, 2026-11-08): New chat opens on the agent used last on this computer (a chat made or a message sent): its
 // section comes first and its first row has the focus, so + then Enter starts it, with that agent's saved defaults.
-const newPop = popover($('#newBtn'), $('#newPop'), () => { $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
-$('#newPop').querySelectorAll('[data-new]').forEach(b => b.onclick = () => { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); });
+// O44: each row starts the model it names. A live P9's rows come from the agent's own list (the last one this window saw),
+// after the row that starts on the defaults; before any list, that row alone. The sample data keeps its fixed names.
+const SAMPLE_MODELS = { claude: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'], codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini'] };
+const row = (a, label, model) => `<button class="item" data-new="${a}"${model ? ` data-model="${esc(model)}"` : ''}>${label}</button>`;
+const newRows = () => { for (const a of Object.keys(names)) $(`#newAgents [data-sec="${a}"]`).innerHTML = `<hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New ${names[a]}</div>`
+  + row(a, `${names[a]} <span class="muted">default model</span>`, !liveChat.on && SAMPLE_MODELS[a][0])
+  + (liveChat.on ? lastModels[a]?.options || [] : SAMPLE_MODELS[a].slice(1).map(v => ({ value: v, name: v }))).map(o => row(a, `${names[a]} · ${esc(o.name)}`, o.value)).join(''); };
+const newPop = popover($('#newBtn'), $('#newPop'), () => { newRows(); $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
+$('#newAgents').onclick = e => { const b = e.target.closest('[data-new]'); if (b) { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); } };
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
@@ -873,7 +888,7 @@ const maintain = {
     if (r.error) toast({ kind: 'not rebuilt', txt: 'Could not rebuild P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: 'bad' }, true);
   },
 };
-const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
+const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', liveChat.on ? '' : 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', liveChat.on ? '' : 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
 let palSel = 0;
 // U8: no Mission commands on a slim Temporary remote, which has no Mission Control, or while Mission is off in Settings.
 const MISSION_CMDS = new Set(['Mission Control', 'Refresh Mission']);
@@ -1203,7 +1218,7 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
 liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
-  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
+  const body = ['list', 'events', 'lock'].includes(action) ? payload : { op: crypto.randomUUID(), ...payload }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
@@ -1213,9 +1228,14 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   return r;
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
-liveChat.create = async (agent, folder = '', project = null) => {
-  const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }), ...(project && { project }) });
-  if (r.status === 201) { const s = S.sessions.find(x => x.id === r.body.conversation); s ? startDefaults(s) : fresh.add(r.body.conversation); }
+liveChat.create = async (agent, folder = '', project = null, model = '') => {
+  const op = crypto.randomUUID(), f = { agent, model, op }; fresh.push(f);
+  const r = await liveChat.call('create', { op, provider: agent, ...(folder && { folder }), ...(project && { project }) });
+  if (r.status !== 201) { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); }
+  else if (!f.id) { // not claimed by its 'created' yet: that is still to come (claimFresh finds it by id), or came without op
+    f.id = r.body.conversation; const s = S.sessions.find(x => x.id === f.id);
+    if (s) { fresh.splice(fresh.indexOf(f), 1); startDefaults(s, model); renderChats(); }
+  }
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;
 };

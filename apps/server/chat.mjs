@@ -802,7 +802,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
-    async create(body) {
+    // op: the request's operation ID (x-p9-op), echoed in 'created' so the window that asked knows its own chat (O44 review).
+    async create(body, op) {
       const project = body?.project === undefined ? null : await projects.record(body.project);
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
           || (body.project !== undefined && !project))
@@ -812,7 +813,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
       const id = randomUUID(), title = body.title?.trim() || (body.provider === 'claude' ? 'Claude' : 'Codex');
       db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project) VALUES (?, ?, ?, 'idle', ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null);
-      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }) });
+      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(ID.test(op ?? '') && { op }) });
       return { status: 201, conversation: id };
     },
     // held: the waiting messages this prompt carries (drain), named in its user event so the window drops them.

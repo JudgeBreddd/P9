@@ -487,7 +487,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // Mission Control files too, through the desktop's own handlers, behind its session, CSRF and the op ledger.
   api.post('/agent-lock', async (c) => reply(c, await chat.setLock(await json(c))));
   api.get('/chat', (c) => c.json({ conversations: chat.list() }));
-  api.post('/chat', async (c) => reply(c, await chat.create(await json(c))));
+  api.post('/chat', async (c) => reply(c, await chat.create(await json(c), c.req.header('x-p9-op'))));
   api.get('/chat/events', async (c) => { const only = c.req.query('only'), until = c.req.query('until'), tail = c.req.query('tail');
     return reply(c, await chat.events(Number(c.req.query('after') ?? 0), Number(c.req.query('wait') ?? 0), only === undefined ? undefined : only.split(',').filter(Boolean), until === undefined ? undefined : Number(until), tail === undefined ? undefined : Number(tail))); });
   // P8: a signed-out Codex has no plan figure (its old sessions would show one months old) and is named signed out. Claude
