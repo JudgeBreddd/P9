@@ -72,6 +72,15 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
   // A failed query counts as running, so Stop All never reports a stop it could not confirm.
   const serverState = (which = unit) => systemctl(['is-active', which]).then(({ stdout }) => stdout.trim(), (error) => String(error.stdout ?? '').trim() || 'query-failed');
   const gone = (state) => state === 'inactive' || state === 'failed';
+  // O43 review (Builder, 2026-11-09): a server an older P9 started is kept across an upgrade, in p9.slice, so its panes'
+  // scopes are not in `slice`. tmux puts each pane's scope in the server's slice and describes it as "tmux child pane <pid>
+  // launched by process <server pid>"; the two, read before the server's last session ends, find only this socket's scopes.
+  const props = (text) => Object.fromEntries(text.split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+  const owner = () => systemctl(['show', '-p', 'MainPID', '-p', 'Slice', unit]).then(({ stdout }) => props(stdout), () => ({}));
+  // null when the query failed: Stop All then reports a stop it could not confirm.
+  const paneScopes = ({ MainPID: pid, Slice: home }) => !/^[1-9]\d*$/.test(pid ?? '') ? Promise.resolve([])
+    : systemctl(['show', '-p', 'Id', '-p', 'Slice', '-p', 'Description', 'tmux-spawn-*.scope']).then(({ stdout }) => stdout.split(/\n\n+/).map(props)
+      .filter((scope) => scope.Slice === home && /^tmux child pane \d+ launched by process (\d+)$/.exec(scope.Description ?? '')?.[1] === pid).map((scope) => scope.Id), () => null);
   let starting = null;
   const ensureServer = () => starting ??= (async () => {
     // ponytail: without a user bus the server forks from the daemon; Stop All then sees sessions, not detached jobs.
@@ -155,14 +164,16 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
 
   async function stopAll() {
     await recovered;
+    const running = hasUserBus() ? await owner() : {}; // before the sessions end: the server exits with its last one
     const owned = await sessions();
     stillAuthorized();
     await Promise.all(owned.map((session) => tmux(['kill-session', '-t', '=' + session]).catch(() => {})));
     let server = 'inactive';
     if (hasUserBus()) {
       stillAuthorized();
-      await systemctl(['stop', unit, slice]).catch(() => {});
-      server = (await Promise.all([serverState(), serverState(slice)])).find((state) => !gone(state)) ?? 'inactive';
+      const panes = await paneScopes(running);
+      await systemctl(['stop', unit, slice, ...(panes ?? [])]).catch(() => {});
+      server = panes ? (await Promise.all([unit, slice, ...panes].map((which) => serverState(which)))).find((state) => !gone(state)) ?? 'inactive' : 'query-failed';
     }
     const left = await sessions();
     for (const session of owned) db.prepare('UPDATE terminals SET state = ? WHERE id = ?').run(left.includes(session) ? 'cleanup-failed' : 'stopped', idFrom(session));

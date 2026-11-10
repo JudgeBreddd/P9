@@ -346,8 +346,15 @@ instance, `p9-*` sessions on its dedicated tmux socket, and that socket's tmux s
 unit (`p9-tmux-<socket>.service`) together with the slice it runs in
 (`p9-tmux-<socket>.slice`, inside `p9.slice`). tmux moves each new pane into a scope of its
 own in that slice, so stopping the slice ends every process a pane started, including
-jobs a pane detached with nohup or setsid. It verifies all of it is gone (the server
-unit and its slice read inactive or failed) before reporting success. Failed scope or tmux cleanup is returned as a failure,
+jobs a pane detached with nohup or setsid. A server an older P9 started is kept across
+an upgrade, in `p9.slice` with its pane scopes beside it; Stop All also stops each scope
+in the server's slice that tmux describes as launched by the server's process (its PID,
+read before its last session ends). It verifies all of it is gone (the server unit, its
+slice and those scopes read inactive or failed) before reporting success. Known limit:
+if such an older server exits on its own first (its last terminal stopped one by one),
+its PID is gone, so a job one of its panes detached is not tied to the socket any more
+and lives until the user's systemd manager ends; Stop All does not end every pane scope
+in `p9.slice`, since other P9 instances share it. Failed scope or tmux cleanup is returned as a failure,
 and a retry enumerates real systemd and tmux state again. Other user units and other
 tmux sockets are outside the namespace and are never enumerated or stopped. Also outside Stop All:
 the Dev Focus editor host (its own `p9-editor-host-*` scope, stopped when the window quits), apps
@@ -370,8 +377,8 @@ reconciled against the dedicated socket at startup. The tmux server runs as its 
 transient user unit, in a slice of its own, with only P9's allowlisted environment, and
 tmux puts each pane in a scope in that slice, so neither a systemd restart nor SIGKILL of the daemon
 touches them (the daemon's service also keeps `KillMode=process`). Stop Session ends one
-terminal's panes; a job that pane detached lives until Stop All stops the server unit
-and its slice (known gap). Stored ACP provider session IDs resume
+terminal's panes; a job that pane detached lives until Stop All stops the server unit,
+its slice and its pane scopes (known gap). Stored ACP provider session IDs resume
 through `session/resume` after restart. An in-flight turn becomes interrupted, its
 pending approval expires, and P9 never retries the prompt automatically.
 
