@@ -1883,7 +1883,10 @@ if (localStorage.getItem('p9-mission-draft')) show('mission'); // P2: put back b
 // O5: usage is drawn after the first chat list, so its per-chat context lines name chats (a draw before it had none, and
 // a tap on Usage showed that draw until its own reload came back).
 void first.then(listen); void first.finally(loadUsage);
-if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(new URL(import.meta.url).pathname.split('/').pop()!));
+// A page that opened while the worker was still activating missed its clients.claim() and stayed uncontrolled until the
+// next open (seen in CI, 2026-11-10); a hard reload is the same. So the page asks the active worker to take it over.
+if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(new URL(import.meta.url).pathname.split('/').pop()!))
+  .then(() => navigator.serviceWorker.ready).then((r) => { if (!navigator.serviceWorker.controller) r.active?.postMessage('claim'); });
 // Item 19 (threat model row 65): on the phone an artifact opens in the full-screen sheet, the side panel's phone form
 // (specs/side-panel.md). A chip in an agent reply opens it; so does Open on the plan (the Plan chip's sheet) or on Claude's
 // plan-mode plan. The frame page is the server's /frame/ (its own CSP); comments go through the composer's send above.
