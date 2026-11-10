@@ -23,7 +23,7 @@ export const stateOf = (s, busy) => s.pending ? 'needs' : s.failed ? 'failed' : 
 // The strip: every live chat (running or waiting for an answer), then every chat whose result is not seen yet (unread or failed),
 // each group most recent first. A chat leaves it when it is opened (renderChats clears done and failed) or stops.
 const when = s => s.used || s.created || 0, recent = (a, b) => when(b) - when(a);
-export const stripChats = sessions => { const live = s => s.state === 'running' || !!s.pending, ok = sessions.filter(s => !s.archived);
+export const stripChats = sessions => { const live = s => s.state !== 'stopped', ok = sessions.filter(s => !s.archived);
   return [...ok.filter(live).sort(recent), ...ok.filter(s => !live(s) && (s.done || s.failed)).sort(recent)]; };
 // The list: the chats a message was sent in, and the ones still open (what the tab row and History showed together).
 export const listedChats = sessions => sessions.filter(s => (s.sent || !s.hidden) && !s.archived).sort(recent);
@@ -43,6 +43,17 @@ export function installPanel(o, { focus, stopChat, busy }) {
   const find = id => o.S.sessions.find(s => s.id === id);
   const shown = () => o.S.focus === 'chat' ? o.S.open.slice(0, o.S.split ? 2 : 1) : [];
   const live = s => s.state === 'running' || !!s.pending;
+  const working = s => s.state !== 'stopped';
+  const savedOrder = (() => { try { const value = JSON.parse(localStorage.getItem('p9-panel-open-order') || '[]'); return Array.isArray(value) ? value.filter(x => Array.isArray(x) && typeof x[0] === 'string' && Number.isSafeInteger(x[1]?.order)) : []; } catch { return []; } })();
+  const positions = new Map(savedOrder); let nextPosition = Math.max(-1, ...savedOrder.map(([, value]) => value.order)) + 1;
+  const ordered = sessions => {
+    for (const s of [...sessions].sort((a, b) => when(a) - when(b))) {
+      const active = working(s), before = positions.get(s.id);
+      if (active && (!before || !before.active || before.project !== s.project)) positions.set(s.id, { active, project: s.project, order: nextPosition++ });
+      else if (!active) positions.set(s.id, { active, project: s.project });
+    }
+    return [...sessions].sort((a, b) => Number(working(b)) - Number(working(a)) || (working(a) ? positions.get(a.id).order - positions.get(b.id).order : recent(a, b)));
+  };
   // Two chats with one title (two new chats of one agent both read "Claude") get a number by age, as the old strip's #n did.
   const title = s => { const same = o.S.sessions.filter(x => x.title === s.title); return same.length > 1 && same[0] !== s ? s.title + ' ' + (same.indexOf(s) + 1) : s.title; };
   const stripped = () => P.collapsed || o.S.focus !== 'chat' || (P.narrow && !P.overlay);
@@ -56,7 +67,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
       + (live(s) ? `<button class="rstop" data-stop="${esc(s.id)}" title="Stop ${esc(o.names[s.agent] || s.agent)} in this chat" aria-label="Stop ${esc(title(s))}">${svg.stop}</button>` : '')
       + `<button class="more" data-more="${esc(s.id)}" aria-haspopup="menu" aria-expanded="false" title="More" aria-label="More for ${esc(title(s))}">${I.more}</button></div>`; };
   function renderList() {
-    const q = P.q.toLowerCase(), hit = t => !q || String(t).toLowerCase().includes(q), all = listedChats(o.S.sessions), ps = projects();
+    const q = P.q.toLowerCase(), hit = t => !q || String(t).toLowerCase().includes(q), all = ordered(listedChats(o.S.sessions)), ps = projects();
     const groups = ps.map(p => ({ p, kids: all.filter(s => s.project === p.id && (hit(s.title) || hit(p.name))) })).filter(g => hit(g.p.name) || g.kids.length);
     const general = all.filter(s => !projectOf(s, ps) && hit(s.title));
     // A search shows only the sections it matched; without one, Chats stays as the drop target that takes a chat out of a project.
@@ -75,14 +86,47 @@ export function installPanel(o, { focus, stopChat, busy }) {
     // Archived projects and chats: one row at the end, to their page (projects-view.mjs), where Unarchive puts one back.
     const na = (o.S.projects || []).filter(p => p.archived).length + o.S.sessions.filter(s => s.archived && (s.sent || !s.hidden)).length;
     if (!q && na && o.openArchived) h += `<button class="row arch" data-archived aria-current="${o.S.view?.kind === 'archived' && o.S.focus === 'chat'}"><span class="t">Archived</span><span class="n">${na}</span></button>`;
+    // Keep each existing row node with its chat when the order changes, including keyboard focus.
+    const draft = document.createElement('template'); draft.innerHTML = h;
+    for (const zone of draft.content.querySelectorAll('[data-zone]')) {
+      const existing = [...list.querySelectorAll('[data-zone]')].find(x => x.dataset.zone === zone.dataset.zone);
+      if (!existing) continue;
+      const target = existing.querySelector('.kids') ?? existing;
+      const source = zone.querySelector('.kids') ?? zone;
+      const wanted = [...source.querySelectorAll(':scope > .rowwrap')].filter(x => x.querySelector('.row[data-chat]'));
+      const old = new Map([...target.querySelectorAll(':scope > .rowwrap')].filter(x => x.querySelector('.row[data-chat]')).map(x => [x.querySelector('.row[data-chat]').dataset.chat, x]));
+      const ids = new Set(wanted.map(x => x.querySelector('.row[data-chat]').dataset.chat));
+      for (const [id, row] of old) if (!ids.has(id)) row.remove();
+      let anchor = target.querySelector(':scope > .showmore, :scope > .none');
+      for (const wantedRow of wanted.reverse()) {
+        const id = wantedRow.querySelector('.row[data-chat]').dataset.chat, row = old.get(id) ?? wantedRow.cloneNode(true);
+        if (row.nextSibling !== anchor || row.parentNode !== target) target.insertBefore(row, anchor);
+        anchor = row;
+      }
+    }
     o.morph(list, h);
   }
   // Builder's build fix 2: the strip's marks are bigger than the mock's 12 px (panel.css .bm), so the hand and the cross read apart.
   function renderStrip() {
-    o.morph(strip, stripChats(o.S.sessions).map(s => { const st = stateOf(s, busy(s));
-      return `<button class="bot" data-chat="${esc(s.id)}" data-agent="${esc(s.agent)}" data-s="${st}"${busy(s) ? ' data-busy' : ''} aria-label="${esc(title(s))} · ${LABEL[st] || 'Idle'}" aria-current="${shown().includes(s.id)}">${agentIcon(s.agent)}<span class="bm">${st === 'needs' ? I.hand : st === 'failed' ? svg.x : ''}</span></button>`; }).join(''));
+    const html = ordered(stripChats(o.S.sessions)).map(s => { const st = stateOf(s, busy(s));
+      return `<button class="bot" data-chat="${esc(s.id)}" data-agent="${esc(s.agent)}" data-s="${st}"${busy(s) ? ' data-busy' : ''} aria-label="${esc(title(s))} · ${LABEL[st] || 'Idle'}" aria-current="${shown().includes(s.id)}">${agentIcon(s.agent)}<span class="bm">${st === 'needs' ? I.hand : st === 'failed' ? svg.x : ''}</span></button>`; }).join('');
+    const draft = document.createElement('template'); draft.innerHTML = html;
+    const wanted = [...draft.content.children], old = new Map([...strip.children].map(node => [node.dataset.chat, node]));
+    const ids = new Set(wanted.map(node => node.dataset.chat));
+    for (const [id, node] of old) if (!ids.has(id)) node.remove();
+    let anchor = null;
+    for (const next of wanted.reverse()) {
+      const node = old.get(next.dataset.chat) ?? next.cloneNode(true);
+      if (node.nextSibling !== anchor || node.parentNode !== strip) strip.insertBefore(node, anchor);
+      anchor = node;
+    }
+    o.morph(strip, html);
   }
   function renderPanel() {
+    const known = new Set(o.S.sessions.map(s => s.id));
+    if (o.liveChat.on) for (const id of positions.keys()) if (!known.has(id)) positions.delete(id);
+    ordered(o.S.sessions);
+    if (o.liveChat.on) try { localStorage.setItem('p9-panel-open-order', JSON.stringify([...positions].filter(([, value]) => value.active))); } catch {}
     const shut = stripped();
     nav.toggleAttribute('data-collapsed', shut);
     nav.toggleAttribute('data-overlay', P.narrow && P.overlay && o.S.focus === 'chat');
@@ -192,10 +236,12 @@ export function installPanel(o, { focus, stopChat, busy }) {
   for (const ev of ['pointerover', 'pointerout', 'focusin', 'focusout']) strip.addEventListener(ev, e => setTimeout(() => tipFor(e)));
 
   // ---- Clicks, the menu's keys, search ----
+  let pressedStop = null;
+  nav.addEventListener('pointerdown', e => { pressedStop = e.target.closest?.('[data-stop]')?.dataset.stop ?? null; });
   nav.addEventListener('click', e => {
     if (P.noclick) return;
     const t = e.target;
-    const st = t.closest('[data-stop]'); if (st) { const s = find(st.dataset.stop); return s && stopChat(s); }
+    const st = t.closest('[data-stop]'); if (st) { const id = st.dataset.stop; if (e.detail && pressedStop !== id) return; pressedStop = null; const s = find(id); return s && stopChat(s); }
     const more = t.closest('[data-more]');
     if (more) { if (more.getAttribute('aria-expanded') === 'true') return closeMenu(); const r = more.getBoundingClientRect(); return chatMenu(more.dataset.more, { x: r.right - 230, y: r.bottom + 4 }, more); }
     const sm = t.closest('[data-showmore]'); if (sm) { P.more[sm.dataset.showmore] = !P.more[sm.dataset.showmore]; return renderPanel(); }

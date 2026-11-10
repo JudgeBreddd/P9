@@ -248,12 +248,13 @@ test('projects: the New project dialog fits a long folder path', { timeout: 1200
 });
 
 // Nightly 3: "moving a chat to a project changes the edited last timer". Only a message or a turn is activity: a move,
-// a rename and an archive leave a chat's last-used time (and so its place in the list) alone, live and after a reload.
+// a rename and an archive leave a closed chat's last-used time and place alone, live and after a reload.
 test('projects: move, rename and archive do not count as use', { timeout: 120000 }, async (t) => {
   const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
   const make = async (text) => { const id = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
     await call(instance, '/chat/' + id + '/prompt', 'POST', { text }); await ended(instance, id); return id; };
   const older = await make('title Older'), newer = await make('title Newer');
+  for (const id of [older, newer]) await call(instance, '/chat/' + id + '/stop', 'POST', {});
   const used = async (id) => (await conv(instance, id)).used;
   const before = await used(older);
   const p = (await call(instance, '/projects', 'POST', { name: 'Kept', work: { kind: 'p9' } })).project.id;
