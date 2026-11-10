@@ -105,8 +105,8 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   // O43 (Builder, 2026-11-09): tmux moves each new pane into its own tmux-spawn-*.scope just after starting it. The job
   // above usually forks before that move and so sits in the server's unit; this one waits for the move, so it is in the
   // pane's scope, which stopping the unit alone did not end (one CI failure at the check after Stop All below).
-  const lateMarker = String(Number(marker) + 1);
-  t.after(() => { try { run('pkill', ['-f', '^sleep (' + marker + '|' + lateMarker + ')$']); } catch {} }); // a failed run leaves neither behind
+  const lateMarker = String(Number(marker) + 1), oldMarker = String(Number(marker) + 2);
+  t.after(() => { try { run('pkill', ['-f', '^sleep (' + marker + '|' + lateMarker + '|' + oldMarker + ')$']); } catch {} }); // a failed run leaves none behind
   tmux(socket, ['new-window', '-d', '-t', '=' + sessionName,
     'for i in $(seq 100); do grep -q tmux-spawn- /proc/self/cgroup && break; sleep 0.05; done; nohup sleep ' + lateMarker + ' >/dev/null 2>&1 & sleep 1']);
   const lateJob = () => run('pgrep', ['-f', '^sleep ' + lateMarker + '$'], { stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -203,5 +203,22 @@ test('Phase 9: real systemd restart and SIGKILL preserve only P9 tmux work; ACP 
   assert.equal(Number(run('systemctl', ['--user', 'show', hubUnit, '-p', 'MainPID', '--value']).trim()), hubPid);
   assert.match(tmux(unrelated, ['list-sessions']), /someone-unrelated/);
   assert.deepEqual((await call(credentials, '/terminals')).body.terminals.map((item) => item.state), ['stopped']);
+
+  // O43 review (Builder, 2026-11-09): a tmux server an older P9 started is kept across the upgrade, in p9.slice, and its
+  // panes' scopes are made beside it, not in this socket's slice. Start one the way the older daemon did; Stop All must
+  // still end a job detached in one of its pane scopes.
+  run('systemd-run', ['--user', '--quiet', '--collect', '--slice=p9.slice', '--unit', tmuxUnit, '--property=KillMode=control-group',
+    '--setenv=TMUX_TMPDIR=' + tmuxTmp, '--setenv=PATH=' + process.env.PATH, '--', 'tmux', '-L', socket, '-D']);
+  await waitFor(() => { try { return tmux(socket, ['list-sessions']) !== null; } catch (error) { return /no sessions/i.test(String(error.stderr)); } }, 'older-style tmux server');
+  assert.equal(run('systemctl', ['--user', 'show', tmuxUnit, '-p', 'Slice', '--value']).trim(), 'p9.slice');
+  const kept = await call(credentials, '/terminals', 'POST', {});
+  assert.equal(kept.status, 201, JSON.stringify(kept.body));
+  tmux(socket, ['new-window', '-d', '-t', '=p9-' + kept.body.terminal,
+    'for i in $(seq 100); do grep -q tmux-spawn- /proc/self/cgroup && break; sleep 0.05; done; nohup sleep ' + oldMarker + ' >/dev/null 2>&1 & sleep 1']);
+  const oldJob = () => run('pgrep', ['-f', '^sleep ' + oldMarker + '$'], { stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  await waitFor(() => oldJob(), 'detached job under the older server');
+  assert.match(await readFile('/proc/' + oldJob() + '/cgroup', 'utf8'), /\/p9\.slice\/tmux-spawn-[^/]+\.scope$/m, 'the job is in a pane scope outside this socket\'s slice');
+  assert.equal((await call(credentials, '/stop-all', 'POST', {})).status, 200);
+  assert.throws(() => oldJob(), 'a job in an older server\'s pane scope survived Stop All');
   console.log('PASS phase9 durability: window close kept the daemon and one side effect; restart + SIGKILL kept tmux; providers resumed; pending approval expired; adapter crash stopped; failed kill reported; creation barrier refused a concurrent start; repeated Stop All verified P9 work gone; unrelated tmux and session-hub sentinel untouched');
 });

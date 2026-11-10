@@ -18,7 +18,8 @@ import { daemon, http, authenticated, remoteDaemon, passkeyDevice, enrollDevice,
 const node = process.execPath;
 const print = (value) => [node, '-e', `process.stdout.write(${JSON.stringify(JSON.stringify(value))})`];
 const SCRIPTS = [
-  { id: 'nums', title: 'Numbers', cmd: print({ count: 12, label: '<b>not markup</b>' }) },
+  // hub/nums.json, when the test writes it, is a changed answer from the same allowed script (O45).
+  { id: 'nums', title: 'Numbers', cmd: [node, '-e', `const f = require('fs'), n = 'hub/nums.json'; process.stdout.write(f.existsSync(n) ? f.readFileSync(n, 'utf8') : ${JSON.stringify(JSON.stringify({ count: 12, label: '<b>not markup</b>' }))})`] },
   { id: 'oops', title: 'Broken', cmd: [node, '-e', 'process.stdout.write("oops, not JSON")'] },
 ];
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
@@ -197,6 +198,9 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
       assert.deepEqual(await frames(), Array(6).fill('kept'), 'six card frames, quiet for 3 s, before the pulls');
       await sleep(36000); // one 30 s pull at least, and its answers
       assert.deepEqual(await frames(), Array(6).fill('kept'), 'a pull with the same answers keeps every card frame');
+      // A changed answer must still reach the card (on the next pull, or the one after: a tile's answer is kept 30 s).
+      await writeFile(path.join(ws, 'hub/nums.json'), JSON.stringify({ count: 13, label: '<b>not markup</b>' }));
+      await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 65000 });
     }
     await card('inbox').scrollIntoViewIfNeeded();
     shot('m5-desktop-1280-' + theme, await page.screenshot());
@@ -287,7 +291,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.clock.install(); // the tiles' 30 s refresh is then the page's own timer, moved on below
   for (const title of ['Inbox', 'Probe', 'Broken script', 'Throws']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
-  await pinbox.frameLocator('iframe').locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
+  await pinbox.frameLocator('iframe').locator('#count', { hasText: '13' }).waitFor({ timeout: 20000 }); // the desktop's changed answer
   await phone.locator('#mission dialog[open] [data-tile="broken"] .card-note', { hasText: 'not JSON' }).waitFor({ timeout: 15000 });
   await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
   // One 30 s refresh brings the card new JSON but never runs it again: its error line must stay.
