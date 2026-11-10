@@ -51,7 +51,7 @@ export function mountShell({ askAdmin } = {}) {
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
     get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get keepLists() { return keepLists; },
     get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get defaultEffort() { return defaultEffort; },
-    get fresh() { return fresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
+    get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
     get loadMission() { return loadMission; }, get loadPetLook() { return loadPetLook; }, get loadSetup() { return loadSetup; },
@@ -161,12 +161,19 @@ const keepLists = agent => { for (const [k, from] of Object.entries(KEPT)) try {
 // daemon on a remote) goes by name. The chat bar's pills that read them are in chat-view.mjs.
 const pickerKind = p => p.category === 'thought_level' || !p.category && /effort|thought/i.test(p.id + p.name) ? 'effort' : p.category === 'collaboration_mode' || !p.category && /collab/i.test(p.id) ? 'collab' : 'model';
 // Settings > New chats start in: Default model and Default effort per agent, applied to chats this window makes (startDefaults)
-// when the agent still offers them; a chat's own pick never changes them. fresh: ids made here whose 'created' is still to come,
-// each with its New menu row's model.
+// when the agent still offers them; a chat's own pick never changes them. fresh: the chats this window is creating, each
+// { agent, model: its New menu row's, id once known }. The daemon sends 'created' before it answers the create, so claimFresh
+// runs from whichever comes first and applies the pick once; a pick made in the chat after that is never overwritten (O44 review).
 const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
-const fresh = new Map();
+const fresh = [];
+// ponytail: a 'created' with no id match takes this window's oldest create for that agent still waiting for its reply; another
+// device's chat made in that same instant could take it here, and the reply then applies it to the right chat instead.
+function claimFresh(s) {
+  const i = fresh.findIndex(f => f.id === s.id), j = i >= 0 ? i : fresh.findIndex(f => !f.id && f.agent === s.agent); if (j < 0) return;
+  const [f] = fresh.splice(j, 1); f.id = s.id; startDefaults(s, f.model);
+}
 function startDefaults(s, model) {
-  const m = model || defaultModel(s.agent); if (m && lastModels[s.agent]?.options.some(o => o.value === m)) s.modelPick = m; // model: the New menu row's (O44)
+  const m = [model, defaultModel(s.agent)].find(v => v && lastModels[s.agent]?.options.some(o => o.value === v)); if (m) s.modelPick = m; // model: the New menu row's (O44); one no longer offered falls back
   const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
 // Each agent's own mode names (the daemon's allowlist, chat.mjs MODES). Threat model row 25: a new chat starts in the last mode
@@ -881,7 +888,7 @@ const maintain = {
     if (r.error) toast({ kind: 'not rebuilt', txt: 'Could not rebuild P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: 'bad' }, true);
   },
 };
-const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
+const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', liveChat.on ? '' : 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', liveChat.on ? '' : 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
 let palSel = 0;
 // U8: no Mission commands on a slim Temporary remote, which has no Mission Control, or while Mission is off in Settings.
 const MISSION_CMDS = new Set(['Mission Control', 'Refresh Mission']);
@@ -1222,8 +1229,13 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
 liveChat.create = async (agent, folder = '', project = null, model = '') => {
+  const f = { agent, model }; fresh.push(f);
   const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }), ...(project && { project }) });
-  if (r.status === 201) { const s = S.sessions.find(x => x.id === r.body.conversation); if (s) { startDefaults(s, model); renderChats(); } else fresh.set(r.body.conversation, model); } // the pane may be drawn already (its 'created' came first)
+  if (r.status !== 201) { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); }
+  else if (f.id !== r.body.conversation) { // its 'created' is still to come, or another chat took f (claimFresh)
+    f.id = r.body.conversation; const s = S.sessions.find(x => x.id === f.id);
+    if (!s) { if (!fresh.includes(f)) fresh.push(f); } else { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); startDefaults(s, model); renderChats(); }
+  }
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;
 };

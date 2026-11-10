@@ -377,6 +377,62 @@ test('New menu: each row names a model the agent offers, and the chat it starts 
   console.log('PASS new menu: rows from the agent\'s own list; the row picked is the model the chat runs on');
 });
 
+// O44 review: the window's chat calls, held in the main process after the daemon answers. hold('create') holds the create
+// reply, hold('events') the read that brings the chat's 'created', each for ms, so either can be made to come first.
+async function holdChat(app) {
+  await app.evaluate(({ ipcMain }) => {
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o44 = { what: null, ms: 0, done: 0 };
+    ipcMain.handle('p9:chat', async (e, action, ...rest) => { const r = await h(e, action, ...rest), o = globalThis.o44; if (o.what === action) { await new Promise((d) => setTimeout(d, o.ms)); o.done++; } return r; });
+  });
+  return { hold: (what, ms = 0) => app.evaluate((_, [what, ms]) => Object.assign(globalThis.o44, { what, ms, done: 0 }), [what, ms]), done: () => app.evaluate(() => globalThis.o44.done) };
+}
+const fromRow = async (page, model) => { const had = await rows(page); await page.click('#newBtn'); await page.locator(`#newPop [data-model="${model}"]`).click(); return madeNext(page, had); };
+const sendModel = async (pane) => { await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter'); };
+const ranOn = (pane, model) => pane.locator('.hist', { hasText: 'model:' + model }).waitFor({ timeout: 20000 });
+
+test('New menu: the row\'s model applies once, whether the chat\'s created event or the create reply comes first, never over a pick made in the chat after', { timeout: 180000 }, async (t) => {
+  const { app, page, errors } = await setup(t, 'new-order', 'claude');
+  const chat = await holdChat(app);
+  // 1. created first (the create reply held 4 s): the chat shows the row's model, and a message sent before the reply runs on it.
+  await chat.hold('create', 4000);
+  const a = await fromRow(page, 'haiku');
+  assert.equal(await pillValue(a.pane, 'Model'), 'Haiku', 'created first: the row\'s model before the reply');
+  await sendModel(a.pane);
+  assert.equal(await chat.done(), 0, 'the message went while the create reply was still held');
+  await ranOn(a.pane, 'haiku');
+  await until(async () => await chat.done() === 1, 'the held reply returned', 10000);
+  // 2. created first, and Opus picked in the chat before the reply: the reply leaves Opus.
+  await chat.hold('create', 4000);
+  const b = await fromRow(page, 'haiku');
+  await choose(page, b.pane, 'Model', 'Opus');
+  assert.equal(await chat.done(), 0, 'Opus was picked while the create reply was still held');
+  await until(async () => await chat.done() === 1, 'the held reply returned', 10000);
+  await sendModel(b.pane); await ranOn(b.pane, 'opus');
+  assert.equal(await pillValue(b.pane, 'Model'), 'Opus', 'the reply did not put the row\'s model back');
+  // 3. the reply first (the read that brings created held 2 s): the chat appears on the row's model.
+  await chat.hold('events', 2000);
+  const c = await fromRow(page, 'opus');
+  await chat.hold(null);
+  assert.equal(await pillValue(c.pane, 'Model'), 'Opus', 'reply first: the row\'s model');
+  await sendModel(c.pane); await ranOn(c.pane, 'opus');
+  assert.deepEqual(errors, []);
+  console.log('PASS new menu order: created first and reply first both start on the row\'s model; a pick in the chat after it stays');
+});
+
+// O44 review: only New menu rows name a model. The palette's New Claude session starts on Settings' Default model.
+test('New menu, palette: New Claude session starts on the saved Default model', { timeout: 150000 }, async (t) => {
+  const { page, errors } = await setup(t, 'new-palette', 'claude');
+  await page.evaluate(() => localStorage.setItem('p9-model-default:claude', 'opus'));
+  const had = await rows(page);
+  await page.keyboard.press('Control+k'); await page.fill('#palIn', 'New Claude session');
+  await page.locator('#palList li[data-i]', { hasText: 'New Claude session' }).first().waitFor({ timeout: 5000 }); await page.keyboard.press('Enter');
+  const made = await madeNext(page, had);
+  await until(async () => await pillValue(made.pane, 'Model') === 'Opus', 'the palette\'s chat shows the saved default', 5000);
+  await sendModel(made.pane); await ranOn(made.pane, 'opus');
+  assert.deepEqual(errors, []);
+  console.log('PASS new menu palette: New Claude session starts on the saved Default model');
+});
+
 // O29, release review (2026-11-09): switching an empty chat's agent keeps what was typed and attached, and the new chat takes
 // the old one's place. A 1x1 PNG pasted into the box, as a screenshot is.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
