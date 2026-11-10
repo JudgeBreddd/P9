@@ -349,8 +349,11 @@ own in that slice, so stopping the slice ends every process a pane started, incl
 jobs a pane detached with nohup or setsid. A server an older P9 started is kept across
 an upgrade, in `p9.slice` with its pane scopes beside it; Stop All also stops each scope
 in the server's slice that tmux describes as launched by the server's process (its PID,
-read before its last session ends) and that started after the server did, so a scope
-left by an exited server that had the same PID is never matched. If either query fails,
+read before its last session ends) and that started after the server did, so a stale
+scope left by an exited server that had the same PID is excluded by its start time. One
+known gap: if that server exits between Stop All's owner lookup and its scope listing,
+and another older-style server in `p9.slice` gets the same PID and starts a pane inside
+that window, the newer scope matches. It needs a PID reuse inside that window. If either query fails,
 Stop All reports a failure, not success. It verifies all of it is gone (the server unit, its
 slice and those scopes read inactive or failed) before reporting success. Known limit:
 if such an older server exits on its own first (its last terminal stopped one by one),
