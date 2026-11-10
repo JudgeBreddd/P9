@@ -1,0 +1,34 @@
+# O50: dependency updates arrive as PRs by themselves. Bot PRs merge by the same rule as any PR: CI green and a
+# non-author verdict that read the changelog.
+# One npm entry, because Dependabot allows only one block per ecosystem, directory and target branch. It checks daily
+# so the agent engines (Claude and Codex adapters, the ACP SDK) come within a day; everything else is one grouped PR
+# that the same daily check keeps current.
+# cooldown: a release is offered only once it is 3 days old (version updates only; security updates come at once).
+# Not covered: the packageManager pnpm pin in package.json (dependabot-core#4830, open); bump it by hand.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 3
+    groups:
+      agent-engines:
+        patterns:
+          - '@agentclientprotocol/claude-agent-acp'
+          - '@agentclientprotocol/codex-acp'
+          - '@agentclientprotocol/sdk'
+      everything-else:
+        patterns:
+          - '*'
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns:
+          - '*'
