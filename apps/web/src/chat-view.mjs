@@ -750,7 +750,7 @@ function applyChat(ev, into) {
     case 'unheld': s.held = s.held?.filter(h => h.id !== d.id); if (d.why !== 'removed' && d.why !== 'cancelled') notice('Not sent (' + d.why + '): ' + d.text); break;
     case 'connected': notice('Connected over ACP'); s.state = 'running'; s.session = d.session; break;
     // O32: the model the resumed session is really on, so a change shows (the Model pill follows the config event after it).
-    case 'resumed': notice('Resumed natively (session/resume)' + (typeof d.model === 'string' ? ' on ' + d.model : '')); s.state = 'running'; s.session = d.session; break;
+    case 'resumed': notice('Resumed natively (session/resume)' + (typeof d.model === 'string' ? ' on ' + d.model : '')); if (Array.isArray(d.restoreNotice) && d.restoreNotice.length) notice('Could not restore ' + d.restoreNotice.join(', ')); s.state = 'running'; s.session = d.session; break;
     // The mode the daemon last set for this chat (the phone's own rule), so after a restart or an update the Mode pill, and
     // the mode each message sends, are the chat's own and not a new chat's. The lock's mode is the lock's, not the chat's.
     case 'mode': if (!into && !d.lock && modes[s.agent]?.includes(d.name)) s.mode = d.name; break;

@@ -137,12 +137,14 @@ const connection = new acp.AgentSideConnection(() => ({
     if (!params.sessionId.startsWith('fake-') && !existsSync('uuid-sessions')) throw new Error('unknown session');
     if (projects() && !transcript(params.sessionId)) throw new Error('No conversation found with session ID: ' + params.sessionId);
     cwd = 'resume:' + params.cwd; folder = params.cwd;
+    if (existsSync(path.join(folder, 'refuse-resume-settings'))) mode = 'default';
     mcpServers = params.mcpServers;
     commands(params.sessionId);
     return { configOptions: configOptions() };
   },
   async closeSession() { if (existsSync('slow-close')) await new Promise((resolve) => setTimeout(resolve, 2000)); return {}; },
   async setSessionConfigOption(params) {
+    if (cwd.startsWith('resume:') && existsSync(path.join(folder, 'refuse-resume-settings'))) throw new Error('restore refused');
     if (params.configId === 'model') { if (!['default', 'opus', 'haiku'].includes(params.value)) throw new Error('unknown model'); model = params.value; }
     else if (Object.hasOwn(picked, params.configId)) { picked[params.configId] = String(params.value); } else mode = String(params.value);
     return { configOptions: configOptions() };

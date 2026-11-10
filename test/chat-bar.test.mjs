@@ -290,6 +290,24 @@ test('a resumed chat keeps its model, effort and mode after a daemon restart and
   console.log('PASS resume (desktop): Opus, High and Plan shown and used after a daemon and an app restart');
 });
 
+test('resume shows settings that could not be restored', { timeout: 180000 }, async (t) => {
+  const { app, instance, id, pane, page, send, said, idle } = await setup(t, 'resume-refused');
+  const profile = await app.evaluate(({ app }) => app.getPath('userData'));
+  await choose(page, pane, 'Model', 'Opus'); await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Mode', 'Plan');
+  await send('config'); await said('config:model=opus,effort=high'); await idle();
+  fs.writeFileSync(path.join(instance.workspace, 'refuse-resume-settings'), '');
+  await app.close(); instance.child.kill('SIGTERM');
+  await new Promise((resolve) => instance.child.exitCode !== null ? resolve() : instance.child.once('exit', resolve));
+  const second = await restart(t, instance, 'state-refused');
+  const again = await launch(t, second, profile);
+  await again.page.locator('#nav .row[data-chat="' + id + '"]').click();
+  const p2 = again.page.locator('.pane[data-id="' + id + '"]');
+  await p2.locator('.composer textarea').fill('hello'); await p2.locator('.composer textarea').press('Enter');
+  await p2.locator('.hist', { hasText: 'Could not restore Model: Default (recommended), Effort: Medium, Mode: Manual' }).waitFor({ timeout: 20000 });
+  await shot(again.page, 'o38-resume-refused');
+  assert.deepEqual(again.errors, []);
+});
+
 // O29 (Builder, 2026-11-08): the chat that appears next in the list, made by this window; its pane, once shown.
 const madeNext = async (page, had) => {
   await page.waitForFunction((had) => [...document.querySelectorAll('#navList .row[data-chat]')].some((x) => !had.includes(x.dataset.chat)), had, { timeout: 15000 });
