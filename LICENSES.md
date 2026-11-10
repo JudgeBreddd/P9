@@ -20,10 +20,10 @@ the handlers and security boundary here are new code.
 | react / react-dom | 19.3.1 | MIT |
 | electron | 44.7.2 | MIT plus bundled third-party notices |
 | @agentclientprotocol/sdk | 1.8.0 | Apache-2.0 |
-| @agentclientprotocol/claude-agent-acp | 0.88.0 | Apache-2.0 |
+| @agentclientprotocol/claude-agent-acp | 0.104.1 | Apache-2.0 |
 | @agentclientprotocol/codex-acp | 2.1.1 | Apache-2.0 (brings @openai/codex 0.159.3, Apache-2.0) |
 
-The Claude adapter brings @anthropic-ai/claude-agent-sdk 0.3.293 and its native
+The Claude adapter brings @anthropic-ai/claude-agent-sdk 0.3.322 and its native
 claude-agent-sdk-linux-x64 binary, under Anthropic's own terms (their LICENSE.md and
 README.md), not an open-source licence. P9 runs it locally with the user's own login
 and does not redistribute it; Phase 13 packaging must decide whether a packaged app
