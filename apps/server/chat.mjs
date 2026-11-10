@@ -315,7 +315,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const modeFor = (provider) => provider === 'claude' ? (locked ? 'plan' : 'default') : (locked ? 'read-only' : 'agent');
   const setMode = (session, provider, value = modeFor(provider)) => session.agent.setSessionConfigOption({ sessionId: session.sessionId, configId: 'mode', value })
-    .then((result) => { session.mode = value; emit(session.id, 'mode', { mode: value, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === value) ?? value, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
+    .then((result) => { session.mode = result?.configOptions?.find((o) => o.id === 'mode')?.currentValue ?? value; emit(session.id, 'mode', { mode: session.mode, name: Object.keys(MODES[provider]).find((k) => MODES[provider][k] === session.mode) ?? session.mode, lock: locked }); return result; }); // P6: the phone's pill shows the mode set
   // The chat's Mode picker, sent with each desktop prompt (Builder, 2026-10-17: Auto still asked before every command). Codex's
   // four are its own (contracts.md rule 2); Full access and Claude's bypass are threat model row 25. The lock wins over all.
   const MODES = { claude: { Auto: 'auto', Manual: 'default', Plan: 'plan', 'Accept edits': 'acceptEdits', 'Bypass permissions': 'bypassPermissions' },
@@ -559,12 +559,23 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
       if (conversation.session) {
         const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers }));
+        session.mode = resumed?.configOptions?.find((o) => o.id === 'mode')?.currentValue;
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
         const was = lastPicks(conversation.id);
         if (conversation.provider === 'codex' || locked) await bounded(setMode(session, conversation.provider));
         await bounded(carry(session, conversation, resumed?.configOptions, was));
-        emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: session.models.options.find((o) => o.value === session.models.current)?.name ?? session.models.current }) });
+        const label = (item) => item?.options?.find((o) => o.value === item.current)?.name ?? item?.current ?? 'unknown';
+        const changes = [];
+        if (was.config?.model?.current && was.config.model.current !== session.models?.current) changes.push('Model: ' + label(session.models));
+        for (const previous of was.config?.pickers ?? []) {
+          if (previous.category !== 'thought_level') continue;
+          const current = session.pickers?.find((p) => p.id === previous.id);
+          if (previous.current !== current?.current) changes.push('Effort: ' + label(current));
+        }
+        if (was.mode && was.mode !== session.mode) changes.push('Mode: ' + (Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode ?? 'unknown'));
+        if (was.mode && was.mode !== session.mode && session.mode) emit(conversation.id, 'mode', { mode: session.mode, name: Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode, lock: locked });
+        emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: label(session.models) }), ...(changes.length && { restoreNotice: changes }) });
         if (session.models) emit(conversation.id, 'config', configOf(session));
       } else {
         const created = await bounded(session.agent.newSession({ cwd, mcpServers }));

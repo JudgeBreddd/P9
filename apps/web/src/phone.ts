@@ -362,6 +362,7 @@ function build(picked: string) {
       add('answered', 'You answered · ' + (outcome ? (outcome.outcome === 'selected' ? String(chosen?.name ?? outcome.optionId) : 'Cancelled') : (({ accept: 'Answered', decline: 'Declined' } as Json)[String(answer.action)] ?? 'Cancelled')));
     }
     else if (kind === 'question') add('ask', data.message, { id: data.request, form: ((data.form as Json | null)?.fields as Json[] | undefined) ?? null });
+    else if (kind === 'resumed' && Array.isArray(data.restoreNotice) && data.restoreNotice.length) add('note', 'Could not restore ' + data.restoreNotice.join(', '));
     else if (kind === 'turn-end') { settle(); if (data.stopReason !== 'end_turn') add('note', 'Turn ended · ' + data.stopReason); }
     else if (kind === 'error') add('error', data.message);
     else if (kind === 'steer-lost') add('note', 'This message may not have reached the agent · ' + data.text);

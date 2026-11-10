@@ -87,3 +87,18 @@ test('P20: a long chat opens on its newest messages; Load earlier adds the next 
   assert.deepEqual([await status('&tail=5'), await status('&tail=0&only=' + BIG), await status('&tail=201&only=' + BIG), await status('&tail=x&only=' + BIG)], [400, 400, 400, 400]);
   console.log('PASS P20: ' + first + ' blocks first, ' + await count() + ' after Load earlier; the place held (' + before + ' then ' + after + ')');
 });
+
+test('phone displays a resume restore notice', { timeout: 120000 }, async (t) => {
+  const server = await remoteDaemon(t, {});
+  const db = new DatabaseSync(path.join(server.directory, '.local', 'state', 'p9-foundation', 'p9.db'));
+  db.prepare('INSERT INTO conversations (id, provider, title, state, created) VALUES (?, ?, ?, ?, ?)').run(BIG, 'claude', 'Resume', 'idle', Date.now());
+  const event = db.prepare('INSERT INTO events (conversation, type, data, at) VALUES (?, ?, ?, ?)');
+  event.run(BIG, 'user', JSON.stringify({ text: 'hello' }), Date.now());
+  event.run(BIG, 'resumed', JSON.stringify({ session: 'fake', restoreNotice: ['Model: Default', 'Mode: Manual'] }), Date.now());
+  event.run(BIG, 'turn-end', JSON.stringify({ stopReason: 'end_turn' }), Date.now());
+  db.close();
+  const { page } = await phone(t, server);
+  await page.evaluate((id) => history.replaceState(null, '', '#chat=' + id), BIG);
+  await page.reload();
+  await page.locator('#events', { hasText: 'Could not restore Model: Default, Mode: Manual' }).waitFor({ timeout: 20000 });
+});

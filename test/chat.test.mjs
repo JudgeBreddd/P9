@@ -824,11 +824,28 @@ test('resume: a chat keeps its model, effort and mode across a daemon restart', 
   assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > first.cursor, 0)).hit.data.content.text, 'config:model=opus,effort=high,fast=off,sandbox=on', 'model and effort put back');
   const back = (await until(second, (e) => e.type === 'resumed' && e.conversation === id, 0)).hit;
   assert.equal(back.data.model, 'Opus', 'the resumed event names the model the session is on');
+  assert.equal(back.data.restoreNotice, undefined, 'no notice when all settings were restored');
   const config = (await until(second, (e) => e.type === 'config' && e.conversation === id && e.cursor > back.cursor, back.cursor - 1)).hit;
   assert.deepEqual([config.data.model.current, config.data.pickers.find((p) => p.id === 'effort').current], ['opus', 'high'], 'one config after the resume, with what it is on');
   await turn(second, { text: 'mode' }, resumed.cursor);
   assert.equal((await until(second, (e) => said(id, 'mode:')(e) && e.cursor > resumed.cursor, resumed.cursor)).hit.data.content.text, 'mode:plan', 'mode put back');
   console.log('PASS resume: opus, high effort and Plan kept across a daemon restart; resumed names Opus');
+});
+
+test('resume reports settings the agent refused without sending a notice in the prompt', { timeout: 120000 }, async (t) => {
+  const first = await start(t);
+  const id = await create(first);
+  assert.equal((await call(first, `/chat/${id}/prompt`, 'POST', { text: 'config', model: 'opus', config: { effort: 'high' }, mode: 'Plan' })).status, 202);
+  const done = await until(first, (e) => e.type === 'turn-end' && e.conversation === id);
+  await writeFile(path.join(first.workspace, 'refuse-resume-settings'), '');
+  first.child.kill('SIGTERM');
+  await once(first.child, 'exit');
+  const second = await restart(t, first, 'state-refused');
+  assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'hello' })).status, 202);
+  const result = await until(second, (e) => e.type === 'turn-end' && e.conversation === id, done.cursor);
+  const resume = result.seen.find((e) => e.type === 'resumed');
+  assert.deepEqual(resume.data.restoreNotice, ['Model: Default (recommended)', 'Effort: Medium', 'Mode: Manual']);
+  assert.ok(result.seen.some(said(id, 'echo:hello')), 'agent received only the original prompt');
 });
 
 // O32, Codex: resume first sets Codex's own safe mode (contracts.md rule 2), which is a mode event too; the chat still goes
