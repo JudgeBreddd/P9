@@ -128,3 +128,71 @@ test('panel: project by id not folder, Stop on a running row, unseen stays on th
   assert.deepEqual([...one.errors, ...two.errors], []);
   console.log('PASS panel: project by id (folder-only chat under Chats), row Stop stopped a running chat, unseen chat kept on the strip until opened, collapse and a failed chat kept over a restart, search opened a closed project, Move + Undo agreed with the daemon, Ctrl K opened a project chat');
 });
+
+test('open chats keep their place and Stop follows the row during a reorder', { timeout: 180000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const make = async (name) => {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude', title: name })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' }); await ended(instance, id); return id;
+  };
+  const a = await make('Alpha'), b = await make('Beta'), c = await make('Gamma');
+  for (const id of [a, b, c]) await call(instance, `/chat/${id}/stop`, 'POST', {});
+  const { page, errors } = await launch(t, instance);
+  const rows = () => page.locator('#navList [data-zone=""] .row[data-chat]').evaluateAll((els) => els.map((el) => el.dataset.chat));
+  const send = (id) => call(instance, `/chat/${id}/prompt`, 'POST', { text: 'slow' });
+  await call(instance, `/chat/${a}/prompt`, 'POST', { text: 'background quiet' }); await ended(instance, a, 2);
+  await until(async () => (await rows())[0] === a, 'idle Alpha stays open');
+  await send(b); await until(async () => (await rows()).slice(0, 2).join() === [a, b].join(), 'Beta joins below Alpha');
+  await send(c); await until(async () => (await rows()).slice(0, 3).join() === [a, b, c].join(), 'Gamma joins below Beta');
+  await until(async () => (await call(instance, `/chat/events?after=0&only=${a}`)).events.some(e => e.type === 'update' && e.data.toolCallId === 'bg-1'), 'Alpha emits background activity');
+  await page.waitForTimeout(1000);
+  assert.deepEqual((await rows()).slice(0, 3), [a, b, c], 'new activity does not move Alpha');
+  await page.keyboard.press('Control+b');
+  await until(async () => (await page.locator('#rBots .bot').evaluateAll((els) => els.map((el) => el.dataset.chat))).slice(0, 3).join() === [a, b, c].join(), 'strip keeps the same open order');
+  await call(instance, `/chat/${a}/stop`, 'POST', {});
+  await until(async () => (await conv(instance, a)).state === 'stopped' && (await page.locator('#rBots .bot').evaluateAll((els) => els.map((el) => el.dataset.chat))).slice(0, 2).join() === [b, c].join(), 'closed Alpha drops below the open chats');
+  await send(a);
+  await until(async () => (await page.locator('#rBots .bot').evaluateAll((els) => els.map((el) => el.dataset.chat))).slice(0, 3).join() === [b, c, a].join(), 'reopened Alpha joins the strip at the bottom');
+  await page.keyboard.press('Control+b');
+  await page.locator('#nav:not([data-collapsed])').waitFor({ timeout: 5000 });
+  await call(instance, `/chat/${a}/stop`, 'POST', {});
+  await until(async () => (await rows()).join() === [b, c, a].join(), 'closed Alpha drops below open chats');
+  await send(a);
+  await until(async () => (await rows()).join() === [b, c, a].join() && (await conv(instance, a)).state === 'turn', 'reopened Alpha joins the bottom');
+  await page.locator(`#navList .row[data-chat="${c}"]`).click();
+  await page.mouse.move(800, 600);
+  assert.equal(await page.locator(`#navList .rstop[data-stop="${c}"]`).evaluate((el) => getComputedStyle(el).opacity), '1', 'selected chat shows Stop');
+  const png = await page.screenshot({ type: 'png' });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT sidebar-stable ' + png.toString('base64'));
+  const stop = page.locator(`#navList .rstop[data-stop="${c}"]`);
+  await stop.hover();
+  const box = await stop.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await call(instance, `/chat/${b}/stop`, 'POST', {});
+  await until(async () => (await rows())[0] === c, 'Beta drops below open chats');
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  assert.equal((await conv(instance, a)).state, 'turn', 'a moving row never stops Alpha by accident');
+  await page.locator(`#navList .rstop[data-stop="${c}"]`).click();
+  await until(async () => (await conv(instance, c))?.state === 'stopped', 'the displayed Gamma row stops Gamma');
+  assert.equal((await conv(instance, a)).state, 'turn', 'Alpha remains open');
+  assert.deepEqual(errors, []);
+});
+
+test('open project chats keep their place when activity arrives', { timeout: 120000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const project = (await call(instance, '/projects', 'POST', { name: 'Project', work: { kind: 'p9' } })).project.id;
+  const make = async (title) => {
+    const id = (await call(instance, '/chat', 'POST', { provider: 'claude', project, title })).conversation;
+    await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'hello' }); await ended(instance, id);
+    await call(instance, `/chat/${id}/stop`, 'POST', {}); return id;
+  };
+  const a = await make('One'), b = await make('Two');
+  const { page, errors } = await launch(t, instance);
+  const rows = () => page.locator(`#navList [data-zone="${project}"] .row[data-chat]`).evaluateAll((els) => els.map(el => el.dataset.chat));
+  await call(instance, `/chat/${a}/prompt`, 'POST', { text: 'hello' }); await ended(instance, a, 2);
+  await call(instance, `/chat/${b}/prompt`, 'POST', { text: 'slow' });
+  await until(async () => (await rows()).join() === [a, b].join(), 'idle project chat stays above newly opened chat');
+  assert.deepEqual(errors, []);
+});

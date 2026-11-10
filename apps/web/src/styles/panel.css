@@ -116,10 +116,12 @@
 .lpanel .rstop svg{width:12px;height:12px}
 .lpanel :is(.more,.padd,.rstop):hover{color:var(--foreground);background:color-mix(in oklch,var(--foreground) 12%,transparent)}
 .lpanel .rstop:hover{color:var(--destructive)}
-.lpanel .rowwrap:is(:hover,:focus-within) :is(.more,.padd,.rstop),.lpanel .more[aria-expanded="true"]{opacity:1}
+.lpanel .rowwrap:is(:hover,:focus-within) :is(.more,.padd,.rstop),.lpanel .rowwrap:has(.row[aria-current="true"]) :is(.more,.rstop),.lpanel .more[aria-expanded="true"]{opacity:1}
 /* Build fix 1: on a chat row the time stays in view, moved left of the buttons; a project row's count gives way to its +. */
 .lpanel .rowwrap:is(:hover,:focus-within) .proj .tail{visibility:hidden}
 .lpanel .rowwrap:is(:hover,:focus-within) .row:not(.proj) .tail,.lpanel .rowwrap:has(.more[aria-expanded="true"]) .tail{margin-right:26px}
+.lpanel .rowwrap:has(.row[aria-current="true"]) .row .tail{margin-right:26px}
+.lpanel .rowwrap[data-live]:has(.row[aria-current="true"]) .row .tail{margin-right:52px}
 .lpanel .rowwrap[data-live]:is(:hover,:focus-within) .row .tail,.lpanel .rowwrap[data-live]:has(.more[aria-expanded="true"]) .tail{margin-right:52px}
 .lpanel .rowwrap:has(.more[aria-expanded="true"]) .row{background:var(--accent)}
 @media (hover:none){.lpanel :is(.more,.padd,.rstop){opacity:1}.lpanel .tail{visibility:hidden}}
