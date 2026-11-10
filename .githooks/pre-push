@@ -9,8 +9,6 @@ while read -r _ local _ remote; do
   [ "$local" = "$zero" ] && continue
   if [ "$remote" = "$zero" ]; then range="$local --not --remotes"; else range="$remote..$local"; fi
   gitleaks git . --redact --no-banner --log-opts="$range"
-  # shellcheck disable=SC2086 # $range is two or three words on purpose
-  if git log -p $range -- . ':(exclude).gitignore' ':(exclude).publishignore' | grep -qE '^\+.*(/h[o]me/|I[C]M/|_p[r]ivate/)'; then
-    echo "pre-push: a private path appears in a commit this push adds ($range)" >&2; exit 1
-  fi
+  # Paths in added lines and commit messages, from the merge base with main (scripts/no-local-paths.mjs; the PR check runs it too).
+  node scripts/no-local-paths.mjs --range "$(git merge-base origin/main "$local")..$local"
 done

@@ -1,0 +1,30 @@
+# Every PR: its description, commit messages and added lines name no place on a maintainer's machine
+# (scripts/no-local-paths.mjs). Runs again when the description is edited. A failure lists each line and what it names.
+name: No local paths
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Scan the description, commits and added lines
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          NO_LOCAL_PATHS_TERMS: ${{ secrets.NO_LOCAL_PATHS_TERMS }}
+          # A PR from this repo must have the names secret; a fork PR gets no secrets and says so in the result.
+          REQUIRE: ${{ github.event.pull_request.head.repo.full_name == github.repository && '--require-terms' || '' }}
+        run: |
+          printf '%s\n' "$BODY" > "$RUNNER_TEMP/body.md"
+          node scripts/no-local-paths.mjs --body "$RUNNER_TEMP/body.md" --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" $REQUIRE > "$RUNNER_TEMP/out.txt" && ok=0 || ok=$?
+          cat "$RUNNER_TEMP/out.txt"
+          { echo '```'; cat "$RUNNER_TEMP/out.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$ok"
