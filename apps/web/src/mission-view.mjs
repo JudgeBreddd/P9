@@ -530,11 +530,12 @@ function notesModal(m, body, row) {
 const liveKey = name => 'live:' + name;
 function liveFileModal(m, body) {
   if (FILE_IMAGE.test(m.name)) return imageModal(m, body);
+  const project = /^:project-files\/([0-9a-f-]{36})\/(.+)$/.exec(m.name);
   const key = liveKey(m.name);
-  outer.$('#mdlT').textContent = m.name;
+  outer.$('#mdlT').textContent = project ? project[2] : m.name;
   if (!m.asked && !outer.dirty(key)) {
     m.asked = true;
-    window.p9.mission('read', { path: m.name }).then(r => {
+    window.p9.mission(project ? 'projectRead' : 'read', project ? { project: project[1], path: project[2] } : { path: m.name }).then(r => {
       if (r.status === 200 && !outer.dirty(key)) outer.S.docs[key] = { text: r.body.content, saved: r.body.content, hash: r.body.hash, sel: [0, 0], top: 0 };
       else if (r.status !== 200) m.error = r.body?.error || String(r.status);
       if (outer.S.modal === m) outer.renderModal();
@@ -547,6 +548,7 @@ function liveFileModal(m, body) {
     ? `<p>Changed on disk since you opened it. Your text is still here.</p><div class="notes-row"><button data-slot="button" data-variant="outline" data-size="sm" data-disk>Load disk version</button><button data-slot="button" data-size="sm" data-mine>Save mine over it</button></div>`
     : `<p>This file is no longer on disk (moved, renamed or deleted elsewhere). Your text is still here: copy it before you close.</p><div class="notes-row"><button data-slot="button" data-size="sm" data-copytext>Copy my text</button></div>`}</div>` : '')
     + outer.editorHtml(key, 'mdlEd');
+  if (project) { outer.edSave = null; body.querySelector('textarea').readOnly = true; outer.$('#mdlFoot').innerHTML = '<span class="muted sm">Read-only</span>'; return; }
   outer.wireEditor(body, key, () => liveFoot(m), () => saveLive(m));
   body.querySelector('[data-disk]')?.addEventListener('click', () => { Object.assign(d, { text: c.diskContent, saved: c.diskContent, hash: c.diskHash }); m.conflict = null; outer.renderModal(); });
   body.querySelector('[data-mine]')?.addEventListener('click', () => saveLive(m, c.diskHash));
@@ -555,11 +557,12 @@ function liveFileModal(m, body) {
 }
 // An image from the Files pane (rows 23/26/27 adds): read-only; the words and the check are helpers.mjs's, shared with the phone.
 function imageModal(m, body) {
-  outer.$('#mdlT').textContent = m.name;
-  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
+  const project = /^:project-files\/([0-9a-f-]{36})\/(.+)$/.exec(m.name), name = project ? project[2] : m.name;
+  outer.$('#mdlT').textContent = name;
+  outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(name)}</span><span class="spacer"></span><span class="muted sm">Read-only</span>`;
   if (m.image === undefined) {
     m.image = null;
-    window.p9.mission('image', { path: m.name }).then(r => {
+    window.p9.mission(project ? 'projectImage' : 'image', project ? { project: project[1], path: project[2] } : { path: m.name }).then(r => {
       const src = r.status === 200 && fileImageSrc(r.body);
       m.image = src ? { src } : { error: r.status === 200 ? 'not-an-image' : r.body?.error || String(r.status) };
       if (outer.S.modal === m) outer.renderModal();
@@ -567,7 +570,7 @@ function imageModal(m, body) {
   }
   const i = m.image;
   body.innerHTML = !i ? '<p class="sm muted file-image-note">Loading…</p>' : i.error ? `<p class="sm muted file-image-note">${esc(fileImageError[i.error] || 'Not readable: ' + i.error)}</p>`
-    : `<div class="file-image"><img src="${i.src}" alt="${esc(m.name)}"></div>`;
+    : `<div class="file-image"><img src="${i.src}" alt="${esc(name)}"></div>`;
 }
 function liveFoot(m) {
   outer.$('#mdlFoot').innerHTML = `<span class="muted sm mono truncate">${esc(m.name)}</span><span class="spacer"></span><span class="muted sm">Ctrl S</span>${outer.saveBtn(liveKey(m.name))}`;

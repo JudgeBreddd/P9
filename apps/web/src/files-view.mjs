@@ -3,16 +3,17 @@ import { esc } from './helpers.mjs';
 
 export function installFiles(outer) {
 // MC-18 (N1 point 11): Current project is the project page's work folder, else the shown chat's project's, else the chat's own
-// folder as before. In P9 (no path from the daemon) and a chat's ':project-files' marker are not workspace folders: the main project.
+// folder as before. In P9 projects use an internal project identifier rather than a workspace path.
 const projectRoot = () => { const v = outer.S.view, s = outer.S.sessions.find(x => x.id === outer.S.open[0]), id = v?.kind === 'project' ? v.id : !v && s?.project;
   // id is false on the Archived page, and false?.work does not stop the chain: no project there.
-  const p = id ? outer.S.projects?.find(x => x.id === id) : null; if (p?.work.folder != null) return p.work.folder;
+  const p = id ? outer.S.projects?.find(x => x.id === id) : null; if (p?.work.kind === 'p9') return ':project-files/' + p.id; if (p?.work.folder != null) return p.work.folder;
   return (!(v?.kind === 'project') && s?.folder && !s.folder.startsWith(':') && s.folder) || outer.live.primary?.path || ''; };
 const fileRoot = () => ({ project: projectRoot, workspace: () => '',
   needs: () => outer.live.waitDir, ideas: () => '_ideas' })[outer.files.scope]();
 async function loadDir(dir) {
   outer.files.dirs[dir] = 'loading';
-  const r = await window.p9.mission('list', { path: dir });
+  const match = /^:project-files\/([0-9a-f-]{36})(?:\/(.*))?$/.exec(dir);
+  const r = match ? await window.p9.mission('projectList', { project: match[1], path: match[2] || '' }) : await window.p9.mission('list', { path: dir });
   outer.files.dirs[dir] = r.status === 200 ? r.body.entries.slice().sort((a, b) => (b.dir ? 1 : 0) - (a.dir ? 1 : 0)) : { error: r.body?.error || String(r.status) };
   renderTree();
 }
@@ -30,10 +31,11 @@ function renderTree() {
   if (outer.live.on) {
     const root = fileRoot(), cur = outer.S.modal?.kind === 'file' && outer.mdl.open ? outer.S.modal.name : null;
     outer.$('#fileScope').hidden = false; outer.$('#fileScope').value = outer.files.scope;
-    outer.$('#tree').innerHTML = `<p class="where muted mono truncate" title="${esc(root || 'Workspace')}">${esc(root || 'Workspace')}</p>${liveTree(root, 0, q, cur)}`;
+    const match = /^:project-files\/([0-9a-f-]{36})$/.exec(root), label = match ? (outer.S.projects?.find(p => p.id === match[1])?.name || 'Project') + ' / files' : root || 'Workspace';
+    outer.$('#tree').innerHTML = `<p class="where muted mono truncate" title="${esc(label)}">${esc(label)}</p>${liveTree(root, 0, q, cur)}`;
     outer.$('#tree').querySelectorAll('[data-ldir]').forEach(b => b.onclick = () => { const p = b.dataset.ldir; outer.files.open.has(p) ? outer.files.open.delete(p) : outer.files.open.add(p); renderTree(); });
     outer.$('#tree').querySelectorAll('[data-lfile]').forEach(b => b.onclick = () => outer.openModal({ kind: 'file', name: b.dataset.lfile, live: true }));
-    outer.$('#xferBtn').hidden = !window.p9?.xferPlan || !!outer.serverInfo?.host;
+    outer.$('#xferBtn').hidden = !!match || !window.p9?.xferPlan || !!outer.serverInfo?.host;
     outer.$('#xferBtn').title = 'Copy ' + (root || 'the workspace') + ' to the same folder on ' + (outer.serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' over P9\'s own tunnel: no Syncthing. It asks before writing over anything.';
     return;
   }

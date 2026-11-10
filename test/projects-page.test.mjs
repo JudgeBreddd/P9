@@ -139,6 +139,8 @@ test('projects: New project (three places, adopt offer, shared folder), the page
   await page.locator('#projPage h1', { hasText: 'Notes' }).waitFor({ timeout: 10000 });
   await page.locator('#projPage .wf .tag', { hasText: 'In P9' }).waitFor({ timeout: 5000 });
   assert.equal((await project(instance, 'Notes')).work.kind, 'p9');
+  await page.locator('#projPage [data-pj=open]').click();
+  await until(async () => (await treeRoot(page)) === 'Notes / files', 'Open shows the In P9 files folder');
   assert.deepEqual(errors, []);
 });
 
@@ -361,4 +363,52 @@ test('projects: the project row counts only the chats it lists', { timeout: 1200
   await page.reload(); await page.locator('#dataNote', { hasText: 'Chat live' }).waitFor({ timeout: 20000 });
   await until(async () => (await rows()).join() === shown && await count() === '1', async () => 'after a reload ' + await count());
   assert.deepEqual(errors, []);
+});
+
+test('MC-18: In P9 chat lists and opens its project file', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const p = (await call(instance, '/projects', 'POST', { name: 'Notes', work: { kind: 'p9' } })).project;
+  assert.equal((await call(instance, '/projects/' + p.id + '/files', 'POST', { name: 'notes.txt', data: Buffer.from('Project note').toString('base64') })).status, 201);
+  assert.equal((await call(instance, '/projects/' + p.id + '/files', 'POST', { name: 'picture.png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' })).status, 201);
+  const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
+  await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title Notes chat' }); await ended(instance, chat);
+  const { page } = await launch(t, instance);
+  await page.locator(`#navList .row[data-chat="${chat}"]`).click({ timeout: 10000 });
+  if (await page.locator('#files').isHidden()) await page.locator('[data-tool=files]').click();
+  await page.locator('#fileScope').selectOption('project');
+  await page.locator('#tree [data-lfile]', { hasText: 'notes.txt' }).waitFor({ timeout: 12000 });
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT mc18 ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  await page.locator('#tree [data-lfile]', { hasText: 'notes.txt' }).click();
+  await page.locator('#mdlBody textarea').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdlBody textarea').inputValue(), 'Project note');
+  const traversal = await call(instance, '/files?' + new URLSearchParams({ project: p.id, path: '../project.json' }));
+  assert.equal(traversal.status, 400); assert.equal(traversal.error, 'locked-path');
+  assert.equal((await call(instance, '/files/list?' + new URLSearchParams({ project: '../x', path: '' }))).status, 404);
+  await page.locator('#mdlX').click();
+  await page.locator('#tree [data-lfile]', { hasText: 'picture.png' }).click();
+  await page.locator('#mdlBody img').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#mdlT').textContent(), 'picture.png');
+  assert.equal(await page.locator('#mdlFoot').innerText(), 'picture.png\nRead-only');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT mc18-image ' + (await page.screenshot({ type: 'png' })).toString('base64'));
+  assert.equal((await call(instance, '/files/list?' + new URLSearchParams({ project: randomUUID(), path: '' }))).status, 404);
+});
+
+test('MC-18: switching chats switches the In P9 project files both ways', { timeout: 90000 }, async (t) => {
+  const instance = await daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+  const chats = [];
+  for (const name of ['Alpha', 'Beta']) {
+    const p = (await call(instance, '/projects', 'POST', { name, work: { kind: 'p9' } })).project;
+    assert.equal((await call(instance, '/projects/' + p.id + '/files', 'POST', { name: name + '.txt', data: Buffer.from(name).toString('base64') })).status, 201);
+    const chat = (await call(instance, '/chat', 'POST', { provider: 'claude', project: p.id })).conversation;
+    await call(instance, '/chat/' + chat + '/prompt', 'POST', { text: 'title ' + name + ' chat' }); await ended(instance, chat);
+    chats.push(chat);
+  }
+  const { page } = await launch(t, instance);
+  if (await page.locator('#files').isHidden()) await page.locator('[data-tool=files]').click();
+  await page.locator('#fileScope').selectOption('project');
+  for (const [index, name] of [[0, 'Alpha'], [1, 'Beta'], [0, 'Alpha']]) {
+    await page.locator(`#navList .row[data-chat="${chats[index]}"]`).click({ timeout: 10000 });
+    await page.locator('#tree [data-lfile]', { hasText: name + '.txt' }).waitFor({ timeout: 12000 });
+    assert.equal(await page.locator('#tree [data-lfile]').count(), 1);
+  }
 });

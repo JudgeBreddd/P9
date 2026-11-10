@@ -67,7 +67,7 @@ export function installProjects(o, api) {
     // In P9: the daemon gives no path for P9's own folder, so the page names it instead (report: open question 1).
     const wf = p.found === false
       ? `<div class="missing" role="status">${I.alert}<div><b>Folder not found</b><span>${esc(where(f))} was moved or deleted. New chats in this project can't start until P9 knows where it is.</span></div><button data-slot="button" data-variant="outline" data-size="sm" data-pj="locate">Locate…</button></div>`
-      : `<div class="wf">${I.folder}<span>Work folder</span>${mine ? `<span class="plain">P9's folder for this project</span><span class="tag">In P9</span>`
+      : `<div class="wf">${I.folder}<span>Work folder</span>${mine ? `<span class="plain">P9's folder for this project</span><span class="tag">In P9</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`
         : `<span class="mono" title="Chats in this project start here">${esc(where(f))}</span><button data-slot="button" data-variant="ghost" data-size="sm" data-pj="open" title="Show it in the Files pane">Open</button>`}</div>`;
     const own = !mine && p.agentFiles?.length ? `<p class="ownfile">${svg.files}This folder has its own instructions (${p.agentFiles.map(esc).join(', ')}). Agents read them on their own.</p>` : '';
     const instr = edit ? `<textarea data-slot="textarea" id="pjInstr" aria-label="Instructions" maxlength="32000">${esc(p.instructions ?? '')}</textarea>`
