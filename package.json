@@ -42,9 +42,9 @@
     "package:win": "node scripts/package-windows.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.88.0",
-    "@agentclientprotocol/codex-acp": "2.1.1",
-    "@agentclientprotocol/sdk": "1.8.0",
+    "@agentclientprotocol/claude-agent-acp": "0.101.0",
+    "@agentclientprotocol/codex-acp": "2.5.0",
+    "@agentclientprotocol/sdk": "2.4.0",
     "@hono/node-server": "2.1.4",
     "@simplewebauthn/server": "14.0.3",
     "electron-updater": "6.8.9",
