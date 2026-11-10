@@ -18,7 +18,8 @@ import { daemon, http, authenticated, remoteDaemon, passkeyDevice, enrollDevice,
 const node = process.execPath;
 const print = (value) => [node, '-e', `process.stdout.write(${JSON.stringify(JSON.stringify(value))})`];
 const SCRIPTS = [
-  { id: 'nums', title: 'Numbers', cmd: print({ count: 12, label: '<b>not markup</b>' }) },
+  // hub/nums.json, when the test writes it, is a changed answer from the same allowed script (O45).
+  { id: 'nums', title: 'Numbers', cmd: [node, '-e', `const f = require('fs'), n = 'hub/nums.json'; process.stdout.write(f.existsSync(n) ? f.readFileSync(n, 'utf8') : ${JSON.stringify(JSON.stringify({ count: 12, label: '<b>not markup</b>' }))})`] },
   { id: 'oops', title: 'Broken', cmd: [node, '-e', 'process.stdout.write("oops, not JSON")'] },
 ];
 const SETTINGS = { primary: 'projects/AGENTS.md', registry: 'hub/registry.json', waiting: '_waiting', space: 'hub/space.json' };
@@ -187,6 +188,20 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
     assert.ok(['connect-src', 'img-src', 'style-src-elem'].every((d) => r.v.includes(d)), 'the frame CSP refused fetch, images and CSS: ' + r.v.join(', '));
     assert.equal(hits, 0, 'nothing reached the network server');
     assert.equal(page.url(), 'p9://app/', 'the shell is still P9');
+    if (theme === 'daylight') { // O45 (Builder, 2026-11-09): the window pulls each card's script every 30 s; an answer that did not
+      // change must not draw the window again (that made every card's frame again, and a click on a card then was lost).
+      await page.evaluate(() => { window.__o45 = Date.now(); new MutationObserver(rs => rs.some(r => [...r.removedNodes].some(n => n.nodeName === 'IFRAME' || n.querySelector?.('iframe'))) && (window.__o45 = Date.now()))
+        .observe(document.querySelector('#mdlBody'), { childList: true, subtree: true }); });
+      for (const end = Date.now() + 20000; Date.now() < end && Date.now() - await page.evaluate(() => window.__o45) < 3000; await sleep(200));
+      const frames = () => page.evaluate(() => [...document.querySelectorAll('#mdlBody [data-card] iframe')].map(f => f.dataset.o45 ?? 'new'));
+      await page.evaluate(() => document.querySelectorAll('#mdlBody [data-card] iframe').forEach(f => { f.dataset.o45 = 'kept'; }));
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'six card frames, quiet for 3 s, before the pulls');
+      await sleep(36000); // one 30 s pull at least, and its answers
+      assert.deepEqual(await frames(), Array(6).fill('kept'), 'a pull with the same answers keeps every card frame');
+      // A changed answer must still reach the card (on the next pull, or the one after: a tile's answer is kept 30 s).
+      await writeFile(path.join(ws, 'hub/nums.json'), JSON.stringify({ count: 13, label: '<b>not markup</b>' }));
+      await inbox.locator('#count', { hasText: '13' }).waitFor({ timeout: 65000 });
+    }
     await card('inbox').scrollIntoViewIfNeeded();
     shot('m5-desktop-1280-' + theme, await page.screenshot());
     // A title-bar press opens the button's run window; a confirm button still asks first.
@@ -276,7 +291,7 @@ test('M5 cards (screen): the sandbox holds, the JSON arrives, errors show on the
   await phone.clock.install(); // the tiles' 30 s refresh is then the page's own timer, moved on below
   for (const title of ['Inbox', 'Probe', 'Broken script', 'Throws']) await phone.click(`#mission dialog[open] summary:has-text("${title}")`);
   const pinbox = phone.locator('#mission dialog[open] [data-tile="inbox"]');
-  await pinbox.frameLocator('iframe').locator('#count', { hasText: '12' }).waitFor({ timeout: 20000 });
+  await pinbox.frameLocator('iframe').locator('#count', { hasText: '13' }).waitFor({ timeout: 20000 }); // the desktop's changed answer
   await phone.locator('#mission dialog[open] [data-tile="broken"] .card-note', { hasText: 'not JSON' }).waitFor({ timeout: 15000 });
   await phone.locator('#mission dialog[open] [data-tile="throws"] .card-note', { hasText: 'card boom' }).waitFor({ timeout: 15000 });
   // One 30 s refresh brings the card new JSON but never runs it again: its error line must stay.

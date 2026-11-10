@@ -184,3 +184,49 @@ test('a missing tmux binary says tmux-not-found on list and create, and works on
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { first: 'tmux-not-found', made: { status: 503, error: 'tmux-not-found' }, later: 'rows:0' });
 });
+
+// O43 re-check (Builder, 2026-11-09): Stop All with a fake user bus. The fake systemctl logs every call and answers the
+// owner query (MainPID, Slice, start time) and the pane-scope list as given; tmux has no sessions left.
+async function stopAllWith(owner) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'p9-fakebus-')), runtime = path.join(dir, 'runtime'), calls = path.join(dir, 'calls');
+  await mkdir(runtime, { mode: 0o700 });
+  await writeFile(path.join(runtime, 'bus'), '');
+  await writeFile(path.join(dir, 'tmux'), '#!/bin/sh\nexit 0\n');
+  // Three scopes all "launched by" 4242: one in another slice, one that started before the server did (left by an
+  // exited server that had the same PID), and the server's own.
+  const scopes = ['Id=other.scope\\nSlice=app.slice\\nDescription=tmux child pane 11 launched by process 4242\\nActiveEnterTimestampMonotonic=3000',
+    'Id=stale.scope\\nSlice=p9.slice\\nDescription=tmux child pane 12 launched by process 4242\\nActiveEnterTimestampMonotonic=1000',
+    'Id=live.scope\\nSlice=p9.slice\\nDescription=tmux child pane 13 launched by process 4242\\nActiveEnterTimestampMonotonic=3000'].join('\\n\\n');
+  await writeFile(path.join(dir, 'systemctl'), `#!/bin/sh\necho "$@" >> ${calls}\ncase "$*" in
+  *MainPID*) ${owner};;
+  *tmux-spawn-*) printf '${scopes}\\n';;
+  *is-active*) echo inactive; exit 3;;
+esac\n`);
+  await chmod(path.join(dir, 'tmux'), 0o755);
+  await chmod(path.join(dir, 'systemctl'), 0o755);
+  const script = `
+    const { createTerminals } = await import(${JSON.stringify(terminals)});
+    const stmt = { all: () => [], get: () => undefined, run: () => {} };
+    const t = createTerminals({ ledger: { db: { exec() {}, prepare: () => stmt } }, workspace: '/', lifecycle: {}, socket: 'p9fakebus' });
+    console.log(await t.stopAll());`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, XDG_RUNTIME_DIR: runtime }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const { readFileSync } = await import('node:fs');
+  return { result: result.stdout.trim(), stop: readFileSync(calls, 'utf8').split('\n').find((line) => line.startsWith('--user stop ')) ?? '' };
+}
+
+test('a failed owner query makes Stop All report cleanup-failed, never stopped (O43)', { skip: process.platform !== 'linux' }, async () => {
+  const { result, stop } = await stopAllWith('exit 1');
+  assert.equal(result, 'cleanup-failed', 'Stop All answered stopped although it could not read the tmux server\'s owner');
+  assert.match(stop, /p9-tmux-p9fakebus\.service/); // the unit and slice are still stopped
+});
+
+test('Stop All stops only scopes the running server started, not a stale one with its PID (O43)', { skip: process.platform !== 'linux' }, async () => {
+  const { result, stop } = await stopAllWith("printf 'MainPID=4242\\nSlice=p9.slice\\nExecMainStartTimestampMonotonic=2000\\n'");
+  assert.equal(result, 'stopped');
+  assert.match(stop, /\blive\.scope\b/);
+  assert.doesNotMatch(stop, /\bstale\.scope\b/, 'Stop All stopped a scope older than the server: another server that had the same PID left it');
+  assert.doesNotMatch(stop, /\bother\.scope\b/);
+});

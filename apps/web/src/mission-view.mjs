@@ -717,7 +717,10 @@ function sectionBody(m, body, g, o) {
   });
   const lv = ['bad', 'warn'].find(l => runs.some(r => tileLevel(m.tiles[r.id]) === l)) || '';
   if ((secLv[g] || '') !== lv) { secLv[g] = lv; outer.setTimeout(outer.renderMission); }
-  const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { m.tiles[d.id] = tileAnswer(r.status, r.body); if (o.shown()) o.redraw(); });
+  // O45 (Builder, 2026-11-09): the 30 s pull redrew on every answer, and the window draws whole, so each card's frame was made
+  // again six times a tick with nothing new; a click in a card at that moment was lost. Only a changed answer draws again.
+  const pull = (d) => window.p9.mission('data', { id: d.id }).then(r => { const a = tileAnswer(r.status, r.body);
+    if (JSON.stringify(a) === JSON.stringify(m.tiles[d.id])) return; m.tiles[d.id] = a; if (o.shown()) o.redraw(); });
   if (runs.length && !m.pulled && o.seen()) { m.pulled = true; runs.forEach(pull); }
   if (runs.length && !m.pulling) m.pulling = setInterval(() => { if (!o.shown()) { clearInterval(m.pulling); m.pulling = 0; return; } if (o.seen()) { m.pulled = true; runs.forEach(pull); } }, 30000);
   body.querySelectorAll('[data-tile-allow]').forEach(b => b.onclick = () => { const d = runs.find(x => x.id === b.closest('[data-tile]').dataset.tile);

@@ -61,21 +61,37 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
       throw error;
     }
   }
-  // The tmux server runs as its own user unit, so a daemon restart or SIGKILL leaves it alone, and Stop All ends
-  // everything a pane started (detached background jobs too) by stopping the unit; tmux puts each pane in a scope that
-  // is PartOf it. The server gets exactly childEnv(), not the user manager's environment.
-  const unit = `p9-tmux-${socket}.service`;
+  // The tmux server runs as its own user unit, so a daemon restart or SIGKILL leaves it alone. The server gets exactly
+  // childEnv(), not the user manager's environment.
+  // O43 (Builder, 2026-11-09): tmux moves each new pane into its own tmux-spawn-*.scope, made in the server's slice and
+  // not tied to the unit, so a job a pane detached after that move outlived a stop of the unit alone. The server gets a
+  // slice of its own (inside p9.slice, so its cap and telemetry still hold; '-' escaped, since it nests slices), and
+  // Stop All stops the unit and that slice, which ends every scope in it.
+  const unit = `p9-tmux-${socket}.service`, slice = `p9-tmux-${socket.replaceAll('-', '\\x2d')}.slice`;
   const systemctl = (args) => run('systemctl', ['--user', ...args], { env: childEnv(), timeout: 2000 });
   // A failed query counts as running, so Stop All never reports a stop it could not confirm.
-  const serverState = () => systemctl(['is-active', unit]).then(({ stdout }) => stdout.trim(), (error) => String(error.stdout ?? '').trim() || 'query-failed');
+  const serverState = (which = unit) => systemctl(['is-active', which]).then(({ stdout }) => stdout.trim(), (error) => String(error.stdout ?? '').trim() || 'query-failed');
   const gone = (state) => state === 'inactive' || state === 'failed';
+  // O43 review (Builder, 2026-11-09): a server an older P9 started is kept across an upgrade, in p9.slice, so its panes'
+  // scopes are not in `slice`. tmux puts each pane's scope in the server's slice and describes it as "tmux child pane <pid>
+  // launched by process <server pid>"; the two, read before the server's last session ends, find only this socket's scopes.
+  // O43 re-check (Builder, 2026-11-09): a scope must also have started after the server did, so a stale scope an exited
+  // server left in the shared p9.slice never matches a later server that got the same PID. A failed owner query is null,
+  // like a failed scope list, so Stop All reports a stop it could not confirm instead of skipping the scopes.
+  const props = (text) => Object.fromEntries(text.split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+  const owner = () => systemctl(['show', '-p', 'MainPID', '-p', 'Slice', '-p', 'ExecMainStartTimestampMonotonic', unit]).then(({ stdout }) => props(stdout), () => null);
+  // null when a query failed: Stop All then reports a stop it could not confirm.
+  const paneScopes = (running) => running === null ? Promise.resolve(null) : !/^[1-9]\d*$/.test(running.MainPID ?? '') ? Promise.resolve([])
+    : systemctl(['show', '-p', 'Id', '-p', 'Slice', '-p', 'Description', '-p', 'ActiveEnterTimestampMonotonic', 'tmux-spawn-*.scope']).then(({ stdout }) => stdout.split(/\n\n+/).map(props)
+      .filter((scope) => scope.Slice === running.Slice && Number(scope.ActiveEnterTimestampMonotonic) >= Number(running.ExecMainStartTimestampMonotonic)
+        && /^tmux child pane \d+ launched by process (\d+)$/.exec(scope.Description ?? '')?.[1] === running.MainPID).map((scope) => scope.Id), () => null);
   let starting = null;
   const ensureServer = () => starting ??= (async () => {
     // ponytail: without a user bus the server forks from the daemon; Stop All then sees sessions, not detached jobs.
     if (!hasUserBus() || !gone(await serverState())) return;
     await systemctl(['reset-failed', unit]).catch(() => {});
     const environment = Object.entries(childEnv()).map(([key, value]) => key + '=' + value);
-    await run('systemd-run', ['--user', '--quiet', '--collect', '--slice=p9.slice', '--unit', unit, '--property=KillMode=control-group', '--',
+    await run('systemd-run', ['--user', '--quiet', '--collect', '--slice=' + slice, '--unit', unit, '--property=KillMode=control-group', '--',
       '/usr/bin/env', '-i', ...environment, 'tmux', '-L', socket, '-D'], { env: childEnv(), timeout: 3000 });
     for (let i = 0; i < 60; i++) {
       try { await tmux(['list-sessions']); return; } catch (error) { if (/no sessions/i.test(String(error.stderr))) return; }
@@ -152,14 +168,16 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
 
   async function stopAll() {
     await recovered;
+    const running = hasUserBus() ? await owner() : {}; // before the sessions end: the server exits with its last one
     const owned = await sessions();
     stillAuthorized();
     await Promise.all(owned.map((session) => tmux(['kill-session', '-t', '=' + session]).catch(() => {})));
     let server = 'inactive';
     if (hasUserBus()) {
       stillAuthorized();
-      await systemctl(['stop', unit]).catch(() => {});
-      server = await serverState();
+      const panes = await paneScopes(running);
+      await systemctl(['stop', unit, slice, ...(panes ?? [])]).catch(() => {});
+      server = panes ? (await Promise.all([unit, slice, ...panes].map((which) => serverState(which)))).find((state) => !gone(state)) ?? 'inactive' : 'query-failed';
     }
     const left = await sessions();
     for (const session of owned) db.prepare('UPDATE terminals SET state = ? WHERE id = ?').run(left.includes(session) ? 'cleanup-failed' : 'stopped', idFrom(session));
