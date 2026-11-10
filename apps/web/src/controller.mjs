@@ -162,15 +162,15 @@ const keepLists = agent => { for (const [k, from] of Object.entries(KEPT)) try {
 const pickerKind = p => p.category === 'thought_level' || !p.category && /effort|thought/i.test(p.id + p.name) ? 'effort' : p.category === 'collaboration_mode' || !p.category && /collab/i.test(p.id) ? 'collab' : 'model';
 // Settings > New chats start in: Default model and Default effort per agent, applied to chats this window makes (startDefaults)
 // when the agent still offers them; a chat's own pick never changes them. fresh: the chats this window is creating, each
-// { agent, model: its New menu row's, id once known }. The daemon sends 'created' before it answers the create, so claimFresh
-// runs from whichever comes first and applies the pick once; a pick made in the chat after that is never overwritten (O44 review).
+// { agent, model: its New menu row's, op: the create's operation ID, id once known }. The daemon sends 'created' (carrying op)
+// before it answers the create, so claimFresh runs from whichever comes first and applies the pick once; a pick made in the chat
+// after that is never overwritten. Only op or id match: another window's chat, or this window's creates out of order, never take
+// it (O44 review). A daemon without op in 'created' leaves it to the reply.
 const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
 const fresh = [];
-// ponytail: a 'created' with no id match takes this window's oldest create for that agent still waiting for its reply; another
-// device's chat made in that same instant could take it here, and the reply then applies it to the right chat instead.
-function claimFresh(s) {
-  const i = fresh.findIndex(f => f.id === s.id), j = i >= 0 ? i : fresh.findIndex(f => !f.id && f.agent === s.agent); if (j < 0) return;
-  const [f] = fresh.splice(j, 1); f.id = s.id; startDefaults(s, f.model);
+function claimFresh(s, op) {
+  const i = fresh.findIndex(f => f.id === s.id || op && f.op === op); if (i < 0) return;
+  const [f] = fresh.splice(i, 1); f.id = s.id; startDefaults(s, f.model);
 }
 function startDefaults(s, model) {
   const m = [model, defaultModel(s.agent)].find(v => v && lastModels[s.agent]?.options.some(o => o.value === v)); if (m) s.modelPick = m; // model: the New menu row's (O44); one no longer offered falls back
@@ -1218,7 +1218,7 @@ $('#welDlg').addEventListener('close', () => { clearInterval(W.timer); W.timer =
 // back as events, so the screen never claims something the daemon did not record.
 const liveChat = { on: false, cursor: 0 };
 liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
-  const body = ['list', 'events', 'lock'].includes(action) ? payload : { ...payload, op: crypto.randomUUID() }, start = Date.now();
+  const body = ['list', 'events', 'lock'].includes(action) ? payload : { op: crypto.randomUUID(), ...payload }, start = Date.now();
   let r = await window.p9.chat(action, body);
   // ponytail: one retry with the same operation ID after an unanswered request; the daemon replays it or says outcome-unknown.
   if (r.status === 503 && body.op) { await new Promise(res => setTimeout(res, 1000)); r = await window.p9.chat(action, body); }
@@ -1229,12 +1229,12 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
 liveChat.create = async (agent, folder = '', project = null, model = '') => {
-  const f = { agent, model }; fresh.push(f);
-  const r = await liveChat.call('create', { provider: agent, ...(folder && { folder }), ...(project && { project }) });
+  const op = crypto.randomUUID(), f = { agent, model, op }; fresh.push(f);
+  const r = await liveChat.call('create', { op, provider: agent, ...(folder && { folder }), ...(project && { project }) });
   if (r.status !== 201) { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); }
-  else if (f.id !== r.body.conversation) { // its 'created' is still to come, or another chat took f (claimFresh)
+  else if (!f.id) { // not claimed by its 'created' yet: that is still to come (claimFresh finds it by id), or came without op
     f.id = r.body.conversation; const s = S.sessions.find(x => x.id === f.id);
-    if (!s) { if (!fresh.includes(f)) fresh.push(f); } else { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); startDefaults(s, model); renderChats(); }
+    if (s) { fresh.splice(fresh.indexOf(f), 1); startDefaults(s, model); renderChats(); }
   }
   if (r.status === 201 && folder) try { localStorage.setItem('eh-chat-folders', JSON.stringify([folder, ...recentFolders().filter(f => f !== folder)].slice(0, 5))); } catch {}
   return r;

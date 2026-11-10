@@ -381,10 +381,19 @@ test('New menu: each row names a model the agent offers, and the chat it starts 
 // reply, hold('events') the read that brings the chat's 'created', each for ms, so either can be made to come first.
 async function holdChat(app) {
   await app.evaluate(({ ipcMain }) => {
-    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o44 = { what: null, ms: 0, done: 0 };
-    ipcMain.handle('p9:chat', async (e, action, ...rest) => { const r = await h(e, action, ...rest), o = globalThis.o44; if (o.what === action) { await new Promise((d) => setTimeout(d, o.ms)); o.done++; } return r; });
+    const h = ipcMain._invokeHandlers.get('p9:chat'); ipcMain.removeHandler('p9:chat'); globalThis.o44 = { what: null, ms: 0, done: 0, once: [] };
+    const sleep = (ms) => new Promise((d) => setTimeout(d, ms));
+    // once: the next call of that action only, held before it reaches the daemon (pre) and/or before its reply returns (post).
+    ipcMain.handle('p9:chat', async (e, action, ...rest) => {
+      const o = globalThis.o44, k = o.once.findIndex((x) => x.what === action), one = k >= 0 ? o.once.splice(k, 1)[0] : null;
+      if (one?.pre) await sleep(one.pre);
+      const r = await h(e, action, ...rest);
+      if (one?.post) { await sleep(one.post); o.done++; } else if (!one && o.what === action) { await sleep(o.ms); o.done++; }
+      return r;
+    });
   });
-  return { hold: (what, ms = 0) => app.evaluate((_, [what, ms]) => Object.assign(globalThis.o44, { what, ms, done: 0 }), [what, ms]), done: () => app.evaluate(() => globalThis.o44.done) };
+  return { hold: (what, ms = 0) => app.evaluate((_, [what, ms]) => Object.assign(globalThis.o44, { what, ms, done: 0 }), [what, ms]), done: () => app.evaluate(() => globalThis.o44.done),
+    once: (what, pre, post) => app.evaluate((_, [what, pre, post]) => { globalThis.o44.once.push({ what, pre, post }); globalThis.o44.done = 0; }, [what, pre, post]) };
 }
 const fromRow = async (page, model) => { const had = await rows(page); await page.click('#newBtn'); await page.locator(`#newPop [data-model="${model}"]`).click(); return madeNext(page, had); };
 const sendModel = async (pane) => { await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter'); };
@@ -417,6 +426,28 @@ test('New menu: the row\'s model applies once, whether the chat\'s created event
   await sendModel(c.pane); await ranOn(c.pane, 'opus');
   assert.deepEqual(errors, []);
   console.log('PASS new menu order: created first and reply first both start on the row\'s model; a pick in the chat after it stays');
+});
+
+// O44 re-check: two creates in flight for one agent. The first (Haiku row) reaches the daemon 10 s late, so the second's
+// (Opus row) 'created' comes first; its reply is held 4 s so the chat is used before it. Each chat gets its own row's model.
+test('New menu: two overlapping creates for one agent each get their own row\'s model', { timeout: 180000 }, async (t) => {
+  const { app, page, errors } = await setup(t, 'new-two', 'claude');
+  const chat = await holdChat(app);
+  await chat.once('create', 10000, 0); await chat.once('create', 0, 4000);
+  const had = await rows(page);
+  await page.click('#newBtn'); await page.locator('#newPop [data-model="haiku"]').click();
+  const b = await fromRow(page, 'opus');
+  assert.equal(await pillValue(b.pane, 'Model'), 'Opus', 'the second create\'s chat, before either reply: its own row\'s model');
+  await sendModel(b.pane);
+  assert.equal(await chat.done(), 0, 'the message went while the second create\'s reply was still held');
+  await ranOn(b.pane, 'opus');
+  const a = await madeNext(page, [...had, b.id]);
+  assert.equal(await pillValue(a.pane, 'Model'), 'Haiku', 'the first create\'s chat: its own row\'s model');
+  await sendModel(a.pane); await ranOn(a.pane, 'haiku');
+  await page.click(`#navList .row[data-chat="${b.id}"]`); await b.pane.locator('[data-pill="Model"]').waitFor({ timeout: 5000 }); // the Haiku chat was shown on its created
+  assert.equal(await pillValue(b.pane, 'Model'), 'Opus', 'the first create left the second chat alone');
+  assert.deepEqual(errors, []);
+  console.log('PASS new menu two creates: each overlapping create starts on its own row\'s model');
 });
 
 // O44 review: only New menu rows name a model. The palette's New Claude session starts on Settings' Default model.
