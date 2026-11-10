@@ -75,12 +75,16 @@ function tmuxTerminals({ ledger, workspace, lifecycle, socket, greeting }) {
   // O43 review (Builder, 2026-11-09): a server an older P9 started is kept across an upgrade, in p9.slice, so its panes'
   // scopes are not in `slice`. tmux puts each pane's scope in the server's slice and describes it as "tmux child pane <pid>
   // launched by process <server pid>"; the two, read before the server's last session ends, find only this socket's scopes.
+  // O43 re-check (Builder, 2026-11-09): a scope must also have started after the server did, so a stale scope an exited
+  // server left in the shared p9.slice never matches a later server that got the same PID. A failed owner query is null,
+  // like a failed scope list, so Stop All reports a stop it could not confirm instead of skipping the scopes.
   const props = (text) => Object.fromEntries(text.split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
-  const owner = () => systemctl(['show', '-p', 'MainPID', '-p', 'Slice', unit]).then(({ stdout }) => props(stdout), () => ({}));
-  // null when the query failed: Stop All then reports a stop it could not confirm.
-  const paneScopes = ({ MainPID: pid, Slice: home }) => !/^[1-9]\d*$/.test(pid ?? '') ? Promise.resolve([])
-    : systemctl(['show', '-p', 'Id', '-p', 'Slice', '-p', 'Description', 'tmux-spawn-*.scope']).then(({ stdout }) => stdout.split(/\n\n+/).map(props)
-      .filter((scope) => scope.Slice === home && /^tmux child pane \d+ launched by process (\d+)$/.exec(scope.Description ?? '')?.[1] === pid).map((scope) => scope.Id), () => null);
+  const owner = () => systemctl(['show', '-p', 'MainPID', '-p', 'Slice', '-p', 'ExecMainStartTimestampMonotonic', unit]).then(({ stdout }) => props(stdout), () => null);
+  // null when a query failed: Stop All then reports a stop it could not confirm.
+  const paneScopes = (running) => running === null ? Promise.resolve(null) : !/^[1-9]\d*$/.test(running.MainPID ?? '') ? Promise.resolve([])
+    : systemctl(['show', '-p', 'Id', '-p', 'Slice', '-p', 'Description', '-p', 'ActiveEnterTimestampMonotonic', 'tmux-spawn-*.scope']).then(({ stdout }) => stdout.split(/\n\n+/).map(props)
+      .filter((scope) => scope.Slice === running.Slice && Number(scope.ActiveEnterTimestampMonotonic) >= Number(running.ExecMainStartTimestampMonotonic)
+        && /^tmux child pane \d+ launched by process (\d+)$/.exec(scope.Description ?? '')?.[1] === running.MainPID).map((scope) => scope.Id), () => null);
   let starting = null;
   const ensureServer = () => starting ??= (async () => {
     // ponytail: without a user bus the server forks from the daemon; Stop All then sees sessions, not detached jobs.
