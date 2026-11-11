@@ -699,7 +699,7 @@ export async function createDesktop({ state, open } = {}) {
     || (Array.isArray(value) && value.length <= 16 && value.every(short))
     || (key === 'notes_roots' && typeof value === 'object' && Object.keys(value).length <= 16 && Object.entries(value).every(([name, folder]) => name.length <= 64 && short(folder)))));
   const chatRoutes = {
-    list: () => ['GET', '/chat'],
+    list: () => ['GET', '/chat?lists=fresh'], // O47: with each agent's model lists
     // only/until (E2): one chat's history, or the chats still running at launch; the daemon checks them again.
     // tail (P20, with only): the newest tail blocks of each of those chats.
     events: ({ after = 0, wait = 0, only, until, tail }) => Number.isSafeInteger(after) && after >= 0 && Number.isSafeInteger(wait) && wait >= 0 && wait <= 8000

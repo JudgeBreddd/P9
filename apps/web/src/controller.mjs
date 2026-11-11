@@ -49,7 +49,7 @@ export function mountShell({ askAdmin } = {}) {
     get guide() { return guide; }, set guide(v) { guide = v; }, get hideSteps() { return hideSteps; }, set hideSteps(v) { hideSteps = v; },
     get land() { return land; }, get landOn() { return landOn; }, get landVideo() { return landVideo; },
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
-    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get keepLists() { return keepLists; },
+    get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newRows() { return newRows; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
     get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get defaultEffort() { return defaultEffort; },
     get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
@@ -90,7 +90,7 @@ export function mountShell({ askAdmin } = {}) {
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
   const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
-  const { saveSettings, applySettings, settingsAt, renderSettings, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
+  const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
   const { renderTree, XFER_SETTINGS, bytes, xfer, xferRefused, sendFiles, xferAsk, doc, dirty, editorHtml, wireEditor, saveWhy, saveDoc, saveBtn, renderModalFoot } = installFiles(outer);
   const { NO_SKY, lastFocus, landingStart, openLanding, landMain, leaveLanding, leave, onMove, moveReloaded, SERVER_STATE } = installLanding(outer);
@@ -149,13 +149,24 @@ function attrs(o, n) {
 }
 const setHTML = (el, html) => { if (written.get(el) !== html) { written.set(el, html); el.innerHTML = html; addHalos(el); } return el; };
 // note 7: every chat starts in Auto mode
-// Each agent's last model, picker and command lists (daemon config / available_commands_update), so a new chat has them
-// before its own session starts. 0.1.8: the lists are kept per computer too, so Settings > New chats start in can offer
-// Default model and Default effort after a restart (keepLists).
-const lastModels = {}, lastCommands = {}, lastPickers = {};
-const KEPT = { models: lastModels, pickers: lastPickers };
-for (const [k, into] of Object.entries(KEPT)) for (const a of Object.keys(modes)) try { const v = JSON.parse(localStorage.getItem(`p9-${k}:` + a)); if (v) into[a] = v; } catch {}
-const keepLists = agent => { for (const [k, from] of Object.entries(KEPT)) try { localStorage.setItem(`p9-${k}:` + agent, JSON.stringify(from[agent] ?? null)); } catch {} };
+// Each agent's last model, picker and command lists, so a new chat has them before its own session starts.
+// O47: the model and picker lists are the daemon's (GET /chat's lists: what a running agent last reported there, read
+// fresh once per daemon run with no chat), so each P9 this window talks to has its own, and they outlive a restart.
+// listsAt: when the kept list was reported; only a newer report replaces it (takeLists, newLists), so replaying an old
+// chat never puts an old list back. listState: 'loading' | 'ok' | 'failed' | 'kept'. listDef (MC-16): what a new
+// session of that agent starts on, { model, pickers: { id: value } }.
+const lastModels = {}, lastCommands = {}, lastPickers = {}, listsAt = {}, listState = {}, listDef = {};
+for (const a of Object.keys(modes)) for (const k of ['models', 'pickers']) try { localStorage.removeItem(`p9-${k}:` + a); } catch {} // 0.1.8's per-computer copy, which mixed this P9's lists with a remote's
+function takeLists(lists) {
+  let loading = false;
+  for (const a of Object.keys(modes)) { const l = lists?.[a]; if (!l) continue;
+    listState[a] = l.state; loading ||= l.state === 'loading'; if (l.def) listDef[a] = l.def;
+    if (Array.isArray(l.model?.options) && l.at >= (listsAt[a] || 0)) { lastModels[a] = l.model; lastPickers[a] = Array.isArray(l.pickers) ? l.pickers : []; listsAt[a] = l.at; } }
+  return loading;
+}
+// A chat's own report (a 'config' event): kept as the agent's list only when it is newer than the one held.
+const newLists = (a, at, model, pickers) => { if (!(at >= (listsAt[a] || 0))) return; listsAt[a] = at; if (model) lastModels[a] = model; if (pickers) lastPickers[a] = pickers; };
+const isDefault = (a, id, v) => v !== undefined && (id === null ? listDef[a]?.model : listDef[a]?.pickers?.[id]) === v;
 // The agent's other settings (threat model row 22), told apart by category: Effort (thought_level), Fast mode (model_config, in
 // the Model menu) and Codex's plan switch (collaboration_mode, the Mode menu's Plan). A list without categories (an older
 // daemon on a remote) goes by name. The chat bar's pills that read them are in chat-view.mjs.

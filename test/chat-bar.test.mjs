@@ -72,7 +72,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   assert.equal(await pane.locator('select').count(), 0, 'no selects left in the pane');
   assert.equal(await pane.locator('.composer .bar .hint').count(), 0, 'the hint text is gone while idle');
   assert.deepEqual(await pane.locator('.composer .bar .pills [data-pill]').evaluateAll((l) => l.map((b) => [b.tagName, b.getAttribute('aria-haspopup'), b.getAttribute('aria-label')])),
-    [['BUTTON', 'menu', 'Agent: Claude'], ['BUTTON', 'menu', 'Mode: Auto'], ['BUTTON', 'menu', 'Model: Default (recommended)'], ['BUTTON', 'menu', 'Effort: Medium']]);
+    [['BUTTON', 'menu', 'Agent: Claude'], ['BUTTON', 'menu', 'Mode: Auto'], ['BUTTON', 'menu', 'Model: Default (recommended)'], ['BUTTON', 'menu', 'Effort: Medium (Default)']]); // MC-16: the closed pill names the default
   // Keyboard: Enter on a pill opens its menu (role=menu, menuitemradio items, the current one checked and focused); arrows move;
   // Enter picks and puts focus back on the pill; Escape closes and does the same.
   await pillOf(pane, 'Mode').focus(); await page.keyboard.press('Enter');
@@ -134,7 +134,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
   await page.waitForTimeout(1500);
   assert.ok(await steps() > before, 'the chat streamed meanwhile: ' + before + ' -> ' + await steps());
   await shot(page, 'menu-effort-streaming');
-  assert.deepEqual(await menuState(page), [false, 'Medium'], 'the menu is open and focused through the streaming');
+  assert.deepEqual(await menuState(page), [false, 'Medium (Default)'], 'the menu is open and focused through the streaming');
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
   await pane.locator('[data-pill="Effort"][aria-label="Effort: High"]').waitFor();
   // A mode picked mid-turn shows at once, labelled queued; it applies when the turn ends.
@@ -172,7 +172,7 @@ test('pills: Mode, Model and Effort are menus in the message bar; keyboard and r
 test('Codex: Plan in the Mode menu is the plan collaboration mode, on top of the sandbox mode picked before; any other mode turns it off; the separate picker is gone', { timeout: 150000 }, async (t) => {
   const { pane, page, send, said, idle, errors } = await setup(t, 'codex-plan', 'codex');
   await pane.locator('[data-pill="Mode"][aria-label="Mode: Auto review"]').waitFor({ timeout: 10000 });
-  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium"]').waitFor({ timeout: 10000 }); // the config arrived
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 10000 }); // the config arrived
   assert.equal(await pane.locator('select').count(), 0, 'no selects: the separate plan picker is gone');
   assert.deepEqual(await pillItems(page, pane, 'Mode'), ['Read-only', 'Workspace access', 'Auto review ✓', 'Full access', 'Plan']);
   await choose(page, pane, 'Mode', 'Plan');
@@ -199,17 +199,21 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   const closeSettings = async () => { await page.keyboard.press('Escape'); await page.locator('#setDlg').waitFor({ state: 'hidden', timeout: 5000 }); };
   const options = (sel) => page.locator(sel + ' option').allInnerTexts();
   await settings();
-  assert.deepEqual([await options('[data-default-model="claude"]'), await options('[data-default-effort="claude"]')], [["Agent's default"], ["Agent's default"]], 'no list before a chat');
-  assert.match(await page.locator('.set-defaults', { hasText: 'Claude' }).innerText(), /Start one Claude chat first/);
+  // O47: the daemon read each agent's lists at its start, so they are here before any chat, for both agents; the first
+  // option names the agent's own default (MC-16) unless that option's name already says it.
+  const full = [["Agent's default", 'Default (recommended)', 'Opus', 'Haiku'], ["Agent's default (Medium)", 'Low', 'Medium', 'High'], ["Agent's default", 'Default (recommended)', 'Opus', 'Haiku']];
+  for (const a of ['claude', 'codex']) await page.locator(`[data-default-model="${a}"] option`).nth(1).waitFor({ state: 'attached', timeout: 15000 }); // filled in with Settings already open
+  assert.deepEqual([await options('[data-default-model="claude"]'), await options('[data-default-effort="claude"]'), await options('[data-default-model="codex"]')], full, 'the lists before any chat');
+  assert.doesNotMatch(await page.locator('.set-defaults', { hasText: 'Claude' }).innerText(), /Start one Claude chat first/);
   await closeSettings();
-  // One Claude chat: its config brings Claude's lists; Codex's are still unknown.
+  // One Claude chat: its own report leaves the lists as they are.
   const first = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
   await call(instance, '/chat/' + first + '/prompt', 'POST', { text: 'hello' });
   await page.locator('#nav .row[data-chat="' + first + '"]').click();
   await page.locator('.pane[data-id="' + first + '"] [data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 15000 });
   await settings();
   assert.deepEqual([await options('[data-default-model="claude"]'), await options('[data-default-effort="claude"]'), await options('[data-default-model="codex"]')],
-    [["Agent's default", 'Default (recommended)', 'Opus', 'Haiku'], ["Agent's default", 'Low', 'Medium', 'High'], ["Agent's default"]]);
+    full);
   await page.selectOption('[data-default-model="claude"]', 'haiku'); await page.selectOption('[data-default-effort="claude"]', 'high');
   await closeSettings();
   // A new chat from the New button starts with them before any message, and its first prompt carries them.
@@ -239,7 +243,7 @@ test('Settings > New chats start in: Default model and Default effort per agent,
   await page.locator('#nav .row[data-chat="' + other + '"]').click();
   const otherPane = page.locator('.pane[data-id="' + other + '"]');
   await otherPane.locator('[data-pill="Model"][aria-label="Model: Default (recommended)"]').waitFor({ timeout: 10000 });
-  assert.equal(await pillValue(otherPane, 'Effort'), 'Medium');
+  assert.equal(await pillValue(otherPane, 'Effort'), 'Medium (Default)');
   await otherPane.locator('.composer textarea').fill('config'); await otherPane.locator('.composer textarea').press('Enter');
   await otherPane.locator('.hist', { hasText: 'config:model=default,effort=medium,fast=off,sandbox=on' }).waitFor({ timeout: 20000 });
   // After a restart: Settings still lists and shows them, and a new chat starts with them.
@@ -383,10 +387,11 @@ test('New menu: each row names a model the agent offers, and the chat it starts 
   await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
   const named = (a) => page.locator(`#newPop [data-sec="${a}"] [data-new]`).evaluateAll((l) => l.map((b) => [b.dataset.model ?? null, b.textContent]));
   assert.deepEqual(await named('claude'), [[null, 'Claude default model'], ['default', 'Claude · Default (recommended)'], ['opus', 'Claude · Opus'], ['haiku', 'Claude · Haiku']]);
-  assert.deepEqual(await named('codex'), [[null, 'Codex default model']]);
+  await until(async () => (await named('codex')).length === 4, 'the open menu fills in when the Codex list is read'); // O47: no reopen
+  assert.deepEqual(await named('codex'), [[null, 'Codex default model'], ['default', 'Codex · Default (recommended)'], ['opus', 'Codex · Opus'], ['haiku', 'Codex · Haiku']], 'O47: listed before any Codex chat');
   await shot(page, 'o44-new-menu');
   const had = await rows(page);
-  await page.locator('#newPop [data-model="haiku"]').click();
+  await page.locator('#newPop [data-new="claude"][data-model="haiku"]').click();
   const made = await madeNext(page, had);
   await until(async () => await pillValue(made.pane, 'Model') === 'Haiku', 'the chat shows the row\'s model', 5000);
   await made.pane.locator('.composer textarea').fill('model'); await made.pane.locator('.composer textarea').press('Enter');
@@ -413,7 +418,7 @@ async function holdChat(app) {
   return { hold: (what, ms = 0) => app.evaluate((_, [what, ms]) => Object.assign(globalThis.o44, { what, ms, done: 0 }), [what, ms]), done: () => app.evaluate(() => globalThis.o44.done),
     once: (what, pre, post) => app.evaluate((_, [what, pre, post]) => { globalThis.o44.once.push({ what, pre, post }); globalThis.o44.done = 0; }, [what, pre, post]) };
 }
-const fromRow = async (page, model) => { const had = await rows(page); await page.click('#newBtn'); await page.locator(`#newPop [data-model="${model}"]`).click(); return madeNext(page, had); };
+const fromRow = async (page, model) => { const had = await rows(page); await page.click('#newBtn'); await page.locator(`#newPop [data-new="claude"][data-model="${model}"]`).click(); return madeNext(page, had); };
 const sendModel = async (pane) => { await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter'); };
 const ranOn = (pane, model) => pane.locator('.hist', { hasText: 'model:' + model }).waitFor({ timeout: 20000 });
 
@@ -453,7 +458,7 @@ test('New menu: two overlapping creates for one agent each get their own row\'s 
   const chat = await holdChat(app);
   await chat.once('create', 10000, 0); await chat.once('create', 0, 4000);
   const had = await rows(page);
-  await page.click('#newBtn'); await page.locator('#newPop [data-model="haiku"]').click();
+  await page.click('#newBtn'); await page.locator('#newPop [data-new="claude"][data-model="haiku"]').click();
   const b = await fromRow(page, 'opus');
   assert.equal(await pillValue(b.pane, 'Model'), 'Opus', 'the second create\'s chat, before either reply: its own row\'s model');
   await sendModel(b.pane);

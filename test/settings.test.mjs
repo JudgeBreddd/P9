@@ -1351,12 +1351,15 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the model now in use');
   assert.deepEqual([await pane.evaluate((el) => el.kept), await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => el.kept)], ['yes', 'yes'], 'pane or row rebuilt by the turn');
   // Effort and the other agent settings (Builder, 2026-10-18: "wire all of them"; threat model row 22): the agent's own lists, picked values reach it.
-  assert.equal(await pillValue(pane, 'Effort'), 'Medium');
-  assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium ✓', 'High']);
+  // The default mark needs the daemon's own read of the agent's lists, which may land after the chat's first turn: wait for it.
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 20000 });
+  assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High']);
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On', 'Off ✓']);
   await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
   await ta.click(); await page.keyboard.type('config'); await page.keyboard.press('Enter');
-  await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 });
+  // A failed wait says what the agent did answer and what the pills showed, so a red run names the lost pick.
+  await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 }).catch(async () => {
+    throw new Error('the picks did not reach the agent: Effort pill ' + await pillValue(pane, 'Effort') + ', chat ends: ' + (await pane.innerText()).slice(-300).replace(/\s+/g, ' ')); });
   await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   assert.equal(await pillValue(pane, 'Effort'), 'High', 'the pill shows the effort now in use');
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On ✓', 'Off'], 'the menu shows the fast mode now in use');
@@ -2060,6 +2063,10 @@ test('Speed (E2): a reply in one chat rebuilds only its own pane; launch replays
   await page.locator('#nav .row[data-chat="' + b + '"]').click();
   await page.locator('#chats > .pane').first().locator('[data-tool=split]').click({ timeout: 10000 });
   await page.waitForFunction((ids) => [...document.querySelectorAll('#chats > .pane')].map((p) => p.dataset.id).sort().join() === ids, [a, b].sort().join(), { timeout: 15000 });
+  // O47: the window redraws once when the daemon's first read of the agents' model lists ends (asked again every 1.5 s
+  // while it reads). That redraw is not the reply's, so the count starts after it.
+  for (let i = 0; i < 40 && Object.values((await call(instance, '/chat')).lists ?? {}).some((l) => l?.state === 'loading'); i++) await page.waitForTimeout(250);
+  await page.waitForTimeout(2000);
   // Every pane build goes through a template's innerHTML (morph, and paint's per-pane path): count whose pane it holds.
   await page.evaluate(([a, b]) => {
     const d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML'), m = window.e2 = { bytes: 0, a: 0, b: 0 };

@@ -175,7 +175,7 @@ let loads = Promise.resolve();
 const loadChat = () => loads = loads.then(readChat);
 async function readChat() {
   try {
-    const [list] = await Promise.all([request('/chat'), loadPhoneProjects(request)]); state.conversations = list.conversations ?? [];
+    const [list] = await Promise.all([request('/chat?lists=fresh'), loadPhoneProjects(request)]); state.conversations = list.conversations ?? []; agentLists = list.lists ?? agentLists;
     await fetchEvents(); // the first read relists (PH3), so the picker is filled after it
     fillPicker();
     if (!linked && applyLink()) { linked = true; route(one<HTMLSelectElement>('#conversation').value); } else render();
@@ -462,6 +462,7 @@ function renderList() {
 }
 // The chat screen's top bar: back, the chat's title with its agent and model (tap: the Model sheet), a status.
 let barSig = '';
+let agentLists: Record<string, unknown> = {}; // O47: each agent's lists as the daemon keeps them (GET /chat)
 function chatBar(id: string, run: string) {
   const item = state.conversations.find((entry) => entry.id === id), model = one<HTMLSelectElement>('#model');
   const name = model.selectedOptions[0]?.textContent || '', agent = item?.provider === 'codex' ? 'Codex' : 'Claude';
@@ -598,7 +599,8 @@ function renderPicks(id: string) {
   mode.innerHTML = `<option value="">Mode: ${escape(set?.name ?? 'as set')}</option>` + ((modes as Record<string, string[]>)[provider(id)] ?? []).map((name) => `<option value="${escape(name)}">Mode: ${escape(name)}</option>`).join('');
   mode.value = keep; mode.dataset.was = mode.value; startPick.delete(id); pill();
   type Pick = { current?: string; options?: { value: string; name: string }[] };
-  const config = (configs.at(-1)?.data ?? {}) as { model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
+  const config = (configs.at(-1)?.data ?? agentLists[provider(id)] ?? {}) as { // O47: a chat not started yet offers its agent's kept lists
+    model?: Pick; pickers?: (Pick & { id: string; name: string })[] };
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
   model.hidden = !options.length; model.dataset.current = config.model?.current ?? '';
   model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(o.name)}</option>`).join('');

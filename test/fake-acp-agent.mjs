@@ -82,10 +82,14 @@ const transcript = (sessionId) => {
 };
 // As codex, the plan collaboration switch too (codex-acp's collaboration_mode; P9's Codex Plan mode, 0.1.8).
 const picked = { effort: 'medium', fast: 'off', ...(process.argv[2] === 'codex' && { collaboration_mode: 'default' }), sandbox: 'on' };
+// O47: models.json in the workspace replaces the model list ([{ value, name }]), read at every report; calls.log, when it
+// exists, gets one line per session opened and per prompt; signed-out refuses every new session.
+const listedModels = () => { try { return JSON.parse(readFileSync('models.json', 'utf8')); } catch { return null; } };
+const called = (what) => { if (existsSync('calls.log')) appendFileSync('calls.log', process.argv[2] + ' ' + what + '\n'); };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
   { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
-    options: [{ value: 'default', name: 'Default (recommended)' }, { group: 'more', name: 'More', options: [{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }] }] },
+    options: listedModels() ?? [{ value: 'default', name: 'Default (recommended)' }, { group: 'more', name: 'More', options: [{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }] }] },
   // Like the real adapters: effort and fast mode; sandbox is a mode-category switch P9 must never offer (threat model row 22).
   { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: picked.effort, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value[0].toUpperCase() + value.slice(1) })) },
   { id: 'fast', name: 'Fast mode', category: 'model_config', type: 'select', currentValue: picked.fast, options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] },
@@ -120,6 +124,9 @@ const connection = acp.connectAgent(stream, {
   },
   async authenticate() { return {}; },
   async newSession(params) {
+    if (existsSync('signed-out')) throw acp.RequestError.authRequired();
+    if (existsSync('slow-lists')) await new Promise((resolve) => setTimeout(resolve, Number(readFileSync('slow-lists', 'utf8')) || 2500)); // the file may say how long, in ms
+    called('new');
     cwd = 'new:' + params.cwd; folder = params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`;
     if (projects() && process.argv[2] === 'codex') {
       const now = new Date().toISOString(), dir = path.join(rollouts(), now.slice(0, 4), now.slice(5, 7), now.slice(8, 10));
@@ -147,12 +154,13 @@ const connection = acp.connectAgent(stream, {
     // Refuses putting the chat's old settings back; P9's own safe start mode (Manual) still goes through, since P9 fails the
     // start rather than run a Claude chat in the adapter's auto.
     if (cwd.startsWith('resume:') && existsSync(path.join(folder, 'refuse-resume-settings')) && !(params.configId === 'mode' && params.value === 'default')) throw new Error('restore refused');
-    if (params.configId === 'model') { if (!['default', 'opus', 'haiku'].includes(params.value)) throw new Error('unknown model'); model = params.value; }
+    if (params.configId === 'model') { if (!(listedModels()?.map((m) => m.value) ?? ['default', 'opus', 'haiku']).includes(params.value)) throw new Error('unknown model'); model = params.value; }
     else if (Object.hasOwn(picked, params.configId)) { picked[params.configId] = String(params.value); } else mode = String(params.value);
     return { configOptions: configOptions() };
   },
   async cancel(params) { cancelled.add(params.sessionId); },
   async prompt(params) {
+    called('prompt');
     const { sessionId } = params, say = (reply) => connection.sessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: reply } } });
     // Like Claude Code's prompt queue: a prompt during the unprompted work is taken in at its next step.
     if (background.has(sessionId)) { await deliver(sessionId, textOf(params.prompt)); return { stopReason: 'end_turn' }; }
