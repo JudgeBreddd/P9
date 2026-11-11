@@ -632,7 +632,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.steering = init._meta?.steering?.supported === true;
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
       // O48: the base URL and key go to this one agent in the session request itself (its stdin), on new and on resume:
-      // the adapter keeps neither between runs. Never the process environment or a command line.
+      // the adapter keeps neither between runs. Never the adapter's environment or a command line; the adapter itself puts
+      // both in the environment of the agent it starts, so that agent's commands can read the key (SECURITY.md).
       const _meta = profile ? { claudeCode: { options: { env: { ANTHROPIC_BASE_URL: profiles.get(profile.id).baseUrl, ANTHROPIC_AUTH_TOKEN: await bounded(profiles.secret(profile.id)) } } } } : undefined;
       if (conversation.session) {
         const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers, ...(_meta && { _meta }) }));

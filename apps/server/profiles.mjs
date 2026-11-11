@@ -1,5 +1,5 @@
 // Provider profiles (0.1.9 O48, SECURITY.md "Provider profiles"): another service that speaks Claude's API, for Claude
-// chats. One file, <ownership>/profiles.json, beside the ledger: owner-only folder, mode 600, written by create-then-rename.
+// chats. One file, <ownership>/profiles.json, beside the ledger: owner-only folder, plain text, mode 600, written by create-then-rename.
 // The key (or the command that prints it) never leaves this module except through secret(), which chat.mjs calls at a
 // chat's start and passes to that one agent over its stdin. list() is everything the page may see.
 import { execFile } from 'node:child_process';
@@ -29,13 +29,16 @@ export function createProfiles(directory) {
     get: (id) => { const p = all.find((x) => x.id === id); return p ? shown(p) : null; },
     // body: { id?, name, baseUrl, models: [..], key?, command? }. With an id, a missing key and command keep the saved
     // ones; key: '' or command: '' removes it. Setting one clears the other. Returns the shown profile, or null (refused).
+    // A changed base URL drops the saved key and command unless this save brings one: a key typed for one service is
+    // never sent to another address.
     save(body) {
       const old = body?.id === undefined ? null : all.find((x) => x.id === body.id);
       if (body?.id !== undefined && !old) return null;
       const url = baseUrl(body?.baseUrl), models = Array.isArray(body?.models) ? [...new Set(body.models)] : [];
       if (!text(body?.name, 40) || !url || models.length < 1 || models.length > 20 || !models.every((m) => typeof m === 'string' && MODEL.test(m))) return null;
       for (const k of ['key', 'command']) if (body[k] !== undefined && body[k] !== '' && (!text(body[k], 500) || (k === 'key' && /\s/.test(body[k])))) return null;
-      const next = { id: old?.id ?? randomUUID(), name: body.name.trim(), baseUrl: url, models, key: old?.key ?? '', command: old?.command ?? '' };
+      const moved = Boolean(old) && old.baseUrl !== url;
+      const next = { id: old?.id ?? randomUUID(), name: body.name.trim(), baseUrl: url, models, key: moved ? '' : old?.key ?? '', command: moved ? '' : old?.command ?? '' };
       if (body.key !== undefined) { next.key = body.key; if (body.key) next.command = ''; }
       if (body.command !== undefined) { next.command = body.command.trim(); if (next.command) next.key = ''; }
       all = old ? all.map((x) => (x === old ? next : x)) : [...all, next];

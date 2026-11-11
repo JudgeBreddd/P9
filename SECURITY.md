@@ -583,7 +583,9 @@ name, a base URL, a key, and the model names that service uses. You type all of 
 Settings on the desktop. P9 ships no preset and no key. Codex chats have no profiles.
 
 - **Where the key lives.** In `profiles.json` beside the chat ledger, in the daemon's own
-  owner-only folder (never the workspace), mode 600 on Linux. It is written by create-then-rename, never in place. Instead of a key a profile may
+  owner-only folder (never the workspace), as plain text: it is not encrypted. On Linux the
+  file is mode 600; on Windows its protection is that folder's owner-only access list, which
+  the daemon checks at start. It is written by create-then-rename, never in place. Instead of a key a profile may
   name a command that prints one (a password manager's): the daemon runs it at each chat
   start with no shell, the short allow-list environment and a 10 s limit, reads the first
   line, and keeps the key in memory only for that start. The command is split on spaces
@@ -594,14 +596,26 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 - **What the page gets back.** Name, base URL, model names, and whether a key or a command
   is set. Never the key, and never the command's output. A saved key cannot be read back:
   it can only be replaced or removed.
-- **Where the key goes.** To the one agent process of a chat started on that profile, in the
-  first message of its session (new and resume) over the process's own stdin. It is not in
-  that process's environment or on any command line, on Linux or Windows. The model name,
-  which is not a secret, is in that process's environment. Every other chat's agent starts
-  exactly as before, with nothing from any profile.
-- **Where the key never goes.** The page, the phone, the ledger, a transcript event, the
+- **A changed base URL.** A saved key, or key command, belongs to the address it was typed
+  for. When a profile's base URL changes, the daemon drops both unless the same save brings a
+  new one, and Settings asks for it; a key is never sent to an address it was not typed for.
+- **Where the key goes.** P9 hands it to the one adapter process of a chat started on that
+  profile, in the first message of its session (new and resume) over the process's own
+  stdin: not in that process's environment and on no command line, on Linux or Windows. The
+  adapter then puts the key and the base URL in the environment of the agent program it
+  starts, and every command, hook and tool server that agent starts inherits them (seen
+  2026-11-11, bundled adapter 0.106.0: a command the agent ran found the key in its
+  environment). So **the agent and anything it runs in that chat can read the key**. The
+  model name, which is not a secret, is in the adapter's environment. Every other chat's
+  agent starts exactly as before, with nothing from any profile.
+- **Where P9 never puts the key.** The page, the phone, the ledger, a transcript event, the
   daemon's log, telemetry, the memory engine, Send to remote, an export. A profile chat
   cannot be sent to a remote: it is refused with the reason, because the key does not travel.
+  This is about what P9 writes, not what the agent may print: if a command in that chat
+  prints its environment (`env`), the key is in that command's output, and the output is
+  part of the chat like any other, so it reaches the ledger, the window, the phone and the
+  service. P9 does not look for the key in tool output. Use a key you can revoke, and treat
+  a profile chat's transcript as able to hold it.
 - **What the service sees.** Everything that chat sends a model: your prompts, the files and
   command output the agent reads, and its tool calls. That is the point of the profile and
   your choice of service; Settings says so beside the base URL field. P9 does not check
@@ -611,9 +625,11 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 - **Signed in to Claude as well.** A profile chat uses the profile, not your Claude sign-in
   (seen once, 2026-11-11, bundled adapter 0.106.0). Your other Claude chats are unaffected.
   A profile chat is left out of the Claude usage rows: it does not spend that plan.
-- **What the agent can do with it.** The agent process holds the key while it runs, as it
-  holds your Claude sign-in in a normal chat, so a tool it runs as you could read it from
-  that process. The chat's mode and approvals are the same as any Claude chat's.
+- **What the agent can do with it.** Read it and use it, as above: it is in the agent's
+  environment for the whole chat. The agent's own setting that strips such keys from the
+  commands it runs was tried (2026-11-11) and not used: it needs extra programs installed,
+  and without them the agent could run no command at all. The chat's mode and approvals are
+  the same as any Claude chat's.
 - **A removed profile.** Its chats stay readable. They cannot be continued, and say why.
 - **What the bundled adapter keeps.** Checked 2026-11-11 against adapter 0.106.0 with a
   real key, new and resumed sessions: the key was in no file under the agent's home or the

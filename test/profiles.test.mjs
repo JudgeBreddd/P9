@@ -102,6 +102,19 @@ test('profile: what is refused; a removed profile\'s chat can be read, not conti
   assert.deepEqual([away.status, away.error], [409, 'move-unavailable']);
   assert.match(away.message, /key stays on this computer/);
 
+  // A changed base URL drops the saved key, and a saved key command, unless that save brings one: a key typed for one
+  // service is never sent to another address.
+  const OTHER = 'sk-profile-other-77aa01bc93de4f20', inFile = () => fs.readFileSync(path.join(instance.directory, 'profiles.json'), 'utf8');
+  const second = (await call(instance, '/profiles', 'POST', { ...PROFILE, name: 'Second', key: OTHER })).profile;
+  assert.ok(inFile().includes(OTHER));
+  const movedTo = (baseUrl, more) => call(instance, '/profiles', 'POST', { ...PROFILE, name: 'Second', id: second.id, baseUrl, ...more }).then((r) => r.profile);
+  assert.equal((await movedTo('https://elsewhere.example.test/api')).secret, 'none', 'a new address with no key in the request: the old key is dropped');
+  assert.ok(!inFile().includes(OTHER), 'and it is gone from the file');
+  assert.equal((await movedTo('https://third.example.test', { command: 'print-key now' })).secret, 'command', 'a new address with its own command keeps that command');
+  assert.equal((await movedTo('https://fourth.example.test')).secret, 'none', 'a saved command is dropped the same way');
+  assert.ok(!inFile().includes('print-key'));
+  assert.equal((await movedTo('https://fifth.example.test', { key: OTHER })).secret, 'key', 'a new address with its own key keeps that key');
+  assert.equal((await call(instance, '/profiles/' + second.id, 'DELETE')).status, 200);
   // Edited with no key in the request: the saved key stays. Then a wrong key: the chat says whose key was refused.
   assert.equal((await call(instance, '/profiles', 'POST', { ...PROFILE, id: profile.id, name: 'Far Cloud 2' })).profile.secret, 'key');
   await call(instance, '/chat/' + id + '/stop', 'POST');
@@ -211,6 +224,11 @@ test('window: a profile typed in Settings puts its models in the New chat menu; 
   await row.locator('[data-profile-edit]').click();
   assert.equal(await page.inputValue('#profileKey'), '', 'Edit never shows the saved key');
   assert.deepEqual(await held(), [false, false, false]);
+  // A new base URL with no key typed: Settings asks for the key and sends nothing.
+  await page.fill('#profileUrl', 'https://elsewhere.example.test');
+  await page.click('#profileSave');
+  await page.locator('#profileNote', { hasText: 'The base URL changed' }).waitFor({ timeout: 5000 });
+  assert.equal((await call(instance, '/profiles')).profiles[0].baseUrl, made.baseUrl, 'nothing was saved');
   await page.click('#profileCancel');
   await page.keyboard.press('Escape');
   // New chat: the profile's models under Claude's own.
