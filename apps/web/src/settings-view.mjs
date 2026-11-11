@@ -194,6 +194,24 @@ function defaultsRow(a) {
     + `<label class="set-pick">Mode<select data-slot="input" data-default-mode="${a}" aria-label="Default mode for ${outer.names[a]}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === outer.defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`
     + sel('data-default-model', 'Default model', ml, outer.defaultModel(a), outer.listDef[a]?.model) + sel('data-default-effort', 'Default effort', el, outer.defaultEffort(a), outer.listDef[a]?.pickers?.[outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.id]) + '</div>';
 }
+// The handlers of the three selects in each agent's defaults row (renderSettings, refreshDefaults).
+function bindDefaults() {
+  outer.$('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
+    const a = el.dataset.defaultMode, m = el.value;
+    if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(a, m)) { el.value = outer.defaultMode(a); return; }
+    m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
+  }; });
+  outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = () => {
+    const k = el.dataset.defaultModel ? `p9-model-default:${el.dataset.defaultModel}` : `p9-effort-default:${el.dataset.defaultEffort}`;
+    el.value ? localStorage.setItem(k, el.value) : localStorage.removeItem(k);
+  }; });
+}
+// O47: the agents' lists arrived while Settings is open. Only the defaults rows are drawn again, never the page: a full
+// redraw would drop what is being typed in any other box. A row whose select is in use is left as it is.
+function refreshDefaults() {
+  outer.$('#setBody').querySelectorAll('.set-defaults').forEach(row => { if (!row.contains(document.activeElement)) row.outerHTML = defaultsRow(row.querySelector('[data-default-mode]').dataset.defaultMode); });
+  bindDefaults();
+}
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
   const box = (id, label, checked, note = '', disabled = false, tip = '', section = 'settings') => `<label class="set-row"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${label}</strong>${note ? `<span class="muted sm">${note}</span>` : ''}</span>${tip ? '<span class="spacer"></span>' + info(tip, section) : ''}</label>`;
@@ -223,15 +241,7 @@ function renderSettings() {
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
-  outer.$('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
-    const a = el.dataset.defaultMode, m = el.value;
-    if (LOOSE[m] && !localStorage.getItem('p9-mode-ok:' + m) && !await outer.looseOk(a, m)) { el.value = outer.defaultMode(a); return; }
-    m ? localStorage.setItem('p9-mode-default:' + a, m) : localStorage.removeItem('p9-mode-default:' + a);
-  }; });
-  outer.$('#setBody').querySelectorAll('[data-default-model], [data-default-effort]').forEach(el => { el.onchange = () => {
-    const k = el.dataset.defaultModel ? `p9-model-default:${el.dataset.defaultModel}` : `p9-effort-default:${el.dataset.defaultEffort}`;
-    el.value ? localStorage.setItem(k, el.value) : localStorage.removeItem(k);
-  }; });
+  bindDefaults();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
   if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn; };
   if (outer.pets) wirePetSettings();
@@ -398,5 +408,5 @@ function wizRemote(btn) {
     + `<div class="set-row"><span><strong>Which remote</strong><span class="muted sm">A Host name from your ssh config, or user@address. If ssh asks for a password, P9 asks you for it in its own window and never saves it.</span></span><span class="spacer"></span><input data-slot="input" id="welHost" list="welHosts" value="${esc(h?.last || hosts[0] || '')}" placeholder="user@address" aria-label="Remote to connect to" maxlength="253" autocomplete="off" spellcheck="false"><datalist id="welHosts">${opts}</datalist>${btn('connect', 'Connect', 'default')}</div>`
     + (W.note.remote?.error ? `<p class="warn sm" role="alert">${W.note.remote.error === 'host' ? 'Type a Host name or user@address, with no spaces.' : 'Could not connect (' + esc(W.note.remote.error) + ').'}</p>` : '') + '</div>';
 }
-  return { saveSettings, applySettings, settingsAt, renderSettings, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote };
+  return { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote };
 }

@@ -834,8 +834,9 @@ async function loadChat() {
   const lists = async body => { if (!outer.takeLists(body?.lists) || asking) return; asking = true;
     for (let i = 0; i < 60 && !outer.lifetime.signal.aborted; i++) { await new Promise(res => outer.setTimeout(res, 1500)); const l = await window.p9.chat('list', {}); if (l.status === 200 && !outer.takeLists(l.body.lists)) break; }
     asking = false; refreshPill(); renderChats();
-    // Settings open while the lists were read: its Default model and effort rows fill in, unless a list there is in use.
-    if (outer.$('#setDlg')?.open && !outer.$('#setDlg select:focus')) outer.renderSettings(); };
+    // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
+    if (outer.$('#setDlg')?.open) outer.refreshDefaults();
+    const pop = outer.$('#newPop'); if (pop && !pop.hidden) { const at = pop.querySelector('[data-new]:focus'); outer.newRows(); if (at) pop.querySelector(`[data-new="${at.dataset.new}"]${at.dataset.model ? `[data-model="${at.dataset.model}"]` : ':not([data-model])'}`)?.focus(); } };
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); return l.body?.conversations || []; };
   while (!outer.lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});

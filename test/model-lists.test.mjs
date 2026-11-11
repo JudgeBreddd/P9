@@ -147,3 +147,37 @@ test('window: New chat lists each agent\'s models before any chat; opening an ol
   assert.deepEqual(errors, []);
   console.log('PASS window: lists before any chat; no stale list from a replay; a dropped model is said; defaults named');
 });
+
+// The read is still going when the window is up (the fake agent answers after 9 s). What is open then fills in when the
+// lists arrive, and nothing else on the page is drawn again: a full redraw of Settings dropped what was being typed.
+test('window: lists that arrive while Settings is open fill its default rows and leave a box being typed in alone', { timeout: 120000 }, async (t) => {
+  const instance = await start(t, { 'slow-lists': '9000' });
+  const { page, errors } = await launch(t, instance, path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-lists-')), 'profile'));
+  const options = () => page.locator('#setBody [data-default-model="claude"] option').count();
+  await page.click('#setBtn'); await page.locator('#setName').waitFor({ timeout: 10000 });
+  assert.equal(await options(), 1, 'still being read: only the agent\'s default');
+  await page.locator('#setName').evaluate((el) => { el.dataset.mark = 'same'; });
+  await page.locator('#setName').fill(''); await page.locator('#setName').pressSequentially('Ada'); // the box starts with the account's name
+  await until(async () => await options() === 4, 'the Default model row lists the models');
+  assert.equal(await page.locator('#setName').inputValue(), 'Ada', 'what was typed is still there');
+  assert.equal(await page.locator('#setName').getAttribute('data-mark'), 'same', 'the same box: Settings was not drawn again');
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'setName', 'and it still has the caret');
+  // The new row's select still saves.
+  await page.locator('#setBody [data-default-model="claude"]').evaluate((el) => { el.value = 'opus'; el.dispatchEvent(new Event('change')); }); // on another Settings page, so not clicked
+  assert.equal(await page.evaluate(() => localStorage.getItem('p9-model-default:claude')), 'opus');
+  assert.deepEqual(errors, []);
+  console.log('PASS window: lists arriving with Settings open fill the default rows only');
+});
+
+test('window: lists that arrive while the New menu is open fill its rows', { timeout: 120000 }, async (t) => {
+  const instance = await start(t, { 'slow-lists': '9000' });
+  const { page, errors } = await launch(t, instance, path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-lists-')), 'profile'));
+  const rows = () => page.locator('#newPop [data-sec="codex"] [data-new]').evaluateAll((l) => l.map((b) => b.textContent));
+  await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
+  assert.deepEqual(await rows(), ['Codex default model'], 'still being read');
+  await until(async () => (await rows()).length === 4, 'the open menu lists the models');
+  assert.deepEqual(await rows(), ['Codex default model', 'Codex · Default (recommended)', 'Codex · Opus', 'Codex · Haiku']);
+  assert.ok(await page.evaluate(() => document.activeElement?.closest('#newPop')), 'the keyboard is still in the menu');
+  assert.deepEqual(errors, []);
+  console.log('PASS window: lists arriving with the New menu open fill it');
+});

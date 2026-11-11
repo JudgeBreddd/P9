@@ -387,6 +387,7 @@ test('New menu: each row names a model the agent offers, and the chat it starts 
   await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
   const named = (a) => page.locator(`#newPop [data-sec="${a}"] [data-new]`).evaluateAll((l) => l.map((b) => [b.dataset.model ?? null, b.textContent]));
   assert.deepEqual(await named('claude'), [[null, 'Claude default model'], ['default', 'Claude · Default (recommended)'], ['opus', 'Claude · Opus'], ['haiku', 'Claude · Haiku']]);
+  await until(async () => (await named('codex')).length === 4, 'the open menu fills in when the Codex list is read'); // O47: no reopen
   assert.deepEqual(await named('codex'), [[null, 'Codex default model'], ['default', 'Codex · Default (recommended)'], ['opus', 'Codex · Opus'], ['haiku', 'Codex · Haiku']], 'O47: listed before any Codex chat');
   await shot(page, 'o44-new-menu');
   const had = await rows(page);

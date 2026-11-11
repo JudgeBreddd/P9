@@ -125,7 +125,7 @@ const connection = acp.connectAgent(stream, {
   async authenticate() { return {}; },
   async newSession(params) {
     if (existsSync('signed-out')) throw acp.RequestError.authRequired();
-    if (existsSync('slow-lists')) await new Promise((resolve) => setTimeout(resolve, 2500));
+    if (existsSync('slow-lists')) await new Promise((resolve) => setTimeout(resolve, Number(readFileSync('slow-lists', 'utf8')) || 2500)); // the file may say how long, in ms
     called('new');
     cwd = 'new:' + params.cwd; folder = params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`;
     if (projects() && process.argv[2] === 'codex') {

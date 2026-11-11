@@ -109,6 +109,9 @@ test('MR2: the cache clock moves on every 15 s without rebuilding the pane', { t
   const { page, pane } = await open(t, 'claude');
   const cache = pane.locator('.meters .cache');
   await until(async () => /60 min/.test(await cache.textContent()), 'the clock shows after the turn');
+  // O47: the window draws the pane once more when the daemon's fresh read of the agents' lists is over; mark it after that.
+  await until(async () => !Object.values((await page.evaluate(() => window.p9.chat('list', {}))).body.lists).some((l) => l.state === 'loading'), 'the lists are read');
+  await page.waitForTimeout(2500); // the window asks every 1.5 s
   await cache.evaluate((el) => { el.dataset.mark = 'same'; });
   // Ten minutes pass (the page's clock jumps); the tick, not a re-render, moves the figure.
   await page.evaluate(() => { const now = Date.now; Date.now = () => now() + 10 * 60000; });
