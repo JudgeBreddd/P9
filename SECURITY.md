@@ -518,6 +518,28 @@ bounds over the Dev pane, and the host's port closed after a normal quit. Unit c
 a host that never starts is stopped and its token file made 0600; Open in VS Code
 refuses a symlink escape and a colon-number name.
 
+## ACP version 2
+
+Since 0.1.9 P9 asks each agent for ACP 2 and falls back to ACP 1 per agent. On 2, one module
+(`apps/server/acp-v2.mjs`) rewrites every message into the ACP 1 shape before any other
+P9 code sees it, so the permission boundary is the same code as before:
+
+- A version 2 permission request names a title and a subject instead of a tool call. The
+  translator builds the tool call P9 shows from that subject (for a command: the command
+  itself as the title, with its folder). The options the agent offers and the answer P9 sends
+  back pass through unchanged, so the agent lock, the mode rules and the approval card decide
+  exactly as on version 1. A subject of a kind P9 does not know is shown as a plain
+  request with the agent's own title; it is never approved by the translator.
+- The agents' sign-in status notices carry the account's email. They are dropped in the
+  translator, before the ledger, the window, the phone and any log. P9 reads sign-in state
+  from its own check, never from these notices.
+- The translator adds nothing to a request going to the agent except a config option's type
+  and an MCP server's transport type (`stdio`), both required by version 2.
+
+Tests: `test/acp-v2.test.mjs` (approval through the translator on a fake version 2 agent,
+the dropped notices fed to the translator directly), `test/acp-contract.test.mjs` (both
+recorded real turns, each with an approval).
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's
