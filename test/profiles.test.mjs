@@ -104,7 +104,10 @@ test('profile: what is refused; a removed profile\'s chat can be read, not conti
 
   // A changed base URL drops the saved key, and a saved key command, unless that save brings one: a key typed for one
   // service is never sent to another address.
-  const OTHER = 'sk-profile-other-77aa01bc93de4f20', inFile = () => fs.readFileSync(path.join(instance.directory, 'profiles.json'), 'utf8');
+  const OTHER = 'sk-profile-other-77aa01bc93de4f20', inFile = () => { // wherever under the test's home the daemon keeps it
+    const at = fs.readdirSync(instance.directory, { recursive: true, withFileTypes: true }).find((entry) => entry.isFile() && entry.name === 'profiles.json');
+    return fs.readFileSync(path.join(at.parentPath, at.name), 'utf8');
+  };
   const second = (await call(instance, '/profiles', 'POST', { ...PROFILE, name: 'Second', key: OTHER })).profile;
   assert.ok(inFile().includes(OTHER));
   const movedTo = (baseUrl, more) => call(instance, '/profiles', 'POST', { ...PROFILE, name: 'Second', id: second.id, baseUrl, ...more }).then((r) => r.profile);
