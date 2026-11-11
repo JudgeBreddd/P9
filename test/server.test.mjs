@@ -110,7 +110,7 @@ test('plan limits: missing sources give null, the newer Claude source wins, noth
     _meta: { '_claude/rateLimit': { status: 'allowed', unifiedWindows: { five_hour: { utilization: five, resetsAt: fiveAt }, seven_day: { utilization: week, resetsAt: weekAt } } } } });
   ledger.append('c1', 'update', meta(0.3, 0.2)); ledger.append('c1', 'update', meta(0.36, 0.25));
   limits = await planLimits({ home, statusLine, claudeLive: ledger.usage().claudeLive });
-  assert.deepEqual([limits.claude.fiveHour, limits.claude.sevenDay.usedPercent], [{ usedPercent: 36, resetsAt: fiveAt * 1000 }, 25]);
+  assert.deepEqual([limits.claude.fiveHour, limits.claude.sevenDay.usedPercent], [{ usedPercent: 36, resetsAt: fiveAt * 1000, windowMins: 300 }, 25]);
   assert.match(limitLine('Claude', limits.claude).text, /^5 h 36% \(resets .+\) · week 25% \(resets .+\) · just now$/);
   assert.equal(limitLine('Claude', limits.claude).stale, false);
   await mkdir(path.join(home, '.codex', 'sessions', '2026', '10', '17'), { recursive: true });

@@ -24,20 +24,14 @@ export async function openQuery(sdk = sdkPath()) {
     settingSources: [], hooks: {}, mcpServers: {}, strictMcpConfig: true, plugins: [], persistSession: false, cwd: os.tmpdir(), env: childEnv() } });
 }
 
-export function createClaudeUsage({ open = openQuery, now = Date.now, log = (line) => console.error(line), wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()) } = {}) {
-  let query = null, reading = null, looked = 0, running = false, said = '';
-  const close = () => { try { query?.close(); } catch {} query = null; };
+// The poll both agents' reads share: every minute while someone looks at usage, stopped after 10 minutes with no look.
+// `read` answers the agent's windows or throws; `close` ends whatever it keeps open.
+export function createPoll({ name, read, close = () => {}, now = Date.now, log = (line) => console.error(line), wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()) }) {
+  let reading = null, looked = 0, running = false, said = '';
   async function poll() {
-    try {
-      query ??= await open();
-      if (typeof query[USAGE_CALL] !== 'function') throw new Error('the bundled SDK has no usage call');
-      let timer;
-      const answer = await Promise.race([query[USAGE_CALL]({ skipBehaviors: true }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), TIMEOUT_MS); })]).finally(() => clearTimeout(timer));
-      if (!answer?.rate_limits_available || !answer.rate_limits) throw new Error('no plan limits (signed out, or not a Claude plan)');
-      reading = { windows: answer.rate_limits, at: now() }; said = '';
-    } catch (error) {
+    try { reading = { windows: await read(), at: now() }; said = ''; } catch (error) {
       // One line per kind of failure, never the answer; the process is restarted at the next poll.
-      if (said !== error.message) log('claude usage: ' + (said = error.message) + '; the meters keep their other sources');
+      if (said !== error.message) log(name + ' usage: ' + (said = error.message) + '; the meters keep their other sources');
       close();
     }
   }
@@ -55,4 +49,17 @@ export function createClaudeUsage({ open = openQuery, now = Date.now, log = (lin
     look() { looked = now(); if (!running) void loop(); return reading; },
     close,
   };
+}
+
+export function createClaudeUsage({ open = openQuery, ...rest } = {}) {
+  let query = null;
+  const close = () => { try { query?.close(); } catch {} query = null; };
+  return createPoll({ ...rest, name: 'claude', close, async read() {
+    query ??= await open();
+    if (typeof query[USAGE_CALL] !== 'function') throw new Error('the bundled SDK has no usage call');
+    let timer;
+    const answer = await Promise.race([query[USAGE_CALL]({ skipBehaviors: true }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), TIMEOUT_MS); })]).finally(() => clearTimeout(timer));
+    if (!answer?.rate_limits_available || !answer.rate_limits) throw new Error('no plan limits (signed out, or not a Claude plan)');
+    return answer.rate_limits;
+  } });
 }
