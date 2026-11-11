@@ -638,6 +638,52 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
   version, not a promise about the next; the adapter's own transcript of the chat is kept
   under its home as for any Claude chat.
 
+## Delegate
+
+Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `answer_chat` and `set_rules`. The
+chat that starts them is the parent, the chats it starts are its sub-agents, and the group is a
+sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it.
+
+- **What one chat can reach.** The tools use the same relay and the same per-chat token as the rest
+  of the P9 MCP server. A token reaches the chats of its own chat's project, and the chats its own
+  chat started, directly or through a sub-agent. A general chat (no project) reaches only the chats
+  it started. `stop_chat` reaches only the chats the caller started: a chat cannot stop its parent
+  or a chat beside it. A chat outside that reach is answered as if it did not exist.
+- **A sub-agent is never wider than its parent.** It starts in the parent's mode unless a narrower
+  one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. The agent lock
+  and File protection are global, so they cover every sub-agent as they cover its parent.
+- **The agent lock.** `open_chat`, `send_chat`, `answer_chat` and `set_rules` are refused while it
+  is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
+  agent may always stop work it started.
+- **Approvals are yours.** No agent can answer another chat's approval prompt; `answer_chat` refuses
+  it (`approval-is-the-users`). An agent may answer a sub-agent's question, and that answer is
+  written in both chats. A sub-agent's approval or question also shows in its parent chat, marked
+  with the sub-agent it came from; your answer there goes to the sub-agent only while its request
+  is still open.
+- **Folders.** A sub-agent's folder passes the same check as a folder the parent asks for itself:
+  inside the workspace or a folder you allowed, never the recovery folder; any absolute folder
+  only in Unrestricted mode.
+- **Tokens.** Each sub-agent gets its own token the way every chat does. Tokens live in memory
+  only; Delegate saves nothing that grants access. What it adds to the ledger is which chat
+  started which, and the name the parent gave it.
+- **What P9 sends on its own.** When a sub-agent's turn ends and its parent is not waiting on it,
+  P9 sends the parent one line, `[p9] <title> finished: <last line of the reply>`, marked in the
+  transcript as P9's and not yours. That line is text the sub-agent wrote, so the parent reads
+  it as a report, not as an instruction from you. It is sent only to a parent that is running; it
+  never starts a stopped chat.
+- **Rules.** A parent may give a sub-agent rules (`rules` on `open_chat`, `set_rules` later). P9
+  sends them with every message the parent sends that sub-agent, and shows them in its chat. They
+  are the parent's words, bounded in size, and they widen nothing.
+- **After a daemon restart.** P9 wakes a parent with one line only when it or one of its
+  sub-agents was in the middle of a turn when the daemon stopped. A sprint that was idle is never
+  started. One wake per restart, and none after three restarts in ten minutes.
+- **Who may start one.** Settings has Delegation: Off (the tools that start or message chats are
+  refused), Ask me first (the default: `open_chat` asks you in the parent chat), or Agent decides.
+  In Unrestricted mode it does not ask, like `run_script`.
+- **Not on the phone.** The phone listener has no MCP server, so nothing here is reachable from
+  it. The phone shows sub-agents in its chat list like any chat.
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's
