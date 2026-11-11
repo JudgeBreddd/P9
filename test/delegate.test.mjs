@@ -184,7 +184,7 @@ test('Delegate: chats in one project read and message each other but stop only t
   const made = await a.tool('open_chat', { text: 'cwd', title: 'Kid' });
   const first = await a.done(made.chat);
   assert.equal((await rows(instance)).find((c) => c.id === made.chat).project, project);
-  assert.equal(first.last, 'cwd:' + made.folder, 'the folder open_chat returned is where the sub-agent works');
+  assert.equal(first.last, 'cwd:new:' + made.folder, 'the folder open_chat returned is where the sub-agent works');
   assert.deepEqual((await b.tool('list_chats')).chats.map((c) => [c.id, c.yours]).sort(), [[a.conversation, false], [made.chat, false]].sort());
   assert.equal((await b.tool('send_chat', { chat: made.chat, text: 'from b' })).sent, 'started a turn');
   assert.equal((await b.done(made.chat)).last, 'echo:from b');
