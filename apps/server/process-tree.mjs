@@ -74,10 +74,11 @@ export function windowsJobCommand(argv, environment = childEnv(), mode = 'Job', 
 }
 
 // Windows owns the process tree through a Job Object. Linux chat uses a systemd scope; other launches use a process group.
-export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', scope = false, stdio = 'pipe', detach = false } = {}) {
+export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', scope = false, stdio = 'pipe', detach = false, env } = {}) {
   let full = argv, unit = null, job = false, detached = true;
+  // env (O48): names added for this one child after the allow list. Never a secret: on Windows it rides the command line.
+  const environment = { ...childEnv(), ...env };
   if (process.platform === 'win32') {
-    const environment = childEnv();
     full = windowsJobCommand(argv, environment, 'Job', detach);
     job = true;
     detached = false;
@@ -87,7 +88,7 @@ export function launchTree(argv, cwd, { instance = 'run', prefix = 'p9-chat', sc
     full = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=' + SLICE, '--unit', unit, '-p', 'MemoryMax=4G',
       '-p', 'TimeoutStopSec=2', '--', ...argv];
   }
-  const child = spawn(full[0], full.slice(1), { cwd, env: childEnv(), shell: false, detached, stdio });
+  const child = spawn(full[0], full.slice(1), { cwd, env: environment, shell: false, detached, stdio });
   return { child, unit, job };
 }
 

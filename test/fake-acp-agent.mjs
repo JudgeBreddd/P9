@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as acp from '../apps/server/acp.mjs';
 
 // Run as the adapter's login CLI (threat model row 31): records its arguments in fake-login-argv, prints the URL in
@@ -61,7 +61,7 @@ const png = (w, h) => {
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 2, 0, 0, 0], 8);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 };
-let mode = 'unset', model = 'default', cwd = '', mcpServers = null, folder = '';
+let mode = 'unset', model = process.env.ANTHROPIC_MODEL ?? 'default', cwd = '', mcpServers = null, folder = '';
 // claude-home (Send to server, D14): a transcript where Claude Code keeps one, <home>/.claude/projects/<folder>/<id>.jsonl,
 // and a resume only of a session whose transcript is there (claude-agent-acp's findTranscript searches every folder).
 // The home is the test's (XDG_STATE_HOME, which the daemon passes on); never HOME, so a test cannot write a real one.
@@ -85,11 +85,25 @@ const picked = { effort: 'medium', fast: 'off', ...(process.argv[2] === 'codex' 
 // O47: models.json in the workspace replaces the model list ([{ value, name }]), read at every report; calls.log, when it
 // exists, gets one line per session opened and per prompt; signed-out refuses every new session.
 const listedModels = () => { try { return JSON.parse(readFileSync('models.json', 'utf8')); } catch { return null; } };
+// O48, like the real Claude adapter: ANTHROPIC_MODEL in its own environment is the model it starts on and
+// ANTHROPIC_CUSTOM_MODEL_OPTION one more row in its list; such a process answers only a session that brings a key in
+// _meta.claudeCode.options.env (new and resume). profile.log, when it exists, gets one line per session opened: the
+// names it saw, a hash of the key, and whether the key was anywhere in its environment or command line.
+const custom = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION;
+const provider = (what, params) => {
+  const env = params._meta?.claudeCode?.options?.env, key = env?.ANTHROPIC_AUTH_TOKEN;
+  if (existsSync('profile.log')) appendFileSync('profile.log', JSON.stringify({ agent: process.argv[2], what, model: process.env.ANTHROPIC_MODEL ?? null, custom: custom ?? null,
+    names: Object.keys(process.env).filter((name) => name.startsWith('ANTHROPIC_')).sort(), baseUrl: env?.ANTHROPIC_BASE_URL ?? null,
+    keyHash: key ? createHash('sha256').update(key).digest('hex') : null,
+    keyOutside: !!key && [...Object.values(process.env), ...process.argv].some((value) => String(value).includes(key)) }) + '\n');
+  if (process.env.ANTHROPIC_MODEL && !key) throw acp.RequestError.authRequired();
+  if (key === 'wrong-key') throw acp.RequestError.authRequired();
+};
 const called = (what) => { if (existsSync('calls.log')) appendFileSync('calls.log', process.argv[2] + ' ' + what + '\n'); };
 const configOptions = () => [{ id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
   options: [{ value: 'agent', name: 'Agent' }, { value: 'workspace-write', name: 'Workspace write' }] },
   { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
-    options: listedModels() ?? [{ value: 'default', name: 'Default (recommended)' }, { group: 'more', name: 'More', options: [{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }] }] },
+    options: [...(listedModels() ?? [{ value: 'default', name: 'Default (recommended)' }, { group: 'more', name: 'More', options: [{ value: 'opus', name: 'Opus' }, { value: 'haiku', name: 'Haiku' }] }]), ...(custom ? [{ value: custom, name: 'Custom model' }] : [])] },
   // Like the real adapters: effort and fast mode; sandbox is a mode-category switch P9 must never offer (threat model row 22).
   { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: picked.effort, options: ['low', 'medium', 'high'].map((value) => ({ value, name: value[0].toUpperCase() + value.slice(1) })) },
   { id: 'fast', name: 'Fast mode', category: 'model_config', type: 'select', currentValue: picked.fast, options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] },
@@ -126,6 +140,7 @@ const connection = acp.connectAgent(stream, {
   async newSession(params) {
     if (existsSync('signed-out')) throw acp.RequestError.authRequired();
     if (existsSync('slow-lists')) await new Promise((resolve) => setTimeout(resolve, Number(readFileSync('slow-lists', 'utf8')) || 2500)); // the file may say how long, in ms
+    provider('new', params);
     called('new');
     cwd = 'new:' + params.cwd; folder = params.cwd; mcpServers = params.mcpServers; const sessionId = existsSync('uuid-sessions') ? randomUUID() : `fake-${process.argv[2]}-${process.pid}-${Date.now()}`;
     if (projects() && process.argv[2] === 'codex') {
@@ -143,6 +158,7 @@ const connection = acp.connectAgent(stream, {
     // uuid-sessions: IDs shaped like the real Claude adapter's (Hand off types one into a shell, so it takes only those).
     if (!params.sessionId.startsWith('fake-') && !existsSync('uuid-sessions')) throw new Error('unknown session');
     if (projects() && !transcript(params.sessionId)) throw new Error('No conversation found with session ID: ' + params.sessionId);
+    provider('resume', params);
     cwd = 'resume:' + params.cwd; folder = params.cwd;
     if (existsSync(path.join(folder, 'refuse-resume-settings'))) mode = 'default';
     mcpServers = params.mcpServers;

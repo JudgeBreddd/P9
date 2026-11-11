@@ -582,12 +582,12 @@ A provider profile lets a Claude chat talk to another service that speaks the sa
 name, a base URL, a key, and the model names that service uses. You type all of it in
 Settings on the desktop. P9 ships no preset and no key. Codex chats have no profiles.
 
-- **Where the key lives.** In `profiles.json` in the daemon's state folder, beside the
-  desktop credentials and protected the same way (the owner-only state folder; mode 600 on
-  Linux). It is written by create-then-rename, never in place. Instead of a key a profile may
+- **Where the key lives.** In `profiles.json` beside the chat ledger, in the daemon's own
+  owner-only folder (never the workspace), mode 600 on Linux. It is written by create-then-rename, never in place. Instead of a key a profile may
   name a command that prints one (a password manager's): the daemon runs it at each chat
   start with no shell, the short allow-list environment and a 10 s limit, reads the first
-  line, and keeps the key in memory only for that start.
+  line, and keeps the key in memory only for that start. The command is split on spaces
+  into a program and its arguments; nothing in it is read by a shell.
 - **Who can set one.** The desktop window only. The phone, the P9 MCP server and agents have
   no route to read, add, change or remove a profile. The command is run as you, by the
   daemon; the desktop window can already open a real terminal, so it gains nothing by it.
