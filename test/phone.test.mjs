@@ -187,7 +187,7 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   // Builder, 2026-10-18 #3: three columns reach the bottom of the window, Usage shows its bars on the page, apps launch from tiles.
   const [cols, gap] = await desktopPage.locator('#fMission .mrow').evaluate((r) => [getComputedStyle(r).gridTemplateColumns.split(' ').length, r.parentElement.getBoundingClientRect().bottom - r.getBoundingClientRect().bottom]);
   assert.equal(cols, 3); assert.ok(gap < 30, `Mission leaves ${gap}px empty below its columns`);
-  assert.match(await desktopPage.locator('#fMission [data-panel="musage"]').innerText(), /Claude\s+5 h\s+42%/);
+  assert.match(await desktopPage.locator('#fMission [data-panel="musage"]').innerText(), /Claude[\s\S]*?Session\s*58% left/);
   assert.ok(await desktopPage.locator('#fMission [data-panel="mlaunch"] .ltile').count() > 0, 'no launch tiles');
   await desktopPage.screenshot({ path: path.join(evidence, 'desktop-mission-short.png') });
   await desktopPage.click('#fMission [data-win="musage"]');
@@ -312,12 +312,12 @@ test('Phase 11: phone editor, offline cursor replay, operation retry and usage s
   await page.locator('#usage .ctx', { hasText: /Claude · / }).first().waitFor({ timeout: 10000 }).catch(() => {});
   assert.match(await page.locator('#usage').innerText(), /Claude · [\s\S]*%[\s\S]*of [\d,]+ tokens/);
   const phoneLimits = await page.locator('#usage [data-limits]').innerText();
-  // P5: each window is a ring with its % inside and when it resets under it; the plan says how old its numbers are.
-  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+42%\s+5 h\s+resets \w{3} \d{1,2}:\d\d\s?[AP]M\s+17%\s+week\s+resets /);
-  assert.match(phoneLimits, /Codex plan\s+Last read 3 h ago\s+0%\s+5 h\s+new window\s+33%\s+week/);
-  const ring = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .uring'), b = r.getBoundingClientRect(), pct = r.querySelector('b').getBoundingClientRect(), under = r.parentElement.querySelector('small').getBoundingClientRect();
-    return { inside: pct.left >= b.left && pct.right <= b.right && pct.top >= b.top && pct.bottom <= b.bottom, below: under.top >= b.bottom - 1, round: getComputedStyle(r, '::before').borderRadius }; });
-  assert.deepEqual(ring, { inside: true, below: true, round: '50%' });
+  // A3: each window is a row: what is left, the pace word, the time to the reset, and a bar with the pace tick.
+  assert.match(phoneLimits, /Claude plan\s+Last read just now\s+Session\s*58% left\s*Room to spare\s*resets in (2h 0m|1h 59m)\s+Weekly\s*83% left\s*Room to spare\s*resets in 3d 1[78]h/);
+  assert.match(phoneLimits, /Codex plan\s+Last read 3 h ago\s+Session\s*100% left\s*new window\s+Weekly\s*67% left/);
+  const tick = await page.evaluate(() => { const bar = document.querySelector('#usage [data-limits] .pbar'), b = bar.getBoundingClientRect(), t = bar.querySelector('u').getBoundingClientRect();
+    return { at: Math.round((t.left + t.width / 2 - b.left) / b.width * 100), taller: t.height > b.height, fill: Math.round(bar.querySelector('i').getBoundingClientRect().width / b.width * 100) }; });
+  assert.deepEqual(tick, { at: 60, taller: true, fill: 42 });
   // P5: each context bar names its chat (the fixture's chats are titled by their agent).
   assert.match(await page.locator('#usage .ctxs').innerText(), /^claude\b/);
   await page.screenshot({ path: path.join(evidence, 'phone-usage.png') });

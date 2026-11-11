@@ -82,13 +82,13 @@ export function mountShell({ askAdmin } = {}) {
     get toast() { return toast; }, get topAt() { return topAt; }, set topAt(v) { topAt = v; }, get tree() { return tree; },
     get updates() { return updates; }, set updates(v) { updates = v; },
     get updatesTimer() { return updatesTimer; }, set updatesTimer(v) { updatesTimer = v; }, get usage() { return usage; },
-    get usageNow() { return usageNow; }, get usageRings() { return usageRings; },
+    get usageNow() { return usageNow; }, get usageRows() { return usageRows; },
     get usageSoon() { return usageSoon; }, set usageSoon(v) { usageSoon = v; }, get view() { return view; }, get walkthrough() { return walkthrough; },
     get welcome() { return welcome; }, get winTop() { return winTop; }, get wins() { return wins; }, get wireEditor() { return wireEditor; },
     get wiredBars() { return wiredBars; }, get wizPicked() { return wizPicked; }, get wizRender() { return wizRender; },
     get written() { return written; }, get xfer() { return xfer; }, get xferAsk() { return xferAsk; }, get xferRefused() { return xferRefused; } };
   const { pullTopLevels, usage, loadUsage, pollUsage, usageNow, restartBtn, restartP9, loadMission, refreshMission, pollMission, queueSoon, noticeLine, listRow, answerLive, widgetOn, allNotes, usageBody, art, launchTile, winTop, winPanel, NEEDS, placed, placedCols, placedHtml, topRow, byFile, missionEmpty, missionIntro, loadGuide, renderSpaceBtn, bindOnboard, missionLive, noteKey, liveFileModal, noteFoot, saveNote, missionModal } = installMission(outer);
-  const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
+  const { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat } = installChat(outer);
   onCodeColours(() => renderChats()); // O37: a parser arrived, so the open chats redraw once with colours
   const { saveSettings, applySettings, settingsAt, renderSettings, refreshDefaults, loadSetup, setupDone, welSkipped, AGENTS_PICK, wizPicked, wizReady, ADMIN_NAMES, STEP_NAMES, checkSetup, skipWelcome, tour, firstRun, W, wizPaths, wizChoosing, wizSteps, welcome, wizRefresh, WIZ_ERR, wizRemote } = installSettings(outer);
   const { PET_ROLES, DEFAULT_PET, petLook, loadPetLook, renderIndicator, petCanvas, tickPets, petBox, cardAct, cardsOverlay, renderCards, sizes, groupOf, openModal, closeModal, outside, askNow, toast, raiseToasts } = installCards(outer);
@@ -245,12 +245,13 @@ const ic = d => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 Object.assign(svg, {
   chat: ic('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/>'),
   code: ic('<path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/><path d="m14.5 4-5 16"/>'),
+  bars: ic('<path d="M6 20v-6"/><path d="M12 20V4"/><path d="M18 20v-10"/>'),
   gauge: ic('<path d="m12 14 4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/>'),
   clock: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   bell: ic('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
   bot: ic('<path d="M12 4v3"/><circle cx="12" cy="3" r="1"/><rect x="4" y="7" width="16" height="13" rx="3"/><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/><path d="M9.5 17h5M2 12v3M22 12v3"/>'),
 });
-for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rTerm','term'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x'],['sideToggle','chat']]) $('#'+id).insertAdjacentHTML('afterbegin', svg[k]); // afterbegin: the panel's labels stay
+for (const [id, k] of [['rChat','chat'],['rDev','code'],['rMission','gauge'],['rBell','bell'],['newBtn','plus'],['stopAll','stop'],['rTerm','term'],['rUsage','bars'],['rCmd','cmd'],['themeBtn','palette'],['setBtn','gear'],['dFloat','float'],['dHide','x'],['sideToggle','chat']]) $('#'+id).insertAdjacentHTML('afterbegin', svg[k]); // afterbegin: the panel's labels stay
 
 /* ---------- the left panel (panel.mjs): the chat switcher, in place of the tab row, History and the rail's robot heads ---------- */
 const panel = installPanel(outer, { focus, stopChat, busy });
@@ -541,8 +542,8 @@ const wins = {
     // "APPs and pages can have the graphic or icon as the button to launch it"). ponytail: the registry has no icon field yet.
     body: () => !M.apps.length && !M.pages.length ? '<p class="empty" data-launch-empty>No apps or pages added yet.</p>' : `<div class="launch">${M.apps.map((a, i) => launchTile(a[0], a[1], `data-app="${i}"`, a[3], false, a[4], art('apps', a[3]))).join('')}${M.pages.map((p, i) => launchTile(p[0], p[1], `data-page="${i}"`, '', true, p[3], art('pages', p[2]))).join('')}</div>` },
   musage: { show: () => widgetOn('usage'), title: () => 'Usage', card: () => { const c = usage.limits && limitLine('Claude', usage.limits.claude); return [c ? c.text.split(' · ')[0].replace(/ \(.*/, '') : usage.totals.outputTokens.toLocaleString(), c ? 'Claude · ' + c.text : 'output tokens recorded', c?.stale ? 'warn' : 'ok']; }, body: usageBody,
-    // On the page: each agent's 5 h and week as rings
-    inline: () => { const rows = usageRings();
+    // On the page: each agent's plan windows as rows with the pace tick
+    inline: () => { const rows = usageRows();
       return (rows ||'<p class="empty">No plan limits recorded yet.</p>') + (usage.state === 'unavailable' ? '' : `<p class="sm muted">${usage.totals.outputTokens.toLocaleString()} output tokens · $${usage.totals.costUsd.toFixed(2)} recorded</p>`); } },
 };
 // M4 (threat model row 72): the shipped guide and template list, fetched once the first time Mission is empty.
@@ -899,7 +900,7 @@ const maintain = {
     if (r.error) toast({ kind: 'not rebuilt', txt: 'Could not rebuild P9 (' + r.error + (r.detail ? ': ' + r.detail : '') + ')', level: 'bad' }, true);
   },
 };
-const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', liveChat.on ? '' : 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', liveChat.on ? '' : 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
+const cmds = [['Notification Center', () => openModal({ kind: 'center' })], ['Usage', () => openUsage()], ['Walkthrough', () => walkthrough()],['Simulate an agent question', () => askNow()], ['Simulate a system notification', () => toast({ kind: 'silent job', txt: 'nightly-backup did not report in', level: 'bad' })], ['Chat Focus', () => setFocus('chat')], ['Dev Focus', () => setFocus('dev')], ['Mission Control', () => setFocus('mission')], ['New Codex session', () => newSession('codex', liveChat.on ? '' : 'gpt-5.1-codex')], ['New Claude session', () => newSession('claude', liveChat.on ? '' : 'Opus 5.5')], ['Toggle chat split', toggleSplit], ['Browse files', TOOLS.search], ['Toggle files pane', toggleFiles], ['Toggle terminal', toggleTerm], ['Stop all sessions', () => $('#stopAll').click()], ['Look: Event Horizon', () => DUWOP.set('event-horizon')], ['Look: Redline', () => DUWOP.set('redline')], ['Look: Night Drive', () => DUWOP.set('night-drive')], ['Look: Duskwood', () => DUWOP.set('duskwood')], ...MAINTENANCE.filter(m => m.when()).map(m => [m.label, maintain[m.id]])];
 let palSel = 0;
 // U8: no Mission commands on a slim Temporary remote, which has no Mission Control, or while Mission is off in Settings.
 const MISSION_CMDS = new Set(['Mission Control', 'Refresh Mission']);
@@ -909,8 +910,11 @@ function renderPal() { const q = $('#palIn').value.toLowerCase(); palRows = [...
 function run(i) { $('#palette').close(); palRows[i][1](); }
 function openPal() { $('#palIn').value = ''; palSel = 0; renderPal(); $('#palette').showModal(); $('#palIn').focus(); }
 $('#rCmd').onclick = openPal;
+// The panel's Usage button (A3): the Usage window from any focus, with a fresh read.
+const openUsage = () => { openModal({ kind: 'win', id: 'musage', any: true }); loadUsage(); };
+$('#rUsage').onclick = openUsage;
 $('#palIn').oninput = () => { palSel = 0; renderPal(); };
-$('#palIn').onkeydown = e => { const n = $('#palList').querySelectorAll('li[data-i]').length; if (e.key === 'ArrowDown') { palSel = (palSel + 1) % n; renderPal(); } if (e.key === 'ArrowUp') { palSel = (palSel - 1 + n) % n; renderPal(); } if (e.key === 'Enter') { const li = $('#palList').querySelector('li[aria-selected="true"]'); if (li) run(+li.dataset.i); } };
+$('#palIn').onkeydown = e => { const n = $('#palList').querySelectorAll('li[data-i]').length; if (e.key === 'ArrowDown') { palSel = (palSel + 1) % n; renderPal(); } if (e.key === 'ArrowUp') { palSel = (palSel - 1 + n) % n; renderPal(); } if (e.key === 'Enter') { e.preventDefault(); const li = $('#palList').querySelector('li[aria-selected="true"]'); if (li) run(+li.dataset.i); } };
 addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#palette').open ? $('#palette').close() : openPal(); } });
 
 /* ---------- settings (phase 18) ---------- */

@@ -51,12 +51,21 @@ html,body{height:100%;overflow:hidden}body{overflow:clip} /* hidden still lets a
 .mpanel[hidden]{display:none}.mpanel{display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}
 .mpanel[data-panel=musage],.mcol>.wins,.mcol>[data-card]{flex-shrink:0}.mpanel[data-panel=mlaunch]{flex:0 1 auto;min-height:120px}.pscroll{overflow:auto;min-height:0}
 .phead{display:flex;justify-content:space-between;align-items:center;padding:0 0 6px;border:0;background:none;color:var(--muted-foreground);font:inherit;font-size:11px;cursor:pointer}.phead h4{margin:0;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.phead:hover{color:var(--foreground)}
-.uring{display:flex;flex-direction:column-reverse;align-items:center;gap:4px}.uring[data-stale]{opacity:.55}
 .ring{--ring-c:var(--primary);position:relative;display:grid;place-items:center;width:54px;height:54px;color:var(--foreground)}
 .ring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--ring-c) calc(var(--p) * 1%),color-mix(in oklch,var(--border) 70%,transparent) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px));mask:radial-gradient(farthest-side,transparent calc(100% - 6px),#000 calc(100% - 5px))}
-.ring[data-hot]{--ring-c:var(--warn)}
 .ring b{position:relative;font-size:12px;font-weight:500}
-.uagent{display:grid;grid-template-columns:56px 1fr 1fr;gap:12px;align-items:center;margin:4px 0 10px;font-size:11px;color:var(--muted-foreground)}.uagent>b{color:var(--foreground);font-size:13px;font-weight:500}
+/* A3: one plan window as a row (helpers.mjs paceRow). The fill is what is used; the tick is where even use would be now. */
+.uagent{margin:2px 0 14px}.uagent[data-stale]{opacity:.6}
+.uagent h5{display:flex;align-items:baseline;gap:8px;margin:0 0 6px;font-size:13px;font-weight:600;color:var(--foreground)}.uagent h5 small{font-size:11px;font-weight:400;color:var(--muted-foreground)}
+.prow{--pc:var(--primary);margin:0 0 10px}.prow[data-hot="1"]{--pc:var(--warn)}.prow[data-hot="2"]{--pc:var(--destructive)}
+.prow-h{display:flex;align-items:baseline;gap:8px;margin-bottom:5px;font-size:12px;color:var(--muted-foreground)}
+.prow-l{min-width:64px}.prow-h b{font-size:15px;font-weight:600;color:var(--foreground);font-variant-numeric:tabular-nums}
+.prow-p{font-size:11.5px}.prow[data-pace="ahead"] .prow-p{color:var(--warn)}.prow[data-pace="headroom"] .prow-p{color:var(--ok)}
+.prow-r{margin-left:auto;font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pbar{position:relative;height:8px;border-radius:999px;background:repeating-linear-gradient(135deg,color-mix(in oklch,var(--border) 80%,transparent) 0 3px,color-mix(in oklch,var(--border) 35%,transparent) 3px 6px)}
+.pbar i{display:block;height:100%;border-radius:inherit;background:var(--pc);transition:width .4s ease}
+.pbar u,.ptick{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;border-radius:1px;background:var(--foreground);box-shadow:0 0 0 1px var(--background)}
+.mbar{position:relative}.mbar .ptick{top:-2px;bottom:-2px}
 .launch{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}.ltile{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 4px;border:1px solid transparent;border-radius:10px;background:none;color:var(--foreground);font:inherit;font-size:11px;cursor:pointer}.ltile:hover{border-color:var(--border);background:color-mix(in oklch,var(--card) 70%,transparent)}
 .ltile img,.mono-ico{width:40px;height:40px;border-radius:10px}.mono-ico{display:grid;place-items:center;font-weight:600;font-size:15px;color:var(--tint);background:color-mix(in oklch,var(--tint) 18%,transparent);border:1px solid color-mix(in oklch,var(--tint) 40%,transparent)}.ltile .nm{text-align:center;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .needs{padding:10px 8px 6px 12px;border:1px solid var(--border);border-radius:11px;background:color-mix(in oklch,var(--card) 60%,transparent)}

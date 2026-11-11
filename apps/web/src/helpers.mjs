@@ -96,6 +96,34 @@ export const warnHtml = (raw, attrs = '') => {
   const [, line, say] = WARNINGS.find(([re]) => re.test(raw)) ?? [null, 'Warning: ' + raw, "The agent's program printed this warning. Your reply is not affected unless the reply itself says so."];
   return `<details class="agent-warn"${attrs}><summary><span>${esc(line)}</span><span class="i" title="What this means">i</span></summary><p>${esc(say)}</p>${line.startsWith('Warning: ') ? `<code>${esc(raw)}</code>` : ''}</details>`;
 };
+// The pace mark (A3). A plan window that is used evenly reaches 100% exactly when it resets, so "how far through the window
+// is the clock" is also "how much should be used by now". elapsed: that share, 0 to 1. gap: used % minus that, in points.
+// More than 5 points over is 'ahead' (it runs out before the reset at this rate), more than 5 under is 'headroom'.
+// null with no reset time or one already passed: there is no window to measure against.
+export const WINDOWS = [['fiveHour', 'Session', 300], ['sevenDay', 'Weekly', 10080]];
+export function paceOf(w, mins, now = Date.now()) {
+  const len = (w?.windowMins || mins) * 60000;
+  if (!w || !Number.isFinite(w.usedPercent) || !w.resetsAt || w.resetsAt <= now || !(len > 0)) return null;
+  const elapsed = Math.min(1, Math.max(0, (len - (w.resetsAt - now)) / len)), gap = w.usedPercent - elapsed * 100;
+  return { elapsed, gap, state: gap > 5 ? 'ahead' : gap < -5 ? 'headroom' : 'on' };
+}
+export const PACE = { ahead: ['Over pace', 'Using it faster than the window passes: at this rate it runs out before the reset'], on: ['On pace', 'Using it about as fast as the window passes'], headroom: ['Room to spare', 'Using it slower than the window passes: there is room to use more'] };
+// "1h 42m", "3d 4h", "12m": the time left to a reset.
+export const countdown = (ms) => { const m = Math.max(0, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60); return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m % 60 + 'm' : m + 'm'; };
+// One agent's windows as [label, window, minutes]: Session, Weekly, then a week window per model family when the plan has them.
+export const planWindows = (limits) => [...WINDOWS.map(([key, label, mins]) => [label, limits?.[key] ?? null, mins]),
+  ...(limits?.models || []).map((w) => ['Weekly · ' + String(w.name).replace(/^./, (c) => c.toUpperCase()), w, 10080])];
+// One window as a row, the same on the desktop and the phone: label, "NN% left", the pace word, the bar (the fill is what is
+// used, the tick is where even use would be now) and the time to the reset. Every value is a number or one of P9's own words.
+export function paceRow(label, w, mins, now = Date.now()) {
+  const fresh = !!w?.resetsAt && w.resetsAt <= now, used = !w || fresh ? 0 : Math.min(100, Math.max(0, Math.round(w.usedPercent)));
+  const pace = paceOf(w, mins, now), at = pace && Math.round(pace.elapsed * 1000) / 10;
+  const left = !w ? '—' : (100 - used) + '% left', word = !w ? 'not recorded' : fresh ? 'new window' : pace ? PACE[pace.state][0] : '';
+  const reset = w?.resetsAt && !fresh ? `<span class="prow-r" title="Resets ${esc(new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}">resets in ${countdown(w.resetsAt - now)}</span>` : '';
+  return `<div class="prow"${pace ? ` data-pace="${pace.state}"` : ''}${used >= 90 ? ' data-hot="2"' : used >= 75 ? ' data-hot="1"' : ''}><div class="prow-h"><span class="prow-l">${esc(label)}</span><b>${left}</b>`
+    + `<span class="prow-p"${pace ? ` title="${PACE[pace.state][1]}"` : ''}>${word}</span>${reset}</div>`
+    + `<div class="pbar" role="img" aria-label="${esc(label)}: ${!w ? 'not recorded' : used + '% used' + (pace ? ', ' + Math.round(pace.elapsed * 100) + '% of the window gone. ' + PACE[pace.state][1] : '')}"><i style="width:${used}%"></i>${pace ? `<u style="left:${at}%"></u>` : ''}</div></div>`;
+}
 
 // One line per provider for the plan limits from /usage (apps/server/limits.mjs). A window whose reset time has passed
 // shows "new window": the old figure expired and the new one is not known until the tool records it again.

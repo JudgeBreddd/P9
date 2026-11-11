@@ -1,6 +1,6 @@
 // Chat Focus: artifacts and chat files, chat tabs and the new-chat folder, panes, meters, turns, and the live chat's history from the daemon. Split out of controller.mjs's mountShell (F9) with no change in behaviour; names that stay in mountShell come in through outer.
 import { artifactView, artifactsIn, KIND_NAMES, chipArtifact } from './artifact.mjs';
-import { esc, copy, limitLine, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
+import { esc, copy, limitLine, paceOf, paceRow, planWindows, svg, agentImgs, warnHtml, modes, dragBar, LOOSE, IMG_OK, MAX_IMAGES, readImage, imgSrc, agentWarning, toolImages } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs';
 import { waiting, chip, turnKey, lineDiff } from './composer.mjs';
 import { phoneDialogBody } from './phone-link.mjs'; import { LABEL } from './panel.mjs'; import { NOT_USE } from '../../../packages/protocol/index.mjs';
@@ -249,10 +249,11 @@ function renderNewFolder() {
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
 // Amber from 75% on every bar (MR1).
 const HOT = 75;
-const meterBar = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div></div>`; };
-// The same reading as a ring (Mission's Usage card and dialog); the label comes first in the markup and is drawn under the ring.
-const ringMeter = (label, w, line, now = Date.now()) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent); return `<div class="uring" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><span class="lbl">${label}</span><div class="ring" role="img" aria-label="${esc(label)} ${p == null ? 'no reading' : p + '%'}" style="--p:${Math.min(p || 0, 100)}" ${p >= HOT ? 'data-hot' : ''}><b>${p == null ? '—' : p + '%'}</b></div></div>`; };
-const usageRings = () => { const now = Date.now(); return Object.keys(outer.names).filter(a => outer.usage.limits?.[a]).map(a => { const lim = outer.usage.limits[a], line = limitLine(outer.names[a], lim, now); return `<div class="uagent"><b>${outer.names[a]}</b>${ringMeter('5 h', lim.fiveHour, line, now)}${ringMeter('Week', lim.sevenDay, line, now)}</div>`; }).join(''); };
+// mins: the window's length; with it the bar carries the pace tick (where even use would be now, helpers.mjs paceOf).
+const meterBar = (label, w, line, now = Date.now(), mins = 0) => { const p = !w || w.resetsAt && w.resetsAt < now ? null : Math.round(w.usedPercent), pace = mins ? paceOf(w, mins, now) : null;
+  return `<div class="meter" title="${esc(line.text)}"${line.stale ? ' data-stale' : ''}><div class="l"><span>${label}</span><b>${p == null ? '—' : p + '%'}</b></div><div class="mbar"${pace ? ` data-pace="${pace.state}"` : ''}><div class="fx-meter" ${p >= HOT ? 'data-hot' : ''}><span style="width:${p || 0}%"></span></div>${pace ? `<u class="ptick" style="left:${Math.round(pace.elapsed * 1000) / 10}%"></u>` : ''}</div></div>`; };
+// Each agent's plan windows as rows (the Usage window, Mission's Usage card): helpers.mjs paceRow, the phone draws the same.
+const usageRows = () => { const now = Date.now(); return Object.keys(outer.names).filter(a => outer.usage.limits?.[a]).map(a => { const lim = outer.usage.limits[a], line = limitLine(outer.names[a], lim, now); return `<section class="uagent" data-agent="${a}"${line.stale ? ' data-stale' : ''}><h5>${outer.names[a]}<small>${esc(line.text.split(' · ').at(-1))}</small></h5>${planWindows(lim).map(([label, w, mins]) => paceRow(label, w, mins, now)).join('')}</section>`; }).join(''); };
 // The cache clock: text and state, so the 15 s tick can move it without rebuilding the pane.
 const cacheOf = s => {
   const cacheMin = !s.live ? s.cacheMin : s.agent === 'claude' && s.lastEnd ? Math.floor((Date.now() - s.lastEnd) / 60000) : null;
@@ -263,12 +264,12 @@ function meters(s) {
   const ctx = s.context ? Math.round(s.context.used / s.context.size * 100) : null;
   const lim = s.live ? outer.usage.limits?.[s.agent] : { fiveHour: { usedPercent: s.limits.h5 * 100 }, sevenDay: { usedPercent: s.limits.d7 * 100 }, asOf: Date.now() };
   const line = limitLine(outer.names[s.agent], lim), now = Date.now();
-  const bar = (label, w) => meterBar(label, w, line, now);
+  const bar = (label, w, mins) => meterBar(label, w, line, now, mins);
   const cache = cacheOf(s);
   return `<div class="meters">
     <div class="meter" title="${esc(ctx == null ? 'No context size reported by this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
-    ${bar('5 h', lim?.fiveHour)}
-    ${bar('7 d', lim?.sevenDay)}
+    ${bar('5 h', lim?.fiveHour, 300)}
+    ${bar('7 d', lim?.sevenDay, 10080)}
     <div class="cache" data-s="${cache[1]}" title="How long the agent still has this chat saved for a cheaper next message (the 1-hour prompt cache, counted from its last output)">${svg.clock}${cache[0]}</div>
   </div>`;
 }
@@ -896,5 +897,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRings, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
+  return { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
 }

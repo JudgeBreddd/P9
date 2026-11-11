@@ -121,7 +121,7 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
       await page.keyboard.press('Escape');
       assert.ok(await alpha(page.locator('#cards .card').first()) >= 0.9, 'card background');
     });
-    await t.test('Usage shows one ring per meter on the Mission page and in its dialog, amber from 75%', async () => {
+    await t.test('Usage shows one row per plan window on the Mission page and in its dialog, amber from 75%, with the pace tick', async () => {
       await app.evaluate(({ ipcMain }, now) => {
         ipcMain.removeHandler('p9:usage');
         ipcMain.handle('p9:usage', () => ({ status: 200, body: { state: 'ok', samples: 3, discarded: 0, totals: { inputTokens: 100, outputTokens: 50, costUsd: 0.5 }, limits: {
@@ -129,14 +129,15 @@ test('Phase 4 round 1 shell regressions in actual Electron', { timeout: 60000 },
           codex: { fiveHour: { usedPercent: 6, resetsAt: now + 3600000 }, sevenDay: { usedPercent: 52, resetsAt: now + 86400000 }, asOf: now } } } }));
       }, Date.now());
       await reset(); await page.click('#rMission');
-      const rings = page.locator('#fMission [data-panel="musage"] .ring');
-      await rings.first().waitFor();
-      assert.deepEqual(await rings.locator('b').allInnerTexts(), ['80%', '30%', '6%', '52%']);
-      assert.deepEqual(await rings.evaluateAll(r => r.map(x => x.hasAttribute('data-hot'))), [true, false, false, false]);
-      assert.equal(await rings.first().evaluate(e => getComputedStyle(e, '::before').backgroundImage.includes('conic-gradient')), true);
+      const rows = page.locator('#fMission [data-panel="musage"] .prow');
+      await rows.first().waitFor();
+      assert.deepEqual(await rows.locator('.prow-h b').allInnerTexts(), ['20% left', '70% left', '94% left', '48% left']);
+      assert.deepEqual(await rows.evaluateAll(r => r.map(x => x.dataset.hot ?? '')), ['1', '', '', '']);
+      // 80% used with 1 h of 5 left: the fill and the tick are both at 80%.
+      assert.deepEqual(await rows.first().evaluate(r => [r.querySelector('.pbar i').style.width, r.querySelector('.pbar u').style.left, r.dataset.pace]), ['80%', '80%', 'on']);
       await look('look-usage-card');
-      await page.click('#fMission [data-win="musage"]'); await page.locator('#mdl[open] #musage .ring').first().waitFor();
-      assert.equal(await page.locator('#mdl #musage .ring').count(), 4);
+      await page.click('#fMission [data-win="musage"]'); await page.locator('#mdl[open] #musage .prow').first().waitFor();
+      assert.equal(await page.locator('#mdl #musage .prow').count(), 4);
       await page.waitForTimeout(400); await look('look-usage-dialog');
       await page.click('#mdlX');
     });
