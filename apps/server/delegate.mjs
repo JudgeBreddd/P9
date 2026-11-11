@@ -244,6 +244,21 @@ export function createDelegate({ chat, allowed }) {
       .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});
   });
 
+  // A restart (SECURITY.md § Delegate): the chat at the top of each sprint that had a chat cut mid-turn gets one line and
+  // so one turn. P9 resends nothing; a sprint that was idle is not touched; none on the third start in 10 minutes.
+  chat.restarted().then(({ chats, storm }) => {
+    const all = new Map(chat.family().map((c) => [c.id, c])), tops = new Map();
+    const top = (c) => { for (let i = 0; i < 10 && c.parent && all.has(c.parent); i += 1) c = all.get(c.parent); return c; };
+    for (const id of chats) {
+      const c = all.get(id), root = c && top(c);
+      if (!c || (root === c && ![...all.values()].some((other) => other.parent === c.id))) continue; // not in a sprint
+      tops.set(root.id, [...(tops.get(root.id) ?? []), root === c ? 'this chat' : c.title]);
+    }
+    if (!storm) for (const [id, titles] of tops) {
+      chat.prompt(id, { text: `[p9] P9 restarted. Interrupted mid-turn: ${titles.slice(0, 20).join(', ').slice(0, 1000)}. Not resent.` }, undefined, 'p9').catch(() => {});
+    }
+  }).catch(() => {});
+
   return {
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
     send_chat: (args, caller) => sendChat(caller, args),

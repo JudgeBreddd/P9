@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { daemon, http, authenticated, root } from './helpers.mjs';
+import { once } from 'node:events';
+import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 // The real MCP SDK client, as in mcp.test.mjs: the tools are called the way an agent's adapter calls them.
 import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js';
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
@@ -385,4 +386,36 @@ test('Delegate: sprint rules ride with every message a parent\'s agent sends its
   assert.ok(Math.abs(Date.now() - Date.parse(row.active)) < 60000, row.active);
   assert.ok('model' in row);
   console.log('PASS Delegate sprint rules: default on the first message, set_rules on the next and on a steer, none on the user\'s, none when empty; list_chats context ' + JSON.stringify(row.context) + ', model ' + row.model);
+});
+
+test('Delegate: after a restart the top chat of a sprint that was cut mid-turn gets one line and one turn; an idle sprint is not started; the third start in 10 minutes wakes nothing', { timeout: 240000 }, async (t) => {
+  let instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const busy = await agent(t, instance), idle = await agent(t, instance);
+  const kid = await busy.tool('open_chat', { text: 'slow', title: 'Busy kid' });
+  const rested = await idle.tool('open_chat', { text: 'hello', title: 'Idle kid' });
+  await idle.done(rested.chat);
+  await until(instance, (event) => event.conversation === kid.chat && event.type === 'user');
+  const again = async (signal, name) => { instance.child.kill(signal); await once(instance.child, 'exit'); instance = await restart(t, instance, name); };
+  const started = async (id, from) => (await events(instance, id)).filter((e) => e.cursor > from && e.type === 'connected').length;
+  let mark = (await call(instance, '/chat/events?after=0')).body.cursor;
+  // An ordinary stop and start (SIGTERM), the way an update restarts P9.
+  await again('SIGTERM', 'state-2');
+  const line = '[p9] P9 restarted. Interrupted mid-turn: Busy kid. Not resent.';
+  const woke = async (id) => (await notices(instance, id)).filter((text) => text.startsWith('[p9] P9 restarted'));
+  await until(instance, (event) => event.conversation === busy.conversation && event.data?.content?.text === 'echo:' + line, mark);
+  await pause(1500);
+  assert.deepEqual(await woke(busy.conversation), [line]);
+  assert.deepEqual(await woke(idle.conversation), [], 'an idle sprint was told');
+  assert.deepEqual([await started(kid.chat, mark), await started(idle.conversation, mark), await started(rested.chat, mark)], [0, 0, 0], 'a chat other than the top one was started');
+  // Third start inside 10 minutes, this time killed outright with the sub-agent mid-turn again: nothing is woken.
+  await call(instance, `/chat/${kid.chat}/prompt`, 'POST', { text: 'slow' });
+  await until(instance, (event) => event.conversation === kid.chat && event.type === 'user', mark);
+  mark = (await call(instance, '/chat/events?after=0')).body.cursor;
+  await again('SIGKILL', 'state-3');
+  await call(instance, '/chat'); // answers once the start-up sweep is done
+  await pause(3000);
+  assert.equal((await events(instance, kid.chat)).filter((e) => e.cursor > mark && e.type === 'interrupted' && e.data.reason === 'daemon-restart').length, 1, 'the kill was not seen as a restart mid-turn');
+  assert.deepEqual(await woke(busy.conversation), [line], 'the third start in 10 minutes woke the sprint');
+  console.log('PASS Delegate restart wake: one line to the working sprint\'s top chat after a SIGTERM restart, no chat of the idle sprint started, none on the third start');
 });

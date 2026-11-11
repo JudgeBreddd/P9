@@ -562,8 +562,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // killed outright leaves its scopes behind, so those conversations stay cleanup-failed (prompts refused) until the
   // sweep confirms no scope is left. Prompts and Stops wait for this first.
   const leftover = db.prepare("SELECT id, state FROM conversations WHERE state IN ('running', 'turn', 'stopping', 'cleanup-failed')").all();
+  // A7 restart wake (delegate.mjs): the chats a restart cut mid-turn. A killed daemon leaves them in 'turn'; one that shut
+  // down in order stopped them itself and left their IDs in prefs (shutdown, below). An idle chat is in neither. storm:
+  // this is the third start in 10 minutes, so nothing is woken (a sprint that crashes P9 must not start itself forever).
+  const pref = (key) => { try { return JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get(key)?.value ?? '[]'); } catch { return []; } };
+  const setPref = (key, value) => db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
+  const cut = new Set(pref('cut-by-shutdown').filter((id) => ID.test(id)));
+  db.prepare("DELETE FROM prefs WHERE key = 'cut-by-shutdown'").run();
+  const starts = [...pref('starts').filter((at) => Number.isFinite(at) && Date.now() - at < 600000), Date.now()].slice(-3);
+  setPref('starts', starts);
   for (const conversation of leftover) {
-    if (conversation.state === 'turn') emit(conversation.id, 'interrupted', { reason: 'daemon-restart' });
+    if (conversation.state === 'turn') { emit(conversation.id, 'interrupted', { reason: 'daemon-restart' }); cut.add(conversation.id); }
     setState(conversation.id, 'cleanup-failed');
   }
   const recovered = sweep().then((result) => {
@@ -1149,6 +1158,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
     },
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
+    restarted: () => recovered.then(() => ({ chats: [...cut], storm: starts.length >= 3 })),
     rules: (id) => rulesOf(id),
     setRules: (id, text) => { db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('rules:' + id, text); },
     gauge,
@@ -1214,6 +1224,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       await Promise.all(reading.values());
       // A startup sweep still stopping a crashed daemon's scopes finishes before exit.
       await recovered;
+      setPref('cut-by-shutdown', db.prepare("SELECT id FROM conversations WHERE state = 'turn'").all().map(({ id }) => id)); // A7: read at the next start
       // Every conversation that may own work: live, mid-Stop (already out of live), or left by a failed cleanup.
       return stopAll();
     },
