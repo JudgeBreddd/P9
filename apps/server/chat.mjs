@@ -1074,7 +1074,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // O48, desktop only (server.mjs): what Settings and New chat show (never a key), save and remove.
     profiles: { list: () => ({ status: 200, profiles: profiles.list() }),
       save: (body) => { const saved = body && typeof body === 'object' ? profiles.save(body) : null; return saved ? { status: 200, profile: saved } : refused(400, 'request-refused'); },
-      remove: (id) => (profiles.remove(id) ? { status: 200 } : refused(404, 'not-found')) },
+      // A chat running on the removed profile is stopped: its agent still holds the key and would go on answering.
+      async remove(id) {
+        if (!profiles.remove(id)) return refused(404, 'not-found');
+        await Promise.all([...live].filter(([, session]) => session.profile?.id === id).map(([conversation]) => stopConversation(conversation)));
+        return { status: 200 };
+      } },
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).

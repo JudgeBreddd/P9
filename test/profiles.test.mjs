@@ -4,7 +4,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { _electron } from '@playwright/test';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
@@ -114,6 +116,14 @@ test('profile: what is refused; a removed profile\'s chat can be read, not conti
   assert.deepEqual([gone.status, gone.error], [409, 'profile-gone']);
   assert.match((await events(instance, id)).at(-1).data.message, /profile was removed in Settings/);
   assert.equal(seen(instance).filter((line) => line.model === 'kimi-k3:cloud').length, 2, 'no agent was started for the removed profile');
+  // Removed while its chat is running: that agent holds the key, so the chat is stopped, not left answering.
+  const live = (await call(instance, '/profiles', 'POST', { ...PROFILE, key: KEY })).profile;
+  const running = (await call(instance, '/chat', 'POST', { provider: 'claude', profile: live.id, model: 'glm-5.3' })).conversation;
+  assert.equal((await said(instance, running, 'model')).status < 300, true);
+  assert.equal((await call(instance, '/profiles/' + live.id, 'DELETE')).status, 200);
+  let after; // refused from the first moment: 'stopping' while the agent ends, then for good
+  await until(async () => { after = await call(instance, '/chat/' + running + '/prompt', 'POST', { text: 'model' }); assert.equal(after.status, 409, after.text); return after.error === 'profile-gone'; }, 'the stopped chat names its removed profile');
+  assert.equal((await events(instance, running)).filter((e) => e.type === 'turn-end').length, 1, 'nothing ran after the removal');
   console.log('PASS profile: bad input refused, Codex and unlisted models refused, send-away refused, a wrong key named, a removed profile stops the chat');
 });
 
@@ -138,4 +148,93 @@ test('profile: a key command is run with no shell at each chat start and its fir
   assert.match((await events(instance, id)).filter((e) => e.type === 'error').at(-1).data.message, /key command .* failed or printed nothing/);
   assert.equal(seen(instance).length, count, 'no session was asked for without a key');
   console.log('PASS profile: the key command runs without a shell per chat start; a failing one starts no session');
+});
+
+// The window. launch, newRows and menu are model-lists.test.mjs's.
+async function launch(t, instance, profile) {
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const app = await _electron.launch({ args: [path.join(root, 'apps/desktop/start.cjs'), '--state', instance.state, '--user-data-dir=' + profile], env, chromiumSandbox: true, timeout: 20000 });
+  const proc = app.process();
+  t.after(async () => { await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 15000))]); proc.kill(); });
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => message.type() === 'error' && errors.push(message.text()));
+  await page.locator('#rChat').waitFor();
+  return { app, page, errors };
+}
+const newRows = async (page) => { await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
+  const got = await page.locator('#newPop [data-sec="claude"] :is([data-new], [data-profile-hd])').evaluateAll((l) => l.map((b) => b.textContent)); await page.keyboard.press('Escape'); return got; };
+const menu = async (page, pane) => { await pane.locator('[data-pill="Model"]').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
+  const got = { head: await page.locator('#pillMenu .hd').first().textContent(), items: await page.locator('#pillMenu .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent)), notes: await page.locator('#pillMenu [data-list-note]').evaluateAll((l) => l.map((x) => x.textContent)) };
+  await page.keyboard.press('Escape'); return got; };
+const profilesPage = async (page) => { await page.click('#setBtn'); await page.locator('[data-set-page="Chat Focus"]').waitFor({ timeout: 10000 }); await page.click('[data-set-page="Chat Focus"]'); await page.locator('#setProfiles').waitFor(); };
+
+test('window: a profile typed in Settings puts its models in the New chat menu; its chat runs on that one model and leaves Claude\'s list alone; the page never holds the key after Save; a removed profile says so', { timeout: 240000 }, async (t) => {
+  const instance = await start(t);
+  const { page, errors } = await launch(t, instance, path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'p9-prof-')), 'profile'));
+  const shot = async (name) => { if (!process.env.GITHUB_ACTIONS) { await page.waitForTimeout(400); console.log('P9_SHOT ' + name + ' ' + (await page.screenshot()).toString('base64')); } };
+  const CLAUDE = ['Claude default model', 'Claude · Default (recommended)', 'Claude · Opus', 'Claude · Haiku'];
+  await until(async () => JSON.stringify(await newRows(page)) === JSON.stringify(CLAUDE), 'Claude\'s own models are listed, and no profile row yet');
+  // The user's default Claude model: not a profile's model, so a profile chat must not send it.
+  await page.evaluate(() => localStorage.setItem('p9-model-default:claude', 'opus'));
+  await profilesPage(page);
+  await page.click('#profileAdd');
+  await page.fill('#profileName', 'Far Cloud');
+  await page.fill('#profileUrl', 'http://models.example.test');
+  assert.equal(await page.locator('#profileHttp').isVisible(), true, 'a plain http address is called not encrypted while it is typed');
+  await page.fill('#profileKey', KEY);
+  await page.click('#profileSave'); // no model yet
+  await page.locator('#profileNote', { hasText: 'Not saved' }).waitFor();
+  assert.equal((await call(instance, '/profiles')).profiles.length, 0, 'a refused form saved nothing');
+  assert.equal(await page.inputValue('#profileKey'), KEY, 'a refused form keeps what was typed');
+  await page.fill('#profileUrl', 'https://models.example.test');
+  assert.equal(await page.locator('#profileHttp').isVisible(), false);
+  await page.fill('#profileModels', 'glm-5.3\nkimi-k3:cloud');
+  await shot('o48-form');
+  await page.click('#profileSave');
+  const row = page.locator('#setProfiles [data-profile]');
+  await row.waitFor();
+  assert.match(await row.textContent(), /Far Cloud.*https:\/\/models\.example\.test · glm-5\.3, kimi-k3:cloud · Key saved/);
+  const [made] = (await call(instance, '/profiles')).profiles;
+  assert.equal(made.secret, 'key');
+  await shot('o48-saved');
+  // After Save the page holds the key nowhere: no field, no markup, no storage.
+  const held = () => page.evaluate((key) => [document.documentElement.outerHTML.includes(key), [...document.querySelectorAll('input,textarea')].some((el) => el.value.includes(key)), JSON.stringify({ ...localStorage, ...sessionStorage }).includes(key)], KEY);
+  assert.deepEqual(await held(), [false, false, false]);
+  await row.locator('[data-profile-edit]').click();
+  assert.equal(await page.inputValue('#profileKey'), '', 'Edit never shows the saved key');
+  assert.deepEqual(await held(), [false, false, false]);
+  await page.click('#profileCancel');
+  await page.keyboard.press('Escape');
+  // New chat: the profile's models under Claude's own.
+  assert.deepEqual(await newRows(page), [...CLAUDE, 'Far Cloud', 'glm-5.3', 'kimi-k3:cloud']);
+  await page.click('#newBtn'); await page.locator('#newPop [data-profile]').first().waitFor(); await shot('o48-new-menu');
+  await page.click('#newPop [data-profile][data-model="glm-5.3"]');
+  let id; await until(async () => (id = (await call(instance, '/chat')).conversations.find((c) => c.profile)?.id), 'the chat was made on the profile');
+  const pane = page.locator('.pane[data-id="' + id + '"]');
+  await pane.locator('[data-pill="Model"]').waitFor({ timeout: 10000 });
+  assert.equal((await pane.locator('[data-pill="Model"]').getAttribute('aria-label')), 'Model: glm-5.3');
+  assert.equal(await pane.locator('.meters .meter').count(), 1, 'Context only: the Claude plan\'s 5 h and 7 d bars are not this chat\'s');
+  await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter');
+  await pane.locator('.hist', { hasText: 'model:glm-5.3' }).waitFor({ timeout: 20000 }); // ran, on its model, though the Claude default is Opus
+  assert.deepEqual(seen(instance).filter((line) => line.what === 'new' && line.model).map((line) => [line.model, line.baseUrl, line.keyHash]), [['glm-5.3', 'https://models.example.test', hash(KEY)]]);
+  await pane.locator('[data-pill="Model"]').click(); await page.locator('#pillMenu:not([hidden])').waitFor(); await shot('o48-pill'); await page.keyboard.press('Escape');
+  assert.deepEqual(await menu(page, pane), { head: 'Far Cloud', items: ['glm-5.3'], notes: ['This chat runs on this model only. Start a new chat for another one.'] });
+  assert.equal((await pane.locator('[data-pill="Model"]').getAttribute('aria-label')), 'Model: glm-5.3');
+  // Its one-model report did not become Claude's list.
+  assert.deepEqual(await newRows(page), [...CLAUDE, 'Far Cloud', 'glm-5.3', 'kimi-k3:cloud']);
+  // Removed in Settings: gone from the menu, and the chat says why it cannot go on.
+  await profilesPage(page);
+  await page.click('#setProfiles [data-profile-remove]');
+  await page.locator('#setProfiles [data-profile]').waitFor({ state: 'detached' });
+  await page.keyboard.press('Escape');
+  assert.deepEqual(await newRows(page), CLAUDE);
+  assert.match((await menu(page, pane)).notes[0], /removed in Settings/);
+  await pane.locator('.composer textarea').fill('model'); await pane.locator('.composer textarea').press('Enter');
+  await pane.locator('.hist', { hasText: 'was removed' }).waitFor({ timeout: 20000 });
+  assert.equal(await pane.getByText('Running', { exact: true }).count(), 0, 'a chat that cannot go on is not called Running');
+  await shot('o48-removed');
+  assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), []);
+  console.log('PASS window: profile in Settings, in the New chat menu, fixed model, key not held, removed profile said');
 });

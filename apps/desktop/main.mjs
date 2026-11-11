@@ -713,6 +713,10 @@ export async function createDesktop({ state, open } = {}) {
     unhold: ({ id: chat, held }) => uuid(chat) && uuid(held) && ['POST', `/chat/${chat}/unhold`, { held }],
     stop: ({ id: chat, close, ...rest }) => uuid(chat) && (close === undefined || close === true) && !Object.keys(rest).length && ['POST', `/chat/${chat}/stop`, ...(close ? [{ close }] : [])],
     handoff: ({ id: chat }) => uuid(chat) && ['POST', `/chat/${chat}/handoff`],
+    // O48 provider profiles (threat model "Provider profiles"): the daemon checks the body and never sends a key back.
+    profiles: () => ['GET', '/profiles'],
+    profileSave: body => ['POST', '/profiles', body],
+    profileRemove: ({ id, ...rest }) => uuid(id) && !Object.keys(rest).length && ['DELETE', '/profiles/' + id],
     ...projectRoutes(uuid), // N1: projects and a chat's project, title, archive and delete
     // D7/D8: an agent's sign-in command typed into a new terminal; the daemon holds the commands, the page only names one.
     agentTerminal: ({ agent, action, ...rest }) => ['claude', 'codex'].includes(agent) && action === 'login' && !Object.keys(rest).length
