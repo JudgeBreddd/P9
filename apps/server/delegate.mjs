@@ -25,15 +25,15 @@ export const DELEGATE_TOOLS = (input) => {
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
       folder: { type: 'string', description: 'Where it starts, relative to the workspace.' } }, ['text'])],
     ['send_chat', 'Send a message to a chat in your project or one you started. when: auto (the default: starts a turn, or goes into the running one), steer (into the running turn) '
-      + 'or queue (after the running turn). It runs no wider than your own mode.',
+      + 'or queue (after the running turn). It runs no wider than your own mode: a chat working in a wider mode refuses it until its turn ends.',
     input({ chat, text: { type: 'string' }, when: { type: 'string', enum: ['auto', 'steer', 'queue'] } }, ['chat', 'text'])],
     ['wait_chat', 'Wait until a chat\'s turn ends, or it asks for an approval or an answer, or timeoutMs passes (default and most: ' + WAIT_MS + '). Returns state (working, idle, '
       + 'stopped or failed), ended, waiting (the open approval or question, or null), timedOut and last (the end of its newest reply). A timeout stops nothing: call it again.',
     input({ chat, timeoutMs: { type: 'integer', minimum: 0, maximum: WAIT_MS } }, ['chat'])],
     ['read_chat', 'Read a chat\'s messages after a cursor: what it was sent and what it replied, oldest first, with next for the following call. Without after, it starts at '
-      + 'the newest message the chat was sent. view: activity adds each tool call as one line.',
+      + 'the newest message the chat was sent. A message over 20,000 characters is cut there (truncated: true). view: activity adds each tool call as one line.',
     input({ chat, after: { type: 'integer', minimum: 0 }, view: { type: 'string', enum: ['messages', 'activity'] } }, ['chat'])],
-    ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether.',
+    ['stop_chat', 'Interrupt the running turn of a chat you started, and of the chats it started. With close: true they are stopped altogether. A chat the user stops takes the chats it started with it.',
       input({ chat, close: { type: 'boolean' } }, ['chat'])],
     ['list_chats', 'The chats you can reach: your project\'s and the ones you started. Each has id, title, provider, state, waiting, parent, key and preview.', input({})],
     ['answer_chat', 'Answer a question a chat you started is waiting on (wait_chat\'s waiting, kind question). An approval is the user\'s: it is refused.',
@@ -43,7 +43,7 @@ export const DELEGATE_TOOLS = (input) => {
 };
 
 export function createDelegate({ chat, allowed }) {
-  const waiting = new Map(); // chat -> how many wait_chat calls are open on it
+  const waiting = new Map(); // 'caller:chat' -> how many wait_chat calls that caller has open on that chat
   const tierOf = (provider, mode) => TIER[provider]?.[mode];
   // The widest mode of provider at or under tier.
   const under = (provider, tier) => Object.entries(TIER[provider]).filter(([, t]) => t <= tier).sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -75,7 +75,7 @@ export function createDelegate({ chat, allowed }) {
     const tier = tierOf(target.provider, want);
     if (tier === undefined) return { error: 'request-refused', detail: 'mode: one of ' + Object.keys(TIER[target.provider]).join(', ') };
     if (tier > ceiling) return { error: 'mode-escalation', detail: 'A sub-agent is never wider than you: your mode is ' + mine.mode + '.' };
-    return { mode: want };
+    return { mode: want, ceiling };
   };
 
   async function openChat(caller, args, signal) {
@@ -106,6 +106,7 @@ export function createDelegate({ chat, allowed }) {
     const ask = 'P9 Delegate: start a ' + (provider === 'claude' ? 'Claude' : 'Codex') + ' sub-agent "' + title + '" in mode ' + picked.mode
       + (args.folder ? ', folder ' + args.folder : '') + '. Its task: ' + args.text.slice(0, 600) + (args.text.length > 600 ? '…' : '');
     if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title: ask, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (chat.lock().on) return { error: 'agent-lock-on' }; // turned on while the user was asked
     const made = await chat.create({ provider, title, ...(folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
     const sent = await chat.prompt(made.conversation, { text: args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
@@ -119,6 +120,11 @@ export function createDelegate({ chat, allowed }) {
     if (!reach(caller, args.chat)) return { error: 'chat-not-found' };
     const target = chat.info(args.chat), picked = modeFor(caller, target);
     if (picked.error) return picked;
+    // A message to a working chat joins the turn it is in, or the next one with whatever else waits, in that turn's mode
+    // and not the one picked above. So a chat working wider than the sender (or in a mode not known yet) takes nothing.
+    if (stateOf(target) === 'working' && !(tierOf(target.provider, target.mode) <= picked.ceiling)) {
+      return { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' };
+    }
     const sent = await chat.prompt(args.chat, { text: args.text, mode: picked.mode, ...(args.when && args.when !== 'auto' && { when: args.when }) }, undefined, caller);
     if (sent.status !== 202) return { error: 'chat-not-sendable', reason: sent.error, state: stateOf(chat.info(args.chat)) };
     return { chat: args.chat, sent: sent.held ? 'waiting for ' + (sent.when === 'queue' ? 'the turn to end' : 'its next step') : sent.steered ? 'into its running turn' : 'started a turn' };
@@ -128,7 +134,10 @@ export function createDelegate({ chat, allowed }) {
     if (!reach(caller, args.chat)) return { error: 'chat-not-found' };
     if (args.timeoutMs !== undefined && (!Number.isSafeInteger(args.timeoutMs) || args.timeoutMs < 0)) return { error: 'request-refused' };
     const until = Date.now() + Math.min(args.timeoutMs ?? WAIT_MS, WAIT_MS);
-    waiting.set(args.chat, (waiting.get(args.chat) ?? 0) + 1);
+    const slot = caller + ':' + args.chat;
+    waiting.set(slot, (waiting.get(slot) ?? 0) + 1);
+    // One listener for the whole call: a pass runs at every event of any chat.
+    const aborted = new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }));
     try {
       for (;;) {
         const info = chat.info(args.chat);
@@ -137,11 +146,11 @@ export function createDelegate({ chat, allowed }) {
         if (ask || state !== 'working' || left <= 0 || signal?.aborted) {
           return { chat: args.chat, state, ended: state !== 'working', waiting: ask, timedOut: state === 'working' && !ask, last: chat.reply(args.chat).slice(-400) };
         }
-        await Promise.race([chat.changed(Math.min(left, 8000)), new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+        await Promise.race([chat.changed(Math.min(left, 8000)), aborted]);
       }
     } finally {
-      const n = waiting.get(args.chat) - 1;
-      if (n > 0) waiting.set(args.chat, n); else waiting.delete(args.chat);
+      const n = waiting.get(slot) - 1;
+      if (n > 0) waiting.set(slot, n); else waiting.delete(slot);
     }
   }
 
@@ -158,8 +167,10 @@ export function createDelegate({ chat, allowed }) {
         : update?.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string' ? { role: 'assistant', text: update.content.text }
           : update?.sessionUpdate === 'tool_call' && args.view === 'activity' ? { role: 'tool', text: String(update.title ?? update.kind ?? 'tool').slice(0, 300) } : null;
       if (said) {
-        // ponytail: 20,000 characters or 60 messages a call; next carries on from the first one left out.
-        if (size + said.text.length > 20_000 || messages.length >= 60) { more = true; break; }
+        // ponytail: 20,000 characters or 60 messages a call; next carries on from the first one left out. A page's first
+        // message is always let in, cut to the limit, or a longer one would be the whole of every page after it.
+        if (messages.length && (size + said.text.length > 20_000 || messages.length >= 60)) { more = true; break; }
+        if (said.text.length > 20_000) { said.text = said.text.slice(0, 20_000); said.truncated = true; }
         size += said.text.length;
         const run = messages.at(-1);
         if (said.role === 'assistant' && run?.role === 'assistant') run.text += said.text; else messages.push({ cursor: event.cursor, ...said });
@@ -205,7 +216,7 @@ export function createDelegate({ chat, allowed }) {
   // § Delegate). Only a parent whose agent is running: an idle-since-start or stopped chat is never started by this.
   chat.settled((id, ok) => {
     const child = chat.info(id), parent = child?.parent && chat.info(child.parent);
-    if (!parent || waiting.has(id) || !['running', 'turn'].includes(parent.state)) return;
+    if (!parent || waiting.has(parent.id + ':' + id) || !['running', 'turn'].includes(parent.state)) return;
     const line = '[p9] ' + child.title + (ok ? ' finished: ' + lastLine(chat.reply(id)).slice(0, 400) : ' failed; read_chat shows why.');
     chat.prompt(parent.id, { text: line, ...(parent.state === 'turn' && { when: 'steer' }) }, undefined, 'p9')
       .then((sent) => sent.status === 409 && chat.prompt(parent.id, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});

@@ -569,6 +569,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         live.delete(conversation.id);
         for (const pending of session.pending.values()) pending.resolve(null);
         if (session.stopping) return;
+        // A7: died mid-turn. The turn's own end comes after this and sees a stop, so the hooks are told here.
+        if (session.turn) for (const hook of settledHooks) { try { hook(conversation.id, false); } catch {} }
         // The adapter died on its own; its scope may still hold children, so end it like a Stop would.
         emit(conversation.id, 'exited', { code, signal });
         session.stopping = true;
@@ -813,15 +815,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const gone = items.filter((item) => !item.allowed());
     unheld(id, gone, 'session-ended');
     const send = [];
-    let text = '', images = [];
+    let text = '', images = [], mode;
     for (const item of items.filter((x) => !gone.includes(x))) {
       const joined = send.length ? text + '\n\n' + item.body.text : item.body.text;
-      if (send.length && (joined.length > MAX_TEXT || images.length + item.images.length > MAX_IMAGES)) { session.queued.push(item); continue; }
-      send.push(item); text = joined; images = [...images, ...item.images];
+      // A7: messages sent for different modes are not one prompt, or a chat's text would run in the mode of your later message.
+      const other = mode !== undefined && item.body.mode !== undefined && item.body.mode !== mode;
+      if (send.length && (other || joined.length > MAX_TEXT || images.length + item.images.length > MAX_IMAGES)) { session.queued.push(item); continue; }
+      send.push(item); text = joined; images = [...images, ...item.images]; mode ??= item.body.mode;
     }
     if (!send.length) return;
     const allowed = () => send.every((item) => item.allowed());
-    const result = await authority.run(allowed, () => api.prompt(id, { ...send.at(-1).body, text, images }, send.map((item) => item.id), senders.get(send.at(-1).body))).catch(() => refused(403, 'session-ended'));
+    const result = await authority.run(allowed, () => api.prompt(id, { ...send.at(-1).body, ...(mode !== undefined && { mode }), text, images }, send.map((item) => item.id), senders.get(send.at(-1).body))).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
   }
 
@@ -1062,6 +1066,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (body?.close !== undefined && body.close !== true) return refused(400, 'request-refused');
       // Send to server (move.mjs): a frozen or moved chat is already stopped, and a Stop would make it runnable here again.
       if (['moving', 'moved'].includes(row(id).state)) { if (body?.close) emit(id, 'closed'); return { status: 200, result: 'stopped' }; }
+      // A7: the chats it started go first, deepest first, so none works on with nobody to report to.
+      const started = [];
+      for (let level = [id]; level.length && started.length < 1000;) {
+        level = level.flatMap((parent) => db.prepare('SELECT id FROM conversations WHERE parent = ?').all(parent).map((c) => c.id)).filter((c) => !started.includes(c));
+        started.push(...level);
+      }
+      for (const child of started.reverse()) if (!['stopped', 'moving', 'moved'].includes(row(child).state)) await stopConversation(child);
       const result = await stopConversation(id);
       if (body?.close) emit(id, 'closed');
       return { status: result === 'stopped' ? 200 : 500, result };

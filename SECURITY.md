@@ -651,7 +651,9 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
   it started. `stop_chat` reaches only the chats the caller started: a chat cannot stop its parent
   or a chat beside it. A chat outside that reach is answered as if it did not exist.
 - **A sub-agent is never wider than its parent.** It starts in the parent's mode unless a narrower
-  one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. The agent lock
+  one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. A message from
+  a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
+  mode takes no message from it until that turn ends. The agent lock
   and File protection are global, so they cover every sub-agent as they cover its parent.
 - **The agent lock.** `open_chat`, `send_chat` and `answer_chat` are refused while it
   is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
@@ -661,16 +663,18 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
   answer is recorded in that chat with the chat that gave it. An approval is shown in the
   sub-agent's own chat, where you answer it.
 - **Folders.** A sub-agent's folder passes the same check as a folder the parent asks for itself:
-  inside the workspace or a folder you allowed, never the recovery folder; any absolute folder
-  only in Unrestricted mode.
+  inside the workspace or a folder you allowed; any absolute folder only in Unrestricted mode.
 - **Tokens.** Each sub-agent gets its own token the way every chat does. Tokens live in memory
   only; Delegate saves nothing that grants access. What it adds to the ledger is which chat
   started which, and the name the parent gave it.
 - **What P9 sends on its own.** When a sub-agent's turn ends and its parent is not waiting on it,
   P9 sends the parent one line, `[p9] <title> finished: <last line of the reply>`, marked in the
   transcript as P9's and not yours. That line is text the sub-agent wrote, so the parent reads
-  it as a report, not as an instruction from you. It is sent only to a parent that is running; it
-  never starts a stopped chat.
+  it as a report, not as an instruction from you. A sub-agent whose agent dies mid-turn is reported
+  as `[p9] <title> failed`. Either line is sent only to a parent that is running; it never starts
+  a stopped chat.
+- **Stopping a parent.** Stop or close on a chat also stops every chat it started, directly or
+  through a sub-agent.
 - **Who may start one.** `open_chat` asks you in the parent chat first, naming the agent, the mode
   and the task. In Unrestricted mode (agent lock and File protection both off) it does not ask,
   like `run_script`. The same key from the same parent returns the chat it already made and asks

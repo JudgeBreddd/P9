@@ -29,6 +29,10 @@ const events = async (instance, id) => (await call(instance, '/chat/events?after
 async function agent(t, instance, more = {}) {
   const { body: { conversation } } = await call(instance, '/chat', 'POST', { provider: 'claude', ...more });
   await call(instance, `/chat/${conversation}/prompt`, 'POST', { text: 'mcp' });
+  return connect(t, instance, conversation);
+}
+// The same client for a chat that was already sent 'mcp' (a sub-agent whose task was that word).
+async function connect(t, instance, conversation) {
   const { hit, cursor } = await until(instance, (event) => event.conversation === conversation && event.data?.content?.text?.startsWith('mcp:'));
   const [entry] = JSON.parse(hit.data.content.text.slice(4));
   const client = new Client({ name: 'p9-test', version: '1' });
@@ -85,6 +89,14 @@ test('Delegate: open_chat asks the user first; the sub-agent is an ordinary chat
   assert.equal((await a.tool('open_chat', { text: 'x', key: 'Not A Key' })).error, 'request-refused');
   assert.equal((await a.tool('open_chat', { text: '' })).error, 'request-refused');
   assert.equal((await rows(instance)).length, 2);
+  // A folder outside the workspace: you allow the start, and the folder check a chat of your own gets still refuses it.
+  for (const folder of ['../', '/etc']) {
+    pending = a.tool('open_chat', { text: 'x', folder });
+    asked = await approval(asked.cursor);
+    await answer(asked.hit.data.request, 'allow');
+    assert.equal((await pending).error, 'folder-refused', folder);
+  }
+  assert.equal((await rows(instance)).length, 2, 'a refused folder made a chat');
   // The HTTP route cannot name a parent: lineage comes only from the tool.
   const typed = await call(instance, '/chat', 'POST', { provider: 'claude', parent: a.conversation, key: 'x' });
   assert.ok(typed.status !== 201 || !(await rows(instance)).find((c) => c.id === typed.body.conversation).parent, 'a request body set a parent');
@@ -220,4 +232,83 @@ test('Delegate: a provider-profile chat\'s sub-agent stays on that profile, on i
   assert.equal(typeof await started({ model: 'opus' }), 'string', 'a model the profile does not list was started');
   assert.equal((await rows(instance)).length, 3);
   console.log('PASS Delegate profile: the sub-agent got the profile\'s address, key and model; a model outside the profile was refused');
+});
+
+test('Delegate: a chat working in a wider mode takes no message from a narrower one; read_chat gets past a message longer than a page', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const project = (await call(instance, '/projects', 'POST', { name: 'Fresh', work: { kind: 'new', parent: '', name: 'fresh' } })).body.project.id;
+  const a = await agent(t, instance, { project }), u = await agent(t, instance, { project });
+  const said = (id, text, after) => until(instance, (event) => event.conversation === id && event.data?.content?.text === text, after);
+  const sentTo = async (id) => (await events(instance, id)).filter((e) => e.type === 'user').map((e) => e.data.text);
+  // The sender is in Plan; the other chat of its project is mid-turn in Auto.
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Plan' });
+  await said(a.conversation, 'mode:plan');
+  await call(instance, `/chat/${u.conversation}/prompt`, 'POST', { text: 'slow', mode: 'Auto' });
+  await said(u.conversation, 'working');
+  for (const when of ['auto', 'steer', 'queue']) {
+    assert.deepEqual(await a.tool('send_chat', { chat: u.conversation, text: 'run it', when }), { error: 'mode-escalation', detail: 'It is running wider than you; wait_chat, then send.' }, when);
+  }
+  assert.deepEqual(await sentTo(u.conversation), ['mcp', 'slow'], 'a refused send reached the wider turn');
+  // Its turn over, the message starts one in the sender's mode, not the chat's own.
+  await call(instance, `/chat/${u.conversation}/cancel`, 'POST', {});
+  assert.equal((await a.done(u.conversation)).state, 'idle');
+  assert.equal((await a.tool('send_chat', { chat: u.conversation, text: 'mode' })).sent, 'started a turn');
+  assert.equal((await a.done(u.conversation)).last, 'mode:plan');
+  // The other way round is not an escalation: the Auto chat's message waits for the Plan chat's turn to end. Your own
+  // message for Auto, queued after it, is not joined to it: the chat's text runs in Plan and yours after it in Auto.
+  await call(instance, `/chat/${u.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Auto' });
+  await said(u.conversation, 'mode:auto');
+  await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'late', mode: 'Plan' });
+  assert.equal((await u.tool('send_chat', { chat: a.conversation, text: 'mode', when: 'queue' })).sent, 'waiting for the turn to end');
+  assert.equal((await call(instance, `/chat/${a.conversation}/prompt`, 'POST', { text: 'mode', mode: 'Auto', when: 'queue' })).status, 202);
+  await said(a.conversation, 'mode:auto');
+  const replies = (await events(instance, a.conversation)).map((e) => e.data?.content?.text).filter((x) => typeof x === 'string');
+  assert.deepEqual(replies.slice(replies.indexOf('late reply') + 1), ['mode:plan', 'mode:auto'], 'the chat\'s queued text ran in the mode of your later message');
+
+  // A 25,000-character task: the first page is that message cut to 20,000, and next moves on to the reply.
+  const long = 'x'.repeat(25_000);
+  const made = await u.tool('open_chat', { text: long, title: 'Long' });
+  await u.done(made.chat);
+  const first = await u.tool('read_chat', { chat: made.chat });
+  assert.deepEqual(first.messages.map((m) => [m.role, m.text.length, m.truncated]), [['user', 20_000, true]]);
+  assert.equal(first.more, true);
+  const second = await u.tool('read_chat', { chat: made.chat, after: first.next });
+  assert.deepEqual(second.messages.map((m) => [m.role, m.text.slice(0, 8), m.truncated]), [['assistant', 'echo:xxx', true]]);
+  assert.ok(second.next > first.next, 'next did not move past the long message');
+  const third = await u.tool('read_chat', { chat: made.chat, after: second.next });
+  assert.deepEqual([third.messages, third.more], [[], false]);
+  console.log('PASS Delegate ceiling and paging: 3 sends to a wider running turn refused, the later one ran in Plan, a queued one was not joined to an Auto message; a 25,000-character message read as 20,000 truncated, then its reply');
+});
+
+test('Delegate: stop_chat ends a sub-agent\'s own sub-agent first; the user\'s Stop on a chat stops the chats it started; a sub-agent that dies mid-turn is reported as failed', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const state = async (id) => (await rows(instance)).find((c) => c.id === id).state;
+  // a -> kid -> grand, both working.
+  const kid = await a.tool('open_chat', { text: 'mcp', title: 'Kid' });
+  const k = await connect(t, instance, kid.chat);
+  const grand = await k.tool('open_chat', { text: 'slow', title: 'Grand' });
+  await a.done(kid.chat);
+  await a.tool('send_chat', { chat: kid.chat, text: 'slow' });
+  await until(instance, (event) => event.conversation === kid.chat && event.data?.content?.text === 'working');
+  assert.deepEqual(await a.tool('stop_chat', { chat: kid.chat }), { chat: kid.chat, action: 'interrupted', chats: [grand.chat, kid.chat] });
+  assert.equal((await a.done(grand.chat)).state, 'idle');
+  assert.equal((await a.done(kid.chat)).state, 'idle');
+  // The user stops the middle chat while the one it started works: both stop, the chat above it does not.
+  await a.tool('send_chat', { chat: grand.chat, text: 'slow' });
+  assert.equal(await state(grand.chat), 'turn');
+  assert.equal((await call(instance, `/chat/${kid.chat}/stop`, 'POST', {})).status, 200);
+  assert.deepEqual([await state(grand.chat), await state(kid.chat)], ['stopped', 'stopped']);
+  assert.ok(['running', 'turn'].includes(await state(a.conversation)), 'the chat above the stopped one was stopped too');
+
+  // A sub-agent whose agent exits mid-turn: its running parent, not waiting on it, is told.
+  const crasher = await a.tool('open_chat', { text: 'late', title: 'Crasher' });
+  await a.done(crasher.chat);
+  await a.tool('send_chat', { chat: crasher.chat, text: 'crash' });
+  await until(instance, (event) => event.conversation === a.conversation && event.type === 'user' && event.data.text === '[p9] Crasher failed; read_chat shows why.');
+  await pause(500);
+  assert.equal((await notices(instance, a.conversation)).filter((line) => line.includes('Crasher failed')).length, 1, 'one line for the crash');
+  console.log('PASS Delegate stop and crash: stop_chat interrupted the sub-agent\'s sub-agent first, the user\'s Stop took the chat it started, the dead sub-agent was reported failed');
 });
