@@ -370,6 +370,16 @@ the Dev Focus editor host (its own `p9-editor-host-*` scope, stopped when the wi
 and pages launched from Mission Control, and registry entries marked `terminal: true`, which start
 detached in their own Konsole window.
 
+Model lists (0.1.9): once per daemon run, when a signed-in desktop window or phone first
+asks for the chat list, the daemon starts each agent's adapter with no chat and no prompt, opens one
+session in the workspace folder to read the models and settings it offers, and ends it.
+Nothing is sent to the model, no MCP server is attached, and every permission request
+from that session is rejected. The read is not started while the agent lock is on or
+during Stop All, it is bounded by the same 45 s handshake limit, and a failure (an agent
+that is not signed in) keeps the last list. A second ask in
+the same run starts nothing. Tests:
+`test/model-lists.test.mjs`.
+
 Windows: each chat and registry script runs in its own kill-on-close Job Object
 (scripts/windows-host.ps1), and Stop or Stop All closes it, which ends everything inside. One exception: a script
 record marked `detach: true` in the registry or space file (P9's file API cannot write either while file

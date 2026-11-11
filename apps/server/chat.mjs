@@ -336,6 +336,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     options: o.options.flatMap((x) => Array.isArray(x?.options) ? x.options : [x]).filter((x) => typeof x?.value === 'string' && x.value.length <= 200)
       .slice(0, 50).map((x) => ({ value: x.value, name: String(x.name ?? x.value).slice(0, 200) })) });
   const configOf = (session) => ({ model: session.models, pickers: session.pickers });
+  // O47: each agent's lists as last reported by a running agent, kept across restarts, so a chat's pickers are right
+  // before its first message. Only models() writes here: a report from a live agent, never a replayed event.
+  // def (MC-16): what a session starts on before anyone changes it, read from a session nobody has touched yet.
+  const lists = Object.fromEntries(Object.keys(MODES).map((agent) => {
+    try { return [agent, JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('lists:' + agent)?.value ?? 'null')]; } catch { return [agent, null]; }
+  }));
+  const keepList = (session) => {
+    const def = session.fresh ? { model: session.models.current, pickers: Object.fromEntries(session.pickers.map((p) => [p.id, p.current])) } : lists[session.provider]?.def ?? null;
+    lists[session.provider] = { ...configOf(session), def, at: Date.now() };
+    db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('lists:' + session.provider, JSON.stringify(lists[session.provider]));
+  };
   const models = (session, id, options, tell = true) => {
     const all = (Array.isArray(options) ? options : []).filter((x) => x?.type === 'select' && typeof x.id === 'string' && x.id.length <= 60 && Array.isArray(x.options));
     const o = all.find((x) => x.id === 'model');
@@ -343,6 +354,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const { current, options: list } = select(o);
     session.models = { current, options: list };
     session.pickers = all.filter((x) => x.id !== 'model' && PICKERS.includes(x.category)).map(select).filter((x) => x.options.length > 1).slice(0, 6);
+    if (session.provider) keepList(session);
     if (tell) emit(id, 'config', configOf(session));
     return true;
   };
@@ -377,6 +389,40 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : { outcome: { outcome: 'cancelled' } };
   };
   const command = (provider) => adapterOverride ? [process.execPath, adapterOverride, provider] : [process.execPath, adapterEntry(provider)];
+  // O47 (Builder, 2026-11-10: "I like B"): the lists are read fresh once per daemon run, the first time a window or phone
+  // asks for them, with no chat: start the agent, open a session, read its lists, end it. No prompt is ever sent, so no
+  // model is called. Not while the agent lock is on. A failure (signed out, offline, slow) is quiet: the kept list stays
+  // and the reply says 'failed'. A second ask never starts a second read.
+  const reading = new Map(), readState = {};
+  async function readLists(provider) {
+    const proc = launchTree(command(provider), workspace, { instance, scope: true });
+    let timer;
+    try {
+      proc.child.stderr.resume();
+      const gone = new Promise((_, no) => {
+        proc.child.once('exit', () => no(new Error('adapter-exited'))); proc.child.once('error', no);
+        timer = setTimeout(() => no(new Error('adapter-start-timeout')), START_MS);
+      });
+      gone.catch(() => {});
+      const agent = acp.connectClient(acp.ndJsonStream(Writable.toWeb(proc.child.stdin), Readable.toWeb(proc.child.stdout)),
+        { sessionUpdate: async () => {}, requestPermission: async (request) => reject(request), createElicitation: async () => ({ action: 'cancel' }) });
+      const hello = (protocolVersion) => agent.initialize({ protocolVersion, clientCapabilities, clientInfo: { name: 'p9', version: '0' } });
+      const ask = acpAsk(provider);
+      await Promise.race([ask > 1 ? hello(ask).catch(() => hello(1)) : hello(1), gone]);
+      const created = await Promise.race([agent.newSession({ cwd: workspace, mcpServers: [] }), gone]);
+      return models({ provider, fresh: true }, null, created?.configOptions, false);
+    } finally { clearTimeout(timer); await endTree(proc).catch(() => {}); }
+  }
+  const freshLists = () => {
+    if (locked || closing || reading.size) return;
+    const release = lifecycle.begin(); // a start like any other: none during Stop All, and Stop All waits for one in flight
+    if (!release) return;
+    for (const provider of Object.keys(MODES)) {
+      readState[provider] = 'loading';
+      reading.set(provider, readLists(provider).catch(() => false).then((ok) => { readState[provider] = ok ? 'ok' : 'failed'; }));
+    }
+    Promise.all(reading.values()).then(release);
+  };
 
   // Wizard sign-in (threat model row 31): the login of the CLI each adapter ships, with fixed arguments and no shell. The
   // CLI opens the browser itself; its first https:// URL is kept for main, which opens it only after its origin check.
@@ -489,7 +535,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
     // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.
-    const session = { id: conversation.id, proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
+    const session = { id: conversation.id, provider: conversation.provider, proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
     const mcpServers = socketPath ? [{ name: 'p9', command: process.execPath, args: [mcpRelay],
       env: [{ name: 'P9_MCP_SOCKET', value: socketPath }, { name: 'P9_MCP_TOKEN', value: session.mcpToken }] }] : [];
     session.exited = new Promise((resolve) => {
@@ -596,7 +642,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         // Claude's is quiet, as the adapter's own start was: the window's picked mode comes with the first prompt.
         await bounded(setMode(session, conversation.provider, undefined, conversation.provider === 'codex' || locked));
         emit(conversation.id, 'connected', { session: session.sessionId });
+        session.fresh = true; // nobody has changed this session yet: its current values are the agent's defaults (MC-16)
         models(session, conversation.id, created.configOptions);
+        session.fresh = false;
       }
       if (!session.stopping) setState(conversation.id, 'running');
       return session;
@@ -811,6 +859,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // not counting NOT_USE (protocol): the stops a close, an exit or a restart write, a move, rename or archive, nor the created event (its time is a later Date.now()
     // than the row's, so an unsent chat's used is exactly created); sent: a message was ever sent (History leaves out
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
+    // lists (O47): { agent: { model, pickers, def, at, state } | null }; state 'loading' while this run's one fresh read is on.
+    lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], state: readState[agent] ?? 'kept' } : null])); },
     list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
@@ -1019,6 +1069,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       closing = true;
       for (const wake of listeners) wake();
       await Promise.all(Object.keys(LOGIN).map(endLogin));
+      await Promise.all(reading.values());
       // A startup sweep still stopping a crashed daemon's scopes finishes before exit.
       await recovered;
       // Every conversation that may own work: live, mid-Stop (already out of live), or left by a failed cleanup.

@@ -310,15 +310,20 @@ function shown(s) {
    menuitemradio choices; Escape closes it and focuses its pill; arrows move; Enter picks. The Model menu lists the agent's
    models directly, then Fast mode under its own heading (Builder, 2026-11-05: no "More" submenu). Live chats list the agent's
    own models; the sample data keeps its two names. */
-const modelList = s => s.live ? s.models || outer.lastModels[s.agent] || null : { current: s.model, options: [s.model, s.agent === 'codex' ? 'gpt-5.1-codex-mini' : 'Sonnet 5.5'].map(v => ({ value: v, name: v })) };
-const modelName = s => { const m = modelList(s), v = s.modelPick || m?.current; return m?.options.find(o => o.value === v)?.name || s.model; };
+// O47: a chat whose own report is older than the agent's kept list (a chat not run since) offers the kept list, so a
+// model the agent dropped is gone from its menu; its own model stays its current one (goneModel says so in the menu).
+const liveModels = s => { const kept = outer.lastModels[s.agent], own = s.models; return own && kept && (s.modelsAt || 0) < (outer.listsAt[s.agent] || 0) ? { current: own.current, options: kept.options } : own || kept || null; };
+const goneModel = s => { const m = s.live && liveModels(s), v = s.modelPick || m?.current; return m && v && !m.options.some(o => o.value === v) ? s.model || v : ''; };
+const dflt = (s, id, o) => o.name + (s.live && !/default/i.test(o.name) && outer.isDefault(s.agent, id, o.value) ? ' (Default)' : ''); // MC-16; an option the agent itself names its default is left as it is
+const modelList = s => s.live ? liveModels(s) : { current: s.model, options: [s.model, s.agent === 'codex' ? 'gpt-5.1-codex-mini' : 'Sonnet 5.5'].map(v => ({ value: v, name: v })) };
+const modelName = s => { const m = modelList(s), v = s.modelPick || m?.current, o = m?.options.find(o => o.value === v); return o ? dflt(s, null, o) : s.model; };
 // The sample data, and a live chat before its config, keep Effort as a local choice.
 const pickers = s => s.live && (s.pickers || outer.lastPickers[s.agent]) || [];
 const pickerOf = (s, kind) => pickers(s).find(p => outer.pickerKind(p) === kind);
 const pickVal = (s, p) => s.pick?.[p.id] ?? p.current;
 const setPick = (s, p, v) => { s.pick ||= {}; if (v === p.current) delete s.pick[p.id]; else s.pick[p.id] = v; };
 const effortList = s => pickerOf(s, 'effort')?.options || [...new Set([s.effort, 'High', 'Low'])].map(v => ({ value: v, name: v }));
-const effortName = s => { const p = pickerOf(s, 'effort'); if (!p) return s.effort; const v = pickVal(s, p); return p.options.find(o => o.value === v)?.name || v; };
+const effortName = s => { const p = pickerOf(s, 'effort'); if (!p) return s.effort; const v = pickVal(s, p), o = p.options.find(o => o.value === v); return o ? dflt(s, p.id, o) : v; };
 const planOpt = p => p.options.find(o => /plan/i.test(o.value)) || p.options.find(o => /plan/i.test(o.name));
 const planOn = s => { const p = pickerOf(s, 'collab'); return !!p && pickVal(s, p) === planOpt(p)?.value; };
 // The Mode menu's order per agent. Codex's Plan is its plan collaboration mode on top of the sandbox mode picked before
@@ -340,7 +345,10 @@ const pills = s => pill(s, 'Agent', outer.names[s.agent], '', agentDot(s.agent))
 document.body.insertAdjacentHTML('beforeend', '<div class="pop" id="pillMenu" role="menu" hidden></div>');
 const pmRoot = () => document.getElementById('pillMenu'); // not outer.$: installChat runs before controller.mjs defines $
 const mi = (label, checked, data, disabled) => `<button type="button" class="item" role="menuitemradio" aria-checked="${checked}" ${data}${disabled ? ` aria-disabled="true" title="${esc(disabled)}"` : ''}><span class="truncate">${esc(label)}</span></button>`;
-const radio = (list, now, data) => list.map(o => mi(o.name, o.value === now, `${data} data-val="${esc(o.value)}"`)).join('');
+const radio = (list, now, data, s, id) => list.map(o => mi(s ? dflt(s, id, o) : o.name, o.value === now, `${data} data-val="${esc(o.value)}"`)).join('');
+// O47: what the Model menu says while this daemon run's fresh read is on, or after it failed (signed out, offline).
+const listNote = s => { const st = s.live && outer.listState[s.agent], n = outer.names[s.agent], has = modelList(s)?.options.length;
+  return st === 'loading' ? `Reading ${n}'s models…` : st === 'failed' ? (has ? `Could not read ${n}'s models just now. This is the last list it reported.` : `Could not read ${n}'s models. Is ${n} signed in?`) : ''; };
 // O29 (Builder, 2026-11-08): the Agent pill. Each row says what a chat on that agent runs with: this chat's own, or the
 // other agent's start (its saved mode, and the Default model and effort from Settings when it still offers them).
 // A chat with messages keeps its agent (its session is that agent's): the other row is shown, disabled, and says why.
@@ -354,9 +362,11 @@ const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes
 function pillMenuHtml(s, kind) {
   if (kind === 'Agent') return agentMenu(s);
   if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + MODE_ORDER[s.agent].map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
-  if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`); }
+  if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`, p && s, p?.id); }
   const m = modelList(s);
-  return `<div class="hd eyebrow">${outer.names[s.agent]}</div>` + radio(m?.options || [], s.modelPick || m?.current, 'data-model')
+  const gone = goneModel(s), note = [gone && `This chat was on ${gone}, which ${outer.names[s.agent]} no longer lists. Pick one of these.`, listNote(s)].filter(Boolean);
+  return `<div class="hd eyebrow">${outer.names[s.agent]}</div>` + radio(m?.options || [], s.modelPick || m?.current, 'data-model', s, null)
+    + note.map(t => `<p class="pm-note muted" data-list-note>${esc(t)}</p>`).join('')
     + pickers(s).filter(p => outer.pickerKind(p) === 'model').map(p => `<hr data-slot="separator"><div class="hd eyebrow">${esc(p.name)}</div>` + radio(p.options, pickVal(s, p), `data-pick="${esc(p.id)}"`)).join('');
 }
 // Above the pill (below when there is no room); fixed, kept inside the window.
@@ -760,9 +770,10 @@ function applyChat(ev, into) {
     case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
     case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
-    case 'config': if (Array.isArray(d.model?.options)) { s.models = outer.lastModels[s.agent] = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
-      if (Array.isArray(d.pickers)) { s.pickers = outer.lastPickers[s.agent] = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; }
-      if (!into) outer.keepLists(s.agent); break;
+    case 'config': s.modelsAt = ev.at; if (!into) outer.newLists(s.agent, ev.at, Array.isArray(d.model?.options) && d.model, Array.isArray(d.pickers) && d.pickers);
+      if (Array.isArray(d.model?.options)) { s.models = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
+      if (Array.isArray(d.pickers)) { s.pickers = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; }
+      break;
     case 'update':
       // Claude Code also runs turns nobody prompted (the continuation after a compaction, a background task's report): no
       // 'user' starts them and no 'turn-end' closes them. Agent output marks the chat working; that turn's closing
@@ -818,10 +829,17 @@ async function loadChat() {
   // E2: launch replays only the chats that are not stopped (a 110 MB ledger was all replayed before); the rest are
   // listed after it as stubs. ponytail: over 100 such chats it replays everything, as before (their IDs go in the URL).
   let replaying = true, scope = null, listed = [];
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); return l.body?.conversations || []; };
+  // O47: the list reply carries each agent's lists; while the daemon reads them fresh, ask again until it is done.
+  let asking = false;
+  const lists = async body => { if (!outer.takeLists(body?.lists) || asking) return; asking = true;
+    for (let i = 0; i < 60 && !outer.lifetime.signal.aborted; i++) { await new Promise(res => outer.setTimeout(res, 1500)); const l = await window.p9.chat('list', {}); if (l.status === 200 && !outer.takeLists(l.body.lists)) break; }
+    asking = false; refreshPill(); renderChats();
+    // Settings open while the lists were read: its Default model and effort rows fill in, unless a list there is in use.
+    if (outer.$('#setDlg')?.open && !outer.$('#setDlg select:focus')) outer.renderSettings(); };
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); return l.body?.conversations || []; };
   while (!outer.lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});
-    if (l?.status === 200) { listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
+    if (l?.status === 200) { lists(l.body); listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
     // P20: the first replay reads each open chat's newest blocks only (tailed, above).
     const tail = replaying && scope?.only && !outer.liveChat.cursor ? { tail: TAIL } : {};
     const r = scope ? await window.p9.chat('events', { after: outer.liveChat.cursor, ...(replaying ? { ...scope, ...tail } : { wait: 8000 }) }) : l;

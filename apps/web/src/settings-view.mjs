@@ -185,13 +185,14 @@ function openOnRow(all) {
     + places.map(h => '<option value="' + esc(h) + '"' + (h === openOn ? ' selected' : '') + '>' + esc(h) + '</option>').join('') + '</select></label>';
 }
 // 0.1.8: beside each agent's starting mode, Default model and Default effort: Agent's default (no override), or the agent's
-// own list as P9 last received it (keepLists); before any chat with that agent, only Agent's default and a word to start one.
+// own list as this P9 last reported it (O47: the daemon's lists); read fresh at each daemon start, so listed before any chat); with no list (the agent is signed out or never answered), only Agent's default and a word to start a chat.
 function defaultsRow(a) {
   const ml = outer.lastModels[a]?.options || [], el = outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.options || [];
-  const sel = (attr, label, list, now) => `<label class="set-pick">${label}<select data-slot="input" ${attr}="${a}" aria-label="${label} for ${outer.names[a]}"><option value="">Agent's default</option>${list.map(o => `<option value="${esc(o.value)}"${o.value === now ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
+  const own = (list, v) => { const n = list.find(o => o.value === v)?.name; return n && !/default/i.test(n) ? ` (${esc(n)})` : ''; }; // MC-16: which one the agent's default is, unless its own name already says so
+  const sel = (attr, label, list, now, def) => `<label class="set-pick">${label}<select data-slot="input" ${attr}="${a}" aria-label="${label} for ${outer.names[a]}"><option value="">Agent's default${own(list, def)}</option>${list.map(o => `<option value="${esc(o.value)}"${o.value === now ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>`;
   return `<div class="set-row set-defaults"><span><strong>${outer.names[a]}</strong>${ml.length || el.length ? '' : `<span class="muted sm">Start one ${outer.names[a]} chat first: its models and efforts are listed here after that.</span>`}</span><span class="spacer"></span>`
     + `<label class="set-pick">Mode<select data-slot="input" data-default-mode="${a}" aria-label="Default mode for ${outer.names[a]}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === outer.defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`
-    + sel('data-default-model', 'Default model', ml, outer.defaultModel(a)) + sel('data-default-effort', 'Default effort', el, outer.defaultEffort(a)) + '</div>';
+    + sel('data-default-model', 'Default model', ml, outer.defaultModel(a), outer.listDef[a]?.model) + sel('data-default-effort', 'Default effort', el, outer.defaultEffort(a), outer.listDef[a]?.pickers?.[outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.id]) + '</div>';
 }
 function renderSettings() {
   const on = Object.values(outer.settings.focus).filter(Boolean).length;
