@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 // The real MCP SDK client, as in mcp.test.mjs: the tools are called the way an agent's adapter calls them.
@@ -7,7 +9,8 @@ import { Client } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol
 import { StdioClientTransport } from '../node_modules/.pnpm/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
-const start = (t) => daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake] }));
+// profile.log in the workspace: the stand-in writes there what provider settings each agent start was given (a hash, never the key).
+const start = (t) => daemon(t, undefined, false, async ({ workspace }) => { fs.writeFileSync(path.join(workspace, 'profile.log'), ''); return { args: ['--acp-override', fake] }; });
 const call = (instance, route, method = 'GET', body) => http({ socketPath: instance.credentials.socketPath, route, method,
   headers: { ...authenticated(instance.credentials), ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) })
   .then((result) => ({ ...result, body: result.text ? JSON.parse(result.text) : null }));
@@ -194,4 +197,27 @@ test('Delegate: chats in one project read and message each other but stop only t
   assert.deepEqual((await out.tool('list_chats')).chats, []);
   assert.equal((await out.tool('read_chat', { chat: made.chat })).error, 'chat-not-found');
   console.log('PASS Delegate scope: project chats read and sent, stop and answer kept to the starter, a chat outside saw nothing');
+});
+
+test('Delegate: a provider-profile chat\'s sub-agent stays on that profile, on its parent\'s model or another the profile lists', { timeout: 120000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const KEY = 'sk-profile-test-0f3a9c71d2e84b56'; // the made-up key profiles.test.mjs uses; no service knows it
+  const hash = createHash('sha256').update(KEY).digest('hex');
+  const seen = () => fs.readFileSync(path.join(instance.workspace, 'profile.log'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const { profile } = (await call(instance, '/profiles', 'POST', { name: 'Far Cloud', baseUrl: 'https://models.example.test/api/', models: ['glm-5.3', 'kimi-k3:cloud'], key: KEY })).body;
+  const a = await agent(t, instance, { profile: profile.id, model: 'glm-5.3' });
+  const started = async (args) => {
+    const before = seen().length, made = await a.tool('open_chat', { text: 'hello', ...args });
+    if (made.error) return made.error;
+    await a.done(made.chat);
+    const [line, ...more] = seen().slice(before);
+    assert.deepEqual(more, [], 'one agent start per sub-agent');
+    return [line.what, line.model, line.baseUrl, line.keyHash, line.keyOutside];
+  };
+  assert.deepEqual(await started({}), ['new', 'glm-5.3', 'https://models.example.test/api', hash, false]);
+  assert.deepEqual(await started({ model: 'kimi-k3:cloud' }), ['new', 'kimi-k3:cloud', 'https://models.example.test/api', hash, false]);
+  assert.equal(typeof await started({ model: 'opus' }), 'string', 'a model the profile does not list was started');
+  assert.equal((await rows(instance)).length, 3);
+  console.log('PASS Delegate profile: the sub-agent got the profile\'s address, key and model; a model outside the profile was refused');
 });
