@@ -572,6 +572,9 @@ one('#sheetBody').addEventListener('click', async event => {
     await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true });
     note('The chat already has a message or could not be replaced.'); return;
   }
+  const images = attached.get(id);
+  if (images) { attached.set(next, images); attached.delete(id); keepAttached(); }
+  if (restored?.id === id) restored = { ...restored, id: next };
   if (chosenMode) startPick.set(next, chosenMode);
   if (chosenModel) swapModel.set(next, chosenModel);
   sheet.close(); await loadChat(); openChat(next);

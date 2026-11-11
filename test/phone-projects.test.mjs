@@ -81,6 +81,9 @@ test('phone: an empty chat shows and changes its starting folder', { timeout: 18
   await page.waitForFunction(() => [...document.querySelectorAll('#model option')].some(o => o.value === 'haiku'), null, { timeout: 20000 });
   await page.click('#modePill'); await page.click('#sheet[open] [data-mode="Plan"]');
   await page.click('#modelBtn'); await page.click('#sheet[open] [data-model="haiku"]');
+  await page.locator('#prompt').fill('draft survives');
+  await page.locator('#attachInput').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64') });
+  await page.locator('#attached img[alt="photo.png"]').waitFor();
   if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-folder-welcome ' + (await page.screenshot()).toString('base64'));
   await page.locator('[data-chat-folder]').click();
   await page.locator('[data-chat-folder-at="site"]').waitFor();
@@ -92,8 +95,15 @@ test('phone: an empty chat shows and changes its starting folder', { timeout: 18
   await page.locator('[data-chat-folder]').filter({ hasText: path.join(server.workspace, 'site') }).waitFor();
   assert.equal(await page.locator('#mode').inputValue(), 'Plan');
   assert.equal(await page.locator('#model').inputValue(), 'haiku');
+  await page.locator('#attached img[alt="photo.png"]').waitFor({ timeout: 10000 });
+  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives');
+  await page.reload();
+  await page.locator('#attached img[alt="photo.png"]').waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('#prompt').inputValue(), 'draft survives');
   assert.equal(await page.locator('#gap').isHidden(), true, 'no gap immediately after swap');
   const id = (await call(server, '/chat')).conversations[0].id;
+  await page.locator('#prompt').fill('photo check'); await page.locator('#composer button[type=submit]').click();
+  await page.locator('#events', { hasText: '[image image/png' }).waitFor({ timeout: 20000 });
   await page.locator('#prompt').fill('cwd'); await page.locator('#composer button[type=submit]').click();
   await page.locator('#events', { hasText: 'cwd:new:' + path.join(server.workspace, 'site') }).waitFor({ timeout: 20000 });
   for (const text of ['hello', 'again']) { await page.locator('#prompt').fill(text); await page.locator('#composer button[type=submit]').click(); await page.locator('#events', { hasText: 'echo:' + text }).waitFor({ timeout: 20000 }); }
