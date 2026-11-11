@@ -164,7 +164,7 @@ function newSession(agent, model, project = null, profile = '') {
   outer.usedAgent(agent);
   // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
-  if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project, model, profile);
+  if (outer.liveChat.on) return outer.liveChat.create(agent, '', project, model, profile);
   const s = { id: 's-' + Date.now(), agent, title: `${outer.names[agent]} ${outer.S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: outer.startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: outer.M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: outer.M.sessions[0].cwd, events: [] };
   s.project = project; outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
 }
@@ -237,13 +237,6 @@ const pickRemoteFolder = ({ ask = (kind, path) => window.p9.mission(kind, { path
   d.onclose = () => done(d.returnValue === 'yes' ? chosen() : undefined);
   d.showModal(); go('');
 });
-const recentFolders = () => { try { const r = JSON.parse(localStorage.getItem('eh-chat-folders')); return Array.isArray(r) ? r.filter(f => typeof f === 'string').slice(0, 5) : []; } catch { return []; } };
-function renderNewFolder() {
-  const seen = new Set(), opts = [['', 'Workspace'], ...(outer.live.primary ? [[outer.live.primary.path, 'Main project · ' + outer.live.primary.name]] : []), ...[outer.newFolder, ...recentFolders()].map(f => [f, f])]
-    .filter(([v]) => !seen.has(v) && seen.add(v));
-  outer.$('#newFolder').innerHTML = opts.map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join('') + (window.p9?.pickFolder ? '<option value=":pick">Choose folder…</option>' : '');
-  outer.$('#newFolder').value = outer.newFolder;
-}
 // Live chats: context from the agent's usage_update, 5 h and 7 d from the daemon's /usage for this agent (a reading over
 // an hour old is dimmed), the cache timed from the last turn end (Claude only: its prompt cache lasts an hour).
 // One limit window as a bar (chat meters and Mission's Usage panel); an expired window shows a dash.
@@ -427,7 +420,7 @@ function swapIn(id) {
   const w = SWAP.get(id), n = outer.S.sessions.find(x => x.id === id);
   if (!w || !w.done || !n) return !!w; // under way: its 'created' does not show it; this does, once the old one is gone
   SWAP.delete(id);
-  Object.assign(n, { draft: w.from.draft, images: w.from.images });
+  Object.assign(n, { draft: w.from.draft, images: w.from.images, ...(w.folderChange ? { mode: w.from.mode, modelPick: w.from.modelPick, pick: w.from.pick } : {}) });
   outer.S.open = w.open.map(x => x === w.from.id ? id : x).filter(x => outer.S.sessions.some(o => o.id === x));
   if (w.side === w.from.id) outer.S.sideId = id;
   if (outer.S.modal?.kind === 'chat' && outer.S.modal.id === w.from.id) outer.S.modal.id = id; // opened from the panel in another focus
@@ -438,24 +431,45 @@ function swapIn(id) {
 async function pickAgent(s, a) {
   if (a === s.agent || started(s)) return;
   if (!s.live) { outer.usedAgent(a); Object.assign(s, { agent: a, mode: outer.startMode(a), title: `${outer.names[a]} ${outer.S.sessions.filter(x => x.agent === a).length + 1}` }); outer.renderTabs(); return renderChats(); }
-  const w = { from: s, open: [...outer.S.open], side: outer.S.sideId, done: false };
-  const r = await outer.liveChat.create(a, s.project ? '' : s.folder, s.project);
+  return replaceEmpty(s, a, s.project ? '' : s.folder, s.project);
+}
+async function replaceEmpty(s, agent, folder, project = null) {
+  const w = { from: s, open: [...outer.S.open], side: outer.S.sideId, done: false, folderChange: agent === s.agent };
+  const r = await outer.liveChat.create(agent, folder, project);
   if (r.status !== 201) return;
   const id = r.body.conversation; SWAP.set(id, w);
   const d = await outer.liveChat.call('deleteChat', { id: s.id, empty: true }, { quiet: true });
   if (d.status !== 200) {
     SWAP.delete(id); outer.S.open = w.open.filter(x => outer.S.sessions.some(o => o.id === x)); renderChats();
     outer.liveChat.call('deleteChat', { id, empty: true });
-    return outer.toast({ kind: 'chat', txt: d.body?.error === 'not-empty' ? `This chat has a message now, so it stays on ${outer.names[s.agent]}.` : `${outer.names[a]} was not started: this chat could not be replaced.`, level: 'warn' }, true);
+    return outer.toast({ kind: 'chat', txt: d.body?.error === 'not-empty' ? 'This chat has a message now, so it stays as it was.' : 'The chat could not be replaced.', level: 'warn' }, true);
   }
-  outer.usedAgent(a); w.done = true; swapIn(id);
+  outer.usedAgent(agent); w.done = true; swapIn(id);
 }
+async function pickChatFolder(s) {
+  if (started(s) || s.project || !s.live) return;
+  let picked = await window.p9.pickFolder();
+  if (picked?.remote) picked = await pickRemoteFolder();
+  if (picked === null) return outer.toast({ kind: 'chat', txt: 'Choose a folder inside the workspace, or turn off both restrictions to choose another folder.', level: 'warn' }, true);
+  if (typeof picked === 'string') await replaceEmpty(s, s.agent, picked);
+}
+function chatFolder(s) {
+  if (!s.live) return s.cwd;
+  if (!s.folderAsked) {
+    s.folderAsked = true;
+    outer.liveChat.call('chatFolder', { id: s.id }, { quiet: true }).then(r => {
+      s.cwd = r.status === 200 ? r.body.folder : 'Folder unavailable'; renderChats();
+    }).catch(() => { s.cwd = 'Folder unavailable'; renderChats(); });
+  }
+  return s.cwd;
+}
+
 function pillPick(item) {
   const s = outer.S.sessions.find(x => x.id === PM.sid); if (!s || item.getAttribute('aria-disabled') === 'true') return;
   const v = item.dataset.val;
   if (item.dataset.mode) { closePill(); return pickMode(s, item.dataset.mode); }
   if (item.dataset.agent) { closePill(); return pickAgent(s, item.dataset.agent); }
-  if (item.hasAttribute('data-model')) { if (s.live) s.modelPick = v === modelList(s)?.current ? null : v; else s.model = v; }
+  if (item.hasAttribute('data-model')) { if (s.live) s.modelPick = v === s.models?.current ? null : v; else s.model = v; }
   else if (item.dataset.pick !== undefined) { const p = pickers(s).find(x => x.id === item.dataset.pick); if (p) setPick(s, p, v); else s.effort = v; }
   closePill(); renderChats();
 }
@@ -477,8 +491,8 @@ function pane(s, i, bare) {
   // D14: a chat on its way to the server, or gone there, takes no messages here.
   const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away || !!s.leaving;
   const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to the remote…', moved: 'Moved to ' + (s.movedTo || 'the remote') }[s.state];
-  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${outer.names[s.agent]} · ${esc(s.cwd)}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
-    : `<div class="col">${shown(s)}${pending(s)}</div>`;
+  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${outer.names[s.agent]} · ${s.live && !s.project && !started(s) ? `<button class="chat-folder" data-chat-folder title="Click to start this chat in another folder">${esc(chatFolder(s))}</button>` : esc(chatFolder(s))}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
+    : `<div class="col"><p class="chat-folder-readonly">${esc(chatFolder(s))}</p>${shown(s)}${pending(s)}</div>`;
   return `<section class="pane${i === 0 && outer.S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${outer.hideSteps ? ' data-quiet' : ''}${outer.FX.pull === s.id ? ' data-pulled' : ''} aria-label="${outer.names[s.agent]} chat">
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span>${bare ? `<span class="name">${outer.names[s.agent]}</span>` : crumb(s)}
       <button data-slot="button" data-variant="ghost" data-size="sm" data-steps aria-pressed="${outer.hideSteps}" title="Shows or hides the agent's tool calls and thinking in this chat">${outer.hideSteps ? 'Show steps' : 'Hide steps'}</button>
@@ -602,6 +616,7 @@ function paint(root, ss, only) {
       if (s.more !== undefined && s.events.filter(e => e.t !== 'approval' && e.t !== 'question').length < (s.tail || TAIL) + TAIL) { s.fetching = true; try { await earlier(s); } finally { s.fetching = false; } }
       s.tail = (s.tail || TAIL) + TAIL; renderChats(); h.scrollTop = h.scrollHeight - below;
     };
+    const folder = p.querySelector('[data-chat-folder]'); if (folder) folder.onclick = () => void pickChatFolder(s);
     const st = p.querySelector('[data-start]'); if (st) st.onclick = () => { s.state = 'running'; s.events.push({t:'notice', text:'Connected over ACP · ' + s.model}); outer.renderTabs(); renderChats(); };
     const stop = p.querySelector('[data-stop]'); if (stop) stop.onclick = () => stopChat(s);
     const res = p.querySelector('[data-resume]'); if (res) res.onclick = () => { if (s.live) return p.querySelector('textarea').focus(); s.state = 'running'; s.readonly = false; s.events.push({t:'notice', text:'Resumed natively (session/resume).'}); outer.renderTabs(); renderChats(); };
@@ -816,7 +831,7 @@ function applyChat(ev, into) {
     case 'turn-end': settle(); s.lastEnd = ev.at; outer.usageNow(); outer.queueSoon(); if (d.stopReason !== 'end_turn') notice('Turn ended: ' + d.stopReason); return s;
     case 'error': s.events.push({ t: 'error', text: d.message }); s.working = false; break;
     // N1: the daemon's word on a chat's project, title, archive and removal, for every window (apps/server/projects.mjs).
-    case 'project': s.project = d.project ?? null; break;
+    case 'project': s.project = d.project ?? null; s.folderAsked = false; break;
     case 'renamed': s.title = d.title; break;
     case 'archived': s.archived = !!d.archived; break;
     case 'deleted': if (!into) { outer.S.sessions = outer.S.sessions.filter(x => x !== s); outer.S.open = outer.S.open.filter(x => x !== s.id); } break;
@@ -899,5 +914,5 @@ async function loadChat() {
     try { outer.renderTabs(); renderChats(new Set(r.body.events.map(ev => ev.conversation))); } catch (e) { console.error('chat paint', e); }
   }
 }
-  return { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, recentFolders, renderNewFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
+  return { ART, keepBox, focus, show, stopChat, newSession, pickRemoteFolder, usageRows, cacheOf, busy, renderChats, paint, turnEnd, reply, dataNote, linkOk, keepQueue, history, loadChat };
 }

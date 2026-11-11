@@ -196,7 +196,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   // The routes both listeners serve. Device management is desktop-only and the login routes are remote-only.
   const api = new Hono();
   api.onError(onError);
-  // F2: the phone (a remote device) never needs the workspace's full path, so only the desktop gets it.
+  // F2: health hides the workspace path from phones. Row 24 separately exposes a chat's starting path to authenticated phones.
   // savedWorkspace: the folder the task or unit names, when it was not there at start and this run uses the default (main.mjs).
   // version: the daemon's own; the installed app counts a start healthy only when it matches its own (AU5, rollback.mjs).
   api.get('/health', async (c) => c.json({ status: 'ok', phase: 11, writes: 'guarded', ...(c.get('device') ? {} : { workspace, boot, version: VERSION, ...(savedWorkspace ? { savedWorkspace } : {}) }),
@@ -277,9 +277,9 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
   });
   // U4 on a remote (Builder, 2026-11-02: "need a picker so i can click in and out of folders"): in Unrestricted mode the
   // desktop's New chat picker walks the whole computer, folders only, from an absolute path ('': the workspace). Links are
-  // not listed; the chat's own start check (chat.mjs folderCheck) still decides. Off, or from a phone: refused.
+  // not listed; the chat's own start check (chat.mjs folderCheck) still decides. Off: refused.
   api.get('/files/folders', async (c) => {
-    if (c.get('device') || !loose()) return c.json({ error: 'unrestricted-only' }, 403);
+    if (!loose()) return c.json({ error: 'unrestricted-only' }, 403);
     const asked = c.req.query('path') || workspace;
     if (!path.isAbsolute(asked) || asked.length > 4096 || asked.includes('\0')) return c.json({ error: 'request-refused' }, 400);
     let at; try { at = await realpath(asked); } catch { return c.json({ error: 'not-found' }, 404); }
@@ -500,6 +500,7 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     return c.json({ ...usage, ...(contexts && { contexts }), limits: { ...limits, ...(signedOut.length ? { codex: null } : {}), signedOut } });
   });
   api.post('/anymouse', async (c) => reply(c, await anymouse(await json(c))));
+  api.get('/chat/:id/folder', async (c) => reply(c, await chat.folder(c.req.param('id'))));
   api.post('/chat/:id/prompt', async (c) => reply(c, await chat.prompt(c.req.param('id'), await json(c))));
   api.post('/chat/:id/answer', async (c) => reply(c, chat.answer(c.req.param('id'), await json(c))));
   api.post('/chat/:id/cancel', async (c) => reply(c, await chat.cancel(c.req.param('id'))));

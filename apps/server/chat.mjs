@@ -918,7 +918,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
     // op: the request's operation ID (x-p9-op), echoed in 'created' so the window that asked knows its own chat (O44 review).
-    // lineage (A7 Delegate, from delegate.mjs only, never a request body): the chat that starts this one and its key.
+    async folder(id) {
+      const conversation = ID.test(id) && row(id);
+      if (!conversation) return refused(404, 'unknown-conversation');
+      try { return { status: 200, folder: await startOf(conversation), workspace }; }
+      catch { return refused(404, 'folder-unavailable'); }
+    },
+    // Delegate lineage is supplied internally.
     async create(body, op, lineage) {
       const project = body?.project === undefined ? null : await projects.record(body.project);
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))

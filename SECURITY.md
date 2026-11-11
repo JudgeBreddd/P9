@@ -735,6 +735,8 @@ change carries its operation id. Deleting a chat (from its menu) removes its row
 memory and telemetry databases recorded from it, and its photos no other chat uses. What it already spent (tokens and
 cost) stays in the usage totals, carried on the ledger's `deleted` event, so the totals are the same after a restart.
 
+**Chat starting folder (row 24).** An empty chat shows its full starting path. The desktop and an authenticated phone may read any chat's path by chat ID. A phone in Unrestricted mode can browse directory names on the daemon's host through the folder picker; with agent lock or File protection on, it can browse only the workspace. The daemon validates the selected folder again. Changing the folder replaces the chat only if it has never been sent a message; a race with Send keeps the original chat. Project chats cannot change their folder this way. Revealing a path may reveal user and project names to a signed-in phone.
+
 Switching an empty chat's agent (the Agent pill) makes a new chat on the other agent, in the same folder or project, and
 deletes the old one with `{ "empty": true }` (threat model row O29). With it, the daemon deletes only a chat never sent
 to: no `user` or `held` event in its history and no turn running. Otherwise it refuses 409 `not-empty` and the chat stays
@@ -881,4 +883,4 @@ removed (an A/B run; logs in the private phase 12 folder).
 | An ssh button takes one plain word | `test/mission.test.mjs` "surface 8" | Spaces, quotes, glob and brace characters refused for ssh buttons only; fails without the rule |
 | A remote device cannot fill the disk with operation IDs | auth-races "cold-read M2" | 600 new operation IDs an hour per device, then 429 `operation-quota`; the desktop and other devices are unaffected. Rows are never deleted, so a device held at the cap adds about 0.8 GB a year at worst |
 | The 10 minutes to finish enrolling count from the desktop's approval; an unapproved request still lapses at 10 (v0.1.3 F1) | auth-races "Phase 10: the 10 minutes to finish enrolling count from the approval" | Approved at 9 minutes, registered 9 minutes later; an unapproved request is 404 at 11 minutes; fails (403) when the clock starts at the request |
-| A phone never learns the workspace path (v0.1.3 F2) | "PASS F2" in `test/phone.test.mjs` "Phase 11: malformed and stale usage" (not in `gate:12`; run on its own) | TCP `/health` has no workspace, TCP `/setup` is 404, a refused New idea names no path; fails with the old routes |
+| A phone learns a chat’s starting path only through the chat folder view; health and setup still hide the workspace path (F2, row 24) | "PASS F2" in `test/phone.test.mjs` "Phase 11: malformed and stale usage" (not in `gate:12`; run on its own) | TCP `/health` has no workspace, TCP `/setup` is 404, a refused New idea names no path; fails with the old routes |

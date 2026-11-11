@@ -196,12 +196,6 @@ function fillPicker() {
   if (openId) select.value = openId;
   else if ([...select.options].some((option) => option.value === was)) select.value = was;
 }
-// P10: a new chat can start in a folder a recent chat used (the daemon's list is newest first); the desktop's
-// folder dialog has no phone form, so a new folder is picked there once. Shown in the New chat sheet.
-function startIn() {
-  const folders = [...new Set(state.conversations.map((item) => String(item.folder ?? '')).filter(Boolean))].slice(0, 8);
-  return folders.length ? `<select id="startIn" aria-label="Start in"><option value="">Start in: Workspace</option>${folders.map((item) => `<option value="${escape(item)}">Start in: ${escape(item)}</option>`).join('')}</select>` : '';
-}
 // PH1: "Continue on phone" on the desktop opens /phone#chat=<id>; that chat is shown (once on load, and again when the
 // link changes on an open page).
 let linked = false;
@@ -492,6 +486,8 @@ function route(id: string) {
 function openChat(id: string) { window.history.pushState(null, '', '#chat=' + encodeURIComponent(id)); pushed = true; route(id); }
 function back() { if (pushed) window.history.back(); else { window.history.replaceState(null, '', location.pathname + location.search); route(''); } }
 onCodeColours(() => render()); // O37: a parser arrived; the version in each block's sig redraws its blocks once
+const phoneFolders = new Map<string, { folder: string; workspace: string }>();
+const phoneFoldersLoading = new Set<string>();
 function render() {
   if (!openId) return renderList();
   const picked = openId;
@@ -510,7 +506,21 @@ function render() {
   if (changedEarlier !== picked) { changedEarlier = picked; earlier.disabled = false; earlier.textContent = 'Load earlier'; }
   const height = body.scrollHeight, top = body.scrollTop;
   patch(events, shown);
-  if (!blocks.length) events.insertAdjacentHTML('beforeend', '<div class="empty">No messages yet.</div>');
+  const info = phoneFolders.get(picked);
+  if (!info && !phoneFoldersLoading.has(picked)) {
+      phoneFoldersLoading.add(picked);
+      request('/chat/' + encodeURIComponent(picked) + '/folder').then(r => {
+        phoneFolders.set(picked, { folder: String(r.folder), workspace: String(r.workspace) });
+        if (openId === picked) render();
+      }).catch(() => {}).finally(() => phoneFoldersLoading.delete(picked));
+  }
+  if (!blocks.length) {
+    const item = state.conversations.find(entry => entry.id === picked);
+    const name = item?.provider === 'codex' ? 'Codex' : 'Claude';
+    const folder = info?.folder ?? 'Loading folder…';
+    const canPick = !!info && !item?.project && !item?.sent;
+    events.insertAdjacentHTML('beforeend', `<div class="empty"><h2>What are we working on?</h2><p>${escape(name)} · ${canPick ? `<button type="button" class="quiet" data-chat-folder title="Click to start this chat in another folder">${escape(folder)}</button>` : escape(folder)}</p></div>`);
+  } else if (info) events.insertAdjacentHTML('afterbegin', `<p class="chat-folder-readonly">${escape(info.folder)}</p>`);
   if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
   anchored = false;
   const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
@@ -521,6 +531,44 @@ function render() {
   chatBar(picked, digest().get(picked)?.run ?? 'idle');
   renderPicks(picked); renderQueue(); renderAttached(); label(); void drain();
 }
+// The same empty-only swap as the desktop: the daemon refuses deletion if a message raced the picker.
+let pickChatAt = '', pickChatWhole = false, pickChatWorkspace = '';
+async function showChatFolders(at = '') {
+  const id = openId, info = phoneFolders.get(id); if (!info) return;
+  pickChatWorkspace = info.workspace;
+  try {
+    let result: Json, dirs: { path: string; name: string }[], parent: string | null;
+    try {
+      result = await request('/files/folders?' + new URLSearchParams({ path: at }));
+      pickChatWhole = true; pickChatAt = String(result.path); parent = result.parent ?? null; dirs = result.dirs;
+    } catch (error) {
+      if (at && pickChatWhole) throw error;
+      pickChatWhole = false; pickChatAt = at;
+      result = await request('/files/list?' + new URLSearchParams({ path: at }));
+      parent = at ? at.split('/').slice(0, -1).join('/') : null;
+      dirs = (result.entries ?? []).filter((entry: Json) => entry.dir).map((entry: Json) => ({ name: String(entry.name), path: [at, entry.name].filter(Boolean).join('/') }));
+    }
+    openSheet('Start chat in', `<p>${escape(pickChatWhole ? pickChatAt : [pickChatWorkspace, pickChatAt].filter(Boolean).join('/'))}</p>${!pickChatWhole ? '<p>Only the workspace is available while a restriction is on.</p>' : ''}${parent !== null ? `<button class="quiet" data-chat-folder-at="${escape(parent)}">Up</button>` : ''}${dirs.map(d => `<button class="quiet" data-chat-folder-at="${escape(d.path)}">${escape(d.name)}</button>`).join('')}<button data-chat-folder-select>Use this folder</button>`);
+  } catch { openSheet('Start chat in', '<p>Could not open that folder.</p><button class="quiet" data-chat-folder-at="">Back to workspace</button>'); }
+}
+one('#events').addEventListener('click', event => { if ((event.target as Element).closest('[data-chat-folder]')) void showChatFolders(); });
+one('#sheetBody').addEventListener('click', async event => {
+  const target = event.target as Element, dir = target.closest<HTMLElement>('[data-chat-folder-at]');
+  if (dir) return void showChatFolders(dir.dataset.chatFolderAt ?? '');
+  if (!target.closest('[data-chat-folder-select]')) return;
+  const id = openId, item = state.conversations.find(entry => entry.id === id);
+  if (!item || item.sent || item.project) return;
+  const folder = pickChatWhole && pickChatAt === pickChatWorkspace ? '' : pickChatAt;
+  const made = await mutate('/chat', { provider: item.provider, ...(folder && { folder }) });
+  if (made.status !== 201) return;
+  const next = String(made.body.conversation);
+  const removed = await mutate('/chat/' + encodeURIComponent(id) + '/delete', { empty: true });
+  if (removed.status !== 200) {
+    await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true });
+    note('The chat already has a message or could not be replaced.'); return;
+  }
+  sheet.close(); await loadChat(); openChat(next);
+});
 // P20: the next TAIL blocks before the oldest read, drawn above; the reader stays where they were.
 one('#earlier').addEventListener('click', async () => {
   const id = openId, from = older.get(id), button = one<HTMLButtonElement>('#earlier');
@@ -554,7 +602,7 @@ one('[data-bar="chat"]').addEventListener('click', (event) => {
   const button = (event.target as Element).closest('button'); if (!button) return;
   if (button.dataset.back !== undefined) back();
   else if (button.id === 'stopTurn') stopChat(openId);
-  else if (button.id === 'newChat') openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>${startIn()}`);
+  else if (button.id === 'newChat') openSheet('New chat', `<button type="button" class="opt" data-new="claude">New Claude chat</button><button type="button" class="opt" data-new="codex">New Codex chat</button>`);
   else if (button.id === 'modelBtn') {
     const model = one<HTMLSelectElement>('#model'), options = [...model.options];
     openSheet('Model', options.length ? options.map((option) => `<button type="button" class="opt" data-model="${escape(option.value)}" aria-checked="${option.selected}">${escape(option.textContent)}</button>`).join('') : '<div class="empty">This agent lists no models.</div>');
@@ -567,9 +615,8 @@ one('#sheetBody').addEventListener('click', async (event) => {
   if (pick) { const model = one<HTMLSelectElement>('#model'); model.value = pick.dataset.model!; model.dispatchEvent(new Event('change')); barSig = ''; sheet.close(); render(); }
   if (make) {
     if (!navigator.onLine) return;
-    const folder = document.querySelector<HTMLSelectElement>('#startIn')?.value;
     sheet.close();
-    const result = await mutate('/chat', { provider: make.dataset.new, ...(folder && { folder }) });
+    const result = await mutate('/chat', { provider: make.dataset.new });
     if (result.status !== 201) return;
     // A loosened last pick carries to a new chat only after "don't show again": a plain "Turn on" was for that chat (review #2).
     const last = localStorage.getItem('p9-mode:' + make.dataset.new);

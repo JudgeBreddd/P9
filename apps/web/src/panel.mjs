@@ -249,7 +249,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     const tog = t.closest('[data-toggle]'), pr = t.closest('[data-proj]');
     if (tog || (pr && !o.openProject)) { const id = (tog || pr).dataset.toggle || pr.dataset.proj; setOpen(id, !isOpen(id)); return renderPanel(); }
     if (pr) { P.overlay = false; return o.openProject(pr.dataset.proj); }
-    const ni = t.closest('[data-newin]'); if (ni) return newChatIn(ni.dataset.newin, ni);
+    const ni = t.closest('[data-newin]'); if (ni) return o.newSession(o.lastAgent(), '', ni.dataset.newin);
     if (t.closest('[data-newproj]')) return o.newProject?.();
     if (t.closest('[data-archived]')) { P.overlay = false; return o.openArchived(); }
     const c = t.closest('[data-chat]'); if (c) return openChat(c.dataset.chat);
@@ -261,7 +261,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
     const m = e.target.closest?.('.lp-menu');
     if (m) { const st = e.target.closest('[data-stop]'), mv = e.target.closest('[data-moveto]'); if (st) { closeMenu(); const s = find(st.dataset.stop); if (s) stopChat(s); } else if (mv) move(mv.dataset.id, mv.dataset.moveto); return; }
     if (!e.target.closest?.('[data-more]')) closeMenu();
-    if (P.overlay && !e.target.closest?.('#nav, .lp-toast, #newPop')) { P.overlay = false; renderPanel(); } // the panel over the chat closes on a click outside it
+    if (P.overlay && !e.target.closest?.('#nav, .lp-toast')) { P.overlay = false; renderPanel(); } // the panel over the chat closes on a click outside it
   }, { signal: o.lifetime.signal });
   addEventListener('keydown', e => {
     const m = document.querySelector('.lp-menu');
@@ -291,15 +291,6 @@ export function installPanel(o, { focus, stopChat, busy }) {
     return [...(q ? ps.filter(p => p.name.toLowerCase().includes(q)) : []).map(p => [p.name, () => { setOpen(p.id, true); o.openProject ? o.openProject(p.id) : (o.setFocus('chat'), renderPanel()); }, I.folder, 'Project']),
       ...(q ? chats.slice(0, 20) : chats.slice(0, 5)).map(s => [title(s), () => openChat(s.id), `<span class="dot" data-agent="${esc(s.agent)}"></span>`, (projectOf(s, ps)?.name || 'Chats') + ' · ' + fmt(when(s))])];
   };
-  // New chat opens beside the button that asked: below New chat in the full panel, to its right on the strip. The + on a
-  // project row opens it for that project, without Start in: the chat starts where the project says (the daemon decides).
-  function newAt(btn, id = null) {
-    P.newIn = id; const r = btn.getBoundingClientRect(), p = $('#newPop'), side = !!btn.closest('.lpanel[data-collapsed]') || !!id, pr = id && projects().find(x => x.id === id);
-    $('#newFolder').hidden = $('#newFolderHd').hidden = !!pr; $('#newInHd').hidden = !pr; if (pr) $('#newInHd').textContent = 'In ' + pr.name;
-    p.style.left = Math.max(8, Math.min(side ? r.right + 8 : r.left, innerWidth - p.offsetWidth - 8)) + 'px'; p.style.top = Math.max(8, Math.min(side ? r.top : r.bottom + 6, innerHeight - p.offsetHeight - 8)) + 'px';
-  }
-  // The + on a project row: after this click has bubbled, as the popover closes on any document click.
-  const newChatIn = (id, btn) => setTimeout(() => { o.newPop.open(); newAt(btn, id); $('#newPop [data-new]')?.focus(); });
   // The projects list (GET /projects through p9:chat). Read at launch and after an event that changes a project's chats;
   // an older daemon without the route leaves the list empty.
   let loading = null;
@@ -309,7 +300,7 @@ export function installPanel(o, { focus, stopChat, busy }) {
   addEventListener('click', e => { const b = e.target.closest?.('[data-goproj]'); if (!b) return; const id = b.dataset.goproj;
     if (o.openProject) return o.openProject(id);
     setOpen(id, true); if (P.collapsed) setCollapsed(false); else if (P.narrow) P.overlay = true; renderPanel(); list.querySelector(`[data-proj="${CSS.escape(id)}"]`)?.focus(); }, { signal: o.lifetime.signal });
-  const api = { renderPanel, jumps, openChat, move, setOpen, newAt, loadProjects, closeMenu, openMenu, undoToast, panel: P };
+  const api = { renderPanel, jumps, openChat, move, setOpen, loadProjects, closeMenu, openMenu, undoToast, panel: P };
   installProjects(o, api); // N1 points 9 and 10: the project page, New project, a chat's Rename, Archive and Delete
   return api;
 }
