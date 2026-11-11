@@ -117,9 +117,15 @@ test('profile: what is refused; a removed profile\'s chat can be read, not conti
   assert.match((await events(instance, id)).at(-1).data.message, /profile was removed in Settings/);
   assert.equal(seen(instance).filter((line) => line.model === 'kimi-k3:cloud').length, 2, 'no agent was started for the removed profile');
   // Removed while its chat is running: that agent holds the key, so the chat is stopped, not left answering.
+  const own = (await call(instance, '/chat', 'POST', { provider: 'claude' })).conversation;
+  await said(instance, own, 'model');
+  await until(async () => JSON.stringify((await call(instance, '/chat')).lists.claude ?? null).includes('"opus"'), 'Claude\'s own list is kept');
   const live = (await call(instance, '/profiles', 'POST', { ...PROFILE, key: KEY })).profile;
   const running = (await call(instance, '/chat', 'POST', { provider: 'claude', profile: live.id, model: 'glm-5.3' })).conversation;
   assert.equal((await said(instance, running, 'model')).status < 300, true);
+  // The profile chat's report is the newest one from a Claude agent here: Claude's own kept list is still Claude's.
+  const kept = JSON.stringify((await call(instance, '/chat')).lists.claude ?? null);
+  assert.ok(kept.includes('"opus"') && !kept.includes('glm-5.3'), kept);
   assert.equal((await call(instance, '/profiles/' + live.id, 'DELETE')).status, 200);
   let after; // refused from the first moment: 'stopping' while the agent ends, then for good
   await until(async () => { after = await call(instance, '/chat/' + running + '/prompt', 'POST', { text: 'model' }); assert.equal(after.status, 409, after.text); return after.error === 'profile-gone'; }, 'the stopped chat names its removed profile');
