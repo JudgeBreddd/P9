@@ -33,7 +33,9 @@ server `type`, and what is dropped). On version 1 it passes every line through u
 Seen live on v2 (2026-11-10):
 
 - Codex reports `_meta.steering.supported` in its `initialize` reply and takes `_session/steering` mid-turn
-  (`injected`). Claude (0.106.0) has no steering on 2: a message sent mid-turn waits for the turn's end.
+  (`injected`). Claude (0.106.0) has no `_session/steering` on 2, so P9 holds a message sent mid-turn until the turn's end.
+  (Seen once on a real recording: on 2 Claude takes a second `session/prompt` into the running turn, then sends the
+  whole answer again under a new message id. P9 does not use that path.)
 - Both agents resume a session through `session/resume`, and send one `idle` state after it.
 - Claude's `usage_update` carries `_meta['_claude/rateLimit']` on 2 in the same shape as on 1.
 - The account notices (`_auth/*`, `auth/status_update`) carry the account's email; the translator drops them.

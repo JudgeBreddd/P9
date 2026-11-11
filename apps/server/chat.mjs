@@ -54,8 +54,9 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // agents read, write and run under their own permission checks.
 // The ACP version P9 asks each agent for (0.1.9 O52). ACP 2 is still a draft to its authors, so each agent has its own
 // number here and P9_ACP_VERSION=1 in the daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
-// ponytail: Claude's adapter (0.106.0) has no steering on 2, so a message sent mid-turn waits for the turn's end
-// (session.steering is false; Builder, 2026-11-10: "thats really enough for me"). It steers again when the adapter does.
+// ponytail: Claude's adapter (0.106.0) has no `_session/steering` on 2, so a message sent mid-turn waits for the
+// turn's end (session.steering is false; Builder, 2026-11-10: "thats really enough for me"). On 2 it does take a
+// second session/prompt into the running turn, but then sends the whole answer again; P9 does not use that yet.
 const ACP_ASK = { claude: 2, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
