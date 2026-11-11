@@ -4,6 +4,7 @@
 // parsers and File protection as the desktop; the agent lock turns every write off; running a script or answering a
 // needs-you item asks the user in the chat first.
 // ponytail: MCP by hand (JSON-RPC, tools and resources only, no SDK in the daemon); the SDK if P9 needs more of the protocol.
+import { DELEGATE_TOOLS, createDelegate } from './delegate.mjs';
 import { readFile as readText, writeFile as writeText, open, mkdir, lstat, chmod, realpath, rename, readdir, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -126,6 +127,7 @@ const TOOLS = [
     + 'Markdown). The same id replaces that card in place. Text only, at most 8 KB; HTML shows as text, a link as its text, an image as its alt text.',
     input({ id: cardIdField, kind: { type: 'string', enum: KINDS }, text: { type: 'string', description: 'Markdown, at most ' + MAX_TEXT + ' bytes of UTF-8.' } }, ['id', 'kind', 'text'])],
   ['unpin_card', 'Remove a card pinned in this chat.', input({ id: cardIdField }, ['id'])],
+  ...DELEGATE_TOOLS(input),
 ].map(([name, description, inputSchema]) => ({ name, description, inputSchema }));
 
 const RESOURCES = [
@@ -604,6 +606,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
   }
 
   const calls = {
+    ...createDelegate({ chat, allowed }),
     describe_mission: () => describeMission(),
     validate_registry: (args) => validate('registry', args.text),
     validate_space: (args) => validate('space', args.text),

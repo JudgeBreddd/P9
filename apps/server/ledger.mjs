@@ -23,7 +23,11 @@ export const MIGRATIONS = [`
   `ALTER TABLE conversations ADD COLUMN folder TEXT NOT NULL DEFAULT '';`,
   // 3 (N1): a chat's project, the id the user put it in (NULL is a general chat, as every chat before this step), and
   // its archive flag (archived chats are hidden, not deleted).
-  `ALTER TABLE conversations ADD COLUMN project TEXT; ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`];
+  `ALTER TABLE conversations ADD COLUMN project TEXT; ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`,
+  // 4 (A7 Delegate): the chat that started this one through open_chat (NULL: the user did), and the name that chat
+  // gave it, one per parent, so the same open_chat sent twice makes one chat.
+  `ALTER TABLE conversations ADD COLUMN parent TEXT; ALTER TABLE conversations ADD COLUMN key TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS conversations_parent_key ON conversations (parent, key) WHERE key IS NOT NULL;`];
 export const SCHEMA = MIGRATIONS.length;
 const backupOf = (file, version) => `${file}.v${version}.bak`;
 const replaceWith = (file, copy) => {
