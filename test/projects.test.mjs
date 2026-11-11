@@ -410,8 +410,8 @@ test('ledger schema 3: every chat from before is a general chat, not archived; t
   const before = read('SELECT id, title, folder FROM conversations ORDER BY id').map((r) => ({ ...r }));
   const ledger = openLedger(file);
   ledger.db.close();
-  assert.equal(SCHEMA, 3);
-  assert.equal(read('PRAGMA user_version')[0].user_version, 3);
+  assert.equal(SCHEMA, 4); // 4 (A7 Delegate) adds parent and key; this test is about step 3's columns
+  assert.equal(read('PRAGMA user_version')[0].user_version, 4);
   const after = read('SELECT id, title, folder, project, archived FROM conversations ORDER BY id').map((r) => ({ ...r }));
   assert.deepEqual(after.map(({ id, title, folder }) => ({ id, title, folder })), before);
   assert.ok(after.every((r) => r.project === null && r.archived === 0));

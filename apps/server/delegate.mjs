@@ -1,6 +1,8 @@
 // A7 Delegate: the P9 MCP tools that let one chat's agent start and steer other chats (SECURITY.md § Delegate).
 // The chat that calls open_chat is the parent, the chats it starts are its sub-agents, the group is a sprint.
 // Everything here goes through chat.mjs's own create, prompt, stop and answer, so a sub-agent is an ordinary chat.
+import { randomUUID } from 'node:crypto';
+
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 // How wide a mode is, across both agents: 0 reads only, 1 asks before each action, 2 edits files, 3 acts with a
@@ -63,7 +65,7 @@ export function createDelegate({ chat, allowed }) {
     return mine || (!own && me.project && me.project === it.project) ? { mine, family } : null;
   };
   const lastLine = (reply) => reply.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? '';
-  const stateOf = (info) => info.state === 'turn' || info.busy ? 'working' : ['idle', 'running'].includes(info.state) ? 'idle' : info.state === 'stopped' ? 'stopped' : info.state;
+  const stateOf = (info) => info.state === 'turn' || info.busy ? 'working' : ['idle', 'running'].includes(info.state) ? 'idle' : ['stopped', 'stopping', 'moving', 'moved'].includes(info.state) ? 'stopped' : 'failed';
   // The mode a message from caller may run target in: the target's own, brought down to the caller's tier.
   const modeFor = (caller, target, asked) => {
     const mine = chat.info(caller), ceiling = tierOf(mine.provider, mine.mode);
@@ -103,7 +105,7 @@ export function createDelegate({ chat, allowed }) {
     const title = args.title ?? args.text.trim().split('\n')[0].slice(0, 60);
     const ask = 'P9 Delegate: start a ' + (provider === 'claude' ? 'Claude' : 'Codex') + ' sub-agent "' + title + '" in mode ' + picked.mode
       + (args.folder ? ', folder ' + args.folder : '') + '. Its task: ' + args.text.slice(0, 600) + (args.text.length > 600 ? '…' : '');
-    if (!await allowed(caller, { toolCallId: 'p9-mcp-' + crypto.randomUUID(), title: ask, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
+    if (!await allowed(caller, { toolCallId: 'p9-mcp-' + randomUUID(), title: ask, kind: 'execute' }, signal)) return { error: 'not-allowed', detail: 'The user did not allow it.' };
     const made = await chat.create({ provider, title, ...(folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
     const sent = await chat.prompt(made.conversation, { text: args.text, mode: picked.mode, ...(model && { model }), ...(effort && effortId && { config: { [effortId]: effort } }) }, undefined, caller);
