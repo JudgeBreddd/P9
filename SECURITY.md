@@ -684,6 +684,10 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
   it as a report, not as an instruction from you. A sub-agent whose agent dies mid-turn is reported
   as `[p9] <title> failed`. Either line is sent only to a parent that is running; it never starts
   a stopped chat.
+- **Who sent it.** A message another chat's agent sends (`open_chat`, `send_chat`) reaches the
+  receiving agent with one line in front, added by P9: it says the message is from another chat's
+  agent and not from you, and names that chat. Your own messages carry no such line. It is a
+  label, not a control: P9 does not stop the receiving agent from acting on the message.
 - **After a restart.** P9 resends nothing a restart cut off. When P9 starts and finds that a
   restart stopped a chat of a sprint in the middle of a turn, it sends one line to the chat at the
   top of that sprint, `[p9] P9 restarted. Interrupted mid-turn: <titles>. Not resent.`, which

@@ -340,6 +340,10 @@ test('Delegate: sprint rules ride with every message a parent\'s agent sends its
   const log = path.join(path.resolve(instance.workspace, made.folder), 'rules.log');
   const sent = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []);
   const users = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user');
+  // The sender label: every message another chat's agent sends says so and names that chat; the user's own does not.
+  const from = () => { const file = path.join(path.dirname(log), 'from.log'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []; };
+  assert.equal(from().length, 1, 'the first message did not say who sent it');
+  assert.ok(from()[0].startsWith('[P9: from another chat\'s agent, not from the user.') && from()[0].includes(`(chat ${a.conversation})`), from()[0]);
   // The first message: P9's default, as its own block (the agent saw only "hello"), a hash in the transcript.
   assert.equal(sent().length, 1, 'the first message carried no rules');
   assert.match(sent()[0], /^\[P9: sprint rules[^\n]*\nBefore you start, say in one line which folder[\s\S]*whether the work passed, failed or is waiting/);
@@ -357,6 +361,7 @@ test('Delegate: sprint rules ride with every message a parent\'s agent sends its
   await until(instance, (event) => event.conversation === made.chat && event.type === 'user' && event.data.text === 'slow');
   assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'nudge', when: 'steer' })).sent, 'into its running turn');
   assert.equal(sent().length, 4, 'a steered message carried no rules');
+  assert.equal(from().length, 4, 'a steered message did not say who sent it');
   assert.match((await users()).at(-1).data.rules, /^[0-9a-f]{12}$/);
   await a.tool('stop_chat', { chat: made.chat });
   await a.done(made.chat);
@@ -364,6 +369,7 @@ test('Delegate: sprint rules ride with every message a parent\'s agent sends its
   await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'mine' });
   await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'echo:mine');
   assert.equal(sent().length, 4, 'the user\'s own message carried the parent\'s rules');
+  assert.equal(from().length, 4, 'the user\'s own message was labelled as an agent\'s');
   assert.equal((await users()).at(-1).data.rules, undefined);
   // Empty: none. Too long, or under the lock: refused and unchanged.
   await a.tool('set_rules', { rules: '' });
