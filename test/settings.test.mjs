@@ -1655,7 +1655,7 @@ test('Chat folder: Start in offers the workspace, recent folders and Choose fold
   const pickNext = (filePaths) => app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: !filePaths.length, filePaths }); }, filePaths);
   const folder = page.locator('#newFolder');
   const labels = () => folder.locator('option').allInnerTexts();
-  await page.click('#newBtn'); await folder.waitFor();
+  await page.click('#newOptions'); await folder.waitFor();
   assert.deepEqual(await labels(), ['Workspace', 'Choose folder…']);
   // Main sends back only a folder whose real path is inside the workspace: outside, a link out, and Cancel give nothing.
   for (const [pick, want] of [[[instance.directory], null], [[path.join(instance.workspace, 'out')], null], [[], undefined], [[instance.workspace], '']]) {
@@ -1676,7 +1676,7 @@ test('Chat folder: Start in offers the workspace, recent folders and Choose fold
   assert.deepEqual((await call(instance, '/chat')).conversations.map((c) => c.folder), ['proj/sub']);
   // The folder is now a recent one, also after a reload; Workspace still makes a chat with no folder.
   await page.reload(); await page.locator('#rChat').waitFor();
-  await page.click('#newBtn'); await folder.waitFor();
+  await page.click('#newOptions'); await folder.waitFor();
   assert.deepEqual(await labels(), ['Workspace', 'proj/sub', 'Choose folder…']);
   await folder.selectOption({ label: 'Workspace' });
   await page.locator('#newPop [data-new="claude"]').first().click();
@@ -1733,7 +1733,7 @@ test('Chat file browser: each scope lists its real folder, a file opens in the e
   // Current project follows the chat shown: a chat started in proj/sub.
   await scope('Current project', 'proj');
   await app.evaluate(({ dialog }, filePaths) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths }); }, [path.join(instance.workspace, 'proj/sub')]);
-  await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
+  await page.click('#newOptions'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
   await page.waitForFunction(() => document.querySelector('#newFolder').value === 'proj/sub', null, { timeout: 5000 });
   await page.locator('#newPop [data-new="claude"]').first().click();
   await listed('proj/sub'); assert.deepEqual(await names(), ['deep.md']);

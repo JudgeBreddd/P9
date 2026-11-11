@@ -180,7 +180,7 @@ test('Server mode in the window: badge, status, local-only actions, switch back'
   // and says why it cannot go higher; a click selects, a double click opens, a breadcrumb goes back.
   await mkdir(path.join(remote.workspace, 'proj', 'sub'), { recursive: true });
   const dlg = page.locator('#folderDlg'), row = name => dlg.locator('#folderList [data-fdir]', { hasText: new RegExp('^' + name + '$') });
-  const choose = async () => { if (!await page.locator('#newFolder').isVisible()) await page.click('#newBtn'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' }); };
+  const choose = async () => { if (!await page.locator('#newFolder').isVisible()) await page.click('#newOptions'); await page.locator('#newFolder').selectOption({ label: 'Choose folder…' }); };
   await choose();
   await dlg.locator('#folderWhy', { hasText: 'agent lock or File protection is on' }).waitFor({ timeout: 10000 });
   assert.equal(await dlg.locator('#folderUp').isDisabled(), true, 'the workspace top: Up is off, and the dialog says why');

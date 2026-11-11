@@ -170,7 +170,7 @@ test('side panel: the drag bar, slots, narrow mode, the editor view beside it, s
     assert.ok(await page.locator('#sideChats .pane').count() === 1, 'the chat is in it');
     // New chat in Dev Focus (2026-11-02): it opens beside the editor, and the chat picker stays one line over its short welcome.
     const before = await page.locator('#sidePick option').count();
-    await page.click('#newBtn'); await page.click('#newPop [data-new="claude"]');
+    await page.click('#newOptions'); await page.click('#newPop [data-new="claude"]');
     await page.waitForFunction(n => document.querySelectorAll('#sidePick option').length === n + 1, before);
     const pick = await page.locator('#sidePick').evaluate(s => ({ text: s.selectedOptions[0]?.textContent, h: s.getBoundingClientRect().height }));
     assert.match(pick.text, /^Claude \d+$/, 'the new chat is the one beside the editor');

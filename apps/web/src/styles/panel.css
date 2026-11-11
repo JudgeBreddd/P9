@@ -230,3 +230,12 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 .ptool .state[data-s="failed"]{color:var(--destructive)}
 
 @media (prefers-reduced-motion:reduce){.lpanel .mk-run::after,.lpanel .row[data-moved],.lpanel .bot[data-busy]>svg,.lp-toast{animation:none}.lpanel{transition:none}}
+
+/* One click starts a chat; the adjacent control keeps folder and model choices available. */
+.acts{display:flex;gap:3px}
+#newBtn{flex:1;min-width:0}
+#newOptions{width:30px;height:32px;flex:none;border:0;border-radius:calc(var(--radius) - 2px);color:var(--primary);background:color-mix(in oklch,var(--primary) 14%,transparent);cursor:pointer}
+#newOptions:hover,#newOptions[aria-expanded="true"]{background:color-mix(in oklch,var(--primary) 24%,transparent)}
+.lpanel[data-collapsed] .acts{flex-direction:column;align-items:center}
+.lpanel[data-collapsed] #newBtn{flex:none}
+.lpanel[data-collapsed] #newOptions{width:32px;height:24px}

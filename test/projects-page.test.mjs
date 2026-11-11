@@ -291,7 +291,7 @@ test('projects: the offered chat moves in and shows under the project', { timeou
   // Builder has projects closed in the panel: the open/closed choice is kept.
   await page.locator(`#navList [data-toggle="${other}"]`).click();
   await page.locator(`#navList [data-proj="${other}"][aria-expanded=false]`).waitFor({ timeout: 5000 });
-  await page.click('#newBtn'); await page.locator('#newFolder').waitFor();
+  await page.click('#newOptions'); await page.locator('#newFolder').waitFor();
   await pickNext(path.join(instance.workspace, 'site'));
   await page.locator('#newFolder').selectOption({ label: 'Choose folder…' });
   await page.waitForFunction(() => document.querySelector('#newFolder').value === 'site', null, { timeout: 5000 });

@@ -426,7 +426,7 @@ $('#newFolder').onchange = async e => {
   renderNewFolder();
 };
 // O29 (Builder, 2026-11-08): New chat opens on the agent used last on this computer (a chat made or a message sent): its
-// section comes first and its first row has the focus, so + then Enter starts it, with that agent's saved defaults.
+// button starts it immediately with that agent's saved defaults; the adjacent options button opens the picker.
 // O44: each row starts the model it names. A live P9's rows come from the agent's own list (the last one this window saw),
 // after the row that starts on the defaults; before any list, that row alone. The sample data keeps its fixed names.
 const SAMPLE_MODELS = { claude: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'], codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini'] };
@@ -434,7 +434,8 @@ const row = (a, label, model) => `<button class="item" data-new="${a}"${model ? 
 const newRows = () => { for (const a of Object.keys(names)) $(`#newAgents [data-sec="${a}"]`).innerHTML = `<hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New ${names[a]}</div>`
   + row(a, `${names[a]} <span class="muted">default model</span>`, !liveChat.on && SAMPLE_MODELS[a][0])
   + (liveChat.on ? lastModels[a]?.options || [] : SAMPLE_MODELS[a].slice(1).map(v => ({ value: v, name: v }))).map(o => row(a, `${names[a]} · ${esc(o.name)}`, o.value)).join(''); };
-const newPop = popover($('#newBtn'), $('#newPop'), () => { newRows(); $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
+const newPop = popover($('#newOptions'), $('#newPop'), () => { newRows(); $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
+$('#newBtn').onclick = () => { newPop.close(); newSession(lastAgent()); };
 $('#newAgents').onclick = e => { const b = e.target.closest('[data-new]'); if (b) { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); } };
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
