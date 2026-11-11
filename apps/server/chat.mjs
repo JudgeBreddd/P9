@@ -555,7 +555,13 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const profile = profileOf(conversation.id);
     if (profile?.gone) { emit(conversation.id, 'error', { message: PROFILE_ERRORS['profile-gone'] }); throw Object.assign(new Error('profile-gone'), { status: 409, reason: 'profile-gone' }); }
     // O48: the adapter reads the model name from its own environment only (one outside model per agent process). Not a secret.
-    const proc = launchTree(command(conversation.provider), workspace, { instance, scope: true, ...(profile && { env: { ANTHROPIC_MODEL: profile.model, ANTHROPIC_CUSTOM_MODEL_OPTION: profile.model } }) });
+    // O39: on a resume the Claude adapter sets the session to the computer's default model (the user's own Claude settings)
+    // unless its environment names one. Naming the chat's own model there keeps the resume on it: no switch away and back.
+    // 'default' is left out: as an environment value it would not mean the list's Default row.
+    const kept = !profile && conversation.provider === 'claude' && conversation.session ? lastPicks(conversation.id).config?.model?.current : undefined;
+    const env = profile ? { ANTHROPIC_MODEL: profile.model, ANTHROPIC_CUSTOM_MODEL_OPTION: profile.model }
+      : typeof kept === 'string' && kept !== 'default' && /^[\w.:\[\]@/-]{1,128}$/.test(kept) ? { ANTHROPIC_MODEL: kept } : undefined;
+    const proc = launchTree(command(conversation.provider), workspace, { instance, scope: true, ...(env && { env }) });
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
     // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.

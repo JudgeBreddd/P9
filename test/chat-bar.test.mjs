@@ -307,7 +307,7 @@ test('resume shows settings that could not be restored', { timeout: 180000 }, as
   await again.page.locator('#nav .row[data-chat="' + id + '"]').click();
   const p2 = again.page.locator('.pane[data-id="' + id + '"]');
   await p2.locator('.composer textarea').fill('hello'); await p2.locator('.composer textarea').press('Enter');
-  await p2.locator('.hist', { hasText: 'Could not restore Model: Default (recommended), Effort: Medium, Mode: Manual' }).waitFor({ timeout: 20000 });
+  await p2.locator('.hist', { hasText: 'Could not restore Effort: Medium, Mode: Manual' }).waitFor({ timeout: 20000 });
   await shot(again.page, 'o38-resume-refused');
   assert.deepEqual(again.errors, []);
 });
