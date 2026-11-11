@@ -6,7 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { daemon, http, authenticated, root } from './helpers.mjs';
 import { acpAsk } from '../apps/server/chat.mjs';
-import { diffs } from '../apps/server/acp-v2.mjs';
+import { diffs, v1Stream } from '../apps/server/acp-v2.mjs';
 
 const fake = path.join(root, 'test/fake-acp-v2-agent.mjs');
 const start = (t, env = {}) => daemon(t, undefined, false, async () => ({ args: ['--acp-override', fake], env }));
@@ -94,4 +94,22 @@ test('a git patch becomes one v1 diff per file; a new file has no old text', () 
   const patch = 'diff --git /a.md /a.md\nnew file mode 100644\n--- /dev/null\n+++ /a.md\n@@ -0,0 +1,2 @@\n+one\n+two\ndiff --git /b.md /b.md\n--- /b.md\n+++ /b.md\n@@ -1,2 +1,2 @@\n one\n-two\n+three\n';
   assert.deepEqual(diffs({ patch: { text: patch } }), [{ type: 'diff', path: '/a.md', oldText: null, newText: 'one\ntwo' }, { type: 'diff', path: '/b.md', oldText: 'one\ntwo', newText: 'one\nthree' }]);
   assert.deepEqual(diffs({ patch: {} }), []);
+});
+
+// The SDK ignores a notification P9 has no handler for, so the daemon test above cannot show this drop: checked here on
+// the translator itself, which is the one place that must never pass the account's email on.
+test('the agent\'s sign-in notices stop at the translator', async () => {
+  const toAgent = new TransformStream(), fromAgent = new TransformStream();
+  const p9 = v1Stream({ readable: fromAgent.readable, writable: toAgent.writable });
+  const write = p9.writable.getWriter(), agent = fromAgent.writable.getWriter(), read = p9.readable.getReader();
+  await write.write({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 2, clientCapabilities: {} } });
+  await (await toAgent.readable.getReader()).read();
+  agent.write({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 2, info: { name: 'x' }, capabilities: {} } });
+  assert.equal((await read.read()).value.result.protocolVersion, 2);
+  agent.write({ jsonrpc: '2.0', method: 'auth/status_update', params: { status: { type: 'authenticated', email: 'person@example.com' } } });
+  agent.write({ jsonrpc: '2.0', method: '_auth/status_update', params: { email: 'person@example.com' } });
+  agent.write({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'next' } } } });
+  const next = (await read.read()).value;
+  assert.equal(next.method, 'session/update', JSON.stringify(next));
+  assert.equal(next.params.update.content.text, 'next');
 });
