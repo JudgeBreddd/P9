@@ -7,7 +7,7 @@ import { mkdtemp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
-import * as acp from '@agentclientprotocol/sdk';
+import * as acp from '../apps/server/acp.mjs';
 import { adapterEntry, clientCapabilities } from '../apps/server/chat.mjs';
 import { launchTree, endTree } from '../apps/server/process-tree.mjs';
 
@@ -19,8 +19,8 @@ for (const provider of ['claude', 'codex']) {
     t.after(() => endTree(tree));
     let stderr = '';
     tree.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4000); });
-    const agent = new acp.ClientSideConnection(() => ({ sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
-      createElicitation: async () => ({ action: 'cancel' }) }), acp.ndJsonStream(Writable.toWeb(tree.child.stdin), Readable.toWeb(tree.child.stdout)));
+    const agent = acp.connectClient(acp.ndJsonStream(Writable.toWeb(tree.child.stdin), Readable.toWeb(tree.child.stdout)), { sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
+      createElicitation: async () => ({ action: 'cancel' }) });
     const timeout = (what) => new Promise((resolve, reject) => setTimeout(() => reject(new Error(what + ' timed out; stderr: ' + stderr)), 30000));
     // The same call as chat.mjs connect().
     const init = await Promise.race([agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }), timeout('initialize')]);

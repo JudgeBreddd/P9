@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import * as acp from '@agentclientprotocol/sdk';
+import * as acp from './acp.mjs';
 import { childEnv } from './child-env.mjs';
 import { agentDirs, claudeWindow } from './limits.mjs';
 import { imageType, protection } from '../../packages/files/index.mjs';
@@ -523,7 +523,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Every meter (desktop, phone, /usage) reads the stored event, so it is sized here, once. session.window is set
     // before the first ACP request, so no update can arrive ahead of it.
     const sizing = conversation.provider === 'claude' ? claudeWindow(agentDirs(os.homedir(), childEnv()).claudeDir, childEnv()).catch(() => null) : null;
-    session.agent = new acp.ClientSideConnection(() => ({
+    session.agent = acp.connectClient(stream, {
       sessionUpdate: async ({ update: raw }) => {
         // max(): a reading past the window still shows full, and stays a valid context for the ledger (used <= size).
         const update = session.window && raw?.sessionUpdate === 'usage_update' && raw.size > session.window ? { ...raw, size: Math.max(session.window, Number(raw.used) || 0) } : raw;
@@ -541,7 +541,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // Never the SDK's second argument as a signal: only P9's own MCP approvals can be withdrawn.
       requestPermission: async (request) => (await ownRead(conversation.id, request).catch(() => null)) ?? session.approve(request),
       createElicitation: ask('question'),
-    }), stream);
+    });
     live.set(conversation.id, session);
     let timer;
     const limit = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('adapter-start-timeout')), START_MS); });

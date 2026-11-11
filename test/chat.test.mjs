@@ -10,7 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { daemon, restart, http, authenticated, root } from './helpers.mjs';
 import { formSpec } from '../apps/server/chat.mjs';
-import { zElicitationSchema } from '../node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js';
+import { zElicitationSchema } from '../node_modules/@agentclientprotocol/sdk/dist/v1/unstable/schema/zod.gen.js';
 
 const fake = path.join(root, 'test/fake-acp-agent.mjs');
 const userBus = process.env.XDG_RUNTIME_DIR && existsSync(path.join(process.env.XDG_RUNTIME_DIR, 'bus'))

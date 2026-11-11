@@ -17,7 +17,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
-import * as acp from '@agentclientprotocol/sdk';
+import * as acp from '../apps/server/acp.mjs';
 
 // Run as the adapter's login CLI (threat model row 31): records its arguments in fake-login-argv, prints the URL in
 // fake-login-url (else a claude.com one) and a paste prompt, and records each stdin line in fake-login-code; "done" exits 0.
@@ -96,7 +96,7 @@ const commands = (sessionId) => connection.sessionUpdate({ sessionId, update: { 
   availableCommands: [{ name: 'compact', description: 'Clear history but keep a summary' }, { name: 'context', description: 'Show context use' }, { name: 'review', description: 'Review the changes' }] } });
 
 const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
-const connection = new acp.AgentSideConnection(() => ({
+const connection = acp.connectAgent(stream, {
   async initialize() {
     if (existsSync('hang-init')) await new Promise(() => {});
     if (existsSync('slow-init')) await new Promise((resolve) => setTimeout(resolve, 10000));
@@ -428,4 +428,4 @@ const connection = new acp.AgentSideConnection(() => ({
     await say('echo:' + text);
     return { stopReason: 'end_turn' };
   },
-}), stream);
+});
