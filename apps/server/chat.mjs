@@ -52,11 +52,11 @@ const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // contracts.md rule 1: without elicitation.form both adapters silently skip questions. fs and terminal stay off:
 // agents read, write and run under their own permission checks.
-// The ACP version P9 asks each agent for (0.1.9 O52). ACP 2 is still a draft to its authors. Codex gets 2: it keeps
-// mid-turn steering there. ponytail: Claude stays on 1, because its adapter (0.106.0) has no steering on 2 and a
-// message sent mid-turn makes it send its whole answer twice; make it 2 when its v2 steers. P9_ACP_VERSION=1 in the
-// daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
-const ACP_ASK = { claude: 1, codex: 2 };
+// The ACP version P9 asks each agent for (0.1.9 O52). ACP 2 is still a draft to its authors, so each agent has its own
+// number here and P9_ACP_VERSION=1 in the daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
+// ponytail: Claude's adapter (0.106.0) has no steering on 2, so a message sent mid-turn waits for the turn's end
+// (session.steering is false; Builder, 2026-11-10: "thats really enough for me"). It steers again when the adapter does.
+const ACP_ASK = { claude: 2, codex: 2 };
 export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
 // The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.

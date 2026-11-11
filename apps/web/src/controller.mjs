@@ -1046,7 +1046,7 @@ function wizRender() {
           + (l.running && device && l.code ? `<div class="set-row" data-device-code><span class="muted sm">Your one-time code, for 15 minutes</span><span class="spacer"></span><code style="font:600 18px ui-monospace,monospace;letter-spacing:.08em;user-select:all">${esc(l.code)}</code></div>` : '')
           + (l.running && W.note[a]?.info ? `<p class="muted sm">${esc(W.note[a].info)}</p>` : '')
           + (l.running && a === 'claude' ? `<div class="set-row"><input data-slot="input" id="welCode" value="${esc(W.code)}" placeholder="Paste the code from the browser" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Sign-in code">${btn('code:claude', 'Send')}</div>` : '')
-          + (l.unsupported && !l.running ? '<p class="warn sm">This Codex has no sign-in with a code (P9 was built with Codex 0.159.3, which has one). Use Sign in in a terminal below and follow what Codex prints there.</p>'
+          + (l.unsupported && !l.running ? '<p class="warn sm">This Codex has no sign-in with a code (P9 was built with Codex 0.166.0, which has one). Use Sign in in a terminal below and follow what Codex prints there.</p>'
             : ended ? `<p class="warn sm">${name} sign-in ended without signing in. Retry starts it again; finish in the browser before closing it.</p>` : '')
           // D8: its own sign-in command in a P9 terminal, run by the CLI P9 ships (item 15). Nothing runs before Enter.
           + (s[a + 'Cli'] && !on && !l.running ? `<div class="set-row"><span class="muted sm">Or sign in with ${name}'s own command in a P9 terminal.</span><span class="spacer"></span>${btn('term:' + a + ':login', 'Sign in in a terminal')}</div>` : '')

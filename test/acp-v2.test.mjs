@@ -86,7 +86,7 @@ test('fallback: an agent that answers ACP 1, or refuses the v2 ask, runs on ACP 
     assert.equal(hit.type, 'turn-end', flag + ': ' + JSON.stringify(hit.data));
     assert.ok(says(seen).includes('v1:hello'), flag);
   }
-  assert.deepEqual([acpAsk('codex', {}), acpAsk('claude', {}), acpAsk('codex', { P9_ACP_VERSION: '1' }), acpAsk('claude', { P9_ACP_VERSION: '2' }), acpAsk('codex', { P9_ACP_VERSION: '9' })], [2, 1, 1, 2, 2]);
+  assert.deepEqual([acpAsk('codex', {}), acpAsk('claude', {}), acpAsk('codex', { P9_ACP_VERSION: '1' }), acpAsk('claude', { P9_ACP_VERSION: '1' }), acpAsk('codex', { P9_ACP_VERSION: '9' })], [2, 2, 1, 1, 2]);
   console.log('PASS acp v2 fallback: answers-1 and refuses-2 agents both ran a v1 turn; the version ask follows the per-agent setting and the override');
 });
 

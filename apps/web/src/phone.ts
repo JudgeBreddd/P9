@@ -1559,7 +1559,7 @@ async function loadSignIn() {
     box.innerHTML = (stale ? '<p class="muted card">The daemon did not answer: this is the last sign-in state it sent.</p>' : '') + SIGN_IN.map(([agent, name, page]) => {
       const s = data[agent], note = signInNote[agent];
       const ended = !s.running && s.exit !== null && !s.signedIn;
-      const said = s.unsupported ? `This Codex has no sign-in with a code (P9 was built with Codex 0.159.3, which has one). Sign in from the desktop's Sign in in a terminal and follow what Codex prints there.`
+      const said = s.unsupported ? `This Codex has no sign-in with a code (P9 was built with Codex 0.166.0, which has one). Sign in from the desktop's Sign in in a terminal and follow what Codex prints there.`
         : ended ? `${name} sign-in ended without signing in. Sign in starts it again; finish on ${page}'s page before it ends.` : '';
       const running = !s.running ? '' : !s.url ? '<p class="muted">Starting sign-in…</p>'
         : `<p><a data-sign-link="${agent}" target="_blank" rel="noopener noreferrer"></a></p>`

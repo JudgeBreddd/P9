@@ -9,6 +9,7 @@
 //   config options   named by configId; a set needs a type          -> id; type added
 //   session/prompt   answers at once with a messageId; the turn     -> the v1 reply is held until that idle and carries
 //                    ends with a state_update 'idle'                   its stopReason and usage
+//   MCP servers      each names its transport type                  -> 'stdio' added where v1 leaves it off
 //   tool calls       only tool_call_update; the first one creates   -> the first one per id becomes tool_call
 //   diffs            a git patch                                    -> path/oldText/newText, one per file
 //   permission       title + subject                                -> toolCall
@@ -63,7 +64,11 @@ export function v1Stream(stream) {
     if (!v2 || message.id === undefined || !message.method) return message;
     const params = message.params ?? {};
     if (message.method === 'session/prompt') { sent.set(message.id, { prompt: params.sessionId }); turns.set(params.sessionId, { id: message.id, live: false }); }
-    else if (message.method === 'session/new' || message.method === 'session/resume') sent.set(message.id, { config: true });
+    else if (message.method === 'session/new' || message.method === 'session/resume') {
+      sent.set(message.id, { config: true });
+      // v2 names each MCP server's transport; v1 leaves it off a stdio one. Without it codex-acp 2.6.0 refuses the session.
+      if (Array.isArray(params.mcpServers)) return { ...message, params: { ...params, mcpServers: params.mcpServers.map((server) => (server.type ? server : { ...server, type: 'stdio' })) } };
+    }
     else if (message.method === 'session/set_config_option') {
       sent.set(message.id, { config: true });
       if (params.type === undefined) return { ...message, params: { ...params, type: typeof params.value === 'boolean' ? 'boolean' : 'id' } };

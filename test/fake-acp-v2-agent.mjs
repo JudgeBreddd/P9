@@ -2,7 +2,7 @@
 // recorded traffic of codex-acp 2.6.0 and claude-agent-acp 0.106.0, so apps/server/acp-v2.mjs is tested against what
 // the real agents send and not against its own idea of v2. The prompt text picks the behaviour: "slow" works until
 // cancelled, "fail" ends the turn with an error, anything else runs an edit that asks first, a command, a plan and a
-// notice. A set_config_option without v2's `type` is refused. Files in the working directory: v1-only answers
+// notice. A set_config_option without v2's `type`, or a session whose MCP server has none, is refused. Files in the working directory: v1-only answers
 // initialize with protocol 1 (and then speaks v1), refuse-v2 answers a v2 initialize with an error.
 import { createInterface } from 'node:readline';
 import { existsSync } from 'node:fs';
@@ -69,6 +69,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       v2 = true;
       return send({ id, result: { protocolVersion: 2, info: { name: 'fake-v2', title: 'Fake', version: '0' }, capabilities: { session: { prompt: { image: true, embeddedContext: true } } }, _meta: { steering: { supported: true } } } });
     case 'session/new': case 'session/resume':
+      if (v2 && !(params.mcpServers ?? []).every((server) => server.type)) return fail(-32602, 'Invalid params: mcpServers type'); // as codex-acp 2.6.0
       if (method === 'session/resume') sessionId = params.sessionId;
       send({ id, result: { ...(method === 'session/new' && { sessionId }), configOptions: configOptions() } });
       if (!v2) return;

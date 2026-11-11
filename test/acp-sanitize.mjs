@@ -1,4 +1,4 @@
-// Turns a raw recording (acp-record.mjs) into test/fixtures/acp/<provider>.json: drops _auth/* account notices,
+// Turns a raw recording (acp-record.mjs) into test/fixtures/acp/<provider>.json: drops _auth/* and auth/* account notices,
 // replaces the available-command list, replaces the scratch workspace with /workspace and the repo with /p9, its folder with /scratch, the home directory with ~,
 // redacts email addresses, and drops account metadata (_meta: rate limits and models, cost, usage) and plugin-provided
 // agent options (values with a colon), which carry Builder's own plugins.
@@ -17,7 +17,9 @@ const command = (key, item) => key === 'command' && typeof item === 'string' && 
 function scrub(value) {
   if (Array.isArray(value)) return value.filter((item) => !(typeof item?.value === 'string' && item.value.includes(':'))).map(scrub);
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !DROP.has(key)).map(([key, item]) => [key, scrub(command(key, item))]));
+  // The command list carries the user's own skills, in an update on v1 and in the session reply too on v2: one placeholder keeps the shape.
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !DROP.has(key)).map(([key, item]) => [key, key === 'availableCommands' && Array.isArray(item)
+    ? [{ name: 'example', description: 'Placeholder for the recorded command list', input: null }] : scrub(command(key, item))]));
 }
 let fixture;
 if (raw === '--fixture') {
@@ -31,7 +33,7 @@ if (raw === '--fixture') {
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, 'user@example.invalid');
   const lines = readFileSync(raw, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
     .map(({ dir, line }) => ({ dir, msg: JSON.parse(clean(line)) }))
-    .filter(({ msg }) => !msg.method?.startsWith('_auth/'));
+    .filter(({ msg }) => !/^_?auth\//.test(msg.method ?? '')); // v2 has auth/status_update too
   // The command list carries the user's own skills; one placeholder keeps the message shape.
   for (const { msg } of lines) if (msg.params?.update?.sessionUpdate === 'available_commands_update') msg.params.update.availableCommands = [{ name: 'example', description: 'Placeholder for the recorded command list', input: null }];
   fixture = { provider, package: '@agentclientprotocol/' + pkg, version, lines };
