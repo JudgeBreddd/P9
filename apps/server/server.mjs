@@ -582,6 +582,10 @@ export function createListener({ workspace, savedWorkspace, recovery, state, own
     app.post('/devices/:id/revoke', (c) => reply(c, auth.revoke(c.req.param('id'))));
   }
   // Send to server (D14, threat model row 51, move.mjs): the desktop moves a chat; the phone never sees these routes.
+  // O48 provider profiles: desktop only; the phone has no route. The reply never holds a key.
+  app.get('/profiles', (c) => reply(c, chat.profiles.list()));
+  app.post('/profiles', async (c) => reply(c, chat.profiles.save(await json(c))));
+  app.delete('/profiles/:id', (c) => reply(c, chat.profiles.remove(c.req.param('id'))));
   app.post('/chat/:id/send-away', async (c) => reply(c, await chat.sendAway(c.req.param('id'))));
   app.get('/chat/:id/move-part', async (c) => reply(c, await chat.part(c.req.param('id'), c.req.query('kind'), Number(c.req.query('offset')))));
   app.post('/chat/:id/moved', async (c) => reply(c, await chat.moved(c.req.param('id'), await json(c))));

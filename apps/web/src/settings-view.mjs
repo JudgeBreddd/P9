@@ -150,7 +150,7 @@ async function setUnrestricted(on) {
 // Attempt 2 items 6 and 7 (the owner): five pages, picked on the left; every row moves, unchanged, to the page it mainly
 // affects. The wiring below finds rows by id in #setBody, so it does not care which page holds them.
 const SET_PAGES = ['General', 'Chat Focus', 'Dev Focus', 'Mission Control', 'Remote Connect'];
-const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
+const SET_PAGE_OF = { 'New chats start in': 'Chat Focus', 'Provider profiles': 'Chat Focus', 'Mission Control files': 'Mission Control', Remote: 'Remote Connect', 'Send files': 'Remote Connect' };
 // Settings opened at one row (Add a machine, a send limit): show the page that holds it, then the row.
 const settingsAt = el => { if (!el) return; outer.$('[data-set-page="' + el.closest('.set-page').dataset.page + '"]').click(); el.scrollIntoView({ block: 'center' }); };
 function settingsPages() {
@@ -194,6 +194,53 @@ function defaultsRow(a) {
     + `<label class="set-pick">Mode<select data-slot="input" data-default-mode="${a}" aria-label="Default mode for ${outer.names[a]}"><option value="">Last mode picked</option>${modes[a].map(m => `<option${m === outer.defaultMode(a) ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`
     + sel('data-default-model', 'Default model', ml, outer.defaultModel(a), outer.listDef[a]?.model) + sel('data-default-effort', 'Default effort', el, outer.defaultEffort(a), outer.listDef[a]?.pickers?.[outer.lastPickers[a]?.find(p => outer.pickerKind(p) === 'effort')?.id]) + '</div>';
 }
+// O48 provider profiles (threat model "Provider profiles"): another service that speaks Claude's API, for Claude chats. The
+// daemon keeps the key and never sends it back; the page holds it only in the form's field until Save, then redraws.
+// profileForm: null, 'new', or the id being edited. CHECKED: services a profile was really run against, with the base URL used.
+let profileForm = null, profileNote = '';
+const PROVIDERS = [['ollama.com', 'https://ollama.com', true], ['openrouter.ai', 'https://openrouter.ai', false]];
+function profilesGroup() {
+  if (!outer.liveChat?.on || !window.p9?.chat) return '';
+  const secret = { key: 'Key saved', command: 'Key from a command', none: 'No key yet' };
+  const rows = outer.profiles.map(p => `<div class="set-row" data-profile="${esc(p.id)}"><span><strong>${esc(p.name)}</strong><span class="muted sm">${esc(p.baseUrl)}${p.baseUrl.startsWith('http:') ? ' (not encrypted)' : ''} · ${esc(p.models.join(', '))} · ${secret[p.secret] ?? ''}</span></span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" data-profile-edit="${esc(p.id)}">Edit</button><button data-slot="button" data-variant="outline" data-size="sm" data-profile-remove="${esc(p.id)}">Remove</button></div>`).join('');
+  const p = profileForm && profileForm !== 'new' ? outer.profiles.find(x => x.id === profileForm) : null;
+  const field = (id, label, hint, input) => `<label class="set-row profile-field"><span><strong>${label}</strong><span class="muted sm">${hint}</span></span><span class="spacer"></span>${input}</label>`;
+  const form = !profileForm ? `<div class="set-row"><span class="muted sm">${rows ? '' : 'None yet. '}A profile's models appear under New Claude in the New chat menu.</span><span class="spacer"></span><button data-slot="button" data-size="sm" id="profileAdd">Add a profile</button></div>`
+    : `<div class="profile-form" id="profileForm">`
+    + field('profileName', 'Name', 'What the New chat menu calls it.', `<input data-slot="input" id="profileName" maxlength="40" value="${esc(p?.name ?? '')}" style="width:22em">`)
+    + field('profileUrl', 'Base URL', 'The service\'s address for Claude\'s API. This service sees everything the chat sends. ' + PROVIDERS.map(([n, u, ok]) => `<a href="${u}" data-profile-link>${n}</a>${ok ? '' : ' (not checked with P9)'}`).join(', ') + '<span id="profileHttp" style="color:var(--destructive)" hidden> Not encrypted: anyone on the network path can read the chat and the key.</span>', `<input data-slot="input" id="profileUrl" maxlength="300" placeholder="https://" value="${esc(p?.baseUrl ?? '')}" style="width:22em">`)
+    + field('profileModels', 'Models', 'One per line, named as the service names them.', `<textarea data-slot="input" id="profileModels" rows="3" style="width:22em">${esc((p?.models ?? []).join('\n'))}</textarea>`)
+    + field('profileKey', 'Key', p ? 'Empty keeps what is saved, unless the base URL changes: then type it again. P9 keeps it in one owner-only file and never shows it again.' : 'P9 keeps it in one owner-only file and never shows it again.', `<input data-slot="input" id="profileKey" type="password" autocomplete="off" maxlength="500" style="width:22em">`)
+    + field('profileCommand', 'Or a command that prints the key', 'Run at each chat start, without a shell: a program and its arguments, split on spaces.' + (p?.secret === 'command' ? ' One is saved; empty keeps it.' : ''), `<input data-slot="input" id="profileCommand" maxlength="500" autocomplete="off" style="width:22em">`)
+    + `<div class="set-row"><span class="sm" style="color:var(--destructive)" id="profileNote" role="alert">${esc(profileNote)}</span><span class="spacer"></span><button data-slot="button" data-variant="outline" data-size="sm" id="profileCancel">Cancel</button><button data-slot="button" data-size="sm" id="profileSave">Save</button></div></div>`;
+  return `<fieldset class="set-group" id="setProfiles"><legend>Provider profiles ${info('Another service that speaks Claude\'s API, for Claude chats: its models appear in the New chat menu beside Claude\'s own. A chat on a profile sends everything to that service, runs on the one model it was started on, and stays on this computer.', 'settings')}</legend>${rows}${form}</fieldset>`;
+}
+function bindProfiles() {
+  const g = outer.$('#setProfiles'); if (!g) return;
+  const redraw = async () => { await outer.loadProfiles(); renderSettings(); };
+  if (outer.$('#profileAdd')) outer.$('#profileAdd').onclick = () => { profileForm = 'new'; profileNote = ''; renderSettings(); outer.$('#profileName')?.focus(); };
+  g.querySelectorAll('[data-profile-edit]').forEach(b => { b.onclick = () => { profileForm = b.dataset.profileEdit; profileNote = ''; renderSettings(); }; });
+  g.querySelectorAll('[data-profile-remove]').forEach(b => { b.onclick = async () => {
+    const id = b.dataset.profileRemove, r = await window.p9.chat('profileRemove', { id }).catch(() => null);
+    if (r?.status === 200) for (const s of outer.S.sessions) if (s.profile?.id === id) s.profile = { ...s.profile, gone: true }; // its chats can be read, not continued
+    if (profileForm === id) profileForm = null;
+    await redraw(); outer.renderChats();
+  }; });
+  g.querySelectorAll('[data-profile-link]').forEach(a => { a.onclick = e => { e.preventDefault(); window.p9.openLink?.(a.href); }; });
+  const url = outer.$('#profileUrl'); if (!url) return;
+  const http = () => { outer.$('#profileHttp').hidden = !/^http:/i.test(url.value.trim()); }; url.oninput = http; http();
+  outer.$('#profileCancel').onclick = () => { profileForm = null; profileNote = ''; renderSettings(); };
+  outer.$('#profileSave').onclick = async () => {
+    const key = outer.$('#profileKey').value, command = outer.$('#profileCommand').value.trim();
+    const body = { ...(profileForm !== 'new' && { id: profileForm }), name: outer.$('#profileName').value.trim(), baseUrl: url.value.trim(), models: outer.$('#profileModels').value.split('\n').map(m => m.trim()).filter(Boolean), ...(key && { key }), ...(command && { command }) };
+    // A saved key belongs to the address it was typed for: the daemon drops it when the address changes, so ask here.
+    const was = outer.profiles.find(x => x.id === profileForm), same = (a, b) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+    if (was && was.secret !== 'none' && !key && !command && !same(body.baseUrl, was.baseUrl)) { profileNote = 'The base URL changed, so the saved key is not sent to the new address. Type the key for it, or the command that prints it.'; outer.$('#profileNote').textContent = profileNote; return; }
+    const r = await window.p9.chat('profileSave', body).catch(() => null);
+    if (r?.status !== 200) { profileNote = 'Not saved. It needs a name, an http or https address with no sign-in or query in it, 1 to 20 model names (letters, digits and . _ : / @ + -), and a key without spaces.'; outer.$('#profileNote').textContent = profileNote; return; }
+    profileForm = null; profileNote = ''; await redraw();
+  };
+}
 // The handlers of the three selects in each agent's defaults row (renderSettings, refreshDefaults).
 function bindDefaults() {
   outer.$('#setBody').querySelectorAll('[data-default-mode]').forEach(el => { el.onchange = async () => {
@@ -223,6 +270,7 @@ function renderSettings() {
     // The daemon keeps this one (it starts the shells, the phone's too); null: it did not answer, so the box is disabled.
     + (window.p9?.terminal ? box('setGreeting', 'Show the shell\'s welcome message in terminals', outer.termGreeting !== false, outer.termGreeting === null ? 'P9 did not answer; try again in a moment.' : 'Off: new terminals skip the greeting fish prints (a logo or fastfetch) and get P9_NO_GREETING=1 for your shell config. PowerShell always starts without its logo.', outer.termGreeting === null, 'The welcome text a shell prints when a new P9 terminal opens. Terminals already open keep theirs.') : '')
     + `<fieldset class="set-group"><legend>New chats start in ${info('The mode a new chat starts in, per agent. Last mode picked: the mode you picked last in a chat. Full access and Bypass permissions ask first, in red, unless you ticked Don\'t show again for them; a loosened last pick does not start a new chat on its own. The agent lock still wins.', 'settings')}</legend>${Object.keys(modes).map(defaultsRow).join('')}</fieldset>`
+    + profilesGroup()
     + `<fieldset class="set-group"><legend>Focus modes ${info('The three workspaces of P9: Chat Focus, Dev Focus and Mission Control. Turn off the ones you do not use; at least one stays on.', 'focus-modes')}</legend>${Object.entries(outer.focusNames).map(([f, n]) => box('setF-' + f, n, outer.settings.focus[f], '', outer.settings.focus[f] && on === 1)).join('')}</fieldset>`
     + (outer.pets ? petSettings() : '')
     + securityGroup(box)
@@ -241,7 +289,7 @@ function renderSettings() {
     saveSettings({ ...outer.settings, xfer: { ...outer.settings.xfer, [k]: Math.min(outer.XFER_SETTINGS[k][2], Math.max(1, n)) } }); }; });
   outer.$('#setCloseSend').onchange = e => saveSettings({ ...outer.settings, closeOnSend: e.target.checked });
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
-  bindDefaults();
+  bindDefaults(); bindProfiles();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
   if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn; };
   if (outer.pets) wirePetSettings();

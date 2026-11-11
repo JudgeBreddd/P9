@@ -19,6 +19,7 @@ import { authority, captureAuthority, stillAuthorized } from './authority.mjs';
 import { launchTree, endTree, hasUserBus } from './process-tree.mjs';
 import { listDirectory } from '../../packages/files/index.mjs';
 import { createMove, movedNote } from './move.mjs';
+import { createProfiles } from './profiles.mjs';
 import { createProjects, IN_P9 } from './projects.mjs';
 import { NOT_USE } from '../../packages/protocol/index.mjs';
 
@@ -70,6 +71,8 @@ const refused = (status, error) => ({ status, error });
 // window showed only "Authentication required"). Say how to sign in; any other error passes through, cut to 500 chars.
 const SIGN_IN = { claude: 'Claude Code is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal, run claude and log in. Then start a new chat.',
   codex: 'Codex is not signed in on this computer. Sign in from Settings → Setup in the desktop app, or open a terminal and run codex login. Then start a new chat.' };
+// O48: a chat start that failed before the agent was asked anything. None of these holds a key or a command's output.
+const PROFILE_ERRORS = { 'profile-no-key': 'This chat\'s provider profile has no key. Add one in Settings.', 'profile-command-failed': 'The key command of this chat\'s provider profile failed or printed nothing. Check it in Settings.', 'profile-gone': 'This chat\'s provider profile was removed in Settings. It can be read, not continued.' };
 const agentError = (error, provider) => (error?.code === -32000 ? SIGN_IN[provider] : String(error?.message ?? error).slice(0, 500));
 
 // The form P9 can show for an ACP elicitation schema (council 2026-10-16-013039-tier2): flat fields of string, number,
@@ -272,6 +275,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   };
   const row = (id) => db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
   const setState = (id, state) => db.prepare('UPDATE conversations SET state = ? WHERE id = ?').run(state, id);
+  // O48 (SECURITY.md "Provider profiles"): a Claude chat started on a profile keeps { id, name, model } in prefs under
+  // profile:<chat>; the key stays in profiles.mjs. gone: the profile was removed, so the chat can be read, not continued.
+  const profiles = createProfiles(ownership || state);
+  const profileOf = (id) => {
+    let kept; try { kept = JSON.parse(db.prepare('SELECT value FROM prefs WHERE key = ?').get('profile:' + id)?.value ?? 'null'); } catch { kept = null; }
+    return kept && typeof kept.id === 'string' ? { id: kept.id, name: String(kept.name), model: String(kept.model), gone: !profiles.get(kept.id) } : null;
+  };
+  const profileError = (error, session) => (session.profile && error?.code === -32000 ? 'The provider did not accept the key of the profile "' + session.profile.name + '". Check it in Settings.' : agentError(error, session.provider));
   // Agent lock (threat model row 15): kept in the ledger so a restart keeps it. While on, sessions run in the provider's
   // no-write mode and the daemon answers every permission request Reject itself.
   db.exec('CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -352,9 +363,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const o = all.find((x) => x.id === 'model');
     if (!o) return false;
     const { current, options: list } = select(o);
-    session.models = { current, options: list };
+    // O48: a profile chat offers the one model it was started on, under the provider's own name for it.
+    session.models = { current, options: session.profile ? [{ value: session.profile.model, name: session.profile.model }].filter((x) => list.some((m) => m.value === x.value)) : list };
     session.pickers = all.filter((x) => x.id !== 'model' && PICKERS.includes(x.category)).map(select).filter((x) => x.options.length > 1).slice(0, 6);
-    if (session.provider) keepList(session);
+    if (session.provider && !session.profile) keepList(session);
     if (tell) emit(id, 'config', configOf(session));
     return true;
   };
@@ -531,11 +543,14 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
 
   async function connect(conversation) {
     if (live.has(conversation.id)) return live.get(conversation.id);
-    const proc = launchTree(command(conversation.provider), workspace, { instance, scope: true });
+    const profile = profileOf(conversation.id);
+    if (profile?.gone) { emit(conversation.id, 'error', { message: PROFILE_ERRORS['profile-gone'] }); throw Object.assign(new Error('profile-gone'), { status: 409, reason: 'profile-gone' }); }
+    // O48: the adapter reads the model name from its own environment only (one outside model per agent process). Not a secret.
+    const proc = launchTree(command(conversation.provider), workspace, { instance, scope: true, ...(profile && { env: { ANTHROPIC_MODEL: profile.model, ANTHROPIC_CUSTOM_MODEL_OPTION: profile.model } }) });
     let stderr = '';
     proc.child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4096); });
     // mcpToken: what this chat's MCP relay sends (mcp.mjs); it lives only in the relay's environment and this map.
-    const session = { id: conversation.id, provider: conversation.provider, proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex') };
+    const session = { id: conversation.id, provider: conversation.provider, proc, pending: new Map(), turn: null, tools: new Set(), held: [], queued: [], mcpToken: randomBytes(32).toString('hex'), ...(profile && { profile }) };
     const mcpServers = socketPath ? [{ name: 'p9', command: process.execPath, args: [mcpRelay],
       env: [{ name: 'P9_MCP_SOCKET', value: socketPath }, { name: 'P9_MCP_TOKEN', value: session.mcpToken }] }] : [];
     session.exited = new Promise((resolve) => {
@@ -579,7 +594,9 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     session.agent = acp.connectClient(stream, {
       sessionUpdate: async ({ update: raw }) => {
         // max(): a reading past the window still shows full, and stays a valid context for the ledger (used <= size).
-        const update = session.window && raw?.sessionUpdate === 'usage_update' && raw.size > session.window ? { ...raw, size: Math.max(session.window, Number(raw.used) || 0) } : raw;
+        let update = session.window && raw?.sessionUpdate === 'usage_update' && raw.size > session.window ? { ...raw, size: Math.max(session.window, Number(raw.used) || 0) } : raw;
+        // O48: a profile chat does not spend the Claude plan, so nothing it reports may reach the plan's usage rows.
+        if (session.profile && update?.sessionUpdate === 'usage_update' && update._meta?.['_claude/rateLimit']) { const { '_claude/rateLimit': _, ...rest } = update._meta; update = { ...update, _meta: rest }; }
         if (update?.sessionUpdate === 'config_option_update') models(session, conversation.id, update.configOptions);
         // Both adapters name the chat after its first turn (session_info_update.title); kept so the tab and list show it.
         if (update?.sessionUpdate === 'session_info_update' && typeof update.title === 'string') {
@@ -614,8 +631,12 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.capabilities = init.agentCapabilities ?? {};
       session.steering = init._meta?.steering?.supported === true;
       // contracts.md rule 4: the adapter's own sessionId is kept and resumed natively.
+      // O48: the base URL and key go to this one agent in the session request itself (its stdin), on new and on resume:
+      // the adapter keeps neither between runs. Never the adapter's environment or a command line; the adapter itself puts
+      // both in the environment of the agent it starts, so that agent's commands can read the key (SECURITY.md).
+      const _meta = profile ? { claudeCode: { options: { env: { ANTHROPIC_BASE_URL: profiles.get(profile.id).baseUrl, ANTHROPIC_AUTH_TOKEN: await bounded(profiles.secret(profile.id)) } } } } : undefined;
       if (conversation.session) {
-        const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers }));
+        const resumed = await bounded(session.agent.resumeSession({ sessionId: conversation.session, cwd, mcpServers, ...(_meta && { _meta }) }));
         session.mode = resumed?.configOptions?.find((o) => o.id === 'mode')?.currentValue;
         session.sessionId = conversation.session;
         // contracts.md rule 2 holds on resume too: the adapter's own default auto-approves.
@@ -635,7 +656,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: label(session.models) }), ...(changes.length && { restoreNotice: changes }) });
         if (session.models) emit(conversation.id, 'config', configOf(session));
       } else {
-        const created = await bounded(session.agent.newSession({ cwd, mcpServers }));
+        const created = await bounded(session.agent.newSession({ cwd, mcpServers, ...(_meta && { _meta }) }));
         session.sessionId = created.sessionId;
         db.prepare('UPDATE conversations SET session = ? WHERE id = ?').run(session.sessionId, conversation.id);
         // contracts.md rule 2: P9 picks the starting mode, not the adapter (claude-agent-acp 0.104.1 starts in auto, 0.88.0 in default).
@@ -656,7 +677,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       proc.child.stdin.end();
       await Promise.race([session.exited, wait(1000)]);
       const result = await endTree(proc);
-      emit(conversation.id, 'error', { message: agentError(error, conversation.provider), stderr: stderr.slice(-1000) });
+      emit(conversation.id, 'error', { message: PROFILE_ERRORS[error?.message] ?? profileError(error, session), stderr: stderr.slice(-1000) });
       settle(conversation.id, proc, result);
       throw Object.assign(new Error('adapter-start-failed'), { status: 502 });
     } finally {
@@ -799,6 +820,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const projects = createProjects({ home: (ownership || state) && path.join(ownership || state, 'projects'), workspace, folderCheck, db, row, emit,
     stop: (id) => stopConversation(id), recovered, remove: (id) => {
       const { usage, unused } = ledger.remove(id);
+      db.prepare('DELETE FROM prefs WHERE key = ?').run('profile:' + id); // O48
       if (imageDir) for (const hash of unused) if (/^[0-9a-f]{64}$/.test(hash)) for (const ext of new Set(Object.values(EXT))) rmSync(path.join(imageDir, hash + ext), { force: true });
       return usage;
     } });
@@ -871,7 +893,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       FROM conversations c ORDER BY used DESC, created DESC`).all()
       // waiting: a question or approval not answered since the chat's last turn ended (the phone's own rule, digest() in
       // phone.ts), so the phone's list says Needs you for a chat whose events it has not read.
-      .map((c) => ({ ...c, archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id) })),
+      .map((c) => { const profile = c.provider === 'claude' ? profileOf(c.id) : null; return { ...c, archived: c.archived === 1, sent: c.sent === 1, waiting: c.waiting === 1, preview: preview(c.id), ...(profile && { profile }) }; }),
     // folder: where the agent starts, workspace-relative; checked like GET /files/list (threat model row 24).
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
@@ -881,12 +903,17 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
           || (body.project !== undefined && !project))
         return refused(400, 'request-refused');
+      // O48: profile + model, Claude chats only; the model is one the profile lists and is fixed for the chat.
+      const chosen = body.profile === undefined ? null : profiles.get(body.profile);
+      if (body.profile !== undefined && (body.provider !== 'claude' || !chosen || !chosen.models.includes(body.model))) return refused(400, 'request-refused');
+      const profile = chosen && { id: chosen.id, name: chosen.name, model: body.model };
       const folder = body.folder ?? (project ? projects.startFolder(project) : '');
       const there = () => (body.folder === undefined ? startOf({ folder, project: project?.id }).then(() => true, () => false) : folderThere(folder));
       if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
-      const id = randomUUID(), title = body.title?.trim() || (body.provider === 'claude' ? 'Claude' : 'Codex');
+      const id = randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
       db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project) VALUES (?, ?, ?, 'idle', ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null);
-      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(ID.test(op ?? '') && { op }) });
+      if (profile) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('profile:' + id, JSON.stringify(profile));
+      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(profile && { profile }), ...(ID.test(op ?? '') && { op }) });
       return { status: 201, conversation: id };
     },
     // held: the waiting messages this prompt carries (drain), named in its user event so the window drops them.
@@ -925,7 +952,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
       emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }) }); // hash and type only: events stay small
       let session;
-      try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.status === 409 ? 'stopping' : 'adapter-start-failed'); }
+      try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
       release();
       if (session.stopping) return refused(409, 'stopping');
       try { stillAuthorized(); } catch (error) { setState(id, 'running'); throw error; }
@@ -970,7 +997,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       session.agent.prompt({ sessionId: session.sessionId, prompt }).then(
         // result.usage is the turn's token counts (ACP PromptResponse); the usage view sums them.
         (result) => { ended = result; if (session.turn === turn) emit(id, 'turn-end', { stopReason: result.stopReason, ...(result.usage && { usage: result.usage }) }); },
-        (error) => { if (session.turn === turn && !session.stopping) emit(id, 'error', { message: agentError(error, conversation.provider) }); },
+        (error) => { if (session.turn === turn && !session.stopping) emit(id, 'error', { message: profileError(error, session) }); },
       ).finally(() => {
         if (session.turn !== turn) return;
         session.turn = null;
@@ -1040,7 +1067,20 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     },
     stopAll,
     projects,
-    ...createMove({ db, workspace, ownership, row, emit, stopConversation, recovered, loose }),
+    ...(() => {
+      const move = createMove({ db, workspace, ownership, row, emit, stopConversation, recovered, loose });
+      // O48: the key does not travel, so a profile chat stays on this computer.
+      return { ...move, sendAway: (id) => (ID.test(id) && profileOf(id) ? { status: 409, error: 'move-unavailable', message: 'A chat on a provider profile cannot be sent to a remote: its key stays on this computer.' } : move.sendAway(id)) };
+    })(),
+    // O48, desktop only (server.mjs): what Settings and New chat show (never a key), save and remove.
+    profiles: { list: () => ({ status: 200, profiles: profiles.list() }),
+      save: (body) => { const saved = body && typeof body === 'object' ? profiles.save(body) : null; return saved ? { status: 200, profile: saved } : refused(400, 'request-refused'); },
+      // A chat running on the removed profile is stopped: its agent still holds the key and would go on answering.
+      async remove(id) {
+        if (!profiles.remove(id)) return refused(404, 'not-found');
+        await Promise.all([...live].filter(([, session]) => session.profile?.id === id).map(([conversation]) => stopConversation(conversation)));
+        return { status: 200 };
+      } },
     // Events after a cursor; waits up to waitMs for the first new one so a client can long-poll.
     // only (up to 100 conversation IDs) and until: just those chats' events, up to that cursor, never waiting. The
     // desktop replays only the chats that are not stopped, then loads a stopped one's history when it is opened (E2).

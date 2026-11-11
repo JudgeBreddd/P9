@@ -451,12 +451,13 @@ test('agents see only allowlisted environment names, in a new session and a resu
     assert.ok(names.includes('LANG') && names.includes('PATH'), names.join(','));
     assert.ok(!names.includes('P9_SENTINEL_TOKEN') && !names.includes('OPENAI_API_KEY') && !names.includes('P9_TEST_HOME'), names.join(','));
   }
-  // Every process the server starts goes through childEnv.
+  // Every process the server starts goes through childEnv. launchTree may add names after it for one child (O48: a
+  // profile chat's model names), so the allow list is still the base of every environment.
   for (const file of (await readdir(path.join(root, 'apps/server'))).filter((name) => name.endsWith('.mjs'))) {
     const source = await readFile(path.join(root, 'apps/server', file), 'utf8');
     for (const line of source.split('\n').filter((text) => /\bspawn(Sync)?\(/.test(text) && !/^\s*\/\//.test(text))) {
       const call = source.slice(source.indexOf(line), source.indexOf(line) + 400);
-      assert.match(call.slice(0, call.indexOf(');') + 2), /env: childEnv\(\)/, `${file}: ${line}`);
+      assert.match(call.slice(0, call.indexOf(');') + 2), /env: (\{ \.\.\.)?childEnv\(\)/, `${file}: ${line}`);
     }
   }
   // Locale names pass by category, not by pattern.

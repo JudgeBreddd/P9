@@ -50,7 +50,7 @@ export function mountShell({ askAdmin } = {}) {
     get land() { return land; }, get landOn() { return landOn; }, get landVideo() { return landVideo; },
     get lastArt() { return lastArt; }, set lastArt(v) { lastArt = v; }, get lastCards() { return lastCards; }, set lastCards(v) { lastCards = v; },
     get lastCommands() { return lastCommands; }, get lastModels() { return lastModels; }, get takeLists() { return takeLists; }, get refreshDefaults() { return refreshDefaults; }, get newRows() { return newRows; }, get newLists() { return newLists; }, get listsAt() { return listsAt; }, get listState() { return listState; }, get listDef() { return listDef; }, get isDefault() { return isDefault; },
-    get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get defaultEffort() { return defaultEffort; },
+    get pickerKind() { return pickerKind; }, get defaultModel() { return defaultModel; }, get profiles() { return profiles; }, get loadProfiles() { return loadProfiles; }, get defaultEffort() { return defaultEffort; },
     get claimFresh() { return claimFresh; }, get startDefaults() { return startDefaults; }, get usedAgent() { return usedAgent; },
     get lastOverview() { return lastOverview; }, set lastOverview(v) { lastOverview = v; }, get lastPickers() { return lastPickers; },
     get leave() { return leave; }, get lifetime() { return lifetime; }, get live() { return live; }, get liveChat() { return liveChat; },
@@ -179,11 +179,16 @@ const pickerKind = p => p.category === 'thought_level' || !p.category && /effort
 // it (O44 review). A daemon without op in 'created' leaves it to the reply.
 const defaultModel = a => localStorage.getItem('p9-model-default:' + a) || '', defaultEffort = a => localStorage.getItem('p9-effort-default:' + a) || '';
 const fresh = [];
+// O48 provider profiles (threat model "Provider profiles"): what the daemon lists, never a key: { id, name, baseUrl, models,
+// secret: 'key' | 'command' | 'none' }. Read at the first chat list and after each Settings change.
+let profiles = [];
+async function loadProfiles() { const r = await window.p9?.chat?.('profiles', {}).catch(() => null); if (r?.status === 200 && Array.isArray(r.body?.profiles)) profiles = r.body.profiles; return profiles; }
 function claimFresh(s, op) {
   const i = fresh.findIndex(f => f.id === s.id || op && f.op === op); if (i < 0) return;
   const [f] = fresh.splice(i, 1); f.id = s.id; startDefaults(s, f.model);
 }
 function startDefaults(s, model) {
+  if (s.profile) return; // O48: a profile chat's model is fixed at New chat; the Claude defaults are not its models
   const m = [model, defaultModel(s.agent)].find(v => v && lastModels[s.agent]?.options.some(o => o.value === v)); if (m) s.modelPick = m; // model: the New menu row's (O44); one no longer offered falls back
   const e = defaultEffort(s.agent), p = lastPickers[s.agent]?.find(x => pickerKind(x) === 'effort'); if (e && p?.options.some(o => o.value === e)) (s.pick ||= {})[p.id] = e;
 }
@@ -445,9 +450,11 @@ const SAMPLE_MODELS = { claude: ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'], codex: 
 const row = (a, label, model) => `<button class="item" data-new="${a}"${model ? ` data-model="${esc(model)}"` : ''}>${label}</button>`;
 const newRows = () => { for (const a of Object.keys(names)) $(`#newAgents [data-sec="${a}"]`).innerHTML = `<hr data-slot="separator" style="margin:6px 0"><div class="hd eyebrow">New ${names[a]}</div>`
   + row(a, `${names[a]} <span class="muted">default model</span>`, !liveChat.on && SAMPLE_MODELS[a][0])
-  + (liveChat.on ? lastModels[a]?.options || [] : SAMPLE_MODELS[a].slice(1).map(v => ({ value: v, name: v }))).map(o => row(a, `${names[a]} · ${esc(o.name)}`, o.value)).join(''); };
+  + (liveChat.on ? lastModels[a]?.options || [] : SAMPLE_MODELS[a].slice(1).map(v => ({ value: v, name: v }))).map(o => row(a, `${names[a]} · ${esc(o.name)}`, o.value)).join('')
+  // O48: under New Claude, each profile's models; such a chat runs on that model only
+  + (a === 'claude' && liveChat.on ? profiles.map(p => `<div class="hd eyebrow" data-profile-hd>${esc(p.name)}</div>` + p.models.map(m => `<button class="item" data-new="claude" data-profile="${esc(p.id)}" data-model="${esc(m)}">${esc(m)}</button>`).join('')).join('') : ''); };
 const newPop = popover($('#newBtn'), $('#newPop'), () => { newRows(); $('#newAgents').prepend($(`#newAgents [data-sec="${lastAgent()}"]`)); panel.newAt($('#newBtn')); renderNewFolder(); $('#newPop [data-new]').focus(); }); // N1: placed beside its button (panel.mjs)
-$('#newAgents').onclick = e => { const b = e.target.closest('[data-new]'); if (b) { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn); newPop.close(); } };
+$('#newAgents').onclick = e => { const b = e.target.closest('[data-new]'); if (b) { newSession(b.dataset.new, b.dataset.model, panel.panel.newIn, b.dataset.profile); newPop.close(); } };
 DUWOP.menu($('#themePop')); popover($('#themeBtn'), $('#themePop'));
 
 /* ---------- chats ---------- */
@@ -1243,9 +1250,9 @@ liveChat.call = async (action, payload = {}, { quiet = false } = {}) => {
   return r;
 };
 // N1: project, a uuid, only for a chat in a project: the daemon refuses null, and a general chat leaves the key out.
-liveChat.create = async (agent, folder = '', project = null, model = '') => {
+liveChat.create = async (agent, folder = '', project = null, model = '', profile = '') => {
   const op = crypto.randomUUID(), f = { agent, model, op }; fresh.push(f);
-  const r = await liveChat.call('create', { op, provider: agent, ...(folder && { folder }), ...(project && { project }) });
+  const r = await liveChat.call('create', { op, provider: agent, ...(folder && { folder }), ...(project && { project }), ...(profile && { profile, model }) });
   if (r.status !== 201) { if (fresh.includes(f)) fresh.splice(fresh.indexOf(f), 1); }
   else if (!f.id) { // not claimed by its 'created' yet: that is still to come (claimFresh finds it by id), or came without op
     f.id = r.body.conversation; const s = S.sessions.find(x => x.id === f.id);

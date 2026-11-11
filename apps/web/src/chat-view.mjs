@@ -160,11 +160,11 @@ const show = id => { outer.S.view = null; outer.S.open = [id, ...outer.S.open.fi
 // the panel's list; a message sent to it starts it again.
 function stopChat(s) { if (s.live) return outer.liveChat.stop(s); cancelTurn(s, true); s.state = 'stopped'; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); s.events.push({t:'notice', text:'Stopped. Resume continues the native session.'}); outer.renderTabs(); renderChats(); }
 const untab = id => { outer.S.open = outer.S.open.map(o => o === id ? (outer.S.sessions.find(x => !x.hidden && !outer.S.open.includes(x.id)) || {}).id : o).filter(Boolean); outer.renderTabs(); renderChats(); };
-function newSession(agent, model, project = null) {
+function newSession(agent, model, project = null, profile = '') {
   outer.usedAgent(agent);
   // Builder, 2026-11-02 ("no way to start a new chat here in dev focus"): one started from Dev Focus is the chat beside the editor.
   if (outer.S.focus === 'dev') { outer.S.sideId = null; outer.setSideChat(true); }
-  if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project, model);
+  if (outer.liveChat.on) return outer.liveChat.create(agent, project ? '' : outer.newFolder, project, model, profile);
   const s = { id: 's-' + Date.now(), agent, title: `${outer.names[agent]} ${outer.S.sessions.filter(x => x.agent === agent).length + 1}`, model, mode: outer.startMode(agent), queue: [], effort: 'Medium', state: 'idle', pending: null, context: null, limits: outer.M.sessions[agent === 'claude' ? 0 : 1].limits, cacheMin: null, cwd: outer.M.sessions[0].cwd, events: [] };
   s.project = project; outer.S.sessions.push(s); show(s.id); outer.renderTabs(); renderChats();
 }
@@ -268,8 +268,7 @@ function meters(s) {
   const cache = cacheOf(s);
   return `<div class="meters">
     <div class="meter" title="${esc(ctx == null ? 'No context size reported by this agent yet' : s.context.used.toLocaleString() + ' of ' + s.context.size.toLocaleString() + ' tokens')}"><div class="l"><span>Context</span><b>${ctx == null ? '—' : ctx + '%'}</b></div><div class="fx-meter" ${ctx >= HOT ? 'data-hot' : ''}><span style="width:${ctx || 0}%"></span></div></div>
-    ${bar('5 h', lim?.fiveHour, 300)}
-    ${bar('7 d', lim?.sevenDay, 10080)}
+    ${s.profile ? '' : bar('5 h', lim?.fiveHour, 300) + bar('7 d', lim?.sevenDay, 10080)}
     <div class="cache" data-s="${cache[1]}" title="How long the agent still has this chat saved for a cheaper next message (the 1-hour prompt cache, counted from its last output)">${svg.clock}${cache[0]}</div>
   </div>`;
 }
@@ -313,9 +312,11 @@ function shown(s) {
    own models; the sample data keeps its two names. */
 // O47: a chat whose own report is older than the agent's kept list (a chat not run since) offers the kept list, so a
 // model the agent dropped is gone from its menu; its own model stays its current one (goneModel says so in the menu).
-const liveModels = s => { const kept = outer.lastModels[s.agent], own = s.models; return own && kept && (s.modelsAt || 0) < (outer.listsAt[s.agent] || 0) ? { current: own.current, options: kept.options } : own || kept || null; };
+// O48: a chat on a provider profile has the one model it was started on, whatever the agent or the kept list says.
+const profileModels = s => ({ current: s.profile.model, options: [{ value: s.profile.model, name: s.profile.model }] });
+const liveModels = s => { if (s.profile) return profileModels(s); const kept = outer.lastModels[s.agent], own = s.models; return own && kept && (s.modelsAt || 0) < (outer.listsAt[s.agent] || 0) ? { current: own.current, options: kept.options } : own || kept || null; };
 const goneModel = s => { const m = s.live && liveModels(s), v = s.modelPick || m?.current; return m && v && !m.options.some(o => o.value === v) ? s.model || v : ''; };
-const dflt = (s, id, o) => o.name + (s.live && !/default/i.test(o.name) && outer.isDefault(s.agent, id, o.value) ? ' (Default)' : ''); // MC-16; an option the agent itself names its default is left as it is
+const dflt = (s, id, o) => o.name + (s.live && !s.profile && !/default/i.test(o.name) && outer.isDefault(s.agent, id, o.value) ? ' (Default)' : ''); // MC-16; an option the agent itself names its default is left as it is
 const modelList = s => s.live ? liveModels(s) : { current: s.model, options: [s.model, s.agent === 'codex' ? 'gpt-5.1-codex-mini' : 'Sonnet 5.5'].map(v => ({ value: v, name: v })) };
 const modelName = s => { const m = modelList(s), v = s.modelPick || m?.current, o = m?.options.find(o => o.value === v); return o ? dflt(s, null, o) : s.model; };
 // The sample data, and a live chat before its config, keep Effort as a local choice.
@@ -365,6 +366,7 @@ function pillMenuHtml(s, kind) {
   if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + MODE_ORDER[s.agent].map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
   if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`, p && s, p?.id); }
   const m = modelList(s);
+  if (s.profile) return `<div class="hd eyebrow">${esc(s.profile.name)}</div>` + radio(m.options, m.current, 'data-model') + `<p class="pm-note muted" data-list-note>${s.profile.gone ? 'This profile was removed in Settings, so this chat can be read but not continued.' : 'This chat runs on this model only. Start a new chat for another one.'}</p>`;
   const gone = goneModel(s), note = [gone && `This chat was on ${gone}, which ${outer.names[s.agent]} no longer lists. Pick one of these.`, listNote(s)].filter(Boolean);
   return `<div class="hd eyebrow">${outer.names[s.agent]}</div>` + radio(m?.options || [], s.modelPick || m?.current, 'data-model', s, null)
     + note.map(t => `<p class="pm-note muted" data-list-note>${esc(t)}</p>`).join('')
@@ -486,7 +488,7 @@ function pane(s, i, bare) {
       ${s.state === 'running' ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-stop>Stop</button>` : s.state === 'stopped' ? `<button data-slot="button" data-variant="outline" data-size="sm" data-resume>Resume</button>` : ''}
       ${s.live && s.agent === 'claude' && s.session && !away ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-handoff title="Continue this session in Claude Code Remote Control (claude.ai or the Claude app): stops it here and types the command into a terminal">Hand off</button>` : ''}
       ${s.live && s.session && s.state !== 'moved' && window.p9?.sendToServer && !outer.serverInfo?.host
-        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.leaving ? 'disabled ' : s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.leaving ? 'Moving this chat to the remote' : s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(outer.serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
+        ? `<button data-slot="button" data-variant="ghost" data-size="sm" data-send-away ${s.profile ? 'disabled ' : s.leaving ? 'disabled ' : s.state === 'moving' ? '' : busy(s) ? 'disabled ' : ''}title="${s.profile ? 'A chat on a provider profile stays on this computer: its key is not sent to a remote' : s.leaving ? 'Moving this chat to the remote' : s.state === 'moving' ? 'The move did not finish: press to finish it' : busy(s) ? 'Finish or stop the turn first' : 'Move this chat to ' + esc(outer.serverInfo?.last || 'your remote (Settings > Remote Connect)') + ' and carry on there: it stops here, and the remote picks it up where it left off'}">Send to remote</button>` : ''}
       ${bare ? '' : tools()}</div>
     <div class="hist">${body}</div>
     <div class="bottom"><div class="col">${pinned(s, outer.mdOf)}${working || s.sending ? `<div class="working"><span class="glyph" aria-hidden="true">${outer.IND.glyphs[outer.IND.frame % outer.IND.glyphs.length]}</span>${working ? outer.names[s.agent] + ' is working…' : 'Sending…'}</div>` : ''}${s.readonly ? '' : meters(s)}
@@ -707,7 +709,7 @@ const planText = d => d?.kind === 'switch_mode' && (d.content || []).filter(c =>
 // ponytail: this window's storage only; the phone and a second desktop do not see them (a daemon-side queue would).
 const keepQueue = s => { if (!s.live) return; try { s.queue.length ? localStorage.setItem('p9-queue:' + s.id, JSON.stringify(s.queue)) : localStorage.removeItem('p9-queue:' + s.id); } catch {} };
 const keptQueue = id => { try { const q = JSON.parse(localStorage.getItem('p9-queue:' + id)); return Array.isArray(q) ? q.filter(t => typeof t === 'string') : []; } catch { return []; } };
-const liveSession = (id, provider, title, folder, created, project = null) => ({ id, agent: provider, title, project, model: chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
+const liveSession = (id, provider, title, folder, created, project = null, profile = null) => ({ id, agent: provider, title, project, profile, model: profile?.model || chatModel[provider], mode: outer.startMode(provider), queue: keptQueue(id), effort: 'Medium', state: 'idle', pending: null, context: null, limits: { h5: 0, d7: 0 }, cacheMin: null, cwd: folder || 'P9 workspace', folder: folder || '', events: [], live: true, created });
 // E2: a chat that was stopped at launch is only listed (stub); its events load the first time it is shown, or before
 // the next event for it is applied. Up to until, so nothing the main loop applies comes twice; retried until it loads.
 function history(s, until = outer.liveChat.cursor) {
@@ -746,14 +748,14 @@ async function earlier(s) {
 // Applies one daemon event to S (or to into, Show earlier's older blocks); returns the session when a turn ended (so queued messages can go).
 function applyChat(ev, into) {
   const d = ev.data;
-  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project); outer.claimFresh(s, d.op); outer.S.sessions.push(s); } return null; }
+  if (ev.type === 'created') { if (!into && !outer.S.sessions.some(x => x.id === ev.conversation)) { const s = liveSession(ev.conversation, d.provider, d.title, d.folder, ev.at, d.project, d.profile); outer.claimFresh(s, d.op); outer.S.sessions.push(s); } return null; }
   const s = into ?? outer.S.sessions.find(x => x.id === ev.conversation); if (!s) return null;
   // Last used, as the daemon's list counts it (History's order); a stub's older history can load after newer events.
   if (!NOT_USE.includes(ev.type)) s.used = Math.max(s.used || 0, ev.at);
   const last = s.events[s.events.length - 1], notice = text => s.events.push({ t: 'notice', text });
   const settle = () => { s.working = s.prompted = false; s.pending = null; s.events = s.events.filter(e => e.t !== 'approval' && e.t !== 'question'); };
   switch (ev.type) {
-    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); s.state = 'running'; s.working = s.prompted = s.sent = true;
+    case 'user': if (typeof d.note === 'string') notice('P9 told the agent: ' + d.note.trim()); s.events.push({ t: 'user', text: d.text, images: d.images, when: new Date(ev.at).toTimeString().slice(0, 5) }); if (!s.profile?.gone) s.state = 'running'; s.working = s.prompted = s.sent = true;
       if (Array.isArray(d.held)) s.held = s.held?.filter(h => !d.held.includes(h.id)); break;
     // CP1: a message the daemon holds for this turn (composer.mjs), and its going back: taken back with its x or by a
     // cancel (loadChat puts the text back in the box), or not sent at all.
@@ -771,7 +773,7 @@ function applyChat(ev, into) {
     case 'moved-in': notice('Moved here from another computer. Send a message to carry on where it left off.'); break;
     case 'handed-off': notice('Handed off: press Enter in the terminal to start Claude Code Remote Control, then open this session in claude.ai or the Claude app. Resume here only after you end it there.'); break;
     case 'card': case 'unpin': applyCard(s, ev.type, d); break; // AR2: pin_card and unpin_card, pinned above the composer
-    case 'config': s.modelsAt = ev.at; if (!into) outer.newLists(s.agent, ev.at, Array.isArray(d.model?.options) && d.model, Array.isArray(d.pickers) && d.pickers);
+    case 'config': s.modelsAt = ev.at; if (!into && !s.profile) outer.newLists(s.agent, ev.at, Array.isArray(d.model?.options) && d.model, Array.isArray(d.pickers) && d.pickers);
       if (Array.isArray(d.model?.options)) { s.models = d.model; s.model = d.model.options.find(o => o.value === d.model.current)?.name || s.model; if (s.modelPick === d.model.current) s.modelPick = null; }
       if (Array.isArray(d.pickers)) { s.pickers = d.pickers; for (const p of d.pickers) if (s.pick?.[p.id] === p.current) delete s.pick[p.id]; }
       break;
@@ -838,7 +840,7 @@ async function loadChat() {
     // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
     const pop = outer.$('#newPop'); if (pop && !pop.hidden) { const at = pop.querySelector('[data-new]:focus'); outer.newRows(); if (at) pop.querySelector(`[data-new="${at.dataset.new}"]${at.dataset.model ? `[data-model="${at.dataset.model}"]` : ':not([data-model])'}`)?.focus(); } };
-  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); return l.body?.conversations || []; };
+  const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); return l.body?.conversations || []; };
   while (!outer.lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});
     if (l?.status === 200) { lists(l.body); listed = l.body.conversations; const ids = listed.filter(c => c.state !== 'stopped' && c.state !== 'moved').map(c => c.id); scope = ids.length <= 100 ? { only: ids } : {}; }
@@ -850,7 +852,7 @@ async function loadChat() {
     if (r.status !== 200) { if (!outer.liveChat.on && outer.sampleView) return; await new Promise(res => outer.setTimeout(res, outer.liveChat.on ? 2000 : 5000)); continue; }
     if (!outer.liveChat.on) { outer.liveChat.on = true; outer.S.sessions = []; outer.S.open = []; dataNote(); }
     // A tail can leave out a chat's created event, so its tab comes from the list.
-    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project), archived: c.archived });
+    if (r.body.more) for (const c of listed) if (scope.only.includes(c.id) && !outer.S.sessions.some(s => s.id === c.id)) outer.S.sessions.push({ ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), archived: c.archived });
     const ended = [], answered_ = [];
     for (const ev of r.body.events) {
       const created = ev.type === 'created' && !replaying, stub = outer.S.sessions.find(s => s.id === ev.conversation && s.stub);
@@ -876,7 +878,7 @@ async function loadChat() {
       replaying = false;
       // Tabs keep the order the chats were made in; History sorts by last used.
       const all = (await list()).sort((a, b) => a.created - b.created), have = new Map(outer.S.sessions.map(s => [s.id, s]));
-      outer.S.sessions = [...all.map(c => have.get(c.id) || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project), state: c.state, stub: true, sent: c.sent, used: c.used }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
+      outer.S.sessions = [...all.map(c => { const h = have.get(c.id); if (h && c.profile) h.profile = c.profile; return h || { ...liveSession(c.id, c.provider, c.title, c.folder, c.created, c.project, c.profile), state: c.state, stub: true, sent: c.sent, used: c.used }; }), ...outer.S.sessions.filter(s => !all.some(c => c.id === s.id))];
       // N1: a chat's project and archive come from the list too (a tailed replay can leave their events out).
       for (const c of all) { const s = have.get(c.id); if (s) { s.project = c.project ?? null; s.archived = !!c.archived; } }
       outer.loadProjects?.();
