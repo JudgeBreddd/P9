@@ -550,6 +550,32 @@ Tests: `test/acp-v2.test.mjs` (approval through the translator on a fake version
 the dropped notices fed to the translator directly), `test/acp-contract.test.mjs` (both
 recorded real turns, each with an approval).
 
+## Plan usage reads
+
+The Usage rows (5 h and week, with the pace mark) need each plan's own figures. The agent
+protocol does not carry them, so the daemon asks each agent's own program directly. If the
+protocol ever carries them, that becomes the source and these reads go.
+
+- **Claude** (threat model row 42). One idle query of the Agent SDK that the bundled Claude
+  adapter itself loads. It loads no settings, hooks, plugins or MCP servers, runs in the
+  system temp folder, and is never sent a prompt: only the SDK's usage call is made.
+- **Codex.** Each read starts the bundled Codex's app server, makes the handshake and one
+  call (`account/rateLimits/read`), and ends the process. No thread is started and nothing is
+  sent to a model. This is what keeps the rows right when one Codex account is used on
+  several computers: the session files on this computer only know its own turns.
+- **When.** Only while someone looks at usage: once a minute after a usage request, none after
+  2 minutes without one, and the Claude query is closed after 10 idle minutes. Each read has a
+  5 s limit.
+- **What reaches the network.** The agent's own program asks its own service, signed in as
+  you, exactly as its `/usage` or status screen would. P9 adds no request of its own and
+  never reads, holds or sends the agent's credentials.
+- **What P9 keeps.** The percent used, the window's length and its reset time, in memory only.
+  The Codex answer also carries an account id; P9 drops it. A failed read logs one fixed line
+  per kind of failure, never the agent's error text (it can name the account) and never the
+  process's error output. The rows then fall back to the other sources: the figures a running
+  chat reports, and the agents' own files on this computer. The newest reading wins.
+- **Who can see it.** The same usage summary as before, on the desktop and a signed-in phone.
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's
