@@ -218,12 +218,12 @@ test('Phone tabs: Terminal, Mission, a Mission window, Usage, Files and the edit
     assert.notEqual(await chevron(), closed, 'the chevron turns when Details opens');
     await page.click('#usage details.more summary');
   });
-  // P5: each plan window is a ring with its % inside and when it resets under it (phone.test.mjs Phase 11 holds the
-  // same check, but stops early with no network).
-  const ring = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .uring'), b = r.getBoundingClientRect(), pct = r.querySelector('b').getBoundingClientRect(), under = r.parentElement.querySelector('small');
-    return { inside: pct.left >= b.left && pct.right <= b.right && pct.top >= b.top && pct.bottom <= b.bottom, below: under.getBoundingClientRect().top >= b.bottom - 1, under: under.textContent, round: getComputedStyle(r, '::before').borderRadius }; });
-  assert.match(ring.under, /^resets \w{3} \d{1,2}:\d\d\s?[AP]M$/);
-  assert.deepEqual({ ...ring, under: 'resets' }, { inside: true, below: true, under: 'resets', round: '50%' });
+  // A3: each plan window is a row with the time to its reset and a pace tick on its bar (phone.test.mjs Phase 11 holds
+  // the same check, but stops early with no network).
+  const row = await page.evaluate(() => { const r = document.querySelector('#usage [data-limits] .prow'), b = r.querySelector('.pbar').getBoundingClientRect(), t = r.querySelector('.pbar u').getBoundingClientRect();
+    return { reset: r.querySelector('.prow-r').textContent, inside: t.left >= b.left - 1 && t.right <= b.right + 1, taller: t.height > b.height }; });
+  assert.match(row.reset, /^resets in (\d+d )?(\d+h )?\d+m$|^resets in \d+d \d+h$/);
+  assert.deepEqual({ ...row, reset: '' }, { reset: '', inside: true, taller: true });
   await shot(page, 'tab-usage');
 
   await page.click('[data-nav="files"]');

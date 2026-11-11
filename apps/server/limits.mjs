@@ -8,16 +8,20 @@ import path from 'node:path';
 
 const TAIL = 512 * 1024; // token_count events come every turn, so the last one is near the end of a rollout file
 const seconds = (value) => typeof value === 'string' ? Date.parse(value) / 1000 : value > 1e12 ? value / 1000 : value;
-function windowOf(used, resets) {
+// windowMins: how long the window is, so a reader can tell how far through it the clock is (the pace mark).
+function windowOf(used, resets, windowMins) {
   if (!Number.isFinite(used) || used < 0) return null;
   const at = seconds(resets);
-  return { usedPercent: used, resetsAt: Number.isFinite(at) ? Math.round(at * 1000) : null };
+  return { usedPercent: used, resetsAt: Number.isFinite(at) ? Math.round(at * 1000) : null, windowMins };
 }
 // { five_hour: {...}, seven_day: {...} } with used_percentage / used_percent / utilization, as usage.py accepts.
 function claudeWindows(limits) {
-  const one = (w) => w && typeof w === 'object' ? windowOf(w.used_percentage ?? w.used_percent ?? w.utilization, w.resets_at ?? w.resetsAt) : null;
-  const fiveHour = one(limits?.five_hour), sevenDay = one(limits?.seven_day);
-  return fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
+  const one = (w, mins) => w && typeof w === 'object' ? windowOf(w.used_percentage ?? w.used_percent ?? w.utilization, w.resets_at ?? w.resetsAt, mins) : null;
+  const fiveHour = one(limits?.five_hour, 300), sevenDay = one(limits?.seven_day, 10080);
+  if (!fiveHour && !sevenDay) return null;
+  // The week windows some plans count per model family (only the daemon's own poll carries them): shown when present.
+  const models = Object.entries(limits).flatMap(([key, w]) => { const name = /^seven_day_([a-z0-9]{1,20})$/.exec(key)?.[1], found = name && one(w, 10080); return found ? [{ name, ...found }] : []; });
+  return { fiveHour, sevenDay, ...(models.length ? { models } : {}) };
 }
 
 async function claude(claudeJson, statusLine, live, polled) {
@@ -61,7 +65,7 @@ async function lastLimits(file) {
       if (!limits) continue;
       const byMinutes = (minutes) => [limits.primary, limits.secondary].find((w) => w?.window_minutes === minutes);
       const five = byMinutes(300), week = byMinutes(10080);
-      found = { fiveHour: five ? windowOf(five.used_percent, five.resets_at) : null, sevenDay: week ? windowOf(week.used_percent, week.resets_at) : null, asOf: Date.parse(event.timestamp) || info.mtimeMs };
+      found = { fiveHour: five ? windowOf(five.used_percent, five.resets_at, 300) : null, sevenDay: week ? windowOf(week.used_percent, week.resets_at, 10080) : null, asOf: Date.parse(event.timestamp) || info.mtimeMs };
       if (found.fiveHour || found.sevenDay) break;
       found = null;
     } catch {} // a line cut by the tail window, or malformed
@@ -69,7 +73,15 @@ async function lastLimits(file) {
   tails.set(file, { key, found });
   return found;
 }
-async function codex(codexHome) {
+// The daemon's own read (codex-usage.mjs), in the session files' shape: the window is told by its length, not its slot.
+function codexPolledLimits(polled) {
+  if (!polled || !Number.isFinite(polled.at)) return null;
+  const byMinutes = (minutes) => [polled.windows?.primary, polled.windows?.secondary].find((w) => w && typeof w === 'object' && w.windowDurationMins === minutes);
+  const five = byMinutes(300), week = byMinutes(10080);
+  const found = { fiveHour: five ? windowOf(five.usedPercent, five.resetsAt, 300) : null, sevenDay: week ? windowOf(week.usedPercent, week.resetsAt, 10080) : null, asOf: polled.at };
+  return found.fiveHour || found.sevenDay ? found : null;
+}
+async function codexFiles(codexHome) {
   const names = async (dir) => (await readdir(dir).catch(() => [])).sort().reverse();
   const root = path.join(codexHome, 'sessions');
   // The last 3 day folders by name, then every rollout in them newest-modified first: a session resumed today keeps its
@@ -103,7 +115,9 @@ export async function claudeWindow(claudeDir, env = process.env) {
   try { return tokens(JSON.parse(await readFile(path.join(claudeDir, 'settings.json'), 'utf8'))?.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW); } catch { return null; }
 }
 
-export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null, claudePolled = null }) {
-  const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive, claudePolled), codex(codexHome)]);
-  return { claude: claudeLimits, codex: codexLimits };
+export async function planLimits({ home, codexHome = agentDirs(home).codexHome, claudeJson = agentDirs(home).claudeJson, statusLine = path.join(home, '.cache', 'icm-usage', 'last-statusline.json'), claudeLive = null, claudePolled = null, codexPolled = null }) {
+  const [claudeLimits, codexLimits] = await Promise.all([claude(claudeJson, statusLine, claudeLive, claudePolled), codexFiles(codexHome)]);
+  // Codex: the newest reading wins, the daemon's own read or this computer's session files.
+  const asked = codexPolledLimits(codexPolled), codexNewest = asked && (!codexLimits || asked.asOf >= codexLimits.asOf) ? asked : codexLimits;
+  return { claude: claudeLimits, codex: codexNewest };
 }

@@ -190,7 +190,7 @@ const widgetOn = w => outer.sampleView || outer.M.space.some(s => s.widget === w
 // + New idea writes to the workspace's _ideas folder (an ICM file), so it follows the same rule as the widgets (finding 3b).
 const icmSpace = () => outer.sampleView || outer.M.space.some(namesPanel) || outer.M.icmFiles && !outer.M.space.some(namesPanel);
 const allNotes = () => outer.S.alerts;
-const usageBody = () => (usage.limits ? outer.usageRings() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
+const usageBody = () => (usage.limits ? outer.usageRows() + `<ul class="plist" data-limits>${[limitLine('Claude', usage.limits.claude), limitLine('Codex', usage.limits.codex, undefined, usage.limits.signedOut?.includes('codex'))].map(l => `<li class="sm${l.stale ? ' muted' : ''}"><b>${l.name}</b> ${esc(l.text)}</li>`).join('')}</ul>` : '')
   + (usage.state === 'unavailable' ? '<p class="empty">No chat token records yet.</p>'
   : `<div class="stats"><div><span>Input tokens</span><b>${usage.totals.inputTokens.toLocaleString()}</b></div><div><span>Output tokens</span><b>${usage.totals.outputTokens.toLocaleString()}</b></div><div><span>Recorded cost</span><b>$${usage.totals.costUsd.toFixed(4)}</b></div></div><p class="sm ${usage.state === 'stale' ? 'muted' : ''}">${usage.state === 'stale' ? 'Stale · ' : ''}${usage.samples} samples · ${usage.discarded} malformed discarded</p>`);
 // Icon order: P9's own icon for P9; else the user's picture, the emoji or text icon, the automatic icon (a site's, a program's), the letters.
@@ -763,7 +763,7 @@ function sectionBody(m, body, g, o) {
 // Modal bodies for Mission: a category's buttons, one script (args, Run, output), a Wiki inbox batch
 function missionModal(m, body, row) {
   if (m.kind === 'win') {
-    const w = outer.wins[m.id]; if (!w || (w.show && !w.show())) return outer.closeModal();
+    const w = outer.wins[m.id]; if (!w || (w.show && !w.show() && !m.any)) return outer.closeModal(); // any: the panel's Usage button opens it whatever the space shows
     outer.$('#mdlT').textContent = w.title();
     body.innerHTML = panel(m.id, esc(w.title()), w.body()); outer.addHalos(body);
     bindWin(body, m); missionLive();

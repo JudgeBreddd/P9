@@ -1,5 +1,5 @@
 import { basicSetup, EditorView } from 'codemirror';
-import { limitLine, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
+import { limitLine, paceRow, planWindows, esc, FILE_IMAGE, fileImageError, fileImageSrc, sprintTimes, md, mdReply, agentWarning, warnHtml, copy, copyCode, imgSrc, toolImages, agentImgs, readImage, IMG_OK, MAX_IMAGES, modes, LOOSE } from './helpers.mjs';
 import { pinned, applyCard } from './pinned.mjs'; import { loadPhoneProjects, phoneSections } from './phone-projects.mjs';
 import { artifactView, chipArtifact, mountCard } from './artifact.mjs';
 import { svg as desktopIcons } from './helpers.mjs';
@@ -16,7 +16,8 @@ import { onLookChange } from './lib/theme';
 
 type Json = Record<string, unknown>;
 type Usage = { state: 'recorded' | 'stale' | 'unavailable'; updatedAt: number | null; samples: number; discarded: number; totals: { inputTokens: number; outputTokens: number; cachedTokens: number; costUsd: number }; contexts: { conversation: string; provider: string; used: number; size: number }[]; limits?: { claude: Limits | null; codex: Limits | null; signedOut?: string[] } };
-type Limits = { fiveHour: { usedPercent: number; resetsAt: number | null } | null; sevenDay: { usedPercent: number; resetsAt: number | null } | null; asOf: number };
+type Window = { usedPercent: number; resetsAt: number | null; windowMins?: number };
+type Limits = { fiveHour: Window | null; sevenDay: Window | null; models?: (Window & { name: string })[]; asOf: number };
 const one = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const when = (ms: unknown) => new Date(Number(ms)).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
@@ -1525,11 +1526,6 @@ one<HTMLButtonElement>('#refreshMission').onclick = (event) => void refreshing(e
 
 // P5: a used-% ring with the % inside and when it resets under it: cyan, amber from 75%, red from 90%; a window that
 // already reset shows empty ("new window").
-const meter = (label: string, window: { usedPercent: number; resetsAt: number | null } | null) => {
-  const reset = !!window?.resetsAt && window.resetsAt < Date.now(), pct = !window || reset ? 0 : Math.min(100, Math.round(window.usedPercent));
-  const under = !window ? 'not recorded' : reset ? 'new window' : window.resetsAt ? 'resets ' + new Date(window.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
-  return `<div class="meter" role="meter" aria-label="${label} used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="uring${pct >= 90 ? ' bad' : pct >= 75 ? ' warn' : ''}" style="--p:${pct}"><b>${window ? pct + '%' : '–'}</b></div><span>${label}</span><small>${escape(under)}</small></div>`;
-};
 // Spec §6, P5: the cost is what the agent reports, which is the API price of the tokens; on a subscription it is not what
 // was paid, so it says so. A cost under a cent is not shown as $0.00.
 const cents = (usd: number) => usd > 0 && usd < 0.005 ? '< $0.01' : '$' + usd.toFixed(2);
@@ -1610,8 +1606,8 @@ async function loadUsage() {
   try {
     const data = await request('/usage') as Usage;
     one('#usageWhen').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one row each, two rings under its age.
-    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? `<div class="meters">${meter('5 h', window.fiveHour)}${meter('week', window.sevenDay)}</div>` : ''}</article>`; };
+    // Plan limits (5 h and week used %) from Claude Code's and Codex's own records: one card each: its age, then a row per window with the pace tick (helpers.mjs paceRow).
+    const plan = (name: string, window: Limits | null) => { const l = limitLine(name, window, undefined, data.limits?.signedOut?.includes(name.toLowerCase())); return `<article class="plan${l.stale ? ' muted' : ''}"><h2>${l.name} plan</h2><small>${escape(window ? 'Last read ' + l.text.split(' · ').at(-1).replace(/ old$/, ' ago') : l.text)}</small>${window ? planWindows(window).map(([label, w, mins]: [string, Window | null, number]) => paceRow(label, w, mins)).join('') : ''}</article>`; };
     const limits = data.limits ? `<div class="plans" data-limits>${plan('Claude', data.limits.claude)}${plan('Codex', data.limits.codex)}</div>` : '';
     if (data.state === 'unavailable') { one('#usage').innerHTML = limits + '<article class="card"><h2>No chat token records yet</h2><p>Token counts arrive when a P9 chat turn ends.</p></article>'; return; }
     const stale = data.state === 'stale' ? '<article class="card warn"><h2>Stale usage</h2><p>The latest record is more than 15 minutes old.</p></article>' : '';
