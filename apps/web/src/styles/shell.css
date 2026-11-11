@@ -154,8 +154,8 @@ select option::checkmark{color:var(--primary)}
 /* Cards float top-right over the page as their own items (Builder 2026-10-14). They never resize a pane (Builder, 2026-10-27);
    in Dev Focus the editor is a native view above the page, so there the cards are drawn by their own overlay view instead. */
 .stage{--card-w:208px;--card-gap:24px}
-.stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))}
-.stage:has(.card) #projPage{padding-right:calc(var(--card-w) + var(--card-gap))} /* K11: the Mission page makes room for the cards */
+.stage:has(.card) #fMission{padding-right:calc(var(--card-w) + var(--card-gap))} /* K11: the Mission page makes room for the cards */
+.stage:has(.card) #projPage{padding-right:calc(var(--card-w) + var(--card-gap))} /* O49: so does the Projects page */
 .cards{position:absolute;top:50px;right:14px;width:var(--card-w);display:flex;flex-direction:column;gap:8px;z-index:20;pointer-events:none}
 .cards>*{pointer-events:auto}
 /* An artifact in the side panel (any mode, or over the Dev chat): the cards start below its header (the 30 px side head and

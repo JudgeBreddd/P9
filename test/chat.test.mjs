@@ -930,5 +930,8 @@ test('resume: a chat last in Full access comes back in it for a message with no 
   const { hit: locked, seen } = await until(second, (e) => said(held, 'mode:')(e) && e.cursor > back.cursor, 0);
   assert.equal(locked.data.content.text, 'mode:read-only', 'the lock wins over the Full access a resume puts back');
   assert.ok(!seen.some((e) => e.type === 'mode' && e.conversation === held && e.cursor > back.cursor && e.data.mode === 'agent-full-access'), 'resume set Full access under the lock, if only until the prompt');
-  console.log('PASS resume: Full access comes back for a message with no mode; with the lock on, read-only');
+  const resumed = seen.find((e) => e.type === 'resumed' && e.conversation === held && e.cursor > back.cursor);
+  assert.ok(resumed, 'the held chat resumed');
+  assert.deepEqual((resumed.data.restoreNotice ?? []).filter((line) => line.startsWith('Mode:')), [], 'the lock\'s own mode was reported as a setting that could not be restored');
+  console.log('PASS resume: Full access comes back for a message with no mode; with the lock on, read-only and no "could not restore" for the mode');
 });
