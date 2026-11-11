@@ -52,6 +52,12 @@ const START_MS = 45_000;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // contracts.md rule 1: without elicitation.form both adapters silently skip questions. fs and terminal stay off:
 // agents read, write and run under their own permission checks.
+// The ACP version P9 asks each agent for (0.1.9 O52). ACP 2 is still a draft to its authors. Codex gets 2: it keeps
+// mid-turn steering there. ponytail: Claude stays on 1, because its adapter (0.106.0) has no steering on 2 and a
+// message sent mid-turn makes it send its whole answer twice; make it 2 when its v2 steers. P9_ACP_VERSION=1 in the
+// daemon's environment puts every agent back on 1 if a v2 change breaks a chat.
+const ACP_ASK = { claude: 1, codex: 2 };
+export const acpAsk = (provider, env = process.env) => (/^[12]$/.test(env.P9_ACP_VERSION ?? '') ? Number(env.P9_ACP_VERSION) : ACP_ASK[provider] ?? 1);
 export const clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } };
 // The P9 MCP server's stdio end (mcp.mjs); bundled, it sits beside main.mjs like adapterEntry's lookup expects.
 const mcpRelay = fileURLToPath(new URL('./mcp-relay.mjs', import.meta.url));
@@ -551,7 +557,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const bounded = (step) => Promise.race([step, exited, limit]);
     try {
       session.window = await bounded(Promise.resolve(sizing));
-      const init = await bounded(session.agent.initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities }));
+      // O52: P9 asks for the ACP version in ACP_ASK; the agent answers the one it speaks, and acp-v2.mjs translates a 2.
+      // An agent that errors on the ask instead of answering lower is asked once more for 1.
+      const hello = (protocolVersion) => session.agent.initialize({ protocolVersion, clientCapabilities, clientInfo: { name: 'p9', version: '0' } });
+      const ask = acpAsk(conversation.provider);
+      const init = await bounded(ask > 1 ? hello(ask).catch(() => hello(1)) : hello(1));
       // The chat's folder, checked again at every start like a file path (threat model row 24): a folder since swapped for a link fails.
       const cwd = await bounded(startOf(conversation));
       session.capabilities = init.agentCapabilities ?? {};

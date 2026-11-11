@@ -3,6 +3,7 @@
 // '/unstable' is the full ACP v1 surface: the SDK's default entry is stable v1 only, without session configOptions,
 // elicitation and the prompt reply's usage, all of which P9 reads.
 import * as acp from '@agentclientprotocol/sdk/unstable';
+import { v1Stream } from './acp-v2.mjs';
 
 export const { ndJsonStream, RequestError, PROTOCOL_VERSION } = acp;
 
@@ -10,7 +11,9 @@ const AGENT = { initialize: 'initialize', newSession: 'session/new', resumeSessi
   setSessionConfigOption: 'session/set_config_option', prompt: 'session/prompt' };
 
 // handlers: { sessionUpdate(params), requestPermission(params), createElicitation(params) }, each given the request's params only.
-export function connectClient(stream, handlers) {
+// The stream goes through acp-v2.mjs: an agent that answers initialize with protocol 2 is translated to v1 there.
+export function connectClient(raw, handlers) {
+  const stream = v1Stream(raw);
   const connection = acp.client({ name: 'p9' })
     .onNotification('session/update', ({ params }) => handlers.sessionUpdate(params))
     .onRequest('session/request_permission', ({ params }) => handlers.requestPermission(params))
@@ -18,7 +21,7 @@ export function connectClient(stream, handlers) {
     .connect(stream);
   const request = (method, params) => connection.agent.request(method, params);
   return { ...Object.fromEntries(Object.entries(AGENT).map(([name, method]) => [name, (params) => request(method, params)])),
-    cancel: (params) => connection.agent.notify('session/cancel', params), request, closed: connection.closed };
+    cancel: (params) => connection.agent.notify('session/cancel', params), request, closed: connection.closed, version: stream.version };
 }
 
 // The agent side, for test/fake-acp-agent.mjs: handlers by the same names, plus extMethod(method, params) for any other request.
