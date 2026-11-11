@@ -641,7 +641,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats` and `answer_chat`. The
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `set_rules` and `answer_chat`. The
 chat that starts them is the parent, the chats it starts are its sub-agents, and the group is a
 sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it.
 
@@ -655,13 +655,24 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
   a chat starts a turn no wider than the sender's mode, and a chat that is working in a wider
   mode takes no message from it until that turn ends. The agent lock
   and File protection are global, so they cover every sub-agent as they cover its parent.
-- **The agent lock.** `open_chat`, `send_chat` and `answer_chat` are refused while it
+- **The agent lock.** `open_chat`, `send_chat`, `set_rules` and `answer_chat` are refused while it
   is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
-- **Approvals are yours.** No agent can answer another chat's approval prompt; `answer_chat` refuses
-  it (`approval-is-the-users`). An agent may answer a question asked by a chat it started, and the
-  answer is recorded in that chat with the chat that gave it. An approval is shown in the
-  sub-agent's own chat, where you answer it.
+- **Approvals.** An agent may answer an approval or a question asked by a chat it started,
+  directly or through a sub-agent, and by no other chat. For an approval, P9 first asks you in
+  the parent's chat, naming the sub-agent, what it asked and the answer the parent wants to give;
+  only your Allow sends it. In Unrestricted mode (agent lock and File protection both off) it does
+  not ask, like `run_script`. The tool tells the parent to answer only what is within the task
+  it gave; that is an instruction to the agent, not a check P9 makes. Every answer is recorded in
+  the sub-agent's chat with the chat that gave it. The approval also stays in the sub-agent's own
+  chat, where you can answer it yourself.
+- **Sprint rules.** A parent has one text of rules, at most 8,000 characters, that P9 sends as
+  its own block with every message that parent's agent sends a chat it started. Until the parent
+  sets them (`set_rules`, or `rules` on `open_chat`) P9 sends a short default: state the folder
+  and branch first, wait for what you started, end with pass or fail. The rules are text the
+  parent's agent wrote, so the sub-agent reads them as its parent's instructions, not yours; they
+  widen nothing a sub-agent may do. A message you type, and P9's own `[p9]` lines, carry none.
+  The transcript keeps a hash of the rules sent, and the text is in the parent's tool call.
 - **Folders.** A sub-agent's folder passes the same check as a folder the parent asks for itself:
   inside the workspace or a folder you allowed; any absolute folder only in Unrestricted mode.
 - **Tokens.** Each sub-agent gets its own token the way every chat does. Tokens live in memory

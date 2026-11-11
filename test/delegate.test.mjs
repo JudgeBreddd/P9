@@ -97,6 +97,23 @@ test('Delegate: open_chat asks the user first; the sub-agent is an ordinary chat
     assert.equal((await pending).error, 'folder-refused', folder);
   }
   assert.equal((await rows(instance)).length, 2, 'a refused folder made a chat');
+  // File protection on: a parent's answer to its sub-agent's approval is asked of the user in the parent's chat first.
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'permission' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'approval');
+  const waits = (await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).waiting;
+  assert.equal(waits?.kind, 'approval');
+  pending = a.tool('answer_chat', { chat: made.chat, request: waits.request, answer: { optionId: 'allow' } });
+  asked = await approval(asked.cursor);
+  assert.match(asked.hit.data.toolCall.title, /^P9 Delegate: answer "allow" to the approval "Kid" waits on: Write marker$/);
+  await answer(asked.hit.data.request, 'reject');
+  assert.equal((await pending).error, 'not-allowed');
+  await pause(300);
+  assert.equal((await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).waiting?.kind, 'approval', 'a refused answer still reached the sub-agent');
+  pending = a.tool('answer_chat', { chat: made.chat, request: waits.request, answer: { optionId: 'allow' } });
+  asked = await approval(asked.cursor);
+  await answer(asked.hit.data.request, 'allow');
+  assert.deepEqual(await pending, { chat: made.chat, action: 'answered' });
+  assert.equal((await a.done(made.chat)).last, 'permission:allow');
   // The HTTP route cannot name a parent: lineage comes only from the tool.
   const typed = await call(instance, '/chat', 'POST', { provider: 'claude', parent: a.conversation, key: 'x' });
   assert.ok(typed.status !== 201 || !(await rows(instance)).find((c) => c.id === typed.body.conversation).parent, 'a request body set a parent');
@@ -140,11 +157,11 @@ test('Delegate: send, wait, read, list and stop reach a chat\'s own sub-agents; 
   await a.tool('send_chat', { chat: made.chat, text: 'permission' });
   got = await a.tool('wait_chat', { chat: made.chat });
   assert.equal(got.waiting?.kind, 'approval');
-  assert.equal((await a.tool('answer_chat', { chat: made.chat, request: got.waiting.request, answer: { optionId: 'allow' } })).error, 'approval-is-the-users');
-  await pause(300);
-  assert.equal((await a.tool('wait_chat', { chat: made.chat, timeoutMs: 0 })).waiting?.kind, 'approval', 'the approval still waits for the user');
-  await call(instance, `/chat/${made.chat}/answer`, 'POST', { request: got.waiting.request, answer: { optionId: 'allow' } });
+  // Unrestricted: the parent answers its sub-agent's approval unasked; a chat that did not start it cannot.
+  assert.equal((await b.tool('answer_chat', { chat: made.chat, request: got.waiting.request, answer: { optionId: 'allow' } })).error, 'chat-not-found');
+  assert.deepEqual(await a.tool('answer_chat', { chat: made.chat, request: got.waiting.request, answer: { optionId: 'allow' } }), { chat: made.chat, action: 'answered' });
   assert.equal((await a.done(made.chat)).last, 'permission:allow');
+  assert.equal((await events(instance, made.chat)).filter((e) => e.type === 'answered').at(-1).data.from, a.conversation, 'the approval\'s answer says which chat gave it');
 
   // wait_chat's timeout stops nothing; stop_chat interrupts the turn, and with close stops the chat.
   await a.tool('send_chat', { chat: made.chat, text: 'slow' });
@@ -311,4 +328,61 @@ test('Delegate: stop_chat ends a sub-agent\'s own sub-agent first; the user\'s S
   await pause(500);
   assert.equal((await notices(instance, a.conversation)).filter((line) => line.includes('Crasher failed')).length, 1, 'one line for the crash');
   console.log('PASS Delegate stop and crash: stop_chat interrupted the sub-agent\'s sub-agent first, the user\'s Stop took the chat it started, the dead sub-agent was reported failed');
+});
+
+test('Delegate: sprint rules ride with every message a parent\'s agent sends its sub-agent, the default until set_rules; the user\'s own message carries none; list_chats tells model, context and last use', { timeout: 180000 }, async (t) => {
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'hello', title: 'Kid' });
+  await a.done(made.chat);
+  const log = path.join(path.resolve(instance.workspace, made.folder), 'rules.log');
+  const sent = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []);
+  const users = async () => (await events(instance, made.chat)).filter((e) => e.type === 'user');
+  // The first message: P9's default, as its own block (the agent saw only "hello"), a hash in the transcript.
+  assert.equal(sent().length, 1, 'the first message carried no rules');
+  assert.match(sent()[0], /^\[P9: sprint rules[^\n]*\nBefore you start, say in one line which folder[\s\S]*whether the work passed, failed or is waiting/);
+  assert.match((await users())[0].data.rules, /^[0-9a-f]{12}$/);
+  assert.ok(!JSON.stringify(await users()).includes('Before you start'), 'the rules text is in the transcript');
+  assert.match((await a.tool('set_rules')).rules, /^Before you start/);
+  // set_rules: the next send carries the new text and not the old.
+  assert.deepEqual(await a.tool('set_rules', { rules: 'Only touch docs.' }), { rules: 'Only touch docs.', sentTo: 1 });
+  await a.tool('send_chat', { chat: made.chat, text: 'second' });
+  assert.equal((await a.done(made.chat)).last, 'echo:second');
+  assert.equal(sent().length, 2);
+  assert.ok(sent()[1].includes('\nOnly touch docs.]') && !sent()[1].includes('Before you start'), sent()[1]);
+  // Into a running turn (steered): the same block.
+  await a.tool('send_chat', { chat: made.chat, text: 'slow' });
+  await until(instance, (event) => event.conversation === made.chat && event.type === 'user' && event.data.text === 'slow');
+  assert.equal((await a.tool('send_chat', { chat: made.chat, text: 'nudge', when: 'steer' })).sent, 'into its running turn');
+  assert.equal(sent().length, 4, 'a steered message carried no rules');
+  assert.match((await users()).at(-1).data.rules, /^[0-9a-f]{12}$/);
+  await a.tool('stop_chat', { chat: made.chat });
+  await a.done(made.chat);
+  // The user's own message: none.
+  await call(instance, `/chat/${made.chat}/prompt`, 'POST', { text: 'mine' });
+  await until(instance, (event) => event.conversation === made.chat && event.data?.content?.text === 'echo:mine');
+  assert.equal(sent().length, 4, 'the user\'s own message carried the parent\'s rules');
+  assert.equal((await users()).at(-1).data.rules, undefined);
+  // Empty: none. Too long, or under the lock: refused and unchanged.
+  await a.tool('set_rules', { rules: '' });
+  await a.tool('send_chat', { chat: made.chat, text: 'third' });
+  assert.equal((await a.done(made.chat)).last, 'echo:third');
+  assert.equal(sent().length, 4, 'empty rules were sent');
+  assert.equal((await a.tool('set_rules', { rules: 'x'.repeat(8001) })).error, 'request-refused');
+  await call(instance, '/agent-lock', 'POST', { on: true });
+  assert.equal((await a.tool('set_rules', { rules: 'locked' })).error, 'agent-lock-on');
+  await call(instance, '/agent-lock', 'POST', { on: false });
+  assert.equal((await a.tool('set_rules')).rules, '');
+  // open_chat's rules replace them, for every sub-agent of this parent.
+  const other = await a.tool('open_chat', { text: 'limits 40', title: 'Two', rules: 'Report in one line.' });
+  await a.done(other.chat);
+  assert.ok(sent().at(-1).includes('\nReport in one line.]'));
+  // list_chats: model, context and last use.
+  await until(instance, (event) => event.conversation === other.chat && event.type === 'update' && event.data.sessionUpdate === 'usage_update');
+  const row = (await a.tool('list_chats')).chats.find((c) => c.id === other.chat);
+  assert.deepEqual(row.context, { used: 400, size: 1000 });
+  assert.ok(Math.abs(Date.now() - Date.parse(row.active)) < 60000, row.active);
+  assert.ok('model' in row);
+  console.log('PASS Delegate sprint rules: default on the first message, set_rules on the next and on a steer, none on the user\'s, none when empty; list_chats context ' + JSON.stringify(row.context) + ', model ' + row.model);
 });
