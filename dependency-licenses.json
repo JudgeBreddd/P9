@@ -1,27 +1,27 @@
 [
   {
-    "name": "@agentclientprotocol/claude-agent-acp@0.104.1",
+    "name": "@agentclientprotocol/claude-agent-acp@0.106.0",
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a"
     }
   },
   {
-    "name": "@agentclientprotocol/codex-acp@2.1.1",
+    "name": "@agentclientprotocol/codex-acp@2.6.0",
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "72ea310b40e1ee2c4aa61935d22065155c50bfde288b114c9cfd3e1fa34f8049"
     }
   },
   {
-    "name": "@agentclientprotocol/sdk@1.8.0",
+    "name": "@agentclientprotocol/sdk@2.4.0",
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a"
     }
   },
   {
-    "name": "@agentclientprotocol/sdk@2.5.0",
+    "name": "@agentclientprotocol/sdk@2.6.0",
     "license": "Apache-2.0",
     "files": {
       "LICENSE": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a"
@@ -1017,32 +1017,32 @@
     "files": {}
   },
   {
-    "name": "@openai/codex-darwin-arm64@0.159.3-darwin-arm64",
+    "name": "@openai/codex-darwin-arm64@0.166.0-darwin-arm64",
     "installed": false
   },
   {
-    "name": "@openai/codex-darwin-x64@0.159.3-darwin-x64",
+    "name": "@openai/codex-darwin-x64@0.166.0-darwin-x64",
     "installed": false
   },
   {
-    "name": "@openai/codex-linux-arm64@0.159.3-linux-arm64",
+    "name": "@openai/codex-linux-arm64@0.166.0-linux-arm64",
     "installed": false
   },
   {
-    "name": "@openai/codex-linux-x64@0.159.3-linux-x64",
+    "name": "@openai/codex-linux-x64@0.166.0-linux-x64",
     "license": "Apache-2.0",
     "files": {}
   },
   {
-    "name": "@openai/codex-win32-arm64@0.159.3-win32-arm64",
+    "name": "@openai/codex-win32-arm64@0.166.0-win32-arm64",
     "installed": false
   },
   {
-    "name": "@openai/codex-win32-x64@0.159.3-win32-x64",
+    "name": "@openai/codex-win32-x64@0.166.0-win32-x64",
     "installed": false
   },
   {
-    "name": "@openai/codex@0.159.3",
+    "name": "@openai/codex@0.166.0",
     "license": "Apache-2.0",
     "files": {}
   },

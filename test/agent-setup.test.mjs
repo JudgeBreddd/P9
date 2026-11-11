@@ -549,7 +549,7 @@ test('D8: Codex sign-in shows its one-time code, opens the page on request only,
   await writeFile(path.join(instance.workspace, 'fake-login-device'), 'unsupported');
   await body.locator('[data-act="start:codex"]').click();
   await body.getByText('This Codex has no sign-in with a code').waitFor({ timeout: left() });
-  assert.match(await body.innerText(), /P9 was built with Codex 0\.159\.3/);
+  assert.match(await body.innerText(), /P9 was built with Codex 0\.166\.0/);
   assert.equal(await body.locator('[data-act="term:codex:login"]').count(), 1, 'the terminal way is offered');
   await shot('d8-codex-unsupported', page.locator('#welDlg'));
   assert.deepEqual(errors, []);
@@ -557,11 +557,11 @@ test('D8: Codex sign-in shows its one-time code, opens the page on request only,
 });
 
 // D8: the flag is hidden in codex's help, so the codex P9 ships is pinned: the lockfile's version, and its login takes it.
-test('D8: the codex P9 ships is 0.159.3 and its login takes --device-auth', { timeout: 30000 }, async () => {
+test('D8: the codex P9 ships is 0.166.0 and its login takes --device-auth', { timeout: 30000 }, async () => {
   const lock = await readFile(path.join(root, 'pnpm-lock.yaml'), 'utf8');
-  assert.deepEqual([...new Set([...lock.matchAll(/^ {2}'@openai\/codex@([0-9.]+)':/gm)].map((m) => m[1]))], ['0.159.3'], 'a new codex: check its login still has --device-auth, then move this pin');
+  assert.deepEqual([...new Set([...lock.matchAll(/^ {2}'@openai\/codex@([0-9.]+)':/gm)].map((m) => m[1]))], ['0.166.0'], 'a new codex: check its login still has --device-auth, then move this pin');
   const pkg = createRequire(await realpath(path.join(root, 'node_modules/@agentclientprotocol/codex-acp/package.json'))).resolve('@openai/codex/package.json'); // pnpm: from the adapter's real folder
-  assert.equal(JSON.parse(await readFile(pkg, 'utf8')).version, '0.159.3');
+  assert.equal(JSON.parse(await readFile(pkg, 'utf8')).version, '0.166.0');
   const help = await new Promise((resolve) => execFile(process.execPath, [path.join(path.dirname(pkg), 'bin/codex.js'), 'login', '--help'], { timeout: 20000 }, (error, stdout, stderr) => resolve(stdout + stderr)));
   assert.match(help, /--device-auth/);
 });

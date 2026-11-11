@@ -19,9 +19,9 @@ the handlers and security boundary here are new code.
 | @astrojs/react | 7.1.0 | MIT |
 | react / react-dom | 19.3.1 | MIT |
 | electron | 44.7.2 | MIT plus bundled third-party notices |
-| @agentclientprotocol/sdk | 1.8.0 | Apache-2.0 |
-| @agentclientprotocol/claude-agent-acp | 0.104.1 | Apache-2.0 |
-| @agentclientprotocol/codex-acp | 2.1.1 | Apache-2.0 (brings @openai/codex 0.159.3, Apache-2.0) |
+| @agentclientprotocol/sdk | 2.6.0 | Apache-2.0 |
+| @agentclientprotocol/claude-agent-acp | 0.106.0 | Apache-2.0 |
+| @agentclientprotocol/codex-acp | 2.6.0 | Apache-2.0 (brings @openai/codex 0.166.0, Apache-2.0) |
 
 The Claude adapter brings @anthropic-ai/claude-agent-sdk 0.3.322 and its native
 claude-agent-sdk-linux-x64 binary, under Anthropic's own terms (their LICENSE.md and

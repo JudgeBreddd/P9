@@ -174,7 +174,7 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       into.totals.cachedTokens += usage.cachedReadTokens ?? 0; into.samples += 1;
     } else {
       if (data?.sessionUpdate !== 'usage_update') return;
-      // claude-agent-acp (0.88.0 to 0.104.1, its v1 path) attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
+      // claude-agent-acp (0.88.0 to 0.106.0, on ACP 1 and 2 alike) attaches the SDK's rate_limit_info to a usage_update each turn: the live 5 h / 7 d use.
       const windows = data._meta?.['_claude/rateLimit']?.unifiedWindows;
       if (windows && typeof windows === 'object') into.claudeLive = { windows, at: row.at };
       const context = Number.isSafeInteger(data.used) && data.used >= 0 && Number.isSafeInteger(data.size) && data.size > 0 && data.used <= data.size;
