@@ -130,7 +130,8 @@ test('window: New chat lists each agent\'s models before any chat; opening an ol
   // No chat has run in this daemon run: the lists still come, from the fresh read.
   const NOW = ['Claude default model', 'Claude · Default (recommended)', 'Claude · Opus', 'Claude · Haiku', 'Claude · Nova'];
   await until(async () => JSON.stringify(await newRows(page, 'claude')) === JSON.stringify(NOW), 'New chat lists the agent\'s models of today');
-  assert.equal((await newRows(page, 'codex')).length, 5, 'Codex too, with no Codex chat ever');
+  // Each agent's list is its own read and arrives on its own.
+  await until(async () => (await newRows(page, 'codex')).length === 5, 'Codex too, with no Codex chat ever');
   // The old chat opens from History (its events replay now): the shared list stays today's.
   await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const pane = page.locator('.pane[data-id="' + id + '"]');
