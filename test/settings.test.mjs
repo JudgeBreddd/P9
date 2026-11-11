@@ -1356,7 +1356,9 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On', 'Off ✓']);
   await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
   await ta.click(); await page.keyboard.type('config'); await page.keyboard.press('Enter');
-  await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 });
+  // A failed wait says what the agent did answer and what the pills showed, so a red run names the lost pick.
+  await pane.getByText('config:model=opus,effort=high,fast=on,sandbox=on').waitFor({ timeout: 15000 }).catch(async () => {
+    throw new Error('the picks did not reach the agent: Effort pill ' + await pillValue(pane, 'Effort') + ', chat ends: ' + (await pane.innerText()).slice(-300).replace(/\s+/g, ' ')); });
   await page.locator('#navList .rowwrap[data-live]:not(:has([data-busy])) .row[data-chat="' + id + '"]').waitFor({ timeout: 15000 });
   assert.equal(await pillValue(pane, 'Effort'), 'High', 'the pill shows the effort now in use');
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On ✓', 'Off'], 'the menu shows the fast mode now in use');
