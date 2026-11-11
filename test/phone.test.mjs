@@ -612,6 +612,12 @@ test('Phase 11: malformed and stale usage are explicit and never stop the daemon
   assert.ok(!health.text.includes(workspace), health.text);
   assert.equal((await server.desk('/setup')).status, 200);
   assert.equal((await server.remote('/setup', { session: auth })).status, 404);
+  // O48: provider profiles (their names, addresses and the key's writes) are the desktop's only.
+  assert.equal((await server.desk('/profiles')).status, 200);
+  assert.equal((await server.remote('/profiles', { session: auth })).status, 404);
+  assert.equal((await server.remote('/profiles', { method: 'POST', session: auth, body: { name: 'x', baseUrl: 'https://x.example.test', models: ['m'], key: 'k' }, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
+  assert.equal((await server.remote('/profiles/abc', { method: 'DELETE', session: auth, headers: { 'x-p9-op': crypto.randomUUID() } })).status, 404);
+  assert.deepEqual((await server.desk('/profiles')).body.profiles, []);
   // Settings → Mission Control files is the phone's too since c18 (row 66): the desktop's settings, without the desktop's
   // phone address or the settings file's path.
   const files = await server.remote('/setup/settings', { session: auth });
