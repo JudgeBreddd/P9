@@ -1351,7 +1351,8 @@ test('Models and slash commands: the Model pill lists the agent\'s own models, t
   assert.equal(await pillValue(pane, 'Model'), 'Opus', 'the pill shows the model now in use');
   assert.deepEqual([await pane.evaluate((el) => el.kept), await page.locator('#nav .row[data-chat="' + id + '"]').evaluate((el) => el.kept)], ['yes', 'yes'], 'pane or row rebuilt by the turn');
   // Effort and the other agent settings (Builder, 2026-10-18: "wire all of them"; threat model row 22): the agent's own lists, picked values reach it.
-  assert.equal(await pillValue(pane, 'Effort'), 'Medium (Default)');
+  // The default mark needs the daemon's own read of the agent's lists, which may land after the chat's first turn: wait for it.
+  await pane.locator('[data-pill="Effort"][aria-label="Effort: Medium (Default)"]').waitFor({ timeout: 20000 });
   assert.deepEqual(await pillItems(page, pane, 'Effort'), ['Low', 'Medium (Default) ✓', 'High']);
   assert.deepEqual(await pillItems(page, pane, 'Model'), ['Default (recommended)', 'Opus ✓', 'Haiku', 'On', 'Off ✓']);
   await choose(page, pane, 'Effort', 'High'); await choose(page, pane, 'Model', 'On');
