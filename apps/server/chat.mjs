@@ -240,6 +240,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   const replyText = db.prepare(`SELECT group_concat(text, '') AS text FROM (SELECT json_extract(${valid}, '$.content.text') AS text FROM events
     WHERE conversation = ? AND cursor > ? AND cursor <= ? AND type = 'update' AND json_extract(${valid}, '$.sessionUpdate') = 'agent_message_chunk'
     AND text NOT LIKE 'Warning: %' ORDER BY cursor LIMIT 80)`);
+  // ponytail: the last 400 chunks of the reply, in order; a longer reply loses its start (read_chat pages the whole).
+  const replyEnd = db.prepare(`SELECT group_concat(text, '') AS text FROM (SELECT text FROM (SELECT cursor, json_extract(${valid}, '$.content.text') AS text FROM events
+    WHERE conversation = ? AND cursor > ? AND cursor <= ? AND type = 'update' AND json_extract(${valid}, '$.sessionUpdate') = 'agent_message_chunk'
+    AND text NOT LIKE 'Warning: %' ORDER BY cursor DESC LIMIT 400) ORDER BY cursor)`);
   const preview = (id) => {
     const last = said.get(id);
     if (!last) return '';
@@ -268,6 +272,11 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   });
   // A failed append (disk full, a busy database) is logged, not thrown: emit runs inside child exit listeners and un-awaited
   // chains, where a throw would end the daemon and every chat with it (review 2026-11-03). The chat goes on; the event is lost.
+  // A7 Delegate: who sent a message when it was not the user (a parent chat's id, or 'p9' for P9's own notice). Kept
+  // beside the body, never read from it, so no window or phone can set it.
+  const senders = new WeakMap();
+  const sender = (body) => (senders.has(body) ? { from: senders.get(body) } : {});
+  const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
   const emit = (conversation, type, data = {}) => {
     try { ledger.append(conversation, type, data); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
@@ -744,7 +753,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // Codex has no promptRequired and answers startedNewTurn when the turn ended meanwhile; the message is delivered,
     // but that turn's end is not reported (it is not this prompt's): CP8 below ends it.
     const delivered = (result) => result?.outcome === 'injected' || result?.outcome === 'startedNewTurn';
-    const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }) });
+    const user = () => ({ ...(images.length ? { text: body.text, images: keep(images) } : { text: body.text }), steered: true, ...(held && { held: [held] }), ...sender(body) });
     const request = session.agent.request('_session/steering', { sessionId: session.sessionId, prompt: blocks(body.text, images),
       _meta: { steering: { idleBehavior: 'promptRequired' } } });
     let result;
@@ -812,7 +821,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     }
     if (!send.length) return;
     const allowed = () => send.every((item) => item.allowed());
-    const result = await authority.run(allowed, () => api.prompt(id, { ...send.at(-1).body, text, images }, send.map((item) => item.id))).catch(() => refused(403, 'session-ended'));
+    const result = await authority.run(allowed, () => api.prompt(id, { ...send.at(-1).body, text, images }, send.map((item) => item.id), senders.get(send.at(-1).body))).catch(() => refused(403, 'session-ended'));
     if (result.status !== 202) { unheld(id, send, result.error ?? 'refused'); unheld(id, session.queued.splice(0), result.error ?? 'refused'); }
   }
 
@@ -883,7 +892,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // a chat never used). Each reads the events_conversation index from one end: 36 chats over 200 MB took 40 ms.
     // lists (O47): { agent: { model, pickers, def, at, state } | null }; state 'loading' while this run's one fresh read is on.
     lists: (fresh) => { if (fresh) freshLists(); return Object.fromEntries(Object.keys(MODES).map((agent) => [agent, lists[agent] || readState[agent] ? { ...lists[agent], state: readState[agent] ?? 'kept' } : null])); },
-    list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived,
+    list: () => db.prepare(`SELECT id, provider, title, state, created, folder, project, archived, parent,
         COALESCE((SELECT at FROM events WHERE conversation = c.id AND type NOT IN (${NOT_USE.map((t) => `'${t}'`).join(', ')}) ORDER BY cursor DESC LIMIT 1), created) AS used,
         EXISTS (SELECT 1 FROM events WHERE conversation = c.id AND type = 'user') AS sent,
         EXISTS (SELECT 1 FROM events a WHERE a.conversation = c.id AND a.type IN ('approval', 'question')
@@ -898,7 +907,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     // project (N1): the project the user started it in; without a folder it starts in the project's work folder. A chat
     // with no project is a general chat, wherever it starts: its project is never taken from its folder.
     // op: the request's operation ID (x-p9-op), echoed in 'created' so the window that asked knows its own chat (O44 review).
-    async create(body, op) {
+    // lineage (A7 Delegate, from delegate.mjs only, never a request body): the chat that starts this one and its key.
+    async create(body, op, lineage) {
       const project = body?.project === undefined ? null : await projects.record(body.project);
       if (!PROVIDERS.has(body?.provider) || (body.title !== undefined && (typeof body.title !== 'string' || body.title.length > 120))
           || (body.project !== undefined && !project))
@@ -911,13 +921,16 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const there = () => (body.folder === undefined ? startOf({ folder, project: project?.id }).then(() => true, () => false) : folderThere(folder));
       if (typeof folder !== 'string' || !await there()) return refused(400, project && body.folder === undefined ? 'folder-unavailable' : 'request-refused');
       const id = randomUUID(), title = body.title?.trim() || (profile ? profile.model.slice(0, 120) : body.provider === 'claude' ? 'Claude' : 'Codex');
-      db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project) VALUES (?, ?, ?, 'idle', ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null);
+      try { db.prepare("INSERT INTO conversations (id, provider, title, state, created, folder, project, parent, key) VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?)").run(id, body.provider, title, Date.now(), folder, project?.id ?? null, lineage?.parent ?? null, lineage?.key ?? null); }
+      catch (error) { if (lineage?.key && /UNIQUE/.test(String(error.message))) return refused(409, 'key-taken'); throw error; }
       if (profile) db.prepare('INSERT INTO prefs (key, value) VALUES (?, ?)').run('profile:' + id, JSON.stringify(profile));
-      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(profile && { profile }), ...(ID.test(op ?? '') && { op }) });
+      emit(id, 'created', { provider: body.provider, title, folder, ...(project && { project: project.id }), ...(profile && { profile }), ...(lineage?.parent && { parent: lineage.parent }), ...(ID.test(op ?? '') && { op }) });
       return { status: 201, conversation: id };
     },
     // held: the waiting messages this prompt carries (drain), named in its user event so the window drops them.
-    async prompt(id, body, held) {
+    // from (A7 Delegate, delegate.mjs only): the chat whose agent sent this, or 'p9'; shown in the message's user event.
+    async prompt(id, body, held, from) {
+      if (from && body && typeof body === 'object') senders.set(body, from);
       await recovered;
       const release = lifecycle.begin();
       if (!release) return refused(503, lifecycle.refusal());
@@ -950,7 +963,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       const lastNote = project && db.prepare("SELECT data ->> '$.projectNote' AS hash FROM events WHERE conversation = ? AND type = 'user' AND json_valid(data) AND data ->> '$.steered' IS NULL ORDER BY cursor DESC LIMIT 1").get(id)?.hash;
       const projectText = project?.text && project.hash !== lastNote ? project.text : null;
       // note: the moved note goes in with this message (movedNote), so the history shows what the agent was told.
-      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }) }); // hash and type only: events stay small
+      emit(id, 'user', { text: body.text, ...(images.length && { images: keep(images) }), ...(held && { held }), ...(note && { note }), ...(project && { projectNote: project.hash }), ...sender(body) }); // hash and type only: events stay small
       let session;
       try { session = await connect(conversation); } catch (error) { release(); return refused(error.status ?? 500, error.reason ?? (error.status === 409 ? 'stopping' : 'adapter-start-failed')); }
       release();
@@ -1003,11 +1016,15 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
         session.turn = null;
         session.tools.clear();
         if (live.get(id) === session) setState(id, 'running');
+        // A7: not when more work waits (drain sends it next), nor on a cancel or a stop: someone ended it on purpose.
+        const more = session.held.length + session.queued.length > 0;
+        if (!more && !session.stopping && ended?.stopReason !== 'cancelled') for (const hook of settledHooks) { try { hook(id, Boolean(ended)); } catch {} }
         drain(id, session, ended?.stopReason === 'cancelled');
       });
       return { status: 202, turn };
     },
-    answer(id, body) {
+    // from (A7 answer_chat): the parent chat whose agent answered a question; kept in the answered event.
+    answer(id, body, from) {
       const session = ID.test(id) && live.get(id);
       const pending = session && typeof body?.request === 'string' && session.pending.get(body.request);
       if (!pending) return refused(404, 'no-such-request');
@@ -1016,7 +1033,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       // The route's own check ran before later awaits; a device revoked since then must not approve the agent's action.
       stillAuthorized();
       pending.resolve(answer);
-      emit(id, 'answered', { request: body.request, answer });
+      emit(id, 'answered', { request: body.request, answer, ...(from && { from }) });
       return { status: 200, ok: true };
     },
     async cancel(id) {
@@ -1065,6 +1082,35 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       return { status: 200, session: conversation.session, cwd,
         command: 'claude --resume ' + conversation.session + ' --remote-control' };
     },
+    // A7 Delegate (delegate.mjs). info: one chat as the tools need it; mode is the name in MODES, null until its agent runs.
+    info(id) {
+      const c = ID.test(id ?? '') && row(id);
+      if (!c) return null;
+      const session = live.get(id), effort = session?.pickers?.find((o) => o.category === 'thought_level');
+      const asks = session && !session.stopping ? [...session.pending].map(([request, p]) => ({ kind: p.kind, request,
+        text: String(p.kind === 'approval' ? p.request.toolCall?.title ?? '' : p.request.message ?? '').slice(0, 2000), ...(p.form && { form: p.form }) })) : [];
+      return { id: c.id, provider: c.provider, title: c.title, state: c.state, folder: c.folder, project: c.project, parent: c.parent, key: c.key,
+        mode: session?.mode ? Object.keys(MODES[c.provider]).find((k) => MODES[c.provider][k] === session.mode) ?? null : null,
+        model: session?.models?.current ?? null, effort: effort ? { id: effort.id, value: effort.current } : null,
+        profile: c.provider === 'claude' ? profileOf(id) : null, asks, busy: Boolean(session && (session.held.length || session.queued.length)),
+        asked: db.prepare("SELECT cursor FROM events WHERE conversation = ? AND type = 'user' ORDER BY cursor DESC LIMIT 1").get(id)?.cursor ?? 0 };
+    },
+    family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
+    startFolder: (id) => startOf(row(id)).catch(() => null),
+    modes: MODES,
+    // The newest reply's text, whole (preview() keeps its first line): the chunks since the prompt or tool call before it.
+    reply(id) {
+      const last = said.get(id);
+      if (!last || last.type === 'user') return '';
+      try { return String(replyEnd.get(id, runFrom.get(id, last.cursor)?.cursor ?? 0, last.cursor).text ?? ''); } catch { return ''; }
+    },
+    // Resolves at the next event of any chat, or after ms.
+    changed: (ms) => new Promise((resolve) => {
+      const done = () => { listeners.delete(done); clearTimeout(timer); resolve(); };
+      const timer = setTimeout(done, ms);
+      listeners.add(done);
+    }),
+    settled: (hook) => { settledHooks.add(hook); },
     stopAll,
     projects,
     ...(() => {
