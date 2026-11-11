@@ -668,7 +668,8 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
           const current = session.pickers?.find((p) => p.id === previous.id);
           if (previous.current !== current?.current) changes.push('Effort: ' + label(current));
         }
-        if (was.mode && was.mode !== session.mode) changes.push('Mode: ' + (Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode ?? 'unknown'));
+        // O53: with the agent lock on, the mode is the lock's on purpose; that is not a setting that failed to come back.
+        if (!locked && was.mode && was.mode !== session.mode) changes.push('Mode: ' + (Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode ?? 'unknown'));
         if (was.mode && was.mode !== session.mode && session.mode) emit(conversation.id, 'mode', { mode: session.mode, name: Object.keys(MODES[conversation.provider]).find((k) => MODES[conversation.provider][k] === session.mode) ?? session.mode, lock: locked });
         emit(conversation.id, 'resumed', { session: conversation.session, ...(session.models && { model: label(session.models) }), ...(changes.length && { restoreNotice: changes }) });
         if (session.models) emit(conversation.id, 'config', configOf(session));

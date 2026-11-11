@@ -20,8 +20,9 @@ const I = PANEL_ICONS;
 export const LABEL = { running: 'Running', needs: 'Waiting on you', unread: 'Finished, not read yet', failed: 'Failed' };
 // A chat's state for its row and its strip icon: waiting for an answer, failed, finished and unread, running (busy pulses), or none.
 export const stateOf = (s, busy) => s.pending ? 'needs' : s.failed ? 'failed' : s.done && !busy ? 'unread' : s.state === 'running' ? 'running' : '';
-// The strip: every live chat (running or waiting for an answer), then every chat whose result is not seen yet (unread or failed),
-// each group most recent first. A chat leaves it when it is opened (renderChats clears done and failed) or stops.
+// The strip (the collapsed sidebar): every chat that is not stopped, idle ones already read included, then every stopped chat
+// whose result is not seen yet (unread or failed). The panel's ordered() then puts the open ones in opening order; the stopped
+// ones stay most recent first. A stopped chat leaves it when it is opened (renderChats clears done and failed).
 const when = s => s.used || s.created || 0, recent = (a, b) => when(b) - when(a);
 export const stripChats = sessions => { const live = s => s.state !== 'stopped', ok = sessions.filter(s => !s.archived);
   return [...ok.filter(live).sort(recent), ...ok.filter(s => !live(s) && (s.done || s.failed)).sort(recent)]; };

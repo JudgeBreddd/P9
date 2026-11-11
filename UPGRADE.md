@@ -1,5 +1,11 @@
 # Upgrading P9
 
+## To 0.1.9 (beta)
+
+- **Open chats change order once.** The sidebar now keeps open chats in the order you opened them. On the first launch
+  after the update nothing is saved yet, so your open chats go from newest first to oldest first, one time. After that
+  they stay where they are.
+
 ## To 0.1.8 (beta)
 
 A fix release. The Windows app and the AppImage update themselves from 0.1.7 (Settings > Maintenance > Updates). A
