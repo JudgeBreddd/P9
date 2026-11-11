@@ -356,3 +356,7 @@ section[data-view=files]:has(#fileView[data-image]:not([hidden])) :is(#save,#mor
 #imageView .note{max-width:32ch;text-align:center;color:var(--dim);font-size:14px;line-height:1.45}
 /* P21: the Waiting on you Sort, one line like the space pick. */
 .queue-sort{display:flex;align-items:center;gap:8px;justify-content:flex-end}.queue-sort select{width:auto}
+
+.empty [data-chat-folder]{background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:4px 8px;overflow-wrap:anywhere}
+
+.chat-folder-readonly{color:var(--dim);font-size:12px;overflow-wrap:anywhere;margin:12px 16px}

@@ -1666,8 +1666,10 @@ test('Chat folder: a new chat shows its folder and replaces only an unsent chat'
   const pane = page.locator('.pane[data-id="' + chats[0].id + '"]');
   await pane.locator('.composer textarea').fill('cwd'); await pane.locator('.composer textarea').press('Enter');
   await pane.locator('.hist', { hasText: 'cwd:new:' + path.join(instance.workspace, 'proj/sub') }).waitFor({ timeout: 20000 });
+  for (const text of ['hello', 'again']) { await pane.locator('.composer textarea').fill(text); await pane.locator('.composer textarea').press('Enter'); await pane.locator('.hist', { hasText: 'echo:' + text }).waitFor({ timeout: 20000 }); }
   assert.equal(await pane.locator('[data-chat-folder]').count(), 0, 'folder cannot change after sending');
   assert.equal(await pane.locator('.chat-folder-readonly').innerText(), path.join(instance.workspace, 'proj/sub'));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT desktop-folder-readonly ' + (await page.screenshot()).toString('base64'));
   await page.click('#newBtn');
   await page.waitForFunction(async () => (await window.p9.chat('list')).body.conversations.length === 2, null, { timeout: 10000 });
   chats = (await call(instance, '/chat')).conversations;

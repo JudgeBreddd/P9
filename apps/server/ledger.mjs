@@ -264,7 +264,8 @@ export function openLedger(file, { steps = MIGRATIONS, crashAfter } = {}) {
       let unused;
       db.exec('BEGIN');
       try {
-        db.prepare('DELETE FROM events WHERE conversation = ?').run(id);
+        // Keep anonymous cursor placeholders so readers can distinguish deletion from lost history.
+        db.prepare("UPDATE events SET conversation = '', type = 'deleted-cursor', data = '{}', at = 0 WHERE conversation = ?").run(id);
         db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
         const still = new Set(statements.named.all(JSON.stringify(hashes)).map((row) => row.hash));
         unused = hashes.filter((hash) => !still.has(hash));

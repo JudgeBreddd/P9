@@ -521,10 +521,9 @@ function render() {
   if (info) phoneFolderLine.textContent = info.folder;
   if (!blocks.length) {
     const item = state.conversations.find(entry => entry.id === picked);
-    const name = item?.provider === 'codex' ? 'Codex' : 'Claude';
     const folder = info?.folder ?? 'Loading folder…';
     const canPick = !!info && !item?.project && !item?.sent;
-    events.insertAdjacentHTML('beforeend', `<div class="empty"><h2>What are we working on?</h2><p>${escape(name)} · ${canPick ? `<button type="button" class="quiet" data-chat-folder title="Click to start this chat in another folder">${escape(folder)}</button>` : escape(folder)}</p></div>`);
+    events.insertAdjacentHTML('beforeend', `<div class="empty"><h2>What are we working on?</h2><p>Working directory · ${canPick ? `<button type="button" class="quiet" data-chat-folder title="Click to start this chat in another folder">${escape(folder)}</button>` : escape(folder)}</p></div>`);
   }
   if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
   anchored = false;
@@ -564,6 +563,7 @@ one('#sheetBody').addEventListener('click', async event => {
   const id = openId, item = state.conversations.find(entry => entry.id === id);
   if (!item || item.sent || item.project) return;
   const folder = pickChatWhole && pickChatAt === pickChatWorkspace ? '' : pickChatAt;
+  const chosenMode = one<HTMLSelectElement>('#mode').value, chosenModel = one<HTMLSelectElement>('#model').value;
   const made = await mutate('/chat', { provider: item.provider, ...(folder && { folder }) });
   if (made.status !== 201) return;
   const next = String(made.body.conversation);
@@ -572,6 +572,8 @@ one('#sheetBody').addEventListener('click', async event => {
     await mutate('/chat/' + encodeURIComponent(next) + '/delete', { empty: true });
     note('The chat already has a message or could not be replaced.'); return;
   }
+  if (chosenMode) startPick.set(next, chosenMode);
+  if (chosenModel) swapModel.set(next, chosenModel);
   sheet.close(); await loadChat(); openChat(next);
 });
 // P20: the next TAIL blocks before the oldest read, drawn above; the reader stays where they were.
@@ -639,6 +641,7 @@ let picksFor = '';
 // A chat made here starts in this phone's last pick for its agent. Kept by ID until its picks are first drawn: a chat
 // made while the page's first read runs is a stub, drawn only once its history is in.
 const startPick = new Map<string, string>();
+const swapModel = new Map<string, string>();
 function renderPicks(id: string) {
   const configs = state.events.filter((event) => event.conversation === id && event.type === 'config');
   const set = state.events.findLast((event) => event.conversation === id && event.type === 'mode')?.data as { name?: string } | undefined;
@@ -657,6 +660,7 @@ function renderPicks(id: string) {
   const model = one<HTMLSelectElement>('#model'), options = config.model?.options ?? [];
   model.hidden = !options.length; model.dataset.current = config.model?.current ?? '';
   model.innerHTML = options.map((o) => `<option value="${escape(o.value)}"${o.value === config.model?.current ? ' selected' : ''}>${escape(o.name)}</option>`).join('');
+  const restoredModel = swapModel.get(id); if (restoredModel && [...model.options].some(option => option.value === restoredModel)) { model.value = restoredModel; swapModel.delete(id); }
   // P10: the agent's own effort, fast mode and plan switch (threat model row 22), each sent only when changed.
   one('#pickers').innerHTML = (config.pickers ?? []).map((p) => `<select data-config="${escape(p.id)}" data-current="${escape(p.current)}" aria-label="${escape(p.name)}">${(p.options ?? []).map((o) =>
     `<option value="${escape(o.value)}"${o.value === p.current ? ' selected' : ''}>${escape(p.name + ': ' + o.name)}</option>`).join('')}</select>`).join('');

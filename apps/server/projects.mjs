@@ -271,7 +271,7 @@ export function createProjects({ home, workspace, folderCheck, db, row, emit, st
       if (!conversation) return refused(404, 'unknown-conversation');
       if (['moving', 'moved'].includes(conversation.state)) return refused(409, conversation.state);
       const used = () => row(id)?.state === 'turn' || !!db.prepare("SELECT 1 FROM events WHERE conversation = ? AND type IN ('user', 'held') LIMIT 1").get(id);
-      if (body.empty && used()) return refused(409, 'not-empty');
+      if (body.empty && (conversation.parent || used())) return refused(409, 'not-empty');
       const result = await stop(id);
       if (result !== 'stopped') return refused(500, 'chat-not-stopped');
       if (body.empty && used()) return refused(409, 'not-empty');

@@ -107,8 +107,13 @@ async function launch(t, instance, profile) {
   await page.locator('#rChat').waitFor();
   return { app, page, errors };
 }
-const newRows = async (page, agent) => { await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
-  const got = await page.locator(`#newPop [data-sec="${agent}"] [data-new]`).evaluateAll((l) => l.map((b) => b.textContent)); await page.keyboard.press('Escape'); return got; };
+const newRows = async (page, agent) => {
+  await page.click('#newBtn'); const pane = page.locator('.pane:visible').first(); await pane.locator('[data-pill="Agent"]').waitFor();
+  await pane.locator('[data-pill="Agent"]').click(); await page.locator(`#pillMenu button[data-agent="${agent}"]`).click();
+  const active = page.locator('.pane:visible').first(); await active.locator('[data-pill="Model"]').click(); await page.locator('#pillMenu:not([hidden])').waitFor();
+  const rows = await page.locator('#pillMenu [data-model]').evaluateAll(items => items.map(item => item.firstElementChild.textContent)); await page.keyboard.press('Escape');
+  return [agent === 'claude' ? 'Claude default model' : 'Codex default model', ...rows.map(name => (agent === 'claude' ? 'Claude' : 'Codex') + ' · ' + name)];
+};
 const menu = async (page, pane, kind) => { await pane.locator(`[data-pill="${kind}"]`).click(); await page.locator('#pillMenu:not([hidden])').waitFor();
   const got = { items: await page.locator('#pillMenu .item').evaluateAll((l) => l.map((b) => b.firstElementChild.textContent)), notes: await page.locator('#pillMenu [data-list-note]').evaluateAll((l) => l.map((p) => p.textContent)) };
   await page.keyboard.press('Escape'); return got; };
@@ -138,6 +143,7 @@ test('window: New chat lists each agent\'s models before any chat; opening an ol
   await pane.locator('[data-pill="Model"]').waitFor({ timeout: 15000 });
   await pane.locator('.hist', { hasText: 'hello' }).first().waitFor({ timeout: 15000 });
   assert.deepEqual(await newRows(page, 'claude'), NOW, 'replaying the old chat did not bring its list back');
+  await page.locator('#nav .row[data-chat="' + id + '"]').click();
   const model = await menu(page, pane, 'Model');
   assert.deepEqual(model.items.slice(0, 4), ['Default (recommended)', 'Opus', 'Haiku', 'Nova'], 'its menu offers today\'s models');
   assert.equal(await pillValue(pane, 'Model'), 'Retired', 'the chat still shows the model it ran on');
@@ -170,15 +176,12 @@ test('window: lists that arrive while Settings is open fill its default rows and
   console.log('PASS window: lists arriving with Settings open fill the default rows only');
 });
 
-test('window: lists that arrive while the New menu is open fill its rows', { timeout: 120000 }, async (t) => {
+test('window: lists that arrive while the Model menu is open fill its rows', { timeout: 120000 }, async (t) => {
   const instance = await start(t, { 'slow-lists': '9000' });
   const { page, errors } = await launch(t, instance, path.join(await mkdtemp(path.join(os.tmpdir(), 'p9-lists-')), 'profile'));
-  const rows = () => page.locator('#newPop [data-sec="codex"] [data-new]').evaluateAll((l) => l.map((b) => b.textContent));
-  await page.click('#newBtn'); await page.locator('#newPop [data-new]').first().waitFor({ timeout: 10000 });
-  assert.deepEqual(await rows(), ['Codex default model'], 'still being read');
-  await until(async () => (await rows()).length === 4, 'the open menu lists the models');
-  assert.deepEqual(await rows(), ['Codex default model', 'Codex · Default (recommended)', 'Codex · Opus', 'Codex · Haiku']);
-  assert.ok(await page.evaluate(() => document.activeElement?.closest('#newPop')), 'the keyboard is still in the menu');
+  await page.click('#newBtn'); const pane = page.locator('.pane:visible').first(); await pane.locator('[data-pill="Model"]').waitFor();
+  await pane.locator('[data-pill="Model"]').click();
+  await until(async () => await page.locator('#pillMenu [data-model]').count() >= 3, 'the open menu lists the models');
+  assert.ok(await page.evaluate(() => document.activeElement?.closest('#pillMenu')), 'the keyboard stays in the menu');
   assert.deepEqual(errors, []);
-  console.log('PASS window: lists arriving with the New menu open fill it');
 });

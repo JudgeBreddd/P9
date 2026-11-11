@@ -306,7 +306,7 @@ function shown(s) {
 // O47: a chat whose own report is older than the agent's kept list (a chat not run since) offers the kept list, so a
 // model the agent dropped is gone from its menu; its own model stays its current one (goneModel says so in the menu).
 // O48: a chat on a provider profile has the one model it was started on, whatever the agent or the kept list says.
-const profileModels = s => ({ current: s.profile.model, options: [{ value: s.profile.model, name: s.profile.model }] });
+const profileModels = s => ({ current: s.profile.model, options: ((!started(s) && outer.profiles.find(p => p.id === s.profile.id)?.models) || [s.profile.model]).map(value => ({ value, name: value })) });
 const liveModels = s => { if (s.profile) return profileModels(s); const kept = outer.lastModels[s.agent], own = s.models; return own && kept && (s.modelsAt || 0) < (outer.listsAt[s.agent] || 0) ? { current: own.current, options: kept.options } : own || kept || null; };
 const goneModel = s => { const m = s.live && liveModels(s), v = s.modelPick || m?.current; return m && v && !m.options.some(o => o.value === v) ? s.model || v : ''; };
 const dflt = (s, id, o) => o.name + (s.live && !s.profile && !/default/i.test(o.name) && outer.isDefault(s.agent, id, o.value) ? ' (Default)' : ''); // MC-16; an option the agent itself names its default is left as it is
@@ -336,7 +336,7 @@ function setMode(s, m) {
 const PM = { sid: null, kind: null, btn: null, html: '', ac: null }; // the open menu: chat id, Mode | Model | Effort, its pill, its markup, its window listeners
 const pill = (s, kind, label, extra = '', pre = '') => `<button type="button" class="pill" data-pill="${kind}" aria-haspopup="menu" aria-expanded="${PM.sid === s.id && PM.kind === kind}" aria-label="${kind}: ${esc(label)}" title="${kind}: ${esc(label)}">${pre}<span class="truncate">${esc(label)}</span>${extra}</button>`;
 const agentDot = a => `<span class="dot" data-agent="${esc(a)}"></span>`;
-const pills = s => pill(s, 'Agent', outer.names[s.agent], '', agentDot(s.agent)) + pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
+const pills = s => pill(s, 'Agent', s.profile?.name || outer.names[s.agent], '', s.profile ? agentDot('profile') : agentDot(s.agent)) + pill(s, 'Mode', modeShown(s), s.modeNext ? '<span class="mode-q" title="Applies when this turn ends">queued</span>' : '') + pill(s, 'Model', modelName(s)) + pill(s, 'Effort', effortName(s));
 document.body.insertAdjacentHTML('beforeend', '<div class="pop" id="pillMenu" role="menu" hidden></div>');
 const pmRoot = () => document.getElementById('pillMenu'); // not outer.$: installChat runs before controller.mjs defines $
 const mi = (label, checked, data, disabled) => `<button type="button" class="item" role="menuitemradio" aria-checked="${checked}" ${data}${disabled ? ` aria-disabled="true" title="${esc(disabled)}"` : ''}><span class="truncate">${esc(label)}</span></button>`;
@@ -351,15 +351,16 @@ const started = s => !!(s.sent || s.session || s.queue?.length || s.events.some(
 const STAYS = 'This chat has messages, so it stays on its agent. New chat (+) starts one on the other.';
 const startsOn = a => { const m = outer.defaultModel(a), e = outer.defaultEffort(a), p = outer.lastPickers[a]?.find(x => outer.pickerKind(x) === 'effort');
   return [outer.startMode(a), outer.lastModels[a]?.options.find(o => o.value === m)?.name || 'Default model', p?.options.find(o => o.value === e)?.name].filter(Boolean); };
-const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes).map(a => mi(outer.names[a], a === s.agent, `data-agent="${esc(a)}"`, a !== s.agent && started(s) && STAYS)
+const agentMenu = s => '<div class="hd eyebrow">Agent</div>' + Object.keys(modes).map(a => mi(outer.names[a], a === s.agent && !s.profile, `data-agent="${esc(a)}"`, (a !== s.agent || s.profile) && started(s) && STAYS)
   .replace('<span class="truncate">', '<span class="truncate">' + agentDot(a)).replace(/<\/button>$/, `<span class="muted">${esc((a === s.agent ? [modeShown(s), modelName(s), effortName(s)] : startsOn(a)).join(' · '))}</span></button>`)).join('')
+  + outer.profiles.map(p => mi(p.name || 'Claude 3rd party', s.profile?.id === p.id, `data-profile="${esc(p.id)}"`, started(s) && s.profile?.id !== p.id && STAYS).replace('<span class="truncate">', '<span class="truncate">' + agentDot('profile')).replace('</span></button>', ' <small class="muted">runs on Claude</small></span><span class="muted">' + esc([outer.startMode('claude'), p.models[0], outer.defaultEffort('claude')].filter(Boolean).join(' · ')) + '</span></button>')).join('')
   + (started(s) ? `<p class="pm-note muted">${STAYS}</p>` : '');
 function pillMenuHtml(s, kind) {
   if (kind === 'Agent') return agentMenu(s);
   if (kind === 'Mode') { const now = modeShown(s), noPlan = s.live && s.agent === 'codex' && !pickerOf(s, 'collab') && 'Codex has not offered its plan mode in this chat yet'; return '<div class="hd eyebrow">Mode</div>' + MODE_ORDER[s.agent].map(m => mi(m, m === now, `data-mode="${esc(m)}"`, m === 'Plan' && noPlan)).join(''); }
   if (kind === 'Effort') { const p = pickerOf(s, 'effort'); return '<div class="hd eyebrow">Effort</div>' + radio(effortList(s), p ? pickVal(s, p) : s.effort, `data-pick="${esc(p?.id ?? '')}"`, p && s, p?.id); }
   const m = modelList(s);
-  if (s.profile) return `<div class="hd eyebrow">${esc(s.profile.name)}</div>` + radio(m.options, m.current, 'data-model') + `<p class="pm-note muted" data-list-note>${s.profile.gone ? 'This profile was removed in Settings, so this chat can be read but not continued.' : 'This chat runs on this model only. Start a new chat for another one.'}</p>`;
+  if (s.profile) return `<div class="hd eyebrow">${esc(s.profile.name)}</div>` + radio(m.options, m.current, 'data-model') + `<p class="pm-note muted" data-list-note>${s.profile.gone ? 'This profile was removed in Settings, so this chat can be read but not continued.' : started(s) ? 'This chat runs on this model only. Start a new chat for another one.' : 'Choose a model before the first message.'}</p>`;
   const gone = goneModel(s), note = [gone && `This chat was on ${gone}, which ${outer.names[s.agent]} no longer lists. Pick one of these.`, listNote(s)].filter(Boolean);
   return `<div class="hd eyebrow">${outer.names[s.agent]}</div>` + radio(m?.options || [], s.modelPick || m?.current, 'data-model', s, null)
     + note.map(t => `<p class="pm-note muted" data-list-note>${esc(t)}</p>`).join('')
@@ -400,7 +401,7 @@ function refreshPill() {
   const s = outer.S.sessions.find(x => x.id === PM.sid), btn = s && pillBtn();
   if (!btn) return closePill(false);
   PM.btn = btn;
-  const html = pillMenuHtml(s, PM.kind); if (html !== PM.html) { PM.html = html; outer.morph(pmRoot(), html); }
+  const html = pillMenuHtml(s, PM.kind); if (html !== PM.html) { const retainFocus = document.activeElement === btn || pmRoot().contains(document.activeElement); PM.html = html; outer.morph(pmRoot(), html); if (retainFocus && !pmRoot().contains(document.activeElement)) (pmRoot().querySelector('[aria-checked="true"]') || pmItems()[0])?.focus(); }
 }
 // note 7: a mode picked mid-turn shows at once (queued) but applies when the turn ends (turnEnd). The loosened modes ask first
 // (looseOk, red); the last pick is kept per agent for new chats (startMode), Codex's Plan is not a sandbox mode so it is not.
@@ -429,13 +430,13 @@ function swapIn(id) {
   return true;
 }
 async function pickAgent(s, a) {
-  if (a === s.agent || started(s)) return;
+  if ((a === s.agent && !s.profile) || started(s)) return;
   if (!s.live) { outer.usedAgent(a); Object.assign(s, { agent: a, mode: outer.startMode(a), title: `${outer.names[a]} ${outer.S.sessions.filter(x => x.agent === a).length + 1}` }); outer.renderTabs(); return renderChats(); }
   return replaceEmpty(s, a, s.project ? '' : s.folder, s.project);
 }
-async function replaceEmpty(s, agent, folder, project = null) {
-  const w = { from: s, open: [...outer.S.open], side: outer.S.sideId, done: false, folderChange: agent === s.agent };
-  const r = await outer.liveChat.create(agent, folder, project);
+async function replaceEmpty(s, agent, folder, project = null, profile = null, model = '') {
+  const w = { from: s, open: [...outer.S.open], side: outer.S.sideId, done: false, folderChange: agent === s.agent && (profile?.id ?? null) === (s.profile?.id ?? null) };
+  const r = await outer.liveChat.create(agent, folder, project, model || profile?.model || '', profile?.id || '');
   if (r.status !== 201) return;
   const id = r.body.conversation; SWAP.set(id, w);
   const d = await outer.liveChat.call('deleteChat', { id: s.id, empty: true }, { quiet: true });
@@ -451,7 +452,7 @@ async function pickChatFolder(s) {
   let picked = await window.p9.pickFolder();
   if (picked?.remote) picked = await pickRemoteFolder();
   if (picked === null) return outer.toast({ kind: 'chat', txt: 'Choose a folder inside the workspace, or turn off both restrictions to choose another folder.', level: 'warn' }, true);
-  if (typeof picked === 'string') await replaceEmpty(s, s.agent, picked);
+  if (typeof picked === 'string') await replaceEmpty(s, s.agent, picked, null, s.profile);
 }
 function chatFolder(s) {
   if (!s.live) return s.cwd;
@@ -469,7 +470,8 @@ function pillPick(item) {
   const v = item.dataset.val;
   if (item.dataset.mode) { closePill(); return pickMode(s, item.dataset.mode); }
   if (item.dataset.agent) { closePill(); return pickAgent(s, item.dataset.agent); }
-  if (item.hasAttribute('data-model')) { if (s.live) s.modelPick = v === s.models?.current ? null : v; else s.model = v; }
+  if (item.dataset.profile) { const p = outer.profiles.find(x => x.id === item.dataset.profile); closePill(); if (p && !started(s) && p.id !== s.profile?.id) return replaceEmpty(s, 'claude', s.project ? '' : s.folder, s.project, p, p.models[0]); return; }
+  if (item.hasAttribute('data-model')) { if (s.profile && !started(s) && v !== s.profile.model) { closePill(); return replaceEmpty(s, s.agent, s.project ? '' : s.folder, s.project, s.profile, v); } if (s.live) s.modelPick = v === s.models?.current ? null : v; else s.model = v; }
   else if (item.dataset.pick !== undefined) { const p = pickers(s).find(x => x.id === item.dataset.pick); if (p) setPick(s, p, v); else s.effort = v; }
   closePill(); renderChats();
 }
@@ -491,7 +493,7 @@ function pane(s, i, bare) {
   // D14: a chat on its way to the server, or gone there, takes no messages here.
   const away = s.state === 'moving' || s.state === 'moved', frozen = s.readonly || away || !!s.leaving;
   const stateLabel = { running: 'Running', stopped: s.readonly ? 'Read-only · history' : 'Stopped', idle: 'Not started', stopping: 'Stopping…', moving: 'Moving to the remote…', moved: 'Moved to ' + (s.movedTo || 'the remote') }[s.state];
-  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>${outer.names[s.agent]} · ${s.live && !s.project && !started(s) ? `<button class="chat-folder" data-chat-folder title="Click to start this chat in another folder">${esc(chatFolder(s))}</button>` : esc(chatFolder(s))}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
+  const body = s.stub ? '<div class="welcome"><p>Loading this chat…</p></div>' : s.events.length === 0 ?`<div class="welcome"><span class="dot" data-agent="${esc(s.agent)}" data-live></span><h2 class="fx-title">What are we working on?</h2><p>Working directory · ${s.live && !s.project && !started(s) ? `<button class="chat-folder" data-chat-folder title="Click to start this chat in another folder">${esc(chatFolder(s))}</button>` : esc(chatFolder(s))}</p><div class="chips"><span data-slot="badge">${esc(s.model)}</span><span data-slot="badge">${esc(s.mode)}</span></div>${s.live ? '<p data-start-hint>Type your first message below to start.</p>' : `<button data-slot="button" data-variant="secondary" style="margin-top:8px" data-start>Start ${outer.names[s.agent]} chat</button>`}</div>`
     : `<div class="col"><p class="chat-folder-readonly">${esc(chatFolder(s))}</p>${shown(s)}${pending(s)}</div>`;
   return `<section class="pane${i === 0 && outer.S.split ? ' focus' : ''}" data-id="${esc(s.id)}"${outer.hideSteps ? ' data-quiet' : ''}${outer.FX.pull === s.id ? ' data-pulled' : ''} aria-label="${outer.names[s.agent]} chat">
     <div class="ptool"><span class="dot" data-agent="${esc(s.agent)}" ${s.state === 'running' ? 'data-live' : ''}></span>${bare ? `<span class="name">${outer.names[s.agent]}</span>` : crumb(s)}
@@ -854,7 +856,7 @@ async function loadChat() {
     asking = false; refreshPill(); renderChats();
     // Settings or the New menu open while the lists were read: the Default model and effort rows, and the menu's rows, fill in.
     if (outer.$('#setDlg')?.open) outer.refreshDefaults();
-    const pop = outer.$('#newPop'); if (pop && !pop.hidden) { const at = pop.querySelector('[data-new]:focus'); outer.newRows(); if (at) pop.querySelector(`[data-new="${at.dataset.new}"]${at.dataset.model ? `[data-model="${at.dataset.model}"]` : ':not([data-model])'}`)?.focus(); } };
+  };
   const list = async () => { let l; while ((l = await window.p9.chat('list', {})).status !== 200 && !outer.lifetime.signal.aborted) await new Promise(res => outer.setTimeout(res, 2000)); lists(l.body); await outer.loadProfiles(); return l.body?.conversations || []; };
   while (!outer.lifetime.signal.aborted) {
     const l = scope ? null : await window.p9.chat('list', {});

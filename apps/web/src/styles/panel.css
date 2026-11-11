@@ -231,6 +231,8 @@ body.lp-dragging{cursor:grabbing;user-select:none}
 
 @media (prefers-reduced-motion:reduce){.lpanel .mk-run::after,.lpanel .row[data-moved],.lpanel .bot[data-busy]>svg,.lp-toast{animation:none}.lpanel{transition:none}}
 
-.welcome .chat-folder{color:inherit;font:inherit;background:none;border:0;padding:0;text-decoration:underline;cursor:pointer;overflow-wrap:anywhere}
+.welcome .chat-folder{color:inherit;font:inherit;background:var(--secondary);border:1px solid var(--border);border-radius:8px;padding:4px 8px;text-decoration:none;cursor:pointer;overflow-wrap:anywhere}
 .welcome .chat-folder:focus-visible{outline:2px solid var(--ring)}
 .chat-folder-readonly{color:var(--muted-foreground);overflow-wrap:anywhere;font-size:12px}
+
+.dot[data-agent="profile"]{background:var(--success,var(--chart-2))}

@@ -65,6 +65,7 @@ test('phone: the chat list groups by project (point 12)', { timeout: 180000 }, a
 test('phone: an empty chat shows and changes its starting folder', { timeout: 180000 }, async (t) => {
   const server = await remoteDaemon(t, { args: ['--acp-override', path.join(root, 'test/fake-acp-agent.mjs')] });
   await mkdir(path.join(server.workspace, 'site'), { recursive: true });
+  await until(async () => (await call(server, '/chat?lists=fresh')).lists?.claude?.state === 'ok', 'the agent model list is available');
   const original = (await call(server, '/chat', { provider: 'claude' })).conversation;
   const browser = await chromium.launch(); t.after(() => browser.close());
   const device = await passkeyDevice(browser, server, 'phone-folder');
@@ -76,6 +77,11 @@ test('phone: an empty chat shows and changes its starting folder', { timeout: 18
   await page.goto(server.origin + '/phone/'); await page.evaluate((csrf) => sessionStorage.setItem('p9-csrf', csrf), session.csrf); await page.reload();
   await page.locator(`[data-chat="${original}"]`).click();
   await page.locator('[data-chat-folder]').filter({ hasText: server.workspace }).waitFor();
+  assert.equal(await page.locator('#gap').isHidden(), true, 'no gap before swap');
+  await page.waitForFunction(() => [...document.querySelectorAll('#model option')].some(o => o.value === 'haiku'), null, { timeout: 20000 });
+  await page.click('#modePill'); await page.click('#sheet[open] [data-mode="Plan"]');
+  await page.click('#modelBtn'); await page.click('#sheet[open] [data-model="haiku"]');
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-folder-welcome ' + (await page.screenshot()).toString('base64'));
   await page.locator('[data-chat-folder]').click();
   await page.locator('[data-chat-folder-at="site"]').waitFor();
   await page.waitForTimeout(500);
@@ -84,11 +90,17 @@ test('phone: an empty chat shows and changes its starting folder', { timeout: 18
   await page.locator('[data-chat-folder-select]').click();
   await until(async () => { const x = (await call(server, '/chat')).conversations; return x.length === 1 && x[0].folder === 'site' && x[0].id !== original; }, 'phone folder swap');
   await page.locator('[data-chat-folder]').filter({ hasText: path.join(server.workspace, 'site') }).waitFor();
+  assert.equal(await page.locator('#mode').inputValue(), 'Plan');
+  assert.equal(await page.locator('#model').inputValue(), 'haiku');
+  assert.equal(await page.locator('#gap').isHidden(), true, 'no gap immediately after swap');
   const id = (await call(server, '/chat')).conversations[0].id;
   await page.locator('#prompt').fill('cwd'); await page.locator('#composer button[type=submit]').click();
   await page.locator('#events', { hasText: 'cwd:new:' + path.join(server.workspace, 'site') }).waitFor({ timeout: 20000 });
+  for (const text of ['hello', 'again']) { await page.locator('#prompt').fill(text); await page.locator('#composer button[type=submit]').click(); await page.locator('#events', { hasText: 'echo:' + text }).waitFor({ timeout: 20000 }); }
   assert.equal(await page.locator('[data-chat-folder]').count(), 0, 'sent chat cannot change folder');
   assert.equal(await page.locator('.chat-folder-readonly').innerText(), path.join(server.workspace, 'site'));
+  if (!process.env.GITHUB_ACTIONS) console.log('P9_SHOT phone-folder-readonly ' + (await page.screenshot()).toString('base64'));
+  assert.equal(await page.locator('#gap').isHidden(), true, 'the empty chat swap does not report a history gap');
   assert.notEqual(id, original);
 });
 
