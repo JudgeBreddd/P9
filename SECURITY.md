@@ -641,7 +641,7 @@ Settings on the desktop. P9 ships no preset and no key. Codex chats have no prof
 ## Delegate
 
 Delegate lets a chat's agent start and steer other chats through the P9 MCP server: `open_chat`,
-`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats`, `answer_chat` and `set_rules`. The
+`send_chat`, `wait_chat`, `read_chat`, `stop_chat`, `list_chats` and `answer_chat`. The
 chat that starts them is the parent, the chats it starts are its sub-agents, and the group is a
 sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it.
 
@@ -653,14 +653,13 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
 - **A sub-agent is never wider than its parent.** It starts in the parent's mode unless a narrower
   one is asked for; a wider one is refused (`mode-escalation`) and nothing starts. The agent lock
   and File protection are global, so they cover every sub-agent as they cover its parent.
-- **The agent lock.** `open_chat`, `send_chat`, `answer_chat` and `set_rules` are refused while it
+- **The agent lock.** `open_chat`, `send_chat` and `answer_chat` are refused while it
   is on. Reading (`list_chats`, `read_chat`, `wait_chat`) and `stop_chat` still work: a locked
   agent may always stop work it started.
 - **Approvals are yours.** No agent can answer another chat's approval prompt; `answer_chat` refuses
-  it (`approval-is-the-users`). An agent may answer a sub-agent's question, and that answer is
-  written in both chats. A sub-agent's approval or question also shows in its parent chat, marked
-  with the sub-agent it came from; your answer there goes to the sub-agent only while its request
-  is still open.
+  it (`approval-is-the-users`). An agent may answer a question asked by a chat it started, and the
+  answer is recorded in that chat with the chat that gave it. An approval is shown in the
+  sub-agent's own chat, where you answer it.
 - **Folders.** A sub-agent's folder passes the same check as a folder the parent asks for itself:
   inside the workspace or a folder you allowed, never the recovery folder; any absolute folder
   only in Unrestricted mode.
@@ -672,15 +671,13 @@ sprint. A sub-agent is an ordinary chat: you can open it, type in it and stop it
   transcript as P9's and not yours. That line is text the sub-agent wrote, so the parent reads
   it as a report, not as an instruction from you. It is sent only to a parent that is running; it
   never starts a stopped chat.
-- **Rules.** A parent may give a sub-agent rules (`rules` on `open_chat`, `set_rules` later). P9
-  sends them with every message the parent sends that sub-agent, and shows them in its chat. They
-  are the parent's words, bounded in size, and they widen nothing.
-- **After a daemon restart.** P9 wakes a parent with one line only when it or one of its
-  sub-agents was in the middle of a turn when the daemon stopped. A sprint that was idle is never
-  started. One wake per restart, and none after three restarts in ten minutes.
-- **Who may start one.** Settings has Delegation: Off (the tools that start or message chats are
-  refused), Ask me first (the default: `open_chat` asks you in the parent chat), or Agent decides.
-  In Unrestricted mode it does not ask, like `run_script`.
+- **Who may start one.** `open_chat` asks you in the parent chat first, naming the agent, the mode
+  and the task. In Unrestricted mode (agent lock and File protection both off) it does not ask,
+  like `run_script`. The same key from the same parent returns the chat it already made and asks
+  nothing. A chat has at most 20 running sub-agents, 3 levels deep.
+- **Provider profiles.** A sub-agent started by a chat on a provider profile runs on that profile
+  (the parent's model, or another the profile lists), so it and every command it runs can read
+  that profile's key, as its parent can (see Provider profiles above).
 - **Not on the phone.** The phone listener has no MCP server, so nothing here is reachable from
   it. The phone shows sub-agents in its chat list like any chat.
 
