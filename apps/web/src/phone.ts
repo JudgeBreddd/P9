@@ -488,10 +488,13 @@ function back() { if (pushed) window.history.back(); else { window.history.repla
 onCodeColours(() => render()); // O37: a parser arrived; the version in each block's sig redraws its blocks once
 const phoneFolders = new Map<string, { folder: string; workspace: string }>();
 const phoneFoldersLoading = new Set<string>();
+const phoneFolderLine = document.createElement('p');
+phoneFolderLine.className = 'chat-folder-readonly'; phoneFolderLine.hidden = true; one('#events').before(phoneFolderLine);
 function render() {
   if (!openId) return renderList();
   const picked = openId;
   if (state.stubs.has(picked)) {
+    phoneFolderLine.hidden = true;
     one('#events').innerHTML = '<div class="empty">Loading…</div>';
     history(picked).then(render, () => { one('#events').innerHTML = '<div class="empty">Chat is unavailable.</div>'; });
     return;
@@ -514,13 +517,15 @@ function render() {
         if (openId === picked) render();
       }).catch(() => {}).finally(() => phoneFoldersLoading.delete(picked));
   }
+  phoneFolderLine.hidden = !blocks.length || !info;
+  if (info) phoneFolderLine.textContent = info.folder;
   if (!blocks.length) {
     const item = state.conversations.find(entry => entry.id === picked);
     const name = item?.provider === 'codex' ? 'Codex' : 'Claude';
     const folder = info?.folder ?? 'Loading folder…';
     const canPick = !!info && !item?.project && !item?.sent;
     events.insertAdjacentHTML('beforeend', `<div class="empty"><h2>What are we working on?</h2><p>${escape(name)} · ${canPick ? `<button type="button" class="quiet" data-chat-folder title="Click to start this chat in another folder">${escape(folder)}</button>` : escape(folder)}</p></div>`);
-  } else if (info) events.insertAdjacentHTML('afterbegin', `<p class="chat-folder-readonly">${escape(info.folder)}</p>`);
+  }
   if (stuck) body.scrollTop = body.scrollHeight; else if (anchored) body.scrollTop = top + body.scrollHeight - height; // older blocks inserted above keep the reader where they were
   anchored = false;
   const plan = (strip.events[0]?.entries ?? []) as string[][], cards = strip.cards?.size ?? 0, chips = one<HTMLElement>('#chips');
