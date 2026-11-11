@@ -851,6 +851,26 @@ test('resume: a chat keeps its model, effort and mode across a daemon restart', 
   console.log('PASS resume: opus, high effort and Plan kept across a daemon restart; resumed names Opus');
 });
 
+// O39: the adapter is started with the chat's own model named, so a resume never leaves that model: P9 sets no model on it.
+test('resume: the agent starts on the chat\'s own model, so P9 sets no model after it', async (t) => {
+  const instance = await start(t);
+  const id = await create(instance);
+  assert.equal((await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'config', model: 'opus' })).status, 202);
+  const first = await until(instance, (e) => e.type === 'turn-end' && e.conversation === id, 0);
+  instance.child.kill('SIGTERM');
+  await once(instance.child, 'exit');
+  await writeFile(path.join(instance.workspace, 'sets.log'), '');
+  const second = await restart(t, instance, 'state-o39');
+  assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'config' })).status, 202);
+  await until(second, (e) => e.type === 'turn-end' && e.conversation === id && e.cursor > first.cursor, 0);
+  assert.equal((await until(second, (e) => said(id, 'config:')(e) && e.cursor > first.cursor, 0)).hit.data.content.text.split(',')[0], 'config:model=opus', 'still on the chat\'s model');
+  const sets = (await readFile(path.join(instance.workspace, 'sets.log'), 'utf8')).split('\n').filter(Boolean);
+  assert.ok(sets.some((line) => line.startsWith('resume mode=')), 'the log saw the resume: ' + JSON.stringify(sets));
+  assert.deepEqual(sets.filter((line) => line.includes(' model=')), [], 'P9 set a model on the resumed session');
+  assert.equal((await until(second, (e) => e.type === 'resumed' && e.conversation === id, 0)).hit.data.restoreNotice, undefined);
+  console.log('PASS resume: the agent started on opus; P9 set no model');
+});
+
 test('resume reports settings the agent refused without sending a notice in the prompt', { timeout: 120000 }, async (t) => {
   const first = await start(t);
   const id = await create(first);
@@ -863,7 +883,8 @@ test('resume reports settings the agent refused without sending a notice in the 
   assert.equal((await call(second, `/chat/${id}/prompt`, 'POST', { text: 'hello' })).status, 202);
   const result = await until(second, (e) => e.type === 'turn-end' && e.conversation === id, done.cursor);
   const resume = result.seen.find((e) => e.type === 'resumed');
-  assert.deepEqual(resume.data.restoreNotice, ['Model: Default (recommended)', 'Effort: Medium', 'Mode: Manual']);
+  // O39: the model is no longer put back by a setting the agent can refuse; the adapter starts the resume on it.
+  assert.deepEqual(resume.data.restoreNotice, ['Effort: Medium', 'Mode: Manual']);
   assert.ok(result.seen.some(said(id, 'echo:hello')), 'agent received only the original prompt');
 });
 

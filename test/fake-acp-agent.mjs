@@ -96,7 +96,7 @@ const provider = (what, params) => {
     names: Object.keys(process.env).filter((name) => name.startsWith('ANTHROPIC_')).sort(), baseUrl: env?.ANTHROPIC_BASE_URL ?? null,
     keyHash: key ? createHash('sha256').update(key).digest('hex') : null,
     keyOutside: !!key && [...Object.values(process.env), ...process.argv].some((value) => String(value).includes(key)) }) + '\n');
-  if (process.env.ANTHROPIC_MODEL && !key) throw acp.RequestError.authRequired();
+  if (custom && !key) throw acp.RequestError.authRequired();
   if (key === 'wrong-key') throw acp.RequestError.authRequired();
 };
 const called = (what) => { if (existsSync('calls.log')) appendFileSync('calls.log', process.argv[2] + ' ' + what + '\n'); };
@@ -170,6 +170,7 @@ const connection = acp.connectAgent(stream, {
     // Refuses putting the chat's old settings back; P9's own safe start mode (Manual) still goes through, since P9 fails the
     // start rather than run a Claude chat in the adapter's auto.
     if (cwd.startsWith('resume:') && existsSync(path.join(folder, 'refuse-resume-settings')) && !(params.configId === 'mode' && params.value === 'default')) throw new Error('restore refused');
+    if (existsSync('sets.log')) appendFileSync('sets.log', cwd.split(':')[0] + ' ' + params.configId + '=' + params.value + '\n'); // O39: every setting P9 sets, and whether the session was new or resumed
     if (params.configId === 'model') { if (!(listedModels()?.map((m) => m.value) ?? ['default', 'opus', 'haiku']).includes(params.value)) throw new Error('unknown model'); model = params.value; }
     else if (Object.hasOwn(picked, params.configId)) { picked[params.configId] = String(params.value); } else mode = String(params.value);
     return { configOptions: configOptions() };
