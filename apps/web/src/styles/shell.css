@@ -258,6 +258,52 @@ select option::checkmark{color:var(--primary)}
 /* ---- Chat pane ---- */
 .pane{display:grid;grid-template-rows:38px 1fr auto;grid-template-columns:minmax(0,1fr);min-height:0;min-width:0;overflow:hidden}
 .pane.focus{box-shadow:inset 0 2px 0 var(--primary)}
+/* ---- P9-Sprint card (E1/I2/F3): fixed at the pane's top right, over the transcript; the theme's own tokens only ---- */
+.sprint{position:absolute;z-index:4;top:46px;right:18px;width:296px;max-height:min(58%,460px);display:flex;flex-direction:column;border:1px solid var(--border);border-radius:calc(var(--radius) + 2px);background:color-mix(in oklch,var(--card) 94%,transparent);backdrop-filter:blur(10px);box-shadow:0 8px 28px -12px rgb(0 0 0/.55);overflow:hidden;font-size:12.5px}
+.sprint .sp-head{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:0;background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
+.sprint .sp-head:hover{background:var(--accent)}
+.sprint .sp-head .eyebrow{flex:none}
+.sprint .sp-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted-foreground);font-size:11.5px}
+.sprint .sp-head>svg{flex:none;width:14px;height:14px;color:var(--muted-foreground);transform:rotate(90deg);transition:transform .15s}
+.sprint[data-folded="true"] .sp-head>svg{transform:rotate(0)}
+.sprint[data-folded="true"]{width:auto;max-width:296px}
+.sprint[data-folded="true"] .sp-body{display:none}
+.sprint[data-folded="true"][data-open-asks]:not([data-open-asks="0"]) .sp-sum{color:var(--warn)}
+.sprint .sp-body{display:flex;flex-direction:column;min-height:0;border-top:1px solid var(--border)}
+.sprint ul{list-style:none;margin:0;padding:0}
+.sprint .sp-rows{overflow:auto;padding:4px;scrollbar-width:thin}
+.sprint .sp-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:calc(var(--radius) - 2px);background:none;color:var(--foreground);font:inherit;text-align:left;cursor:pointer}
+.sprint .sp-row:hover{background:var(--accent)}
+.sprint .sp-main{display:grid;gap:1px;min-width:0}
+.sprint .sp-name{display:flex;align-items:center;gap:6px;min-width:0}.sprint .sp-name b{font-weight:600;font-size:12.5px}
+.sprint .sp-item{color:var(--muted-foreground);font-size:11.5px}
+.sprint .sp-st{display:grid;justify-items:end;gap:1px;white-space:nowrap}
+.sprint .sp-label{font-size:11.5px;font-weight:600;color:var(--sc,var(--muted-foreground))}
+.sprint .sp-st time{font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.sprint [data-status="working"]{--sc:var(--primary)}.sprint [data-status="asked"]{--sc:var(--warn)}.sprint [data-status="ready"],.sprint [data-status="passed"]{--sc:var(--ok)}.sprint [data-status="fix"]{--sc:var(--destructive)}
+.sprint .sp-ring{position:relative;width:28px;height:28px;display:grid;place-items:center}
+.sprint .sp-ring svg{position:absolute;inset:0;transform:rotate(-90deg);fill:none;stroke-width:3}
+.sprint .sp-ring .t{stroke:color-mix(in oklch,var(--foreground) 14%,transparent)}
+.sprint .sp-ring .a{stroke:var(--sc,var(--muted-foreground));stroke-linecap:round}
+.sprint .sp-ring[data-status="working"] .t{stroke:color-mix(in oklch,var(--primary) 40%,transparent)}
+.sprint .sp-ring[data-status="working"]{animation:sp-pulse 2.4s ease-in-out infinite}
+.sprint .sp-ring[data-status="ready"] .t,.sprint .sp-ring[data-status="fix"] .t,.sprint .sp-ring[data-status="asked"] .t{stroke:var(--sc)}
+.sprint .sp-ring b{font-size:8.5px;font-weight:600;color:var(--muted-foreground);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+@keyframes sp-pulse{50%{opacity:.55}}
+.sprint .sp-asks{border-top:1px solid var(--border);padding:8px 4px 4px}.sprint .sp-asks h5{margin:0 8px 4px}
+.sprint .sp-asks button{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:baseline;gap:8px;width:100%;padding:5px 8px;border:0;border-radius:calc(var(--radius) - 2px);background:none;color:var(--foreground);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.sprint .sp-asks button:hover{background:var(--accent)}
+.sprint .sp-akind{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--warn)}
+.sprint .sp-akind[data-blocking="true"]::after{content:" · blocking";font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted-foreground)}
+.sprint .sp-wait{color:var(--muted-foreground);font-size:11px;white-space:nowrap}
+.sprint :is(.sp-head,.sp-row,.sp-asks button):focus-visible{outline:2px solid var(--ring,var(--primary));outline-offset:-2px}
+/* room for the card beside the transcript where the window is wide; below that it folds and lies over the text when opened */
+@media (min-width:1100px){.pane:has(.sprint[data-folded="false"]) .hist{padding-right:326px}#chats[data-split="true"] .pane:has(.sprint) .hist{padding-right:20px}}
+/* The needs-you cards own the stage's top right (above, z 20): the sprint card sits left of them while there are any, and the text makes room for both on a wide window (it runs under the cards on a narrower one, as it does without a sprint card). */
+.stage:has(.card) .sprint{right:calc(var(--card-w) + var(--card-gap))}
+@media (min-width:1400px){.stage:has(.card) .pane:has(.sprint[data-folded="false"]) .hist{padding-right:calc(326px + var(--card-w) + var(--card-gap) - 18px)}#chats[data-split="true"] .stage:has(.card) .pane:has(.sprint) .hist{padding-right:20px}}
+@media (max-width:640px){.stage:has(.card) .sprint{right:10px}.sprint{left:10px;right:10px;width:auto;max-width:none}.sprint[data-folded="true"]{left:auto}}
+@media (prefers-reduced-motion:reduce){.sprint .sp-ring[data-status="working"]{animation:none}.sprint .sp-head>svg{transition:none}}
 .ptool{display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--border);font-size:12.5px}
 .ptool .name{font-weight:600}
 .ptool [data-slot="select"]{width:auto;height:24px;padding:0 24px 0 8px;font-size:11.5px;background-color:transparent;border-color:transparent;color:var(--muted-foreground)}
