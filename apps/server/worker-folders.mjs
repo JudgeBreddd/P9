@@ -24,7 +24,8 @@ export function git(cwd, args, { timeout = 60_000 } = {}) {
     (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, out: String(stdout), err: String(stderr) })));
 }
 const one = async (cwd, args) => { const r = await git(cwd, args); return r.code === 0 ? r.out.trim() : null; };
-const lines = (text) => text.split('\n').map((l) => l.trim()).filter(Boolean);
+// File names as git wrote them with -z: never trimmed or unquoted, so an odd name stays itself. null when git failed.
+const names = async (cwd, args) => { const r = await git(cwd, [...args.slice(0, 1), '-z', ...args.slice(1)]); return r.code === 0 ? r.out.split('\0').filter(Boolean) : null; };
 
 // The main line of a repository: origin's default branch, else origin/main, else origin/master, else local main/master.
 async function mainOf(folder) {
@@ -44,17 +45,19 @@ export async function gitFacts(folder) {
   const commit = await one(folder, ['rev-parse', '-q', '--verify', 'HEAD^{commit}']);
   const main = await mainOf(folder);
   const status = await git(folder, ['status', '--porcelain=v1', '--untracked-files=normal']);
-  const changed = main && commit ? await one(folder, ['diff', '--no-ext-diff', '--name-only', main + '...' + commit, '--']) : null;
+  const changed = main && commit ? await names(folder, ['diff', '--no-ext-diff', '--name-only', main + '...' + commit]) : null;
   return {
-    commit, main, dirty: status.code !== 0 || status.out.trim() !== '', changed: changed === null ? null : lines(changed),
+    commit, main, dirty: status.code !== 0 || status.out.trim() !== '', changed,
     async inMain(asked) {
       if (!main) return null;
       if (typeof asked !== 'string' || !HEX.test(asked) || !await one(folder, ['rev-parse', '-q', '--verify', asked + '^{commit}'])) return false;
       if ((await git(folder, ['merge-base', '--is-ancestor', asked, main])).code === 0) return true;
       const base = await one(folder, ['merge-base', asked, main]);
-      const files = base && lines(await one(folder, ['diff', '--no-ext-diff', '--name-only', base, asked, '--']) ?? '');
-      // ponytail: a file the main line changed again after the merge reads as not merged (kept, never lost).
-      return Boolean(files?.length) && (await git(folder, ['diff', '--no-ext-diff', '--quiet', asked, main, '--', ...files])).code === 0;
+      const files = base && await names(folder, ['diff', '--no-ext-diff', '--name-only', base, asked]);
+      // No pathspecs: the files that differ between the commit and the main line, compared by exact name. Any git
+      // failure reads as not merged (fail closed). ponytail: a file the main line changed again after the merge reads as not merged (kept, never lost).
+      const differ = files?.length ? await names(folder, ['diff', '--no-ext-diff', '--name-only', asked, main]) : null;
+      return Boolean(differ) && !files.some((file) => differ.includes(file));
     },
   };
 }
@@ -72,25 +75,42 @@ async function bytes(at) {
   return total;
 }
 // The owner's setup command, in the new folder, through their shell. Resolves to null, or the failure for the agent.
-function runSetup(command, cwd) {
-  return new Promise((resolve) => {
-    let tail = '';
+const system32 = (file) => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', file);
+function runSetup(command, cwd, limit) {
+  return new Promise((finish) => {
+    let tail = '', done = false;
+    const resolve = (value) => { if (!done) { done = true; finish(value); } };
     const keep = (chunk) => { tail = (tail + chunk).slice(-TAIL); };
     const child = spawn(command, { cwd, shell: true, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
-    const timer = setTimeout(() => { try { process.platform === 'win32' ? child.kill() : process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }, SETUP_MS);
+    const stopped = () => ({ error: 'setup-failed', detail: 'The setup command (Settings > Delegation) was stopped after ' + Math.round(limit / 60_000) + ' minutes. The worker was not started; its folder is kept. End of its output:\n' + tail });
+    // At the cap the whole tree ends (Windows has no process groups: taskkill /T), and the answer does not wait for a
+    // child that still holds the output pipes.
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform === 'win32') spawn(system32('taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { shell: false, env: childEnv(), stdio: 'ignore', windowsHide: true }).on('error', () => {});
+        else process.kill(-child.pid, 'SIGKILL');
+      } catch { /* gone */ }
+      child.stdout.destroy(); child.stderr.destroy();
+      resolve(stopped());
+    }, limit);
     child.stdout.on('data', keep); child.stderr.on('data', keep);
     child.on('error', (error) => { clearTimeout(timer); resolve({ error: 'setup-failed', detail: 'The setup command did not start: ' + error.message }); });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
-      resolve(code === 0 ? null : { error: 'setup-failed', detail: 'The setup command (Settings > Delegation) ' + (signal ? 'was stopped after ' + SETUP_MS / 60_000 + ' minutes' : 'ended with exit code ' + code)
+      resolve(code === 0 ? null : signal ? stopped() : { error: 'setup-failed', detail: 'The setup command (Settings > Delegation) ended with exit code ' + code
         + '. The worker was not started; its folder is kept. End of its output:\n' + tail });
     });
   });
 }
 
 // home: <ownership>/sprints. A sprint is the id of the chat that started the workers.
-export function createWorkerFolders({ home }) {
-  const busy = new Map(); // one make per sprint at a time, so two workers never clone twice or race on the clone
+export function createWorkerFolders({ home, setupMs = SETUP_MS }) {
+  const busy = new Map(); // one make or clean per sprint at a time: two workers never clone twice, clean never races a make
+  const queued = (sprint, work) => {
+    const run = (busy.get(sprint) ?? Promise.resolve()).then(work);
+    busy.set(sprint, run.catch(() => {}));
+    return run.catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
+  };
   const dirOf = (sprint) => path.join(home, sprint);
   const branchOf = (sprint, item) => 'sprint/' + sprint.slice(0, 8) + '/' + item;
   const valid = async (sprint, item) => home && ID.test(sprint ?? '') && KEY.test(item ?? '') && (await git(undefined, ['check-ref-format', '--branch', branchOf(sprint, item)])).code === 0;
@@ -99,6 +119,8 @@ export function createWorkerFolders({ home }) {
   async function cloneFor(sprint, source) {
     const clone = path.join(dirOf(sprint), 'clone');
     if (await realDir(clone, 2)) return { clone };
+    // Never git's own default: with no folder git would run in the daemon's working directory.
+    if (typeof source !== 'string' || !path.isAbsolute(source)) return { error: 'folder-refused', detail: 'The worker\'s folder is not one P9 may use.' };
     const top = await one(source, ['rev-parse', '--show-toplevel']);
     if (!top) return { error: 'not-a-repository', detail: 'A worker folder is made from a git repository; this folder is not one: ' + source };
     await mkdir(dirOf(sprint), { recursive: true, mode: 0o700 });
@@ -119,8 +141,7 @@ export function createWorkerFolders({ home }) {
   // A2 (and A4): the worker's folder and branch. The same sprint and item return the folder made before.
   async function make(sprint, item, source, setup = '') {
     if (!await valid(sprint, item)) return { error: 'request-refused', detail: 'A worker folder needs a key of a-z 0-9 . _ - that is also a git branch name.' };
-    const previous = busy.get(sprint) ?? Promise.resolve();
-    const run = previous.then(async () => {
+    return queued(sprint, async () => {
       const folder = path.join(dirOf(sprint), 'workers', item), branch = branchOf(sprint, item);
       // ready/<item>: written once the setup command passed, so a folder whose setup failed runs it again next time.
       const ready = path.join(dirOf(sprint), 'ready', item);
@@ -135,14 +156,12 @@ export function createWorkerFolders({ home }) {
         const added = await git(clone, ['worktree', 'add', '--quiet', ...(has ? [folder, branch] : ['-b', branch, folder, main])], { timeout: 5 * 60_000 });
         if (added.code !== 0) return { error: 'worktree-failed', detail: added.err.slice(-TAIL) };
       }
-      const failed = setup.trim() ? await runSetup(setup, folder) : null;
+      const failed = setup.trim() ? await runSetup(setup, folder, setupMs) : null;
       if (failed) return failed;
       await mkdir(path.dirname(ready), { recursive: true, mode: 0o700 });
       await writeFile(ready, '');
       return { folder, branch, main };
     });
-    busy.set(sprint, run.catch(() => {}));
-    return run.catch((error) => ({ error: 'worker-folder-failed', detail: error.message }));
   }
 
   // Where a worker chat starts: its folder, only if it is still a real folder made here. Else null.
@@ -155,6 +174,9 @@ export function createWorkerFolders({ home }) {
   // A6: remove only folders with nothing unsaved whose work is in the main line; keep and list the rest.
   async function clean(sprint) {
     if (!home || !ID.test(sprint ?? '')) return { error: 'request-refused' };
+    return queued(sprint, () => cleanNow(sprint));
+  }
+  async function cleanNow(sprint) {
     const clone = path.join(dirOf(sprint), 'clone'), root = path.join(dirOf(sprint), 'workers');
     if (!await realDir(clone, 2)) return { removed: [], kept: [] };
     await git(clone, ['fetch', '--quiet', 'origin'], { timeout: 5 * 60_000 }); // best effort: offline, the main line known so far
@@ -162,9 +184,15 @@ export function createWorkerFolders({ home }) {
     for (const item of (await readdir(root).catch(() => [])).sort()) {
       const folder = path.join(root, item), branch = branchOf(sprint, item);
       const facts = KEY.test(item) && await realDir(folder, 3) ? await gitFacts(folder) : null;
-      const why = !facts ? 'not a worker folder' : facts.dirty ? 'unsaved changes' : !facts.commit || await facts.inMain(facts.commit) !== true ? 'not in the main line' : null;
+      // The folder must still be on its own sprint branch, and that branch's tip is what is checked: a worker that
+      // switched branches (or detached) keeps its folder and branch, whatever the folder now shows.
+      const on = facts && await one(folder, ['symbolic-ref', '-q', 'HEAD']);
+      const tip = facts && await one(clone, ['rev-parse', '-q', '--verify', 'refs/heads/' + branch + '^{commit}']);
+      const why = !facts ? 'not a worker folder' : on !== 'refs/heads/' + branch || !tip || tip !== facts.commit ? 'not on its sprint branch'
+        : facts.dirty ? 'unsaved changes' : await facts.inMain(tip) !== true ? 'not in the main line' : null;
       if (!why && (await git(clone, ['worktree', 'remove', folder])).code === 0) {
-        await git(clone, ['branch', '-D', branch]);
+        // Deleted only if the tip is still the one checked (a commit made meanwhile keeps the branch).
+        await git(clone, ['update-ref', '-d', 'refs/heads/' + branch, tip]);
         await rm(path.join(dirOf(sprint), 'ready', item), { force: true });
         removed.push(item);
       } else kept.push({ item, folder, branch, bytes: await bytes(folder), why: why ?? 'git would not remove it' });

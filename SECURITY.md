@@ -827,12 +827,17 @@ A chat that starts a worker with `open_chat` may ask for the worker to get its o
 - **The setup command.** One command you type in Settings > Delegation, run in each new worker folder before its
   worker starts (for example installing packages). Only you set it: no agent tool and no file in the repository can
   set or change it, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
-  environment, for at most 15 minutes; if it fails or runs out of time the worker is not started, the folder is kept,
-  and the agent is told the exit code and the end of its output. It runs without asking you each time: typing it is
+  environment, for at most 15 minutes; at that limit it is stopped with everything it started (Windows: `taskkill /T`).
+  If it fails or runs out of time the worker is not started, the folder is kept, and the agent is told the exit code
+  and the end of its output. Clone and setup can take minutes, so after them P9 checks again that the agent lock is
+  off, Delegation is on, the worker limit allows one more and the chat's mode is the same; if not, the worker is not
+  started and the folder is kept for the next try. A folder P9 cannot resolve is refused before git runs. It runs without asking you each time: typing it is
   the permission, in every mode except while the agent lock is on, which refuses `open_chat` first.
 - **Clean-up never loses work.** Cleaning a sprint's folders removes a worker folder only when it has nothing
-  unsaved and its newest commit is in the main line (or, after a squash merge, every file it changed is the same in
-  the main line). Its branch is deleted with it. Anything else is kept and listed with its size and why it was kept.
+  unsaved, it is still on its own sprint branch, and that branch's newest commit is in the main line (or, after a
+  squash merge, every file it changed is the same in the main line, compared by exact file name). Its branch is
+  deleted with it, and only if the branch has not moved since that check. A folder switched to another branch or
+  detached is kept with its branch. Clean-up waits for any worker folder being made in the same sprint. Anything else is kept and listed with its size and why it was kept.
   P9 never deletes a branch that is not in the main line, and never removes the clone while a worker folder is in it.
 - **Disk.** One clone per sprint plus one worktree (and whatever the setup command installs) per worker, in P9's own
   folder, until cleaned up.

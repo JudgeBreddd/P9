@@ -53,12 +53,26 @@ test('Worker folders A7: gitFacts reads the commit, the files changed against th
   assert.equal(await after.inMain(facts.commit), true, 'after a squash merge every file the commit changed is the same in the main line');
   fs.rmSync(path.join(owner, 'unsaved.txt'));
   assert.equal((await gitFacts(owner)).dirty, false);
+  // Odd file names are read as themselves (git quotes a newline, and trimming loses a leading space): a commit whose
+  // odd-named file differs in the main line is not in it.
+  const odd = [' lead.txt', ...(process.platform === 'win32' ? [] : ['new\nline.txt'])];
+  g(owner, 'checkout', '-qb', 'odd', 'origin/main');
+  for (const name of odd) write(path.join(owner, name), 'mine\n');
+  g(owner, 'add', '--', ...odd); g(owner, 'commit', '-qm', 'odd');
+  const oddCommit = g(owner, 'rev-parse', 'HEAD');
+  assert.deepEqual([...(await gitFacts(owner)).changed].sort(), [...odd].sort(), 'changed names are exact');
+  const land = path.join(dir, 'land-odd'); g(dir, 'clone', '-q', remote, land);
+  for (const name of odd) write(path.join(land, name), 'theirs\n');
+  g(land, 'add', '--', ...odd); g(land, 'commit', '-qm', 'theirs'); g(land, 'push', '-q', 'origin', 'main');
+  g(owner, 'fetch', '-q', 'origin');
+  assert.equal(await (await gitFacts(owner)).inMain(oddCommit), false, 'an odd-named file that differs in the main line is not merged');
   console.log('PASS Worker folders A7');
 });
 
 test('Worker folders A1 A2 A4: one clone per sprint in P9\'s folder, a worktree and branch per worker from the main line; the owner\'s folder is untouched; the setup command runs first', { timeout: 60000 }, async (t) => {
   const { remote, owner, home } = repos(t);
   const before = ownerState(owner);
+  for (const source of [null, undefined, 'owner']) assert.equal((await createWorkerFolders({ home }).make(ID, 'item-x', source)).error, 'folder-refused', 'no folder is never git\'s own default: ' + source);
   const folders = createWorkerFolders({ home });
   const a = await folders.make(ID, 'item-a', owner, 'echo ready> setup.txt');
   assert.equal(a.error, undefined, a.detail);
@@ -91,22 +105,52 @@ test('Worker folders A6: clean-up removes only folders with nothing unsaved whos
   const folders = createWorkerFolders({ home });
   const work = async (item, file) => { const { folder } = await folders.make(ID, item, owner); write(path.join(folder, file), item + '\n'); g(folder, 'add', file); g(folder, 'commit', '-qm', item); return folder; };
   const merged = await work('merged', 'm.txt'), open = await work('open', 'o.txt'), dirty = await work('dirty', 'd.txt');
+  // A worker that committed on its branch and then switched to a merged branch, and one that detached: both are kept
+  // with their branches, whatever their folders now show.
+  const moved = await work('moved', 'v.txt'), detached = await work('detached', 't.txt');
+  g(moved, 'checkout', '-qb', 'elsewhere', 'origin/main'); g(detached, 'checkout', '-q', '--detach', 'origin/main');
+  // A worker whose only change is odd-named files the main line does not have: not merged, kept.
+  const oddFolder = (await folders.make(ID, 'odd', owner)).folder;
+  const odd = [' lead.txt', ...(process.platform === 'win32' ? [] : ['new\nline.txt'])];
+  for (const name of odd) write(path.join(oddFolder, name), 'odd\n');
+  g(oddFolder, 'add', '--', ...odd); g(oddFolder, 'commit', '-qm', 'odd');
   g(merged, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/merged', 'merged');
   g(dirty, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/dirty', 'dirty');
   write(path.join(dirty, 'later.txt'), 'not saved\n');
   const result = await folders.clean(ID);
   assert.deepEqual(result.removed, ['merged']);
-  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['dirty', 'unsaved changes'], ['open', 'not in the main line']]);
+  assert.deepEqual(result.kept.map((k) => [k.item, k.why]), [['detached', 'not on its sprint branch'], ['dirty', 'unsaved changes'], ['moved', 'not on its sprint branch'], ['odd', 'not in the main line'], ['open', 'not in the main line']]);
   assert.ok(result.kept.every((k) => k.bytes > 0 && fs.existsSync(k.folder)));
   const clone = path.join(home, ID, 'clone');
   assert.equal(fs.existsSync(merged), false);
-  assert.deepEqual(g(clone, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n'), ['sprint/0123abcd/dirty', 'sprint/0123abcd/open'], 'an unmerged branch is never deleted');
+  assert.deepEqual(g(clone, 'branch', '--list', 'sprint/*', '--format=%(refname:short)').split('\n'), ['sprint/0123abcd/detached', 'sprint/0123abcd/dirty', 'sprint/0123abcd/moved', 'sprint/0123abcd/odd', 'sprint/0123abcd/open'], 'an unmerged branch is never deleted');
+  for (const item of ['moved', 'detached', 'odd']) { g(clone, 'worktree', 'remove', '--force', path.join(home, ID, 'workers', item)); g(clone, 'branch', '-D', 'sprint/0123abcd/' + item); }
   // Saved and merged at last: everything goes, the clone too.
   fs.rmSync(path.join(dirty, 'later.txt'));
   g(open, 'push', '-q', 'origin', 'HEAD'); squash(dir, remote, 'sprint/0123abcd/open', 'open');
   assert.deepEqual(await folders.clean(ID), { removed: ['dirty', 'open'], kept: [] });
   assert.equal(fs.existsSync(path.join(home, ID)), false);
   console.log('PASS Worker folders A6');
+});
+
+test('Worker folders A4: a setup command past its cap is stopped with everything it started, and the answer does not wait for them', { timeout: 60000 }, async (t) => {
+  const { dir, owner, home } = repos(t);
+  const pidFile = path.join(dir, 'grandchild.pid'), hang = path.join(dir, 'hang.mjs');
+  // The setup starts a child that keeps the output pipes open and outlives it unless the whole tree is stopped.
+  write(hang, `import { spawn } from 'node:child_process'; import fs from 'node:fs';
+const kid = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(kid.pid)); setInterval(() => {}, 1000);\n`);
+  const started = Date.now();
+  const result = await createWorkerFolders({ home, setupMs: 1500 }).make(ID, 'slow', owner, `node "${hang}"`);
+  assert.equal(result.error, 'setup-failed');
+  assert.match(result.detail, /was stopped after/);
+  assert.ok(Date.now() - started < 20000, 'answered at the cap, not when the pipes close');
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  let alive = true;
+  for (let i = 0; i < 50 && alive; i += 1) { try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 100)); } catch { alive = false; } }
+  if (alive) process.kill(pid, 'SIGKILL');
+  assert.equal(alive, false, 'the setup command\'s own child was stopped too');
+  console.log('PASS Worker folders A4 timeout');
 });
 
 // Through the daemon: open_chat with worktree: true starts the worker in its own folder in P9's folder.
@@ -155,5 +199,23 @@ test('Worker folders: open_chat with worktree: true starts the worker in a workt
   assert.equal(row.folder, ':worker-folder', 'the record holds a marker, not a path');
   // A client cannot start a chat on the marker: it has no parent and key.
   assert.equal((await call(instance, '/chat', 'POST', { provider: 'claude', folder: ':worker-folder' })).status, 400);
+  // A folder P9 cannot use is refused before git runs (the daemon's own folder is never cloned in its place).
+  assert.equal((await a.tool('open_chat', { text: 'x', folder: '../outside', worktree: true, key: 'item-2' })).error, 'folder-refused');
+  assert.equal((await a.tool('open_chat', { text: 'x', folder: 'missing', worktree: true, key: 'item-2' })).error, 'folder-refused');
+  assert.equal(fs.existsSync(path.join(path.dirname(made.folder), 'item-2')), false);
+  // Delegation turned off while a slow setup runs: the worker is not started, and its folder is kept.
+  const wait = path.join(instance.workspace, 'wait.mjs'), go = path.join(instance.workspace, 'go');
+  write(wait, `import fs from 'node:fs'; const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(go)})) clearInterval(t); }, 50);\n`);
+  await call(instance, '/delegation', 'POST', { start: 'agent', max: 5, workers: [], setup: `node "${wait}"` });
+  const slow = a.tool('open_chat', { text: 'x', folder: 'repo', worktree: true, key: 'item-3' });
+  const folder3 = path.join(path.dirname(made.folder), 'item-3');
+  for (let i = 0; i < 100 && !fs.existsSync(folder3); i += 1) await new Promise((r) => setTimeout(r, 100));
+  await call(instance, '/delegation', 'POST', { start: 'off', max: 5, workers: [], setup: `node "${wait}"` });
+  write(go, '');
+  const refused = await slow;
+  assert.equal(refused.error, 'delegate-off', JSON.stringify(refused));
+  assert.match(refused.detail, /was made and is kept/);
+  assert.ok(fs.existsSync(folder3), 'the prepared folder is kept');
+  assert.equal((await call(instance, '/chat')).body.conversations.filter((c) => c.parent === a.conversation).length, 1, 'no second worker');
   console.log('PASS Worker folders open_chat');
 });
