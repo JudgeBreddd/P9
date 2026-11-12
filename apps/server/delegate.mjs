@@ -295,6 +295,7 @@ export function createDelegate({ chat, allowed }) {
     if (args.cancel) {
       if (!open) return { error: 'no-open-question' };
       asks.delete(caller);
+      open.cancelled = true; // a question still on its way to the helper is taken out when it lands (below)
       // Still waiting its turn: taken out, so the helper never sees it. Already being answered: only the answer is dropped.
       const removed = open.held && !open.outcome && chat.unhold(open.chat, { held: open.held }).status === 200;
       return { chat: open.chat, cancelled: true, ...(!removed && !open.outcome && { detail: 'It had already started on it; its answer is dropped.' }) };
@@ -309,10 +310,19 @@ export function createDelegate({ chat, allowed }) {
       if (!chat.askable(args.chat)) return { error: 'not-askable', detail: 'The user has not opened that chat to questions (its tab menu, Open to questions). Work it out yourself or ask the user.' };
       const it = chat.info(args.chat); // no ask before waking a stopped or long-idle helper: the user opening it to questions is the yes
       if (stateOf(it) === 'failed') return { error: 'chat-not-askable', reason: it.state };
-      const asked = chat.ask(args.chat, args.text, caller), mine = open = { chat: args.chat, done: asked.done, waits: 0 };
+      const asked = chat.ask(args.chat, args.text, caller), mine = open = { chat: args.chat, waits: 0 };
+      // Sending can take as long as starting a stopped helper, so the call does not wait for it (timeoutMs: 0 returns at
+      // once). A question the helper could not take ends as an answer that did not come.
+      const sent = asked.sent.catch(() => ({ status: 500, error: 'failed' })).then((sent) => {
+        if (sent.status !== 202) return { error: sent.error ?? 'failed' };
+        mine.held = sent.held;
+        if (mine.cancelled && sent.held) chat.unhold(mine.chat, { held: sent.held });
+        return new Promise(() => {});
+      });
+      mine.done = Promise.race([asked.done, sent]);
       asks.set(caller, mine);
       // An answer that comes while the caller is not waiting on it: one line tells a running caller it is there.
-      asked.done.then((outcome) => {
+      mine.done.then((outcome) => {
         mine.outcome = outcome;
         const me = asks.get(caller) === mine && !mine.waits && chat.info(caller);
         if (!me || !['running', 'turn'].includes(me.state)) return;
@@ -320,9 +330,6 @@ export function createDelegate({ chat, allowed }) {
         chat.prompt(caller, { text: line, ...(me.state === 'turn' && { when: 'steer' }) }, undefined, 'p9')
           .then((sent) => sent.status === 409 && chat.prompt(caller, { text: line, when: 'queue' }, undefined, 'p9')).catch(() => {});
       });
-      const sent = await asked.sent.catch(() => ({ status: 500, error: 'failed' }));
-      if (sent.status !== 202) { if (asks.get(caller) === mine) asks.delete(caller); return { error: 'chat-not-askable', reason: sent.error, state: stateOf(chat.info(args.chat) ?? {}) }; }
-      mine.held = sent.held;
     }
     if (!open) return { error: 'no-open-question' };
     const aborted = new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }));

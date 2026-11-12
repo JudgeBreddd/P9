@@ -748,7 +748,7 @@ export function createMcp({ workspace, recovery, state, settingsFile, settings: 
       const call = () => calls[params.name](args, conversation, signal);
       // Peer help (SECURITY.md § Delegate): while this chat's turn answers another chat's question, only the tools
       // that read run. A list of what may run, so a tool added later is refused until someone puts it here.
-      if (!chat.lock().on && chat.lock(conversation).on && !ANSWERING.has(params.name)) {
+      if (chat.answering(conversation) && !ANSWERING.has(params.name)) {
         return { content: [{ type: 'text', text: JSON.stringify({ error: 'answer-only', detail: 'This turn answers another chat\'s question and is read-only: answer in your reply.' }, null, 2) }], isError: true };
       }
       try {

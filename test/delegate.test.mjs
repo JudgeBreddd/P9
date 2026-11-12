@@ -608,6 +608,17 @@ test('Delegate peer help: ask_chat asks a chat the user opened to questions; its
   assert.equal((await pending).reply, 'mode:plan', 'the question was sent alone');
   await said(B, 'mode:acceptEdits', at);
 
+  // A question still waiting when the user closes the helper to questions is not answered.
+  at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
+  await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'late' });
+  assert.equal((await a.tool('ask_chat', { chat: B, text: 'mode', timeoutMs: 0 })).answered, false);
+  await until(instance, (e) => e.conversation === B && e.type === 'held', at);
+  assert.equal((await call(instance, `/chat/${B}/askable`, 'POST', { on: false })).status, 200);
+  const shut = await a.tool('ask_chat', {});
+  assert.deepEqual([shut.error, shut.reason], ['not-answered', 'not-askable']);
+  assert.equal((await call(instance, `/chat/${B}/askable`, 'POST', { on: true })).status, 200);
+  await said(B, 'late reply', at);
+
   // One open question; timeoutMs 0 returns at once; cancel takes a waiting question out; a cancelled turn tells the asker.
   at = (await call(instance, '/chat/events?after=0&wait=0')).body.cursor;
   await call(instance, `/chat/${B}/prompt`, 'POST', { text: 'slow' });

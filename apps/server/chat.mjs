@@ -881,6 +881,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     if (cancelled || live.get(id) !== session || session.stopping) return unheld(id, items, cancelled ? 'cancelled' : 'stopped');
     const gone = items.filter((item) => !item.allowed());
     unheld(id, gone, 'session-ended');
+    // A question that waited while the user closed this chat to questions is not answered.
+    const shut = api.askable(id) ? [] : items.filter((item) => !gone.includes(item) && solos.has(item.body));
+    unheld(id, shut, 'not-askable');
+    gone.push(...shut);
     const send = [];
     let text = '', images = [], mode, rest = false;
     for (const item of items.filter((x) => !gone.includes(x))) {
@@ -1215,6 +1219,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     family: () => db.prepare('SELECT id, parent, key, project, title, provider, state FROM conversations').all(),
     // Peer help (delegate.mjs ask_chat). ask: text goes to chat id as a question from the chat `from`, after whatever
     // that chat is doing; sent is the prompt's own result, done resolves once with { reply } or { error }.
+    answering: (id) => !!live.get(id)?.solo,
     ask(id, text, from) {
       let end;
       const done = new Promise((resolve) => { end = resolve; });
