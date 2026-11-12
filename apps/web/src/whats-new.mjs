@@ -6,7 +6,7 @@ export const WHATS_NEW = {
   changes: [
     "Delegate: a chat's agent can start worker chats, message, read and stop them. Off until you turn it on in Settings.",
     "Workers show under the chat that started them; stopping the chat stops its workers.",
-    "Peer help: a chat you mark Open to questions answers other chats in its project, read-only.",
+    "Peer help: a chat you mark Open to questions answers questions from other chats in its project.",
     "Notes: a chat's agent can pass information to another chat without starting a turn.",
     "A reply the agent sends twice is shown once.",
     "Provider profiles for Claude chats, set in Settings and picked in the New chat menu.",
