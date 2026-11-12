@@ -1,13 +1,14 @@
 // Auto-update (threat model row 39, SECURITY.md § Auto-update): the installed app asks P9's public GitHub releases
 // (Stable, or Nightly too when the Settings switch is on; no sign-in) shortly after it starts and every 4 hours, downloads a newer version in the background, and
-// asks once it is downloaded (O24, 0.1.9): Update now closes P9, installs and reopens it; Later installs it the next time P9
-// opens. Nothing installs when P9 quits: 0.1.8's install-on-quit ran the installer behind a window opened meanwhile and
-// ended it, and never reopened P9. Settings → Maintenance → Updates installs at once too (window.p9.updates, COORD A ↔ B1).
+// asks once it is downloaded (O24, 0.1.9): Update now closes P9, installs and reopens it. Later installs nothing: O24b
+// (0.1.9) removed 0.1.9's install-at-the-next-open, which installed an update the user had not said yes to. The popup
+// asks again at every open, forever, until Update now (or Settings → Maintenance → Updates, window.p9.updates, which
+// installs at once too). Nothing installs when P9 quits either: 0.1.8's install-on-quit ran the installer behind a
+// window opened meanwhile and ended it, and never reopened P9.
 // Off for a source checkout, a build without app-update.yml (its feed), and on Linux anything but the AppImage.
 // electron-updater is loaded only when on, so a source checkout never runs any of it.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { newer } from '../server/update.mjs';
 
 const FIRST_CHECK_MS = 10_000, EVERY_MS = 4 * 3600_000;
 
@@ -49,14 +50,14 @@ export function noteLines(notes) {
 // load: the test's stand-in for electron-updater. skip: the version a rollback came back from (AU5, rollback.mjs), which
 // is never downloaded again; get() reads it, clear() forgets it once a different release is offered. channel: the Nightly
 // switch (O2, 0.1.8), get() and set(on); on, GitHub pre-releases (the nightlies) are offered as well as stable releases.
-// O24: ready({ version, notes }) is the popup, answering 'now' or 'later'; pending (get(), set(version | null)) keeps the
-// downloaded version that waits for the next open; installing(version) says so before that open closes P9 to install.
+// O24: ready({ version, notes }) is the popup, answering 'now' or 'later' (O24b, 0.1.9: any other answer, or none at
+// all — the box closed, P9 quit — installs nothing; only 'now' does, and the next open asks again).
 // Turning it off never goes back down: a nightly stays until a stable release newer than it is out (allowDowngrade off).
 // With it off, a pre-release already on its way (a download under way or done, or a check sent while it was on) is
 // dropped and never installed on quit (phase 1 review finding 1).
 export async function startUpdater({ app, version, log, resources = process.resourcesPath, platform = process.platform,
   env = process.env, load = () => import('electron-updater').then(module => module.default.autoUpdater), skip = { get: () => null, clear() {} },
-  channel = { get: () => false, set() {} }, ready = async () => 'later', pending = { get: () => null, set() {} }, installing = async () => {} }) {
+  channel = { get: () => false, set() {} }, ready = async () => 'later' }) {
   const status = { state: 'off', current: version, available: null,
     reason: offReason({ packaged: app.isPackaged, resources, platform, env }), nightly: channel.get() === true };
   const read = () => ({ ...status });
@@ -85,29 +86,23 @@ export async function startUpdater({ app, version, log, resources = process.reso
   updater.on('checking-for-update', () => set('checking'));
   updater.on('update-not-available', () => set('idle', { available: null }));
   const pre = v => String(v ?? '').includes('-');
-  const drop = v => { pending.set(null); log('dropped ' + v + ': Nightly is off'); set('idle', { available: null }); };
+  const drop = v => { log('dropped ' + v + ': Nightly is off'); set('idle', { available: null }); };
   updater.on('update-available', info => {
     if (!status.nightly && pre(info.version)) return drop(info.version);
     const skipped = skip.get();
-    if (info.version === skipped) { log('skipped ' + skipped + ': P9 went back from it'); pending.set(null); return set('idle', { available: null }); }
+    if (info.version === skipped) { log('skipped ' + skipped + ': P9 went back from it'); return set('idle', { available: null }); }
     if (skipped) skip.clear();
     set('downloading', { available: info.version });
     updater.downloadUpdate().catch(() => {}); // a failure also arrives as 'error'
   });
-  // O24: a version that was waiting when P9 opened installs at once, after installing() says so (P9 reopens on the new
-  // one); any other asks once. Downloaded means it waits for the next open, whichever button, or none, is pressed.
-  const due = pending.get();
-  if (due && !newer(due, version)) pending.set(null);
+  // O24b: nothing ever installs by itself. A downloaded version only asks; Update now is the one thing that installs,
+  // and any other answer, or none, leaves the next open asking again (the re-check re-downloads from electron-updater's
+  // cache and fires this again), every open, forever.
   let asked = null;
   updater.on('update-downloaded', info => {
     if (!status.nightly && pre(info.version)) return drop(info.version);
-    pending.set(info.version);
     set('ready', { available: info.version });
-    if (info.version === due && newer(due, version)) {
-      log('installing ' + due + ': it was left for this open');
-      return void Promise.resolve(installing(due)).catch(() => {}).then(() => updater.quitAndInstall(true, true));
-    }
-    if (asked === info.version) return;
+    if (asked === info.version) return; // one ask per version per open
     asked = info.version;
     Promise.resolve(ready({ version: info.version, notes: noteLines(info.releaseNotes) }))
       .then(answer => { log('popup ' + info.version + ': ' + answer); if (answer === 'now') install(); }, () => {});
@@ -135,8 +130,8 @@ export async function startUpdater({ app, version, log, resources = process.reso
     if (!ask.nightly && pre(status.available) && (status.state === 'downloading' || status.state === 'ready')) drop(status.available);
     return check();
   };
-  // A version left for this open is looked for at once, so P9 closes to install before the user starts anything.
-  setTimeout(check, due && newer(due, version) ? 0 : FIRST_CHECK_MS).unref();
+  // The first check waits its usual few seconds; there is nothing to install early (O24b), so the user's work starts first.
+  setTimeout(check, FIRST_CHECK_MS).unref();
   setInterval(check, EVERY_MS).unref();
   set('idle');
   return { read, check, install, nightly };
