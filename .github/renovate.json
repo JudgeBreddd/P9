@@ -1,0 +1,41 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "O50: dependency updates arrive as PRs by themselves. Bot PRs merge by the same rule as any PR: CI green and a non-author verdict that read the changelog.",
+    "One rule for every package: a version under 3 days old is held back. No branch and no PR is made for it; it is listed by name under 'Pending Status Checks' on the Dependency Dashboard issue until it is old enough.",
+    "Security fixes are not held (Renovate's vulnerability alerts skip the wait; they need Dependabot alerts turned on in the repository settings).",
+    "Not covered: the age of packages pulled in underneath (the lockfile's transitive entries); Renovate does not pass the wait to pnpm."
+  ],
+  "extends": ["config:recommended"],
+  "timezone": "America/Chicago",
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "packageRules": [
+    {
+      "description": "The agent engines (Claude and Codex adapters, the ACP SDK) come as one PR, checked at any time.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "@agentclientprotocol/claude-agent-acp",
+        "@agentclientprotocol/codex-acp",
+        "@agentclientprotocol/sdk"
+      ],
+      "groupName": "agent engines"
+    },
+    {
+      "description": "Every other npm package, the packageManager pnpm pin included, comes as a second PR.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": [
+        "!@agentclientprotocol/claude-agent-acp",
+        "!@agentclientprotocol/codex-acp",
+        "!@agentclientprotocol/sdk"
+      ],
+      "groupName": "everything else"
+    },
+    {
+      "description": "GitHub Actions come as one PR, weekly (Monday before 04:00).",
+      "matchManagers": ["github-actions"],
+      "groupName": "actions",
+      "schedule": ["* 0-3 * * 1"]
+    }
+  ]
+}
