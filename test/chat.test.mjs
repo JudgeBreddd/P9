@@ -70,8 +70,15 @@ test('a reply the agent sends a second time in one piece is recorded once', asyn
   const id = await create(instance);
   await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'twice' });
   const { seen } = await until(instance, (event) => event.type === 'turn-end');
-  // The two whole copies are gone; a reply said in one piece and then said again ('end') is two replies.
-  assert.deepEqual(seen.filter(said(id, '')).map((event) => event.data.content.text), ['one ', 'two', 'an', 'other', 'end', 'end']);
+  const long = 'x'.repeat(150), tail = 'y'.repeat(150);
+  // The three whole copies are gone. Kept: a reply said in one piece and said again ('end'), a short piece that equals
+  // an earlier reply ('alpha'), and a reply that repeats itself while it streams.
+  assert.deepEqual(seen.filter(said(id, '')).map((event) => event.data.content.text),
+    ['one ', 'two', long, tail, 'end', 'end', 'al', 'pha', 'so ', 'alpha', long, tail, long + tail, 'sh', 'ort']);
+  // The chat takes its next message as before.
+  await call(instance, `/chat/${id}/prompt`, 'POST', { text: 'mode' });
+  const next = await until(instance, said(id, 'mode:'));
+  assert.ok(next.hit);
 });
 
 test('approvals and questions are answered only with options and fields the agent offered', async (t) => {

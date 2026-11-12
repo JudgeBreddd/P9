@@ -283,15 +283,22 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
   // A reply sent a second time (seen on the server 2026-11-09 to 11, 9 times in 3 days, Claude chats only): after a
   // compaction, or after a message that joined work the agent had begun by itself, the adapter sends a whole reply
   // again in one piece, under its own message id or a new one. P9 had streamed it already, so it showed twice. A piece
-  // that is exactly a recent reply streamed in two or more pieces is that copy and is not recorded. A piece of the
-  // reply still streaming is kept unless it is 200 characters or more: a short reply may repeat itself.
-  // ponytail: the last 8 replies of this run of the agent, in memory; a copy that comes after a restart is recorded.
+  // that is exactly a recent reply streamed in two or more pieces is that copy and is not recorded, when it comes
+  // under that reply's id after the reply was over, or opens a new id and is 200 characters or more (no first piece
+  // of a stream is a whole long reply; a short one may be a new reply that says the same). A reply is over at its
+  // turn's end, at the next message sent, at a compaction, or when another reply starts.
+  // ponytail: the last 20 replies of this run of the agent, in memory; a copy that comes after a restart, of an older
+  // reply, or of a short reply under a new id is recorded.
   const repeated = (session, update) => {
-    const text = update?.content?.text, id = update?.messageId;
-    if (update?.sessionUpdate !== 'agent_message_chunk' || typeof text !== 'string' || typeof id !== 'string') return false;
-    const heard = session.heard ??= [], open = heard.at(-1);
-    if (heard.some((m) => m.parts > 1 && m.text === text && (m !== open || m.id !== id || text.length >= 200))) return true;
-    if (open?.id === id) { open.text += text; open.parts += 1; } else { heard.push({ id, text, parts: 1 }); if (heard.length > 8) heard.shift(); }
+    const heard = session.heard ??= [], open = heard.at(-1), going = open && !open.over;
+    if (update?.sessionUpdate === 'compaction_update') { if (open) open.over = true; return false; }
+    if (update?.sessionUpdate !== 'agent_message_chunk') return false;
+    const text = update.content?.text, id = update.messageId;
+    if (typeof text !== 'string' || typeof id !== 'string') { if (open) open.over = true; return false; }
+    if (going && open.id === id) { open.text += text; open.parts += 1; return false; }
+    if (heard.some((m) => m.parts > 1 && m.text === text && (m.id === id || text.length >= 200))) return true;
+    heard.push({ id, text, parts: 1 });
+    if (heard.length > 20) heard.shift();
     return false;
   };
   const settledHooks = new Set(); // called at each prompted turn's end (delegate.mjs: the completion notice)
@@ -303,6 +310,7 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
     const kept = gauges.get(conversation);
     if (kept && type === 'config' && data.model?.current) kept.model = data.model.current;
     else if (kept && type === 'update' && data.sessionUpdate === 'usage_update') kept.context = contextOf(data) ?? kept.context;
+    if (type === 'turn-end' || type === 'user') { const said = live.get(conversation)?.heard?.at(-1); if (said) said.over = true; } // repeated(), below
     try { ledger.append(conversation, type, data); }
     catch (error) { console.error(JSON.stringify({ event: 'P9_LEDGER_FAILED', conversation, type, error: String(error.code ?? error.message).slice(0, 200) })); }
     for (const wake of listeners) wake();
