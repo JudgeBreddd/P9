@@ -788,6 +788,47 @@ sprint. A worker is an ordinary chat: you can open it, type in it and stop it.
 - **Not on the phone.** The phone listener has no MCP server, so nothing here is reachable from
   it. The phone shows workers in its chat list like any chat.
 
+## Worker folders
+
+A chat that starts a worker with `open_chat` may ask for the worker to get its own folder (`worktree: true`, with a
+`key`). P9 then makes the folder itself, with git, before the worker starts. Written before the code (sprint spec K1).
+
+- **Where they live.** One clone of the repository per sprint (a sprint is the chat that started the workers), in
+  `sprints/<that chat's id>/` beside the ledger (0700, like `projects/`). Each worker gets a git worktree of that clone
+  in `workers/<key>/`, on its own branch `sprint/<first 8 of the chat id>/<key>`, started from the main line. The
+  key is checked by `open_chat`'s rule and again as a branch name before any path or branch is made.
+- **Your own folder is never touched.** The clone is made from the folder the worker would have started in (the
+  `folder` passed, else the parent's), which must be a git repository and passes the same folder check as before.
+  P9 only reads there (`git clone` from it, and its `origin` address): no branch switch, no file added, unsaved work
+  left as it is. The clone's `origin` is then set to that folder's own `origin`, so a push goes where yours go, with
+  your own git sign-in. If the folder has no `origin`, the clone's `origin` stays your folder.
+- **Where a worker starts.** The chat's record holds a marker, not a path. At every start P9 finds the folder again
+  from the chat's parent and key, and refuses it if it is not a real folder inside the sprint's own folder (a link,
+  or gone). A chat a client makes with that marker has no parent and is refused. The agent then works in that folder
+  in its own mode, like any chat; its approvals are asked as before.
+- **P9 running git.** P9 runs `git` itself only in its own sprint folders, plus the two reads above in your folder.
+  Every run has an empty environment plus the usual allow list, no terminal prompt (`GIT_TERMINAL_PROMPT=0`), hooks
+  off (`core.hooksPath` set to the null device), `core.fsmonitor` off and no external diff, so a hook or a
+  file-system monitor written into the clone does not run as P9. What remains: a clean or smudge filter set in the
+  clone's own git config runs when P9 reads the folder's state. That config sits outside every worker folder, so an
+  agent writes it only by editing outside its folder, which its mode asks you for; in Unrestricted mode nothing is
+  asked, as for every other command an agent runs there.
+- **What P9 reads from git (for the sprint's version stamp).** For a worker folder: the current commit, the files
+  changed against the main line, whether anything is unsaved, and whether a commit is in the main line. It reads; it
+  never fetches on its own except when it cleans up (below), and a fetch uses your git sign-in like a push.
+- **The setup command.** One command you type in Settings > Delegation, run in each new worker folder before its
+  worker starts (for example installing packages). Only you set it: no agent tool and no file in the repository can
+  set or change it, and an empty field runs nothing. It runs through your shell, in that folder, with the allow-listed
+  environment, for at most 15 minutes; if it fails or runs out of time the worker is not started, the folder is kept,
+  and the agent is told the exit code and the end of its output. It runs without asking you each time: typing it is
+  the permission, in every mode except while the agent lock is on, which refuses `open_chat` first.
+- **Clean-up never loses work.** Cleaning a sprint's folders removes a worker folder only when it has nothing
+  unsaved and its newest commit is in the main line (or, after a squash merge, every file it changed is the same in
+  the main line). Its branch is deleted with it. Anything else is kept and listed with its size and why it was kept.
+  P9 never deletes a branch that is not in the main line, and never removes the clone while a worker folder is in it.
+- **Disk.** One clone per sprint plus one worktree (and whatever the setup command installs) per worker, in P9's own
+  folder, until cleaned up.
+
 ## Agent modes
 
 A new install starts every chat in the agent's own default: Claude Auto, Codex Auto review (Codex's

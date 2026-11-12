@@ -2,6 +2,7 @@
 // The chat that calls open_chat is the parent, the chats it starts are its workers, the group is a sprint.
 // Everything here goes through chat.mjs's own create, prompt, stop and answer, so a worker is an ordinary chat.
 import { randomUUID } from 'node:crypto';
+import { WORKER } from './worker-folders.mjs';
 
 const ID = /^[0-9a-f-]{36}$/;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -28,7 +29,8 @@ export const DELEGATE_TOOLS = (input) => {
       title: { type: 'string', maxLength: 120 }, key: { type: 'string', description: 'Your name for it: 1 to 64 of a-z 0-9 . _ -' },
       provider: { type: 'string', enum: ['claude', 'codex'] }, model: { type: 'string', description: 'A model that agent offers.' },
       effort: { type: 'string' }, mode: { type: 'string', description: 'Claude: Plan, Manual, Accept edits, Auto, Bypass permissions. Codex: Read-only, Workspace access, Auto review, Full access.' },
-      folder: { type: 'string', description: 'Where it starts, relative to the workspace.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
+      folder: { type: 'string', description: 'Where it starts, relative to the workspace.' },
+      worktree: { type: 'boolean', description: 'true: P9 gives it its own folder, a git worktree of a clone of folder\'s repository, on branch sprint/<sprint>/<key>; key is required. The user\'s folder is not changed.' }, rules: { type: 'string', maxLength: MAX_RULES } }, ['text'])],
     ['set_rules', 'Replace your sprint rules: one text, at most ' + MAX_RULES + ' characters, that P9 sends along with every message you send a chat you started, so a worker '
       + 'keeps them through a long task. Until you set them, P9 sends its own short default (state the folder and branch first, wait for what you started, end with pass or fail). '
       + 'An empty text sends none. Without rules, it returns the text in force and changes nothing.',
@@ -106,7 +108,7 @@ export function createDelegate({ chat, allowed }) {
     const me = chat.info(caller);
     if (!text(args.text, 100_000) || (args.title !== undefined && !text(args.title, 120)) || (args.key !== undefined && (typeof args.key !== 'string' || !KEY.test(args.key)))
         || (args.provider !== undefined && !Object.hasOwn(TIER, args.provider)) || (args.model !== undefined && !text(args.model, 200))
-        || (args.effort !== undefined && !text(args.effort, 200)) || (args.folder !== undefined && typeof args.folder !== 'string')
+        || (args.effort !== undefined && !text(args.effort, 200)) || (args.folder !== undefined && typeof args.folder !== 'string') || (args.worktree !== undefined && (typeof args.worktree !== 'boolean' || (args.worktree && args.key === undefined)))
         || (args.rules !== undefined && (typeof args.rules !== 'string' || args.rules.length > MAX_RULES))) return { error: 'request-refused' };
     const family = chat.family(), set = chat.delegation();
     const same = args.key !== undefined && family.find((c) => c.parent === caller && c.key === args.key);
@@ -165,7 +167,10 @@ export function createDelegate({ chat, allowed }) {
     if (running(caller, chat.family()) + holding.get(caller).length - 1 >= Math.min(now.max, MAX_CHILDREN)) return tooMany(now);
     if (again.error) return again;
     if (again.mode !== picked.mode) return { error: 'not-allowed', detail: 'This chat\'s mode changed while the user was asked. Call open_chat again.' };
-    const made = await chat.create({ provider, title, ...(folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
+    // A worker folder (SECURITY.md § Worker folders): made after the user allowed the worker, before it starts.
+    const own = args.worktree ? await chat.workers.make(caller, args.key, folder === undefined ? await chat.startFolder(caller) : await chat.checkedFolder(folder), chat.delegation().setup ?? '') : null;
+    if (own?.error) return { ...own, detail: own.detail ?? 'Give the worker a key that is also a git branch name.' };
+    const made = await chat.create({ provider, title, ...(own ? { folder: WORKER } : folder !== undefined && { folder }), ...(me.project && { project: me.project }), ...profile }, undefined, { parent: caller, key: args.key });
     if (made.status !== 201) return { error: made.error === 'key-taken' ? 'key-taken' : args.folder !== undefined ? 'folder-refused' : made.error ?? 'request-refused' };
     chat.setSlot(made.conversation, at);
     if (args.rules !== undefined) chat.setRules(caller, args.rules);
