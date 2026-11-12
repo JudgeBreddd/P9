@@ -58,6 +58,9 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   const valid = { commit: 'claimed-commit', results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
   assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
   assert.equal((await createDelegate({ chat: { ...chat, info: () => ({ parent, state: 'running' }) } }).ready(valid, worker)).error, 'no-active-turn');
+  assert.equal((await createDelegate({ chat: { ...chat, startFolder: async () => null } }).ready(valid, worker)).error, 'folder-unavailable');
+  const stopped = new AbortController(); stopped.abort();
+  assert.equal((await tools.ready(valid, worker, stopped.signal)).error, 'cancelled');
   assert.equal((await tools.ready({ ...valid, results: [] }, worker)).error, 'request-refused');
   assert.equal((await tools.ready({ ...valid, results: [{ check: 'test', result: ' ' }] }, worker)).error, 'request-refused');
   assert.equal((await tools.ready({ ...valid, results: [{ check: 'other', result: 'passed' }] }, worker)).error, 'request-refused');
@@ -96,6 +99,14 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   currentState = 'running';
   releaseTurn(folder);
   assert.equal((await interruptedAttempt).error, 'no-active-turn');
+  let releaseCancel;
+  const pendingCancelFolder = new Promise((resolve) => { releaseCancel = resolve; });
+  const cancelled = new AbortController();
+  const cancelling = createDelegate({ chat: { ...chat, startFolder: () => pendingCancelFolder } });
+  const cancelledAttempt = cancelling.ready(valid, worker, cancelled.signal);
+  cancelled.abort();
+  releaseCancel(folder);
+  assert.equal((await cancelledAttempt).error, 'cancelled');
 
 });
 

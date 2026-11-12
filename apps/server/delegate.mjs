@@ -199,13 +199,15 @@ export function createDelegate({ chat, allowed }) {
     const files = ready.claimed ? 'Unavailable until Git facts can be read' : ready.files.length ? ready.files.map((file) => `- ${file}`).join('\n') : 'None';
     return `### ${task.item}\n\nCommit: ${ready.commit}${ready.claimed ? ' (claim)' : ''}\n\nChanged files:\n${files}\n\nChecks:\n${ready.results.map(({ check, result }) => `- ${check}: ${result}`).join('\n')}\n\nTokens used: ${usage}\n\nWeakest part: ${ready.weakest}`;
   }
-  async function ready(caller, args) {
+  async function ready(caller, args, signal) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const info = chat.info(caller), task = chat.sprint(caller).task;
     if (!info?.parent || !task) return { error: 'no-task' };
     if (info.state !== 'turn') return { error: 'no-active-turn' };
     if (!text(args.commit, 200) || !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) || !Array.isArray(args.results) || args.results.length !== task.checks.length || task.checks.some((check) => args.results.filter((r) => r?.check === check && typeof r.result === 'string' && text(r.result.trim(), 4000)).length !== 1)) return { error: 'request-refused' };
     const folder = await chat.startFolder(caller);
+    if (!folder) return { error: 'folder-unavailable' };
+    if (signal?.aborted) return { error: 'cancelled' };
     let gitFacts;
     try { ({ gitFacts } = await import('./worker-folders.mjs')); }
     catch (error) { if (error.code !== 'ERR_MODULE_NOT_FOUND' || error.url !== new URL('./worker-folders.mjs', import.meta.url).href) return { error: 'git-unavailable' }; }
@@ -220,6 +222,7 @@ export function createDelegate({ chat, allowed }) {
       catch { return { error: 'git-unavailable' }; }
       if (changed.trim()) return { error: 'dirty-folder' };
     }
+    if (signal?.aborted) return { error: 'cancelled' };
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     if (chat.info(caller)?.state !== 'turn') return { error: 'no-active-turn' };
     const value = { commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
@@ -463,7 +466,7 @@ export function createDelegate({ chat, allowed }) {
   }).catch(() => {});
 
   return {
-    ready: (args, caller) => ready(caller, args),
+    ready: (args, caller, signal) => ready(caller, args, signal),
     verdict: (args, caller) => verdict(caller, args),
     open_chat: (args, caller, signal) => openChat(caller, args, signal),
     send_chat: (args, caller) => sendChat(caller, args),
