@@ -116,6 +116,7 @@ test('O22: a staged node missing libatomic names libatomic1 and installs no unit
   const { collectBundle, missingLibrary } = await import('../scripts/teh.mjs');
   assert.equal(collectBundle({ status: '', journal: '', install: log }).missingLibrary, 'libatomic1', 'doctor bundle names it');
   assert.equal(collectBundle({ status: '', journal: '' }).missingLibrary, null);
+  assert.equal(collectBundle({ status: '', journal: '', install: log, daemon: { status: 'ok' } }).missingLibrary, null, 'an old line in the log is not reported once the daemon answers');
   assert.equal(missingLibrary('node: error while loading shared libraries: libfoo.so.3: cannot open'), 'libfoo.so.3', 'unknown file: its own name');
   assert.equal(missingLibrary('error while loading shared libraries: /etc/passwd; rm'), null, 'only lib*.so names');
 });

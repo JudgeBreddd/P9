@@ -56,6 +56,14 @@ test('Open P9 on: Where it was last (as before), This computer or a remote; kept
   await pick.selectOption('test-host');
   assert.equal(await savedOpenOn('test-host'), 'test-host');
   assert.equal((await saved()).host, null, 'this window stays where it is until the next start');
+  // Phase 2 review: saves that overlap. Every read during them is whole JSON, and the last one sent is the one kept.
+  let reading = true, reads = 0;
+  const reader = (async () => { while (reading) { JSON.parse(await readFile(file, 'utf8')); reads += 1; } })();
+  await page.evaluate(() => Promise.all(Array.from({ length: 200 }, (_, i) => window.p9.remotes('open-on', i % 2 ? '' : 'test-host'))));
+  await page.evaluate(() => window.p9.remotes('open-on', 'test-host'));
+  reading = false; await reader;
+  assert.ok(reads > 0, 'the file was read while the saves ran');
+  assert.equal((await saved()).openOn, 'test-host', 'the last save is the one kept');
   await closeSettings(page);
   await status(onLocal, 'still on this computer');
   await app.close();

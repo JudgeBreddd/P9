@@ -331,7 +331,8 @@ function renderSettings() {
   if (outer.$('#setGreeting')) outer.$('#setGreeting').onchange = async e => { const r = await window.p9.terminal('greeting', { show: e.target.checked }).catch(() => null); outer.termGreeting = r?.status === 200 ? r.body.show : null; renderSettings(); };
   bindDefaults(); bindProfiles(); bindDelegation();
   // 0.1.8: Open P9 on, kept by main in p9-server.json (openOn) and read the next time P9 starts.
-  if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn; };
+  if (outer.$('#setOpenOn')) outer.$('#setOpenOn').onchange = async e => { const v = e.target.value, r = await window.p9.remotes('open-on', v === 'last' ? null : v === 'local' ? '' : v).catch(() => null); if (r) outer.serverInfo.openOn = r.openOn;
+    else { const was = outer.serverInfo.openOn; e.target.value = was == null ? 'last' : was === '' ? 'local' : was; outer.toast({ kind: 'settings', txt: 'Not saved. P9 will open where it did before.', level: 'bad' }, true); } }; // the save failed: show what is really kept
   if (outer.pets) wirePetSettings();
   if (outer.missionFiles?.settings) wireMission();
   // Main reloads the window onto the chosen daemon, so nothing here re-renders.

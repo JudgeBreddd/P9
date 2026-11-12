@@ -500,6 +500,15 @@ test('artifacts (O26): the list shows one row per title, opening the newest vers
   await pick(items.filter({ hasText: 'P9 checklist' }));
   assert.equal(await head(), 'One');
   assert.match(await page.locator('#side .stitle').textContent(), /version 2 of 2/);
+  // Phase 2 review: two versions with the same text but a different type are still two places to step between.
+  await page.evaluate(text => window.__artifact.reply(text), `${F}html artifact Same text\n<b>same</b>\n${F}`);
+  await page.evaluate(text => window.__artifact.reply(text), `${F}markdown artifact Same text\n<b>same</b>\n${F}`);
+  await page.locator(`#chats .pane[data-id="${id}"] [data-chat-files]`).click();
+  await page.locator('#side .cf-tabs').waitFor({ timeout: 8000 });
+  await pick(items.filter({ hasText: 'Same text' }));
+  await page.waitForFunction(() => /Same text · version 2 of 2/.test(document.querySelector('#side .stitle').textContent), null, { timeout: 5000 });
+  await page.locator('#side [data-art-mode]', { hasText: 'Older version' }).click();
+  await page.waitForFunction(() => /Same text · version 1 of 2/.test(document.querySelector('#side .stitle').textContent), null, { timeout: 5000 });
 });
 
 test('artifacts (O27): a panel artifact stays open while its chat is in view; the user\'s Pin button pins it', { timeout: 90000 }, async (t) => {

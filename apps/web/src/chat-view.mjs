@@ -32,7 +32,7 @@ function openArtifact(art) {
     if (ART.mode === 'full') outer.side.mode('full');
     return keepBox();
   }
-  const n = art.versions?.length ?? 0, at = n > 1 ? art.versions.findIndex(v => v.src === art.src) : -1, step = d => openArtifact({ ...art, ...art.versions[at + d] });
+  const n = art.versions?.length ?? 0, at = n > 1 ? art.versions.findIndex(v => artSig(v) === JSON.stringify([art.kind, art.lang, art.title, art.src])) : -1, step = d => openArtifact({ ...art, ...art.versions[at + d] });
   // it goes with its chat's focus and, pinned, with its chat (when): hidden elsewhere, back (still pinned) on return
   outer.side.open('artifact', { title: art.title + (at >= 0 ? ` · version ${at + 1} of ${n}` : ''), mode: ART.mode, focuses: [outer.S.focus], defaultWidth: w => w / 2,
     when: () => outer.S.focus !== 'chat' || ART.mode !== 'pinned' || chatsInView().includes(ART.state?.sid),
