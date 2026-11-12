@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import { childEnv } from './child-env.mjs';
+import { card } from './artifacts.mjs';
 const git = promisify(execFile);
 
 const ID = /^[0-9a-f-]{36}$/;
@@ -193,6 +194,11 @@ export function createDelegate({ chat, allowed }) {
     return { chat: made.conversation, title, provider, worker: at + 1, mode: picked.mode, folder: await chat.startFolder(made.conversation) };
   }
 
+  function report(task, ready, tokens) {
+    const usage = tokens ? `Input ${tokens.input}; output ${tokens.output}` : 'Not reported';
+    const files = ready.claimed ? 'Unavailable until Git facts can be read' : ready.files.length ? ready.files.map((file) => `- ${file}`).join('\n') : 'None';
+    return `### ${task.item}\n\nCommit: ${ready.commit}${ready.claimed ? ' (claim)' : ''}\n\nChanged files:\n${files}\n\nChecks:\n${ready.results.map(({ check, result }) => `- ${check}: ${result}`).join('\n')}\n\nTokens used: ${usage}\n\nWeakest part: ${ready.weakest}`;
+  }
   async function ready(caller, args) {
     if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const info = chat.info(caller), task = chat.sprint(caller).task;
@@ -215,6 +221,7 @@ export function createDelegate({ chat, allowed }) {
       if (changed.trim()) return { error: 'dirty-folder' };
     }
     const value = { commit: facts?.commit ?? args.commit, claimed: !facts, results: args.results, weakest: args.weakest, files: facts?.changed ?? [], at: Date.now() };
+    if (card({ id: 'ready-' + caller, kind: 'markdown', text: report(task, value, { input: Number.MAX_SAFE_INTEGER, output: Number.MAX_SAFE_INTEGER }) }).error) return { error: 'report-too-large' };
     chat.setSprint(caller, { ready: value, verdict: null, idleSince: null });
     return { ready: value };
   }
@@ -421,8 +428,10 @@ export function createDelegate({ chat, allowed }) {
   chat.turnEnded?.((id) => {
     const info = chat.info(id), state = chat.sprint(id);
     if (!info?.parent || !state.task || !state.ready) return;
-    const card = { item: state.task.item, ...state.ready, tokens: chat.tokenUsage(id) };
-    chat.note(info.parent, '[p9] Ready: ' + JSON.stringify(card) + (state.ready.claimed ? '\nChanged files are unavailable until git facts can be read.' : ''), 'p9').catch(() => {});
+    const data = card({ id: 'ready-' + id, kind: 'markdown', text: report(state.task, state.ready, chat.tokenUsage(id)) });
+    if (data.error) return;
+    chat.pin(info.parent, data);
+    chat.note(info.parent, '[p9] Ready report pinned for ' + state.task.item + '.', 'p9').catch(() => {});
   });
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md

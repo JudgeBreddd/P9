@@ -746,3 +746,37 @@ test('Delegate sprint task appears in the list and live events and becomes idle'
   assert.ok(ev.some((e) => e.type === 'sprint-state' && typeof e.data.idleSince === 'number'));
   assert.match(ev.find((e) => e.type === 'user').data.text, /Done means: task visible/);
 });
+
+test('Delegate ready emits one parent report after the worker turn ends', { timeout: 120000 }, async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const instance = await start(t);
+  await call(instance, '/file-protection', 'POST', { on: false });
+  const a = await agent(t, instance);
+  const made = await a.tool('open_chat', { text: 'first', item: 'B4', done_means: 'reported', checks: ['check'] });
+  await a.done(made.chat);
+  await a.tool('send_chat', { chat: made.chat, text: 'mcp' });
+  const kid = await connect(t, instance, made.chat);
+  await a.done(made.chat);
+  fs.writeFileSync(path.join(instance.workspace, '.gitignore'), '*\n!note.txt\n!.gitignore\n');
+  execFileSync('git', ['init', '-q', '-b', 'main', instance.workspace]);
+  execFileSync('git', ['-C', instance.workspace, 'add', '.']);
+  execFileSync('git', ['-C', instance.workspace, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', instance.workspace, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  await a.tool('send_chat', { chat: made.chat, text: 'late' });
+  const result = await kid.tool('ready', { commit: head, results: [{ check: 'check', result: 'passed' }], weakest: 'not live' });
+  assert.ok(result.ready, JSON.stringify(result));
+  assert.equal(result.ready.commit, head);
+  assert.equal((await rows(instance)).find((c) => c.id === made.chat).ready.commit, head);
+  const reports = async () => (await events(instance, a.conversation)).filter((e) => e.type === 'card' && e.data.id === 'ready-' + made.chat).map((e) => e.data.text);
+  assert.equal((await reports()).length, 0);
+  await a.done(made.chat);
+  for (let i = 0; i < 40 && !(await reports()).length; i += 1) await pause(50);
+  const cards = await reports();
+  assert.equal(cards.length, 1);
+  assert.match(cards[0], /B4/);
+  assert.ok(cards[0].includes(head));
+  assert.match(cards[0], /Changed files:/);
+  assert.match(cards[0], /check: passed/);
+  assert.match(cards[0], /Weakest part: not live/);
+  assert.match(cards[0], /Tokens used: Not reported/);
+});

@@ -1293,9 +1293,10 @@ export function createChat({ ledger, workspace, adapterOverride, instance, lifec
       let input = 0, output = 0, samples = 0;
       for (const row of db.prepare("SELECT data FROM events WHERE conversation = ? AND type = 'turn-end'").all(id)) {
         let usage; try { usage = JSON.parse(row.data).usage; } catch { return null; }
-        const count = (value) => value === undefined || Number.isSafeInteger(value) && value >= 0;
+        const count = (value) => Number.isSafeInteger(value) && value >= 0;
         if (!usage || !count(usage.inputTokens) || !count(usage.outputTokens)) return null;
-        input += usage.inputTokens ?? 0; output += usage.outputTokens ?? 0; samples += 1;
+        input += usage.inputTokens; output += usage.outputTokens; samples += 1;
+        if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output)) return null;
       }
       return samples ? { input, output } : null;
     },

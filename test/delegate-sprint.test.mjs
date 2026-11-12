@@ -32,6 +32,9 @@ test('verdict requires the current commit and an independent reviewer', { timeou
   assert.ok(tools.verdict(args, worker).error);
   assert.equal(tools.verdict(args, reviewer).verdict.commit, 'abc');
   assert.equal(state.verdict.by, reviewer);
+  assert.equal(state.verdict.result, 'pass');
+  assert.equal(state.verdict.note, 'checked');
+  assert.equal(typeof state.verdict.at, 'number');
 });
 
 test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, async (t) => {
@@ -45,10 +48,10 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   execFileSync('git', ['-C', folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'base']);
   const head = execFileSync('git', ['-C', folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const state = { task: { item: 'B1', doneMeans: 'done', checks: ['test'] } };
-  const notes = []; let endTurn;
+  const notes = [], cards = []; let endTurn;
   const chat = { lock: () => ({ on: false }), info: () => ({ parent, state: 'turn' }), sprint: () => state, startFolder: async () => folder,
     setSprint: (_, patch) => Object.assign(state, patch), gauge: () => ({ context: { used: 7 } }),
-    note: async (...args) => notes.push(args), turnEnded: (fn) => { endTurn = fn; }, tokenUsage: () => ({ input: 9, output: 2 }), settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
+    note: async (...args) => notes.push(args), pin: (_, data) => cards.push(data), turnEnded: (fn) => { endTurn = fn; }, tokenUsage: () => ({ input: 9, output: 2 }), settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
   const valid = { commit: head, results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
   assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
@@ -60,6 +63,7 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   writeFileSync(join(folder, 'unsaved'), 'change');
   assert.equal((await tools.ready(valid, worker)).error, 'dirty-folder');
   rmSync(join(folder, 'unsaved'));
+  assert.equal((await tools.ready({ ...valid, results: [{ check: 'test', result: 'é'.repeat(4000) }], weakest: 'x'.repeat(400) }, worker)).error, 'report-too-large');
   const result = await tools.ready(valid, worker);
   assert.equal(result.ready.commit, head);
   assert.equal(typeof result.ready.claimed, 'boolean');
@@ -68,10 +72,12 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   assert.deepEqual(result.ready.files, []);
   assert.equal(typeof result.ready.at, 'number');
   assert.equal(state.idleSince, null);
-  assert.equal(notes.length, 0);
+  assert.equal(cards.length, 0);
   endTurn(worker);
-  assert.match(notes[0][1], /B1/);
-  assert.match(notes[0][1], /\"input\":9/);
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].text, /B1/);
+  assert.match(cards[0].text, /Input 9; output 2/);
+  assert.match(notes[0][1], /Ready report pinned/);
 });
 
 test('cross-chat list identifies another chat’s words as untrusted', { timeout: 5000 }, () => {
