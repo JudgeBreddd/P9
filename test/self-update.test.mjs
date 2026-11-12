@@ -300,16 +300,24 @@ test('W1 in the window: the app raises the two-versions box on connect; Not now 
   await mkdir(there, { recursive: true, mode: 0o700 }); await mkdir(here, { mode: 0o700 }); await mkdir(profile);
   for (const name of await readdir(remote.state)) if (name !== 'daemon.sock') await symlink(path.join(remote.state, name), path.join(there, name));
   // The relay: what the server says, with its version made older. A piece that ends partway into the version field is
-  // kept until the next piece, so the field is rewritten wherever the stream is cut. statusAsks: the app's own
-  // /update/status requests, the last thing it does before it would ask.
-  const field = '"version":"' + VERSION + '"';
-  let statusAsks = 0;
+  // kept until the next piece, so the field is rewritten wherever the stream is cut. statusAnswers: the server's
+  // answers to the app's own /update/status requests, handed to the app; the answer is the last thing the app waits
+  // for before it would ask. Both the request path and the answer are found wherever the stream is cut.
+  const field = '"version":"' + VERSION + '"', route = '/update/status', mark = '"supported"';
+  let statusAnswers = 0;
   const relay = net.createServer((client) => {
     const daemonSide = net.connect(path.join(remote.state, 'daemon.sock'));
-    client.on('data', (data) => { statusAsks += data.toString('latin1').split('/update/status').length - 1; daemonSide.write(data); });
+    let sent = '', owed = 0, got = '';
+    client.on('data', (data) => {
+      sent += data.toString('latin1');
+      owed += sent.split(route).length - 1;
+      sent = sent.slice(sent.lastIndexOf(route) + 1).slice(-(route.length - 1));
+      daemonSide.write(data);
+    });
     client.on('end', () => daemonSide.end());
     let kept = '';
     daemonSide.on('data', (data) => {
+      if (owed) { got += data.toString('latin1'); if (got.includes(mark)) { owed -= 1; got = ''; setImmediate(() => { statusAnswers += 1; }); } }
       let text = (kept + data.toString('latin1')).replaceAll(field, '"version":"' + OLD + '"');
       kept = '';
       for (let n = Math.min(field.length - 1, text.length); n > 0; n -= 1) if (field.startsWith(text.slice(-n))) { kept = text.slice(-n); text = text.slice(0, -n); break; }
@@ -342,13 +350,16 @@ test('W1 in the window: the app raises the two-versions box on connect; Not now 
   // Not now: no job on the server, nothing built, nothing unpacked.
   await new Promise((resolve) => setTimeout(resolve, 1000));
   assert.deepEqual([(await call(remote, '/update/status')).job ?? null, await lines(remote.log.pnpm), await leftovers(remote)], [null, [], []]);
-  // The same host and pair of versions is not asked again in this launch.
-  const before = statusAsks;
-  assert.ok(before >= 1, 'the app asked the server for its update status before the box');
-  await connect();
-  await until(() => statusAsks > before, 'the second connect reached the update check');
-  await new Promise((resolve) => setTimeout(resolve, 3000));
-  assert.equal((await app.evaluate(() => globalThis.asked)).length, 1, 'asked again after Not now');
+  // The same host and pair of versions is not asked again in this launch: two more connects, each waited for until the
+  // server's update status has reached the app (the app asks straight after it, with no timer between), then 3 s.
+  assert.ok(statusAnswers >= 1, 'the app had the server\'s update status before the box');
+  for (const which of ['second', 'third']) {
+    const before = statusAnswers;
+    await connect();
+    await until(() => statusAnswers > before, 'the ' + which + ' connect had the update status');
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    assert.equal((await app.evaluate(() => globalThis.asked)).length, 1, 'asked again after Not now, ' + which + ' connect');
+  }
   assert.deepEqual([(await call(remote, '/update/status')).job ?? null, await lines(remote.log.pnpm), await leftovers(remote)], [null, [], []]);
 });
 
