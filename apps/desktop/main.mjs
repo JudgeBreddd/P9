@@ -199,7 +199,7 @@ export async function createDesktop({ state, open } = {}) {
   // 0.1.8 Settings > Open P9 on (openOn): null, where it was last (host, as before); '', this computer; a host, that remote,
   // which connects like Connect does and shows the connecting screen while it cannot be reached.
   let openOn = saved?.openOn === '' ? '' : named(saved?.openOn);
-  let openOnKept = openOn; // what the file holds: moved only when a write lands
+  let openOnKept = openOn, openOnTurn = 0; // what the file holds (moved only when a write lands); a count of the choices made
   let serverHost = openOn === '' ? null : openOn ?? named(saved?.host), serverLast = named(saved?.last) ?? serverHost, server = null, serverError = null, serverTry = 0, knownHosts = null;
   // D3: the remotes added in Settings, beside the ~/.ssh/config hosts. None is built in.
   let remotes = Array.isArray(saved?.remotes) ? saved.remotes.filter(named) : [];
@@ -956,8 +956,8 @@ export async function createDesktop({ state, open } = {}) {
     const okHost = typeof host === 'string' && HOST.test(host), ok = action === 'open-on' ? host === null || host === '' || okHost : ['add', 'remove'].includes(action) && okHost;
     if (!fromApp(event) || args.length !== 2 || !ok) throw new Error('ipc-sender-refused');
     // The answer is what the file holds after this save, not the newest choice still in the queue. A save that fails
-    // gives its choice up (unless a newer one has replaced it), so no later save writes it unasked.
-    if (action === 'open-on') { openOn = host; try { await keepServer(); } catch (error) { if (openOn === host) openOn = openOnKept; throw error; } return { remotes, openOn: openOnKept }; }
+    // gives its choice up (unless a newer choice was made since, even the same value), so no later save writes it unasked.
+    if (action === 'open-on') { const turn = ++openOnTurn; openOn = host; try { await keepServer(); } catch (error) { if (turn === openOnTurn) openOn = openOnKept; throw error; } return { remotes, openOn: openOnKept }; }
     remotes = action === 'add' ? [...new Set([...remotes, host])].slice(-50) : remotes.filter(h => h !== host); // ponytail: 50 kept, the oldest go
     if (action === 'remove') noKey = noKey.filter(h => h !== host); // row 79: a removed remote's Don't ask again goes with it
     await keepServer();
