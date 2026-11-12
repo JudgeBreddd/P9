@@ -292,17 +292,30 @@ test('W1: every build kind asks with both versions before it changes the server;
 // to an older one of the same length. The box is the system's: the test takes its options and answers Not now.
 test('W1 in the window: the app raises the two-versions box on connect; Not now leaves the server alone and is not asked again', { skip, timeout: 120000 }, async (t) => {
   const local = await daemon(t), remote = await server(t);
-  const OLD = VERSION.replace(/^(\d+)\.(\d+)/, (_, a, b) => a + '.' + (Number(b) - 1));
+  // An older version of the same length whatever VERSION is: its first digit that is not 0, one lower.
+  const OLD = VERSION.replace(/[1-9]/, (d) => d - 1);
   assert.ok(OLD.length === VERSION.length && newer(VERSION, OLD), OLD);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'p9-w1-'));
   const runtime = path.join(directory, 'server'), there = path.join(runtime, 'p9-foundation'), here = path.join(directory, 'local'), profile = path.join(directory, 'profile');
   await mkdir(there, { recursive: true, mode: 0o700 }); await mkdir(here, { mode: 0o700 }); await mkdir(profile);
   for (const name of await readdir(remote.state)) if (name !== 'daemon.sock') await symlink(path.join(remote.state, name), path.join(there, name));
+  // The relay: what the server says, with its version made older. A piece that ends partway into the version field is
+  // kept until the next piece, so the field is rewritten wherever the stream is cut. statusAsks: the app's own
+  // /update/status requests, the last thing it does before it would ask.
+  const field = '"version":"' + VERSION + '"';
+  let statusAsks = 0;
   const relay = net.createServer((client) => {
     const daemonSide = net.connect(path.join(remote.state, 'daemon.sock'));
-    client.pipe(daemonSide);
-    daemonSide.on('data', (data) => client.write(Buffer.from(data.toString('latin1').replaceAll('"version":"' + VERSION + '"', '"version":"' + OLD + '"'), 'latin1')));
-    daemonSide.on('end', () => client.end());
+    client.on('data', (data) => { statusAsks += data.toString('latin1').split('/update/status').length - 1; daemonSide.write(data); });
+    client.on('end', () => daemonSide.end());
+    let kept = '';
+    daemonSide.on('data', (data) => {
+      let text = (kept + data.toString('latin1')).replaceAll(field, '"version":"' + OLD + '"');
+      kept = '';
+      for (let n = Math.min(field.length - 1, text.length); n > 0; n -= 1) if (field.startsWith(text.slice(-n))) { kept = text.slice(-n); text = text.slice(0, -n); break; }
+      client.write(Buffer.from(text, 'latin1'));
+    });
+    daemonSide.on('end', () => client.end(Buffer.from(kept, 'latin1')));
     for (const side of [client, daemonSide]) { side.on('error', () => { client.destroy(); daemonSide.destroy(); }); side.on('close', () => { client.destroy(); daemonSide.destroy(); }); }
   });
   await new Promise((resolve) => relay.listen(path.join(there, 'daemon.sock'), resolve));
@@ -330,10 +343,13 @@ test('W1 in the window: the app raises the two-versions box on connect; Not now 
   await new Promise((resolve) => setTimeout(resolve, 1000));
   assert.deepEqual([(await call(remote, '/update/status')).job ?? null, await lines(remote.log.pnpm), await leftovers(remote)], [null, [], []]);
   // The same host and pair of versions is not asked again in this launch.
+  const before = statusAsks;
+  assert.ok(before >= 1, 'the app asked the server for its update status before the box');
   await connect();
-  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await until(() => statusAsks > before, 'the second connect reached the update check');
+  await new Promise((resolve) => setTimeout(resolve, 3000));
   assert.equal((await app.evaluate(() => globalThis.asked)).length, 1, 'asked again after Not now');
-  assert.equal((await call(remote, '/update/status')).job ?? null, null);
+  assert.deepEqual([(await call(remote, '/update/status')).job ?? null, await lines(remote.log.pnpm), await leftovers(remote)], [null, [], []]);
 });
 
 // The swap against a tiny daemon: answers /health on <state>/daemon.sock with its tree's version, or exits at once when
