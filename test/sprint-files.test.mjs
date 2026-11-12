@@ -90,11 +90,13 @@ test('Sprint files: open_chat makes the plan and a keyed worker\'s files; rules.
   assert.match(fs.readFileSync(file('plan.md'), 'utf8'), /^# Plan/);
   for (const name of ['roles/w1.instructions.md', 'roles/w1.rules.md', 'notes/w1.md']) assert.ok(fs.existsSync(file(name)), name);
   await a.done(first.chat);
-  const log = (made, name = 'rules.log') => { const f = path.join(path.resolve(instance.workspace, made.folder), name); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []; };
+  // The stand-in writes each P9 rules block it got to rules.log in its own working folder, the workspace: one log for all.
+  const logFile = path.join(instance.workspace, 'rules.log');
+  const log = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   // No instructions yet: the first message carried the rules and the notes path, after them, and the agent saw only "hello".
-  assert.equal(log(first).length, 1);
-  assert.match(log(first)[0], /^\[P9: sprint rules[\s\S]*\]\n\n\[P9: your notes file is [^\n]*notes[\\/]w1\.md\. Keep its Now block current/);
-  assert.ok(!log(first)[0].includes('your instructions'));
+  assert.equal(log().length, 1);
+  assert.match(log()[0], /^\[P9: sprint rules[\s\S]*\]\n\n\[P9: your notes file is [^\n]*notes[\\/]w1\.md\. Keep its Now block current/);
+  assert.ok(!log()[0].includes('your instructions'));
   assert.equal((await a.done(first.chat)).last, 'echo:hello');
   // set_rules writes rules.md; an edit of rules.md is what the next message carries, with this worker's role rules.
   await a.tool('set_rules', { rules: 'Only touch docs.' });
@@ -103,19 +105,20 @@ test('Sprint files: open_chat makes the plan and a keyed worker\'s files; rules.
   assert.equal((await a.tool('set_rules')).rules, 'Edited rules.');
   await a.tool('send_chat', { chat: first.chat, text: 'second' });
   assert.equal((await a.done(first.chat)).last, 'echo:second');
-  assert.equal(log(first).length, 2);
-  assert.ok(log(first)[1].includes('\nEdited rules.\n\nRole one rule.]') && !log(first)[1].includes('notes file'), log(first)[1]);
+  assert.equal(log().length, 2);
+  assert.ok(log()[1].includes('\nEdited rules.\n\nRole one rule.]') && !log()[1].includes('notes file'), log()[1]);
   // A second keyed worker with instructions written before it starts (by the lead, through the file): sent once, first.
   fs.mkdirSync(file('roles'), { recursive: true }); fs.writeFileSync(file('roles/w2.instructions.md'), 'You review docs only.');
   const second = await a.tool('open_chat', { text: 'hi', title: 'Two', key: 'w2' });
   await a.done(second.chat);
-  assert.equal(log(second).length, 1);
-  assert.match(log(second)[0], /\]\n\n\[P9: your instructions, from your sprint's roles\/w2\.instructions\.md\.\nYou review docs only\.\]\n\n\[P9: your notes file is /);
+  assert.equal(log().length, 3);
+  assert.match(log()[2], /\]\n\n\[P9: your instructions, from your sprint's roles\/w2\.instructions\.md\.\nYou review docs only\.\]\n\n\[P9: your notes file is /);
   assert.equal((await a.done(second.chat)).last, 'echo:hi');
   // A worker with no key: the plan is there, no role files, no notes block.
   const third = await a.tool('open_chat', { text: 'yo', title: 'Three' });
   await a.done(third.chat);
-  assert.ok(!log(third)[0].includes('notes file'));
+  assert.equal(log().length, 4);
+  assert.ok(!log()[3].includes('notes file') && !log()[3].includes('Role one rule'), log()[3]);
   // The project page lists the lead's sprint with its files, and edits one.
   const view = (await call(instance, `/projects/${project}`)).body.project;
   const sp = view.sprints.find((s) => s.lead === a.conversation);
