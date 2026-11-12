@@ -52,6 +52,8 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   const valid = { commit: head, results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
   assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
   assert.equal((await tools.ready({ ...valid, results: [] }, worker)).error, 'request-refused');
+  assert.equal((await tools.ready({ ...valid, results: [{ check: 'test', result: ' ' }] }, worker)).error, 'request-refused');
+  assert.equal((await tools.ready({ ...valid, results: [{ check: 'other', result: 'passed' }] }, worker)).error, 'request-refused');
   assert.equal((await tools.ready({ ...valid, weakest: ' ' }, worker)).error, 'request-refused');
   writeFileSync(join(folder, 'unsaved'), 'change');
   assert.equal((await tools.ready(valid, worker)).error, 'dirty-folder');
@@ -61,6 +63,8 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   assert.equal(typeof result.ready.claimed, 'boolean');
   assert.deepEqual(result.ready.results, valid.results);
   assert.equal(result.ready.weakest, valid.weakest);
+  assert.deepEqual(result.ready.files, []);
+  assert.equal(typeof result.ready.at, 'number');
   assert.equal(state.idleSince, null);
   assert.equal(notes.length, 0);
   endTurn(worker);
