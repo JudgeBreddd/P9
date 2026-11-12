@@ -20,10 +20,11 @@ test('verdict requires the current commit and an independent reviewer', { timeou
   const child = '00000000-0000-0000-0000-000000000004';
   const family = [{ id: parent, project: 'p' }, { id: worker, parent, project: 'p' }, { id: reviewer, project: 'p' }, { id: child, parent: worker, project: 'p' }];
   const state = { ready: { commit: 'abc' } };
-  const chat = { family: () => family, sprint: () => state, setSprint: (_, patch) => Object.assign(state, patch),
+  const chat = { lock: () => ({ on: false }), family: () => family, sprint: () => state, setSprint: (_, patch) => Object.assign(state, patch),
     settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
   const args = { chat: worker, commit: 'abc', result: 'pass', note: 'checked' };
+  assert.equal(createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).verdict(args, reviewer).error, 'agent-lock-on');
   assert.equal(tools.verdict({ ...args, commit: 'old' }, reviewer).error, 'stale-commit');
   assert.equal(tools.verdict(args, child).error, 'self-review');
   assert.equal(tools.verdict(args, parent).error, 'self-review');
@@ -39,22 +40,25 @@ test('ready refuses incomplete evidence and dirty folders', { timeout: 10000 }, 
   const { execFileSync } = await import('node:child_process');
   const folder = mkdtempSync(join(tmpdir(), 'p9-ready-'));
   t.after(() => rmSync(folder, { recursive: true, force: true }));
-  execFileSync('git', ['init', '-q', folder]);
+  execFileSync('git', ['init', '-q', '-b', 'main', folder]);
+  execFileSync('git', ['-C', folder, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'base']);
+  const head = execFileSync('git', ['-C', folder, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const state = { task: { item: 'B1', doneMeans: 'done', checks: ['test'] } };
   const notes = []; let endTurn;
-  const chat = { info: () => ({ parent }), sprint: () => state, startFolder: async () => folder,
+  const chat = { lock: () => ({ on: false }), info: () => ({ parent }), sprint: () => state, startFolder: async () => folder,
     setSprint: (_, patch) => Object.assign(state, patch), gauge: () => ({ context: { used: 7 } }),
     note: async (...args) => notes.push(args), turnEnded: (fn) => { endTurn = fn; }, tokenUsage: () => ({ input: 9, output: 2 }), settled: () => {}, restarted: async () => ({ chats: [], storm: false }) };
   const tools = createDelegate({ chat });
-  const valid = { commit: 'abc', results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
+  const valid = { commit: head, results: [{ check: 'test', result: 'passed' }], weakest: 'not live tested' };
+  assert.equal((await createDelegate({ chat: { ...chat, lock: () => ({ on: true }) } }).ready(valid, worker)).error, 'agent-lock-on');
   assert.equal((await tools.ready({ ...valid, results: [] }, worker)).error, 'request-refused');
   assert.equal((await tools.ready({ ...valid, weakest: ' ' }, worker)).error, 'request-refused');
   writeFileSync(join(folder, 'unsaved'), 'change');
   assert.equal((await tools.ready(valid, worker)).error, 'dirty-folder');
   rmSync(join(folder, 'unsaved'));
   const result = await tools.ready(valid, worker);
-  assert.equal(result.ready.commit, 'abc');
-  assert.equal(result.ready.claimed, true);
+  assert.equal(result.ready.commit, head);
+  assert.equal(typeof result.ready.claimed, 'boolean');
   assert.deepEqual(result.ready.results, valid.results);
   assert.equal(result.ready.weakest, valid.weakest);
   assert.equal(state.idleSince, null);

@@ -194,6 +194,7 @@ export function createDelegate({ chat, allowed }) {
   }
 
   async function ready(caller, args) {
+    if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const info = chat.info(caller), task = chat.sprint(caller).task;
     if (!info?.parent || !task) return { error: 'no-task' };
     if (!text(args.commit, 200) || !(typeof args.weakest === 'string' && text(args.weakest.trim(), 4000)) || !Array.isArray(args.results) || args.results.length !== task.checks.length || task.checks.some((check) => args.results.filter((r) => r?.check === check && typeof r.result === 'string' && text(r.result.trim(), 4000)).length !== 1)) return { error: 'request-refused' };
@@ -217,6 +218,7 @@ export function createDelegate({ chat, allowed }) {
     return { ready: value };
   }
   function verdict(caller, args) {
+    if (chat.lock(caller).on) return { error: 'agent-lock-on' };
     const found = reach(caller, args.chat), target = chat.sprint(args.chat), family = chat.family();
     if (!found || !target.ready) return { error: 'chat-not-found' };
     if (caller === args.chat || below(family, args.chat).includes(caller) || below(family, caller).includes(args.chat)) return { error: 'self-review' };
@@ -419,7 +421,7 @@ export function createDelegate({ chat, allowed }) {
     const info = chat.info(id), state = chat.sprint(id);
     if (!info?.parent || !state.task || !state.ready) return;
     const card = { item: state.task.item, ...state.ready, tokens: chat.tokenUsage(id) };
-    chat.note(info.parent, '[p9] Ready: ' + JSON.stringify(card), 'p9').catch(() => {});
+    chat.note(info.parent, '[p9] Ready: ' + JSON.stringify(card) + (state.ready.claimed ? '\nChanged files are unavailable until git facts can be read.' : ''), 'p9').catch(() => {});
   });
 
   // When a worker's turn ends and its parent is not in a wait_chat on it, the parent gets one line (SECURITY.md
