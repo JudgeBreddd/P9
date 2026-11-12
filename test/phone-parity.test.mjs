@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { remoteDaemon, passkeyDevice, enrollDevice, root } from './helpers.mjs';
 
@@ -457,4 +457,68 @@ test('P4: the composer is one rounded box at the foot of the chat: the message, 
   await send(page, 'model'); await replied('model:opus');
   // No sideways scroll on a 390 px phone.
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+});
+
+// O55 (filed 2026-11-12: "the message sends but the text stays and I can keep sending it by hitting send" — it did it
+// mid-turn): after a send the box is empty on every send path, a second tap on Send with nothing typed posts no prompt,
+// and a refused send keeps the text and says why. Queue (the P4 test above), Interrupt (the P18 one) and the offline
+// queue (phone-continue.test.mjs PH2) already assert their empty box; this one covers the default send as Steer, a held
+// steer (a tool call running), a send with an image attached, the idle send, and the empty and refused taps.
+test('O55: a send empties the box on every path; an empty Send posts nothing; a refused send keeps the text', { timeout: 180000 }, async (t) => {
+  const { page, server } = await phoneOn(t);
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', bytes = Buffer.from(png, 'base64');
+  const said = (want) => page.waitForFunction((w) => [...document.querySelectorAll('#events article')].some((el) => el.textContent.includes(w)), want, { timeout: 15000 });
+  const noted = (want) => page.waitForFunction((w) => { const el = document.querySelector('#composerNote'); return !el?.hidden && el.textContent.includes(w); }, want, { timeout: 10000 });
+  const untilLabel = (want) => page.waitForFunction((w) => document.querySelector('#composer button[type="submit"]').textContent === w, want, { timeout: 15000 });
+  const box = () => page.inputValue('#prompt');
+  let posts = 0;
+  page.on('request', (request) => { try { if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/prompt')) posts += 1; } catch {} });
+  await newChat(page, 'claude');
+  // Idle: the send empties the box, and a second tap with nothing typed posts nothing.
+  await send(page, 'late'); await said('late reply');
+  assert.equal(await box(), '', 'an idle send empties the box');
+  const afterIdle = posts;
+  await page.click('#composer button[type="submit"]');
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(posts, afterIdle, 'an empty Send with the agent idle posts no prompt');
+  // The default send as Steer (no tool call running): the message goes into the turn and the box empties.
+  await send(page, 'slow'); await said('working');
+  const beforeSteer = posts;
+  await send(page, 'steer me'); await said('got:steer me');
+  assert.equal(await box(), '', 'a steered send empties the box');
+  assert.equal(posts, beforeSteer + 1, 'the steer is one prompt post');
+  // An empty tap mid-turn is Stop (P3), never a prompt; it ends the turn.
+  await page.click('#composer button[type="submit"]');
+  await untilLabel('Send message');
+  assert.equal(posts, beforeSteer + 1, 'an empty Send mid-turn posts no prompt');
+  // A refused steer keeps the text and says why; the same text goes when the agent takes it again.
+  await writeFile(path.join(server.workspace, 'steering-refuses'), '');
+  await send(page, 'slow'); await said('working');
+  const beforeRefused = posts;
+  await send(page, 'refuse me');
+  await noted('Not sent: turn-running');
+  assert.equal(await box(), 'refuse me', 'a refused send keeps the text');
+  assert.equal(posts, beforeRefused + 1, 'the refused steer is one prompt post');
+  await rm(path.join(server.workspace, 'steering-refuses'));
+  await page.click('#composer button[type="submit"]');
+  await said('got:refuse me');
+  assert.equal(await box(), '', 'the send after the refusal empties the box');
+  await page.click('#composer button[type="submit"]'); // Stop: the slow turn ends
+  await untilLabel('Send message');
+  // A held steer (a tool call running): held to the step's end, the box empties at once, one prompt post.
+  await send(page, 'tools 1'); await page.waitForSelector('#events article[data-kind="tool"]', { timeout: 15000 });
+  const beforeHeld = posts;
+  await send(page, 'hold me');
+  await page.waitForSelector('#queued:not([hidden]) article:has-text("hold me")', { timeout: 10000 });
+  assert.equal(await box(), '', 'a held steer empties the box');
+  await said('got:hold me');
+  assert.equal(posts, beforeHeld + 1, 'the held steer is one prompt post');
+  // An image attached: the send empties the box and the chips.
+  await page.evaluate((b64) => { const dt = new DataTransfer(), bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); dt.items.add(new File([bin], 'pic.png', { type: 'image/png' })); document.querySelector('#prompt').dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt })); }, png);
+  await page.waitForFunction(() => document.querySelectorAll('#attached .chip-img').length === 1, null, { timeout: 10000 });
+  await send(page, 'with a picture');
+  await said('echo:with a picture[image image/png ' + bytes.length + ']');
+  assert.equal(await box(), '', 'a send with an image empties the box');
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#attached .chip-img').length), 0, 'the sent image leaves the chips');
+  await shot(page, 'phone-o55-box-empty-after-send');
 });
